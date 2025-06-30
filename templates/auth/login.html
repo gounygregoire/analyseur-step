@@ -28,7 +28,7 @@
         }
         
         .navbar-brand {
-            color: var(--kaki-light) !important;
+            color: var(--kaki-dark) !important;
             font-weight: 700;
         }
         
@@ -39,56 +39,68 @@
         }
         
         .form-control {
-            background: rgba(255, 255, 255, 0.95) !important;
-            border: 2px solid var(--kaki-dark) !important;
-            color: #1a1a1a !important;
+            background: #ffffff !important;
+            border: 3px solid var(--accent-gold) !important;
+            color: #000000 !important;
+            font-weight: 500;
+            font-size: 1.1rem;
             transition: all 0.3s ease;
         }
         
         .form-control:focus {
-            background: rgba(255, 255, 255, 1) !important;
+            background: #ffffff !important;
             border-color: var(--kaki-light) !important;
-            box-shadow: 0 0 0 0.2rem rgba(168, 160, 104, 0.25) !important;
-            color: #1a1a1a !important;
+            box-shadow: 0 0 0 0.3rem rgba(212, 175, 55, 0.4) !important;
+            color: #000000 !important;
         }
         
         .form-control::placeholder {
-            color: rgba(26, 26, 26, 0.6) !important;
+            color: rgba(0, 0, 0, 0.6) !important;
+            font-style: italic;
         }
         
         .form-label {
-            color: rgba(255, 255, 255, 0.9) !important;
-            font-weight: 500;
+            color: #ffffff !important;
+            font-weight: 600;
+            font-size: 1.1rem;
+            text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
         }
         
         .btn-primary {
-            background: linear-gradient(135deg, var(--kaki-dark) 0%, var(--brown-dark) 100%) !important;
+            background: linear-gradient(135deg, var(--accent-gold) 0%, var(--brown-light) 100%) !important;
             border: none !important;
-            font-weight: 600;
+            font-weight: 700;
+            font-size: 1.1rem;
             transition: all 0.3s ease;
+            text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3);
         }
         
         .btn-primary:hover {
-            background: linear-gradient(135deg, var(--kaki-light) 0%, var(--brown-light) 100%) !important;
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(168, 160, 104, 0.3);
+            background: linear-gradient(135deg, #ffd700 0%, var(--accent-gold) 100%) !important;
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px rgba(212, 175, 55, 0.4);
         }
         
         .btn-outline-secondary {
-            border: 2px solid var(--kaki-dark) !important;
-            color: var(--kaki-light) !important;
+            border: 3px solid var(--accent-gold) !important;
+            color: #ffffff !important;
+            font-weight: 600;
             transition: all 0.3s ease;
+            text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
         }
         
         .btn-outline-secondary:hover {
-            background: var(--kaki-dark) !important;
-            border-color: var(--kaki-light) !important;
-            color: #ffffff !important;
+            background: var(--accent-gold) !important;
+            border-color: #ffd700 !important;
+            color: #000000 !important;
+            text-shadow: none;
         }
         
         h2 {
-            color: var(--kaki-light) !important;
-            font-weight: 700;
+            color: #ffffff !important;
+            font-weight: 800;
+            font-size: 2.2rem;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.7);
         }
         
         .text-muted {
