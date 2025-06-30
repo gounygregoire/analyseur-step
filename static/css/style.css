@@ -1119,3 +1119,161 @@ body {
         margin-bottom: 1rem;
     }
 }
+
+/* === RECOMMANDATIONS MATÉRIAUX === */
+
+.dfm-materials-section {
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(248, 248, 248, 0.95) 100%);
+    border-radius: 15px;
+    padding: 2rem;
+    border: 2px solid var(--kaki-lighter);
+    box-shadow: 0 8px 25px var(--shadow);
+}
+
+.material-recommendations-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 1.5rem;
+    margin-top: 1.5rem;
+}
+
+.material-recommendation-card {
+    background: white;
+    border-radius: 15px;
+    padding: 1.5rem;
+    border: 2px solid var(--kaki-lighter);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    overflow: hidden;
+}
+
+.material-recommendation-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 4px;
+    background: linear-gradient(135deg, var(--kaki-medium) 0%, var(--brown-medium) 100%);
+}
+
+.material-recommendation-card:hover {
+    transform: translateY(-8px) scale(1.02);
+    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.15);
+    border-color: var(--kaki-medium);
+}
+
+.material-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.material-rank {
+    background: linear-gradient(135deg, var(--kaki-dark) 0%, var(--brown-dark) 100%);
+    color: white;
+    border-radius: 20px;
+    padding: 0.4rem 0.8rem;
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.material-score {
+    background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+    color: white;
+    border-radius: 15px;
+    padding: 0.3rem 0.6rem;
+    font-weight: 600;
+    font-size: 0.85rem;
+}
+
+.material-name {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--brown-dark);
+    margin-bottom: 0.5rem;
+}
+
+.material-category {
+    color: var(--kaki-medium);
+    font-weight: 500;
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.material-description {
+    color: var(--brown-medium);
+    line-height: 1.5;
+    margin-bottom: 1rem;
+    font-size: 0.95rem;
+}
+
+.material-cost-level {
+    margin-bottom: 1rem;
+}
+
+.material-advantages, .material-limitations {
+    margin-bottom: 1rem;
+}
+
+.material-advantages strong, .material-limitations strong {
+    color: var(--brown-dark);
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.material-advantages ul, .material-limitations ul {
+    margin: 0.5rem 0 0 0;
+    padding-left: 1.2rem;
+}
+
+.material-advantages li, .material-limitations li {
+    margin-bottom: 0.3rem;
+    font-size: 0.85rem;
+    line-height: 1.4;
+    color: var(--brown-medium);
+}
+
+.material-advantages li {
+    color: #155724;
+}
+
+.material-limitations li {
+    color: #721c24;
+}
+
+.material-processing-notes {
+    background: rgba(138, 138, 106, 0.1);
+    border-radius: 8px;
+    padding: 0.8rem;
+    border-left: 4px solid var(--kaki-medium);
+}
+
+.material-processing-notes small {
+    font-size: 0.8rem;
+    line-height: 1.4;
+}
+
+/* Responsive pour recommandations matériaux */
+@media (max-width: 768px) {
+    .material-recommendations-grid {
+        grid-template-columns: 1fr;
+        gap: 1rem;
+    }
+    
+    .material-recommendation-card {
+        padding: 1.25rem;
+    }
+    
+    .material-name {
+        font-size: 1.1rem;
+    }
+    
+    .material-description {
+        font-size: 0.9rem;
+    }
+}

@@ -11,6 +11,7 @@ from pathlib import Path
 from datetime import datetime
 from models import db, ConversionJob, UserSession
 from dfm_analyzer import analyze_dfm, DFMReport
+from material_recommender import recommend_materials_for_questionnaire
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -436,6 +437,58 @@ def download_pdf(filename):
     except Exception as e:
         logger.error(f"PDF download error: {str(e)}")
         return jsonify({'error': 'Erreur lors du téléchargement'}), 500
+
+@app.route('/api/material-recommendations', methods=['POST'])
+def get_material_recommendations():
+    """Get material recommendations based on questionnaire and DFM data"""
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'error': 'Données manquantes'}), 400
+        
+        questionnaire_data = data.get('questionnaire', {})
+        conversion_id = data.get('conversion_id')
+        
+        # Get DFM data if available
+        dfm_data = None
+        if conversion_id:
+            conversion_job = ConversionJob.query.get(conversion_id)
+            if conversion_job and conversion_job.status == 'completed':
+                # Get the DFM analysis for this conversion
+                try:
+                    step_file_path = os.path.join(app.config['UPLOAD_FOLDER'], conversion_job.step_filename)
+                    if os.path.exists(step_file_path):
+                        # Re-run DFM analysis to get data structure
+                        dfm_report = analyze_dfm(step_file_path, questionnaire_data.get('demolding_axis', 'z'))
+                        dfm_data = {
+                            'overall_rating': dfm_report.overall_score,
+                            'wall_thickness_issues': [
+                                {
+                                    'issue_type': issue.issue_type,
+                                    'thickness': issue.thickness,
+                                    'severity': issue.severity,
+                                    'location': issue.location
+                                } for issue in dfm_report.wall_thickness_issues
+                            ]
+                        }
+                except Exception as e:
+                    logger.warning(f"Could not get DFM data for material recommendations: {str(e)}")
+        
+        # Get material recommendations
+        recommendations = recommend_materials_for_questionnaire(questionnaire_data, dfm_data)
+        
+        logger.info(f"Generated {len(recommendations)} material recommendations")
+        
+        return jsonify({
+            'success': True,
+            'recommendations': recommendations,
+            'questionnaire_summary': questionnaire_data
+        })
+        
+    except Exception as e:
+        logger.error(f"Material recommendations error: {str(e)}")
+        return jsonify({'error': f'Erreur lors de la génération des recommandations: {str(e)}'}), 500
 
 @app.route('/health')
 def health_check():

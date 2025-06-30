@@ -933,6 +933,8 @@ class STEPViewer {
             
             ${this.generateIssuesSection(dfmData.wall_thickness_issues, dfmData.geometry_issues)}
             
+            ${this.generateMaterialRecommendationsSection()}
+            
             ${this.generateRecommendationsSection(dfmData.recommendations)}
         `;
     }
@@ -1002,6 +1004,87 @@ class STEPViewer {
         return issuesHtml;
     }
     
+    generateMaterialRecommendationsSection() {
+        if (!this.materialRecommendations || this.materialRecommendations.length === 0) {
+            return '';
+        }
+        
+        return `
+            <div class="dfm-materials-section mb-4">
+                <div class="dfm-issues-header">
+                    <i class="bi bi-palette-fill text-success me-2"></i>
+                    <h5 class="dfm-issues-title">Recommandations Matériaux</h5>
+                    <span class="badge bg-success ms-2">${this.materialRecommendations.length} matériaux suggérés</span>
+                </div>
+                
+                <div class="material-recommendations-grid">
+                    ${this.materialRecommendations.map((material, index) => `
+                        <div class="material-recommendation-card">
+                            <div class="material-card-header">
+                                <div class="material-rank">#${index + 1}</div>
+                                <div class="material-score">${Math.round(material.score)}%</div>
+                            </div>
+                            
+                            <div class="material-name">${material.name}</div>
+                            <div class="material-category">${material.category}</div>
+                            
+                            <div class="material-description">
+                                ${material.description}
+                            </div>
+                            
+                            <div class="material-cost-level">
+                                <span class="badge ${this.getCostLevelClass(material.cost_level)}">
+                                    ${this.getCostLevelText(material.cost_level)}
+                                </span>
+                            </div>
+                            
+                            <div class="material-advantages">
+                                <strong>Avantages:</strong>
+                                <ul>
+                                    ${material.advantages.slice(0, 3).map(adv => `<li>${adv}</li>`).join('')}
+                                </ul>
+                            </div>
+                            
+                            ${material.limitations && material.limitations.length > 0 ? `
+                                <div class="material-limitations">
+                                    <strong>Limitations:</strong>
+                                    <ul>
+                                        ${material.limitations.slice(0, 2).map(lim => `<li>${lim}</li>`).join('')}
+                                    </ul>
+                                </div>
+                            ` : ''}
+                            
+                            <div class="material-processing-notes">
+                                <small class="text-muted">
+                                    <i class="bi bi-info-circle me-1"></i>
+                                    ${material.processing_notes}
+                                </small>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    }
+
+    getCostLevelClass(costLevel) {
+        const classes = {
+            'economy': 'bg-success',
+            'balanced': 'bg-warning text-dark',
+            'premium': 'bg-danger'
+        };
+        return classes[costLevel] || 'bg-secondary';
+    }
+
+    getCostLevelText(costLevel) {
+        const texts = {
+            'economy': 'Économique',
+            'balanced': 'Équilibré',
+            'premium': 'Premium'
+        };
+        return texts[costLevel] || costLevel;
+    }
+
     generateRecommendationsSection(recommendations) {
         if (recommendations.length === 0) return '';
         
@@ -1009,7 +1092,7 @@ class STEPViewer {
             <div class="dfm-recommendations">
                 <div class="dfm-issues-header">
                     <i class="bi bi-lightbulb-fill text-primary me-2"></i>
-                    <h5 class="dfm-issues-title">Recommandations</h5>
+                    <h5 class="dfm-issues-title">Recommandations DFM</h5>
                 </div>
                 ${recommendations.map(rec => `
                     <div class="dfm-recommendation-item">
@@ -1067,6 +1150,37 @@ class STEPViewer {
     }
     
     showDemoldingAxisModal() {
+        // Show material questionnaire first
+        this.showMaterialQuestionnaireModal();
+    }
+
+    showMaterialQuestionnaireModal() {
+        try {
+            const modalElement = document.getElementById('materialQuestionnaireModal');
+            if (!modalElement) {
+                console.error('Material questionnaire modal not found');
+                alert('Erreur: Questionnaire matériaux non disponible');
+                return;
+            }
+            
+            const modal = new bootstrap.Modal(modalElement);
+            modal.show();
+            
+            // Setup submit button handler
+            const submitBtn = document.getElementById('submitQuestionnaire');
+            if (submitBtn) {
+                submitBtn.onclick = () => {
+                    this.submitMaterialQuestionnaire();
+                };
+            }
+        } catch (error) {
+            console.error('Error showing material questionnaire:', error);
+            // Fallback to demolding axis selection
+            this.showDemoldingAxisModalFallback();
+        }
+    }
+
+    showDemoldingAxisModalFallback() {
         try {
             const modalElement = document.getElementById('demoldingAxisModal');
             if (!modalElement) {
@@ -1093,6 +1207,130 @@ class STEPViewer {
             if (confirm('Erreur d\'interface. Utiliser l\'axe Z par défaut pour l\'analyse DFM?')) {
                 this.analyzeDFM('z');
             }
+        }
+    }
+
+    async submitMaterialQuestionnaire() {
+        const form = document.getElementById('materialQuestionnaireForm');
+        const formData = new FormData(form);
+        
+        // Validate required fields
+        const application = formData.get('application');
+        if (!application) {
+            alert('Veuillez sélectionner un domaine d\'application');
+            return;
+        }
+        
+        // Collect form data
+        const questionnaireData = {
+            application: application,
+            mechanical: formData.getAll('mechanical[]'),
+            temperature: formData.get('temperature'),
+            exposure: formData.getAll('exposure[]'),
+            aesthetic: formData.getAll('aesthetic[]'),
+            regulatory: formData.getAll('regulatory[]'),
+            volume: formData.get('volume'),
+            cost: formData.get('cost'),
+            lifespan: formData.get('lifespan')
+        };
+        
+        try {
+            // Hide material questionnaire modal
+            const materialModal = bootstrap.Modal.getInstance(document.getElementById('materialQuestionnaireModal'));
+            materialModal.hide();
+            
+            // Show demolding axis modal
+            this.showDemoldingAxisModalWithMaterials(questionnaireData);
+            
+        } catch (error) {
+            console.error('Material questionnaire error:', error);
+            alert(`Erreur lors de l'analyse des matériaux: ${error.message}`);
+        }
+    }
+
+    showDemoldingAxisModalWithMaterials(questionnaireData) {
+        try {
+            const modalElement = document.getElementById('demoldingAxisModal');
+            if (!modalElement) {
+                console.error('Demolding axis modal not found');
+                alert('Erreur: Interface de sélection d\'axe non disponible');
+                return;
+            }
+            
+            const modal = new bootstrap.Modal(modalElement);
+            modal.show();
+            
+            // Setup event listeners with material data
+            const axisButtons = modalElement.querySelectorAll('[data-axis]');
+            axisButtons.forEach(btn => {
+                btn.onclick = async (e) => {
+                    const axis = e.currentTarget.getAttribute('data-axis');
+                    modal.hide();
+                    
+                    // Show loading state
+                    this.showDFMAnalysisLoading();
+                    
+                    try {
+                        // Get material recommendations first
+                        const response = await fetch('/api/material-recommendations', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                questionnaire: questionnaireData,
+                                conversion_id: this.currentConversionId
+                            })
+                        });
+                        
+                        const result = await response.json();
+                        
+                        if (!response.ok) {
+                            throw new Error(result.error || 'Erreur lors de l\'analyse des matériaux');
+                        }
+                        
+                        // Store material recommendations
+                        this.materialRecommendations = result.recommendations;
+                        
+                        // Now run DFM analysis
+                        await this.analyzeDFM(axis);
+                        
+                    } catch (error) {
+                        console.error('Material analysis error:', error);
+                        this.hideDFMAnalysisLoading();
+                        alert(`Erreur lors de l'analyse: ${error.message}`);
+                    }
+                };
+            });
+        } catch (error) {
+            console.error('Error showing demolding axis modal:', error);
+            // Fallback: direct analysis with default axis
+            if (confirm('Erreur d\'interface. Utiliser l\'axe Z par défaut pour l\'analyse DFM?')) {
+                this.analyzeDFM('z');
+            }
+        }
+    }
+
+    showDFMAnalysisLoading() {
+        const dfmSection = document.getElementById('dfmAnalysisSection');
+        if (dfmSection) {
+            dfmSection.innerHTML = `
+                <div class="text-center py-5">
+                    <div class="spinner-border text-primary mb-3" role="status">
+                        <span class="visually-hidden">Analyse en cours...</span>
+                    </div>
+                    <h5>Analyse DFM et recommandations matériaux en cours...</h5>
+                    <p class="text-muted">Traitement des données du questionnaire et analyse de la pièce</p>
+                </div>
+            `;
+            dfmSection.style.display = 'block';
+        }
+    }
+
+    hideDFMAnalysisLoading() {
+        const dfmSection = document.getElementById('dfmAnalysisSection');
+        if (dfmSection) {
+            dfmSection.style.display = 'none';
         }
     }
     

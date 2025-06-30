@@ -294,6 +294,226 @@
         </div>
     </div>
 
+    <!-- Modal questionnaire matériaux -->
+    <div class="modal fade" id="materialQuestionnaireModal" tabindex="-1" aria-labelledby="materialQuestionnaireModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="materialQuestionnaireModalLabel">
+                        <i class="bi bi-clipboard-check me-2"></i>Questionnaire de sélection matériaux
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="materialQuestionnaireForm">
+                        <!-- Application -->
+                        <div class="mb-4">
+                            <label class="form-label fw-bold">
+                                <i class="bi bi-gear-fill me-2"></i>Domaine d'application
+                            </label>
+                            <select class="form-select" name="application" required>
+                                <option value="">Sélectionnez...</option>
+                                <option value="automotive">Automobile</option>
+                                <option value="electronics">Électronique/High-tech</option>
+                                <option value="medical">Médical/Pharmaceutique</option>
+                                <option value="packaging">Emballage</option>
+                                <option value="consumer">Biens de consommation</option>
+                                <option value="industrial">Industriel</option>
+                                <option value="aerospace">Aéronautique/Spatial</option>
+                                <option value="toys">Jouets/Loisirs</option>
+                            </select>
+                        </div>
+
+                        <!-- Contraintes mécaniques -->
+                        <div class="mb-4">
+                            <label class="form-label fw-bold">
+                                <i class="bi bi-tools me-2"></i>Contraintes mécaniques principales
+                            </label>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="mechanical[]" value="impact" id="impact">
+                                        <label class="form-check-label" for="impact">Résistance aux chocs</label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="mechanical[]" value="flexural" id="flexural">
+                                        <label class="form-check-label" for="flexural">Résistance à la flexion</label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="mechanical[]" value="tensile" id="tensile">
+                                        <label class="form-check-label" for="tensile">Résistance à la traction</label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="mechanical[]" value="fatigue" id="fatigue">
+                                        <label class="form-check-label" for="fatigue">Résistance à la fatigue</label>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="mechanical[]" value="stiffness" id="stiffness">
+                                        <label class="form-check-label" for="stiffness">Rigidité élevée</label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="mechanical[]" value="flexibility" id="flexibility">
+                                        <label class="form-check-label" for="flexibility">Flexibilité</label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="mechanical[]" value="wear" id="wear">
+                                        <label class="form-check-label" for="wear">Résistance à l'usure</label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="mechanical[]" value="creep" id="creep">
+                                        <label class="form-check-label" for="creep">Résistance au fluage</label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Environnement d'usage -->
+                        <div class="mb-4">
+                            <label class="form-label fw-bold">
+                                <i class="bi bi-thermometer-half me-2"></i>Environnement d'usage
+                            </label>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <label class="form-label">Température de service</label>
+                                    <select class="form-select" name="temperature">
+                                        <option value="low">Basse (-40°C à 0°C)</option>
+                                        <option value="ambient" selected>Ambiante (0°C à 40°C)</option>
+                                        <option value="elevated">Élevée (40°C à 80°C)</option>
+                                        <option value="high">Haute (80°C à 150°C)</option>
+                                        <option value="extreme">Extrême (>150°C)</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label">Exposition</label>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="exposure[]" value="uv" id="uv">
+                                        <label class="form-check-label" for="uv">UV/Soleil</label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="exposure[]" value="humidity" id="humidity">
+                                        <label class="form-check-label" for="humidity">Humidité élevée</label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="exposure[]" value="chemicals" id="chemicals">
+                                        <label class="form-check-label" for="chemicals">Produits chimiques</label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Exigences esthétiques -->
+                        <div class="mb-4">
+                            <label class="form-label fw-bold">
+                                <i class="bi bi-palette me-2"></i>Exigences esthétiques et fonctionnelles
+                            </label>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="aesthetic[]" value="transparent" id="transparent">
+                                        <label class="form-check-label" for="transparent">Transparence</label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="aesthetic[]" value="colored" id="colored">
+                                        <label class="form-check-label" for="colored">Colorabilité</label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="aesthetic[]" value="gloss" id="gloss">
+                                        <label class="form-check-label" for="gloss">Finition brillante</label>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="aesthetic[]" value="surface" id="surface">
+                                        <label class="form-check-label" for="surface">Qualité de surface</label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="aesthetic[]" value="texture" id="texture">
+                                        <label class="form-check-label" for="texture">Texturation possible</label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="aesthetic[]" value="printing" id="printing">
+                                        <label class="form-check-label" for="printing">Aptitude marquage/impression</label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Contraintes réglementaires -->
+                        <div class="mb-4">
+                            <label class="form-label fw-bold">
+                                <i class="bi bi-shield-check me-2"></i>Contraintes réglementaires
+                            </label>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="regulatory[]" value="food_contact" id="food_contact">
+                                <label class="form-check-label" for="food_contact">Contact alimentaire</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="regulatory[]" value="medical_grade" id="medical_grade">
+                                <label class="form-check-label" for="medical_grade">Qualité médicale (USP VI)</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="regulatory[]" value="flame_retardant" id="flame_retardant">
+                                <label class="form-check-label" for="flame_retardant">Retardateur de flamme</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="regulatory[]" value="electrical" id="electrical">
+                                <label class="form-check-label" for="electrical">Propriétés électriques</label>
+                            </div>
+                        </div>
+
+                        <!-- Volume et coût -->
+                        <div class="row mb-4">
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">
+                                    <i class="bi bi-box-seam me-2"></i>Volume de production annuel
+                                </label>
+                                <select class="form-select" name="volume">
+                                    <option value="prototype">Prototype/Très faible (&lt;100)</option>
+                                    <option value="small">Petite série (100-1000)</option>
+                                    <option value="medium" selected>Série moyenne (1000-10000)</option>
+                                    <option value="large">Grande série (10000-100000)</option>
+                                    <option value="mass">Très grande série (&gt;100000)</option>
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">
+                                    <i class="bi bi-currency-euro me-2"></i>Contrainte de coût
+                                </label>
+                                <select class="form-select" name="cost">
+                                    <option value="premium">Premium (performance prioritaire)</option>
+                                    <option value="balanced" selected>Équilibré (performance/coût)</option>
+                                    <option value="economy">Économique (coût prioritaire)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Durée de vie -->
+                        <div class="mb-4">
+                            <label class="form-label fw-bold">
+                                <i class="bi bi-clock me-2"></i>Durée de vie attendue
+                            </label>
+                            <select class="form-select" name="lifespan">
+                                <option value="disposable">Usage unique/jetable</option>
+                                <option value="short">Courte (< 1 an)</option>
+                                <option value="medium" selected>Moyenne (1-5 ans)</option>
+                                <option value="long">Longue (5-15 ans)</option>
+                                <option value="permanent">Très longue (> 15 ans)</option>
+                            </select>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
+                    <button type="button" class="btn btn-primary" id="submitQuestionnaire">
+                        <i class="bi bi-check-circle me-2"></i>Analyser et recommander
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Modal pour sélection axe de démoulage -->
     <div class="modal fade" id="demoldingAxisModal" tabindex="-1" aria-labelledby="demoldingAxisModalLabel" aria-hidden="true">
         <div class="modal-dialog">
