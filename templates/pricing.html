@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tarifs - CADlytics</title>
+    <link rel="stylesheet" href="https://cdn.replit.com/agent/bootstrap-agent-dark-theme.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark">
+        <div class="container">
+            <a class="navbar-brand fw-bold" href="{{ url_for('landing') }}">
+                <i class="bi bi-gear-fill text-primary me-2"></i>CADlytics
+            </a>
+            <div class="navbar-nav ms-auto">
+                {% if current_user.is_authenticated %}
+                    <a class="nav-link" href="{{ url_for('index') }}">Application</a>
+                    <a class="nav-link" href="{{ url_for('auth.profile') }}">Mon Profil</a>
+                    <a class="nav-link" href="{{ url_for('auth.logout') }}">Déconnexion</a>
+                {% else %}
+                    <a class="nav-link" href="{{ url_for('auth.login') }}">Connexion</a>
+                    <a class="btn btn-primary ms-2" href="{{ url_for('auth.register') }}">S'inscrire</a>
+                {% endif %}
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-5">
+        <div class="text-center mb-5">
+            <h1 class="display-4">Choisissez votre formule</h1>
+            <p class="lead">Analysez vos fichiers STEP avec l'IA de CADlytics</p>
+        </div>
+
+        <div class="row justify-content-center">
+            <!-- Offre à l'usage -->
+            <div class="col-md-4 mb-4">
+                <div class="card h-100 shadow-lg">
+                    <div class="card-header text-center py-3">
+                        <h4 class="my-0 fw-normal">À l'usage</h4>
+                    </div>
+                    <div class="card-body d-flex flex-column">
+                        <h1 class="card-title pricing-card-title text-center">5€ <small class="text-muted fw-light">/ 5 analyses</small></h1>
+                        <ul class="list-unstyled mt-3 mb-4">
+                            <li class="mb-2"><i class="bi bi-check-circle-fill text-success me-2"></i>5 analyses DFM complètes</li>
+                            <li class="mb-2"><i class="bi bi-check-circle-fill text-success me-2"></i>Rapports PDF détaillés</li>
+                            <li class="mb-2"><i class="bi bi-check-circle-fill text-success me-2"></i>Recommandations matériaux</li>
+                            <li class="mb-2"><i class="bi bi-check-circle-fill text-success me-2"></i>Visualisation 3D avancée</li>
+                            <li class="mb-2"><i class="bi bi-x-circle-fill text-muted me-2"></i>Support prioritaire</li>
+                        </ul>
+                        <div class="mt-auto">
+                            {% if current_user.is_authenticated %}
+                                {% if not current_user.is_premium %}
+                                    <a href="{{ url_for('stripe.buy_credits') }}" class="w-100 btn btn-lg btn-primary">
+                                        <i class="bi bi-coin me-2"></i>Acheter des crédits
+                                    </a>
+                                {% else %}
+                                    <button class="w-100 btn btn-lg btn-secondary" disabled>
+                                        Vous êtes Premium
+                                    </button>
+                                {% endif %}
+                            {% else %}
+                                <a href="{{ url_for('auth.register') }}" class="w-100 btn btn-lg btn-primary">
+                                    Commencer gratuitement
+                                </a>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Offre abonnement -->
+            <div class="col-md-4 mb-4">
+                <div class="card h-100 shadow-lg border-success">
+                    <div class="card-header text-center py-3 bg-success text-white">
+                        <h4 class="my-0 fw-normal">Premium</h4>
+                        <span class="badge bg-warning text-dark">Populaire</span>
+                    </div>
+                    <div class="card-body d-flex flex-column">
+                        <h1 class="card-title pricing-card-title text-center">23,99€ <small class="text-muted fw-light">/ mois</small></h1>
+                        <ul class="list-unstyled mt-3 mb-4">
+                            <li class="mb-2"><i class="bi bi-check-circle-fill text-success me-2"></i><strong>Analyses illimitées</strong></li>
+                            <li class="mb-2"><i class="bi bi-check-circle-fill text-success me-2"></i>Rapports PDF détaillés</li>
+                            <li class="mb-2"><i class="bi bi-check-circle-fill text-success me-2"></i>Recommandations matériaux</li>
+                            <li class="mb-2"><i class="bi bi-check-circle-fill text-success me-2"></i>Visualisation 3D avancée</li>
+                            <li class="mb-2"><i class="bi bi-check-circle-fill text-success me-2"></i><strong>Support prioritaire</strong></li>
+                        </ul>
+                        <div class="mt-auto">
+                            {% if current_user.is_authenticated %}
+                                {% if not current_user.is_premium %}
+                                    <a href="{{ url_for('stripe.subscribe') }}" class="w-100 btn btn-lg btn-success">
+                                        <i class="bi bi-star-fill me-2"></i>S'abonner
+                                    </a>
+                                {% else %}
+                                    <button class="w-100 btn btn-lg btn-secondary" disabled>
+                                        Abonnement actif
+                                    </button>
+                                {% endif %}
+                            {% else %}
+                                <a href="{{ url_for('auth.register') }}" class="w-100 btn btn-lg btn-success">
+                                    Commencer gratuitement
+                                </a>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mt-5">
+            <div class="col-md-8 mx-auto text-center">
+                <h3>Commencez gratuitement</h3>
+                <p class="text-muted">Créez un compte et obtenez <strong>5 analyses gratuites</strong> pour tester notre service.</p>
+                {% if not current_user.is_authenticated %}
+                    <a href="{{ url_for('auth.register') }}" class="btn btn-primary">
+                        <i class="bi bi-gift me-2"></i>Créer un compte gratuit
+                    </a>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

@@ -65,17 +65,39 @@ class UserSession(db.Model):
     def __repr__(self):
         return f'<UserSession {self.session_id}>'
 
-# Tables requises pour l'authentification Replit
+# Table utilisateur principale avec authentification email et OAuth
 class User(UserMixin, db.Model):
     __tablename__ = 'users'
-    id = db.Column(db.String, primary_key=True)
-    email = db.Column(db.String, unique=True, nullable=True)
-    first_name = db.Column(db.String, nullable=True)
-    last_name = db.Column(db.String, nullable=True)
-    profile_image_url = db.Column(db.String, nullable=True)
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(256), nullable=True)  # Null pour OAuth
+    first_name = db.Column(db.String(50), nullable=True)
+    last_name = db.Column(db.String(50), nullable=True)
+    profile_image_url = db.Column(db.String(255), nullable=True)
+    
+    # Gestion des crédits et abonnements
+    credits = db.Column(db.Integer, default=0)  # Nombre d'analyses restantes
+    is_premium = db.Column(db.Boolean, default=False)  # Abonné ou non
+    stripe_customer_id = db.Column(db.String(255), nullable=True)
+    stripe_subscription_id = db.Column(db.String(255), nullable=True)
+    
+    # OAuth providers
+    google_id = db.Column(db.String(100), nullable=True, unique=True)
     
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    def has_access(self):
+        """Vérifie si l'utilisateur peut faire une analyse"""
+        return self.is_premium or self.credits > 0
+    
+    def use_credit(self):
+        """Utilise un crédit si disponible"""
+        if not self.is_premium and self.credits > 0:
+            self.credits -= 1
+            db.session.commit()
+            return True
+        return self.is_premium
 
 # Table OAuth pour stocker les tokens d'authentification
 class OAuth(OAuthConsumerMixin, db.Model):

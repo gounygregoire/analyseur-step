@@ -54,9 +54,32 @@ app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(CONVERTED_FOLDER, exist_ok=True)
 
+# Initialize Flask-Login
+login_manager = LoginManager(app)
+login_manager.login_view = 'auth.login'
+login_manager.login_message = 'Veuillez vous connecter pour accéder à cette page.'
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(user_id)
+
 # Create database tables
 with app.app_context():
     db.create_all()
+
+# Register authentication blueprints
+from auth import auth_bp
+from google_auth import google_auth_bp
+from stripe_payment import stripe_bp
+
+app.register_blueprint(auth_bp, url_prefix='/auth')
+app.register_blueprint(google_auth_bp)
+app.register_blueprint(stripe_bp, url_prefix='/stripe')
+
+# Make session permanent
+@app.before_request
+def make_session_permanent():
+    session.permanent = True
 
 def allowed_file(filename):
     """Check if file extension is allowed"""
@@ -69,13 +92,26 @@ def landing():
     return render_template('landing.html')
 
 @app.route('/app')
+@login_required
 def index():
     """Main page with file upload and 3D viewer"""
     return render_template('index.html')
 
+@app.route('/pricing')
+def pricing():
+    """Page des tarifs"""
+    return render_template('pricing.html')
+
 @app.route('/upload', methods=['POST'])
+@login_required
 def upload_file():
     """Handle STEP file upload and conversion"""
+    # Vérifier les crédits/abonnement
+    if not current_user.has_access():
+        return jsonify({
+            'success': False,
+            'error': 'Vous n\'avez plus de crédits. Achetez des crédits ou souscrivez à un abonnement.'
+        }), 403
     try:
         # Check if file is present
         if 'file' not in request.files:

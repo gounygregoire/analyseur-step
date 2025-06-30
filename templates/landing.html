@@ -280,10 +280,25 @@
                         <a class="nav-link" href="#benefits">Avantages</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="/app" style="color: var(--kaki-light) !important;">
-                            <i class="bi bi-rocket-takeoff me-1"></i>Commencer
-                        </a>
+                        <a class="nav-link" href="{{ url_for('pricing') }}">Tarifs</a>
                     </li>
+                    {% if current_user.is_authenticated %}
+                        <li class="nav-item">
+                            <a class="nav-link" href="{{ url_for('auth.profile') }}">Mon Profil</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="/app" style="color: var(--kaki-light) !important;">
+                                <i class="bi bi-rocket-takeoff me-1"></i>Application
+                            </a>
+                        </li>
+                    {% else %}
+                        <li class="nav-item">
+                            <a class="nav-link" href="{{ url_for('auth.login') }}">Connexion</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="btn btn-primary ms-2" href="{{ url_for('auth.register') }}">S'inscrire</a>
+                        </li>
+                    {% endif %}
                 </ul>
             </div>
         </div>

@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mon Profil - CADlytics</title>
+    <link rel="stylesheet" href="https://cdn.replit.com/agent/bootstrap-agent-dark-theme.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark">
+        <div class="container">
+            <a class="navbar-brand fw-bold" href="{{ url_for('index') }}">
+                <i class="bi bi-gear-fill text-primary me-2"></i>CADlytics
+            </a>
+            <div class="navbar-nav ms-auto">
+                <a class="nav-link" href="{{ url_for('index') }}">Application</a>
+                <a class="nav-link" href="{{ url_for('pricing') }}">Tarifs</a>
+                <a class="nav-link" href="{{ url_for('auth.logout') }}">Déconnexion</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-5">
+        <div class="row">
+            <div class="col-md-8 mx-auto">
+                <h1 class="mb-4">Mon Profil</h1>
+                
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% if messages %}
+                        {% for category, message in messages %}
+                            <div class="alert alert-{{ 'danger' if category == 'danger' else category }} alert-dismissible fade show" role="alert">
+                                {{ message }}
+                                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+                {% endwith %}
+
+                <div class="card mb-4">
+                    <div class="card-body">
+                        <h5 class="card-title">Informations personnelles</h5>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <p><strong>Email:</strong> {{ user.email }}</p>
+                                <p><strong>Nom:</strong> {{ user.first_name }} {{ user.last_name }}</p>
+                            </div>
+                            <div class="col-md-6">
+                                <p><strong>Membre depuis:</strong> {{ user.created_at.strftime('%d/%m/%Y') }}</p>
+                                {% if user.google_id %}
+                                <p><span class="badge bg-secondary"><i class="bi bi-google me-1"></i>Connecté avec Google</span></p>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card mb-4">
+                    <div class="card-body">
+                        <h5 class="card-title">Mon abonnement</h5>
+                        
+                        {% if user.is_premium %}
+                            <div class="alert alert-success">
+                                <i class="bi bi-star-fill me-2"></i>
+                                <strong>Abonnement Premium Actif</strong>
+                                <p class="mb-0 mt-2">Analyses illimitées • Support prioritaire</p>
+                            </div>
+                            
+                            <form method="POST" action="{{ url_for('stripe.cancel_subscription') }}" onsubmit="return confirm('Êtes-vous sûr de vouloir annuler votre abonnement ?');">
+                                <button type="submit" class="btn btn-outline-danger">
+                                    <i class="bi bi-x-circle me-2"></i>Annuler l'abonnement
+                                </button>
+                            </form>
+                        {% else %}
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="card text-center mb-3">
+                                        <div class="card-body">
+                                            <h2 class="display-4">{{ user.credits }}</h2>
+                                            <p class="text-muted">Crédits restants</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <h6>Options disponibles:</h6>
+                                    <a href="{{ url_for('stripe.buy_credits') }}" class="btn btn-primary btn-sm mb-2 w-100">
+                                        <i class="bi bi-coin me-2"></i>Acheter 5 crédits (5€)
+                                    </a>
+                                    <a href="{{ url_for('stripe.subscribe') }}" class="btn btn-success btn-sm w-100">
+                                        <i class="bi bi-star me-2"></i>S'abonner (23,99€/mois)
+                                    </a>
+                                </div>
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Historique d'utilisation</h5>
+                        <p class="text-muted">Fonctionnalité bientôt disponible</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
