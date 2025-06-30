@@ -832,6 +832,64 @@ body {
     animation: fadeIn 0.6s ease-out;
 }
 
+/* Onglets personnalisés DFM */
+.dfm-tabs-container {
+    margin-top: 1.5rem;
+}
+
+.dfm-custom-tabs {
+    border-bottom: 2px solid var(--kaki-lighter);
+    margin-bottom: 0;
+}
+
+.dfm-tab-btn {
+    color: var(--brown-medium) !important;
+    background: transparent !important;
+    border: none !important;
+    border-bottom: 3px solid transparent !important;
+    padding: 1rem 1.5rem !important;
+    font-weight: 500 !important;
+    transition: all 0.3s ease !important;
+    border-radius: 0 !important;
+}
+
+.dfm-tab-btn:hover {
+    color: var(--kaki-dark) !important;
+    background: rgba(139, 139, 106, 0.1) !important;
+    border-bottom-color: var(--kaki-light) !important;
+}
+
+.dfm-tab-btn.active {
+    color: var(--kaki-dark) !important;
+    background: rgba(139, 139, 106, 0.15) !important;
+    border-bottom-color: var(--kaki-dark) !important;
+    font-weight: 600 !important;
+}
+
+.dfm-tab-content {
+    background: rgba(255, 255, 255, 0.7);
+    border: 1px solid var(--kaki-lighter);
+    border-top: none;
+    border-radius: 0 0 15px 15px;
+    padding: 2rem;
+    min-height: 400px;
+}
+
+.tab-pane {
+    animation: fadeInTab 0.4s ease-out;
+}
+
+@keyframes fadeInTab {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
 /* Tooltips personnalisés */
 .tooltip {
     font-size: 0.9rem;

@@ -931,12 +931,45 @@ class STEPViewer {
                 </div>
             </div>
             
+            <!-- Système d'onglets -->
+            <div class="dfm-tabs-container mb-4">
+                <ul class="nav nav-tabs dfm-custom-tabs" id="dfmTabs" role="tablist">
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link active dfm-tab-btn" id="analysis-tab" data-bs-toggle="tab" data-bs-target="#analysis-panel" type="button" role="tab">
+                            <i class="bi bi-gear-fill me-2"></i>Analyse Technique
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link dfm-tab-btn" id="materials-tab" data-bs-toggle="tab" data-bs-target="#materials-panel" type="button" role="tab">
+                            <i class="bi bi-palette-fill me-2"></i>Recommandations Matériaux
+                        </button>
+                    </li>
+                </ul>
+                
+                <div class="tab-content dfm-tab-content" id="dfmTabsContent">
+                    <!-- Onglet Analyse Technique -->
+                    <div class="tab-pane fade show active" id="analysis-panel" role="tabpanel">
+                        ${this.generateAnalysisTabContent(dfmData)}
+                    </div>
+                    
+                    <!-- Onglet Recommandations Matériaux -->
+                    <div class="tab-pane fade" id="materials-panel" role="tabpanel">
+                        ${this.generateMaterialsTabContent()}
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    
+    generateAnalysisTabContent(dfmData) {
+        return `
             ${this.generateIssuesSection(dfmData.wall_thickness_issues, dfmData.geometry_issues)}
-            
-            ${this.generateMaterialRecommendationsSection()}
-            
             ${this.generateRecommendationsSection(dfmData.recommendations)}
         `;
+    }
+    
+    generateMaterialsTabContent() {
+        return this.generateMaterialRecommendationsSection();
     }
     
     generateIssuesSection(wallIssues, geometryIssues) {
