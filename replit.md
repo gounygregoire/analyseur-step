@@ -94,6 +94,13 @@ CADlytics est une application SaaS basée sur Flask qui permet aux utilisateurs 
 
 ## Changelog
 
+- 30 juin 2025 : Correction finale de l'interface d'authentification et page tarifs
+  - Champs de saisie avec fond blanc et texte noir pour visibilité maximale
+  - Titres H2 en blanc avec ombre portée sur pages login/register
+  - Labels en blanc avec police agrandie et ombre
+  - Bordures dorées épaisses sur les champs de saisie
+  - Page tarifs : suppression mention "IA", cartes avec texte noir lisible
+  - Design cohérent kaki/brun avec contraste optimal pour l'accessibilité
 - 30 juin 2025 : Réorganisation ergonomique de l'interface utilisateur
   - Outils 3D (mesure, coupe, filaire, axes) intégrés directement au visualisateur
   - Analyse DFM repositionnée juste sous le visualisateur pour flux logique
