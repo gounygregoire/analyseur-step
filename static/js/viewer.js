@@ -2389,8 +2389,3 @@ class STEPViewer {
         }, 100);
     }
 }
-
-// Initialize the viewer when the page loads
-document.addEventListener('DOMContentLoaded', function() {
-    window.viewer = new STEPViewer();
-});
