@@ -592,6 +592,80 @@ body {
     transition: width 0.3s ease;
 }
 
+/* Mode sombre - Compatibilité Bootstrap */
+[data-bs-theme="dark"] {
+    --bs-body-bg: #1a1a1a;
+    --bs-body-color: #e0e0e0;
+    --bs-card-bg: #2d2d30;
+    --bs-dropdown-bg: #2d2d30;
+    --bs-dropdown-link-color: #e0e0e0;
+    --bs-dropdown-link-hover-bg: #404040;
+    --bs-dropdown-border-color: #454545;
+    --bs-nav-link-color: #e0e0e0;
+    --bs-nav-link-hover-color: #ffffff;
+}
+
+/* Corrections spécifiques mode sombre */
+[data-bs-theme="dark"] .card {
+    background: var(--bs-card-bg);
+    border-color: #454545;
+    color: var(--bs-body-color);
+}
+
+[data-bs-theme="dark"] .dropdown-menu {
+    background-color: var(--bs-dropdown-bg);
+    border-color: var(--bs-dropdown-border-color);
+}
+
+[data-bs-theme="dark"] .dropdown-item {
+    color: var(--bs-dropdown-link-color);
+}
+
+[data-bs-theme="dark"] .dropdown-item:hover,
+[data-bs-theme="dark"] .dropdown-item:focus {
+    background-color: var(--bs-dropdown-link-hover-bg);
+    color: var(--bs-dropdown-link-color);
+}
+
+[data-bs-theme="dark"] .table {
+    --bs-table-bg: transparent;
+    color: var(--bs-body-color);
+}
+
+[data-bs-theme="dark"] .table-striped > tbody > tr:nth-of-type(odd) > td {
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+[data-bs-theme="dark"] .badge {
+    color: #ffffff;
+}
+
+/* Historique des conversions en mode sombre */
+[data-bs-theme="dark"] .conversion-item {
+    background: #2d2d30;
+    border-color: #454545;
+    color: var(--bs-body-color);
+}
+
+[data-bs-theme="dark"] .conversion-item:hover {
+    background: #3a3a3d;
+}
+
+/* Analyse DFM en mode sombre */
+[data-bs-theme="dark"] .dfm-score-card,
+[data-bs-theme="dark"] .dfm-metric-card,
+[data-bs-theme="dark"] .dfm-projection-card,
+[data-bs-theme="dark"] .dfm-problem-card,
+[data-bs-theme="dark"] .dfm-recommendation-item {
+    background: #2d2d30;
+    border-color: #454545;
+    color: var(--bs-body-color);
+}
+
+[data-bs-theme="dark"] .dfm-section-title {
+    color: var(--bs-body-color);
+}
+
 /* Alerts et notifications */
 .alert {
     border-radius: 10px;

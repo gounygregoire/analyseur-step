@@ -794,10 +794,16 @@ class STEPViewer {
     }
     
     displayDFMAnalysis(dfmData) {
+        console.log('Displaying DFM analysis:', dfmData);
+        
         // Show the DFM results section
         const dfmResultsSection = document.getElementById('dfmResultsSection');
         if (dfmResultsSection) {
             dfmResultsSection.style.display = 'block';
+            console.log('DFM results section shown');
+        } else {
+            console.error('DFM results section not found');
+            return;
         }
         
         // Get the DFM panel container
@@ -806,6 +812,7 @@ class STEPViewer {
             console.error('DFM analysis panel not found');
             return;
         }
+        console.log('DFM panel found, updating content');
         
         // Clear any existing content
         dfmPanel.innerHTML = '';
@@ -816,6 +823,7 @@ class STEPViewer {
         // Show action buttons
         this.showChangeDemoldingAxisButton();
         this.enablePDFGeneration();
+        console.log('DFM analysis displayed successfully');
     }
     
     generateModernDFMInterface(dfmData) {
@@ -1163,389 +1171,201 @@ class STEPViewer {
         }
     }
     
-    displayDFMAnalysis(dfmData) {
-        // Show the DFM results section
-        const dfmResultsSection = document.getElementById('dfmResultsSection');
-        if (dfmResultsSection) {
-            dfmResultsSection.style.display = 'block';
+    showChangeDemoldingAxisButton() {
+        const btn = document.getElementById('changeDemoldingAxisBtn');
+        if (btn) {
+            btn.style.display = 'inline-block';
         }
-        
-        // Get the DFM panel container
-        const dfmPanel = document.getElementById('dfmAnalysisPanel');
-        if (!dfmPanel) {
-            console.error('DFM analysis panel not found');
-            return;
-        }
-        
-        // Clear any existing content
-        dfmPanel.innerHTML = '';
-        
-        const alertClass = this.getDFMAlertClass(dfmData.rating);
-        const riskIndicators = this.generateRiskIndicators(dfmData);
-        
-        dfmPanel.innerHTML = `
-            <!-- Score principal et résumé -->
-            <div class="row mb-4">
-                <div class="col-lg-4 mb-3">
-                    <div class="score-card text-center p-4 rounded-3 shadow-sm" style="background: white; border: 2px solid ${this.getScoreColor(dfmData.score)};">
-                        <div class="score-circle mx-auto mb-3" style="width: 120px; height: 120px; border-radius: 50%; background: linear-gradient(135deg, ${this.getScoreColor(dfmData.score)}, ${this.getScoreColor(dfmData.score)}aa); display: flex; flex-direction: column; justify-content: center; align-items: center; color: white; box-shadow: 0 8px 16px rgba(0,0,0,0.1);">
-                            <h1 class="mb-0 fw-bold">${dfmData.score}</h1>
-                            <small>/10</small>
-                        </div>
-                        <h5 class="mb-2">${this.getDFMRatingText(dfmData.rating)}</h5>
-                        <div class="progress" style="height: 8px;">
-                            <div class="progress-bar" role="progressbar" style="width: ${dfmData.score * 10}%; background: ${this.getScoreColor(dfmData.score)};"></div>
-                        </div>
-                        <p class="mt-2 mb-0 text-muted small">${dfmData.issues_count} problème${dfmData.issues_count > 1 ? 's' : ''} détecté${dfmData.issues_count > 1 ? 's' : ''}</p>
-                    </div>
-                </div>
-                <div class="col-lg-8">
-                    <div class="summary-card p-4 rounded-3 shadow-sm h-100" style="background: white;">
-                        <h6 class="mb-3"><i class="bi bi-info-circle-fill me-2 text-primary"></i>Résumé de l'analyse</h6>
-                        <div class="row">
-                            <div class="col-md-6">
-                                <div class="summary-item mb-3">
-                                    <div class="d-flex justify-content-between">
-                                        <span class="text-muted">Moulabilité générale</span>
-                                        <span class="badge ${this.getRatingBadgeClass(dfmData.rating)}">${this.getDFMRatingText(dfmData.rating)}</span>
-                                    </div>
-                                </div>
-                                <div class="summary-item mb-3">
-                                    <div class="d-flex justify-content-between">
-                                        <span class="text-muted">Épaisseur maximale</span>
-                                        <span class="${dfmData.dimensions.max_wall_thickness > 4 ? 'text-warning' : 'text-success'} fw-bold">${dfmData.dimensions.max_wall_thickness} mm</span>
-                                    </div>
-                                </div>
-                                <div class="summary-item mb-3">
-                                    <div class="d-flex justify-content-between">
-                                        <span class="text-muted">Surface projetée (${(this.selectedDemoldingAxis || 'Z').toUpperCase()})</span>
-                                        <span class="fw-bold">${this.formatArea(this.getProjectedArea(dfmData.dimensions))}</span>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="col-md-6">
-                                <div class="summary-item mb-3">
-                                    <div class="d-flex justify-content-between">
-                                        <span class="text-muted">Volume total</span>
-                                        <span class="fw-bold">${(dfmData.dimensions.volume / 1000).toFixed(2)} cm³</span>
-                                    </div>
-                                </div>
-                                <div class="summary-item mb-3">
-                                    <div class="d-flex justify-content-between">
-                                        <span class="text-muted">Plus grande dimension</span>
-                                        <span class="fw-bold">${Math.max(dfmData.dimensions.x, dfmData.dimensions.y, dfmData.dimensions.z)} mm</span>
-                                    </div>
-                                </div>
-                                <div class="summary-item mb-3">
-                                    <div class="d-flex justify-content-between">
-                                        <span class="text-muted">Temps de refroidissement</span>
-                                        <span class="fw-bold text-info">${Math.round(dfmData.dimensions.cooling_time)} s</span>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                        ${dfmData.recommendations.length > 0 ? `
-                        <div class="mt-3">
-                            <small class="text-muted d-block mb-2">Recommandation principale :</small>
-                            <div class="alert alert-light border-start border-4 border-warning p-2 mb-0">
-                                <small><i class="bi bi-lightbulb me-1"></i>${dfmData.recommendations[0]}</small>
-                            </div>
-                        </div>
-                        ` : ''}
-                    </div>
-                </div>
-            </div>
-                
-            <!-- Détails techniques en accordéon -->
-            <div class="row">
-                <div class="col-12">
-                    <div class="accordion" id="dfmDetailsAccordion">
-                        
-                        <!-- Dimensions détaillées -->
-                        <div class="accordion-item border-0 shadow-sm mb-3">
-                            <h2 class="accordion-header">
-                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#dimensionsCollapse">
-                                    <i class="bi bi-rulers me-2 text-primary"></i>
-                                    <strong>Dimensions et géométrie</strong>
-                                </button>
-                            </h2>
-                            <div id="dimensionsCollapse" class="accordion-collapse collapse" data-bs-parent="#dfmDetailsAccordion">
-                                <div class="accordion-body">
-                                    <div class="row g-3">
-                                        <div class="col-md-4">
-                                            <div class="dimension-item text-center p-3 rounded bg-light">
-                                                <i class="bi bi-arrow-right text-danger fs-4 mb-2"></i>
-                                                <h6 class="mb-1">Longueur (X)</h6>
-                                                <h5 class="mb-0 text-primary">${dfmData.dimensions.x} mm</h5>
-                                            </div>
-                                        </div>
-                                        <div class="col-md-4">
-                                            <div class="dimension-item text-center p-3 rounded bg-light">
-                                                <i class="bi bi-arrow-up text-success fs-4 mb-2"></i>
-                                                <h6 class="mb-1">Largeur (Y)</h6>
-                                                <h5 class="mb-0 text-success">${dfmData.dimensions.y} mm</h5>
-                                            </div>
-                                        </div>
-                                        <div class="col-md-4">
-                                            <div class="dimension-item text-center p-3 rounded bg-light">
-                                                <i class="bi bi-arrow-down text-info fs-4 mb-2"></i>
-                                                <h6 class="mb-1">Hauteur (Z)</h6>
-                                                <h5 class="mb-0 text-info">${dfmData.dimensions.z} mm</h5>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Indicateurs de risque -->
-                        ${riskIndicators.length > 0 ? `
-                        <div class="accordion-item border-0 shadow-sm mb-3">
-                            <h2 class="accordion-header">
-                                <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#risksCollapse">
-                                    <i class="bi bi-exclamation-triangle-fill me-2 text-warning"></i>
-                                    <strong>Indicateurs de risque (${riskIndicators.length})</strong>
-                                </button>
-                            </h2>
-                            <div id="risksCollapse" class="accordion-collapse collapse show" data-bs-parent="#dfmDetailsAccordion">
-                                <div class="accordion-body">
-                                    <div class="row g-3">
-                                        ${riskIndicators.map(indicator => `
-                                            <div class="col-md-6">
-                                                <div class="risk-card p-3 rounded-3 border h-100" style="background: white; border-left: 4px solid ${indicator.color} !important;">
-                                                    <div class="d-flex align-items-start">
-                                                        <div class="risk-icon me-3" style="font-size: 1.5rem;">
-                                                            <i class="bi ${indicator.icon} ${indicator.iconClass}"></i>
-                                                        </div>
-                                                        <div class="flex-grow-1">
-                                                            <h6 class="mb-1">${indicator.title}</h6>
-                                                            <p class="mb-2 text-muted small">${indicator.description}</p>
-                                                            <span class="badge ${indicator.badgeClass}">${indicator.severity}</span>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        `).join('')}
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                        ` : ''}
-                
-                        <!-- Recommandations complètes -->
-                        ${dfmData.recommendations.length > 1 ? `
-                        <div class="accordion-item border-0 shadow-sm mb-3">
-                            <h2 class="accordion-header">
-                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#recommendationsCollapse">
-                                    <i class="bi bi-lightbulb-fill me-2 text-warning"></i>
-                                    <strong>Toutes les recommandations (${dfmData.recommendations.length})</strong>
-                                </button>
-                            </h2>
-                            <div id="recommendationsCollapse" class="accordion-collapse collapse" data-bs-parent="#dfmDetailsAccordion">
-                                <div class="accordion-body">
-                                    <div class="recommendations-grid">
-                                        ${dfmData.recommendations.map((rec, index) => `
-                                            <div class="recommendation-item d-flex align-items-start mb-3 p-3 rounded bg-light">
-                                                <span class="recommendation-number me-3" style="min-width: 32px; height: 32px; background: var(--kaki-light); color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold;">${index + 1}</span>
-                                                <div class="flex-grow-1">
-                                                    <p class="mb-0">${rec}</p>
-                                                </div>
-                                            </div>
-                                        `).join('')}
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                        ` : ''}
-                    </div>
-                </div>
-            </div>
-                        
-                        <!-- Detailed Issues with Design Insights -->
-                        ${dfmData.wall_thickness_issues && dfmData.wall_thickness_issues.length > 0 ? `
-                        <h6 class="mt-3">
-                            <i class="bi bi-layers me-2"></i>Problèmes d'épaisseur
-                            <i class="bi bi-info-circle-fill text-primary ms-2 insight-icon" 
-                               style="cursor: help; font-size: 0.9em;" 
-                               data-bs-toggle="tooltip" 
-                               data-bs-placement="top"
-                               data-bs-html="true"
-                               title="<div class='text-start'><strong>Conseils pour l'épaisseur des parois:</strong><br/>• Optimal: 1.2-3.0mm<br/>• Minimum: 0.8mm<br/>• Maximum: 4.0mm<br/>• Éviter les variations importantes</div>"></i>
-                        </h6>
-                        <div class="small">
-                            ${dfmData.wall_thickness_issues.map((issue, index) => `
-                                <div class="d-flex align-items-center mb-2 p-2 border rounded bg-light position-relative">
-                                    <span class="badge ${this.getSeverityBadgeClass(issue.severity)} me-2">${issue.severity}</span>
-                                    <span class="flex-grow-1">${this.getWallThicknessDescription(issue)}</span>
-                                    <i class="bi bi-lightbulb-fill text-warning ms-2 insight-icon" 
-                                       style="cursor: help;" 
-                                       data-bs-toggle="tooltip" 
-                                       data-bs-placement="left"
-                                       data-bs-html="true"
-                                       data-issue-index="${index}"
-                                       data-issue-category="wall_thickness"
-                                       data-issue-type="${issue.issue_type}"
-                                       title="${this.createWallThicknessInsight(issue)}"></i>
-                                </div>
-                            `).join('')}
-                        </div>
-                        ` : ''}
-                        
-                        ${dfmData.geometry_issues && dfmData.geometry_issues.length > 0 ? `
-                        <h6 class="mt-3">
-                            <i class="bi bi-gear me-2"></i>Problèmes géométriques
-                            <i class="bi bi-info-circle-fill text-primary ms-2 insight-icon" 
-                               style="cursor: help; font-size: 0.9em;" 
-                               data-bs-toggle="tooltip" 
-                               data-bs-placement="top"
-                               data-bs-html="true"
-                               title="<div class='text-start'><strong>Règles géométriques clés:</strong><br/>• Dépouille: min 0.5°<br/>• Congés: min 0.2mm<br/>• Ratio trous: max 3:1<br/>• Hauteur: max 60mm</div>"></i>
-                        </h6>
-                        <div class="small">
-                            ${dfmData.geometry_issues.map((issue, index) => `
-                                <div class="d-flex align-items-center mb-2 p-2 border rounded bg-light position-relative">
-                                    <span class="badge ${this.getSeverityBadgeClass(issue.severity)} me-2">${issue.severity}</span>
-                                    <span class="flex-grow-1">${issue.description}</span>
-                                    <i class="bi bi-lightbulb-fill text-warning ms-2 insight-icon" 
-                                       style="cursor: help;" 
-                                       data-bs-toggle="tooltip" 
-                                       data-bs-placement="left"
-                                       data-bs-html="true"
-                                       data-issue-index="${index}"
-                                       data-issue-category="geometry"
-                                       data-issue-type="${issue.issue_type}"
-                                       title="${this.createGeometryInsight(issue)}"></i>
-                                </div>
-                            `).join('')}
-                        </div>
-                        ` : ''}
-                    </div>
-                </div>
-            </div>
-        `;
-        
-        // Insert after the viewer section
-        const viewerSection = document.querySelector('.card .card-body');
-        viewerSection.appendChild(dfmPanel);
-        
-        // Initialize tooltips for the new content
-        this.initializeDFMTooltips();
     }
     
-    generateRiskIndicators(dfmData) {
-        const indicators = [];
-        
-        // Wall thickness risk based on max thickness
-        if (dfmData.dimensions.max_wall_thickness > 6) {
-            indicators.push({
-                title: 'Parois très épaisses',
-                description: 'Risque de retrait et temps de cycle élevé',
-                severity: 'CRITIQUE',
-                icon: 'bi-exclamation-triangle-fill',
-                iconClass: 'text-danger',
-                bgClass: 'border-danger bg-danger bg-opacity-10',
-                badgeClass: 'bg-danger'
-            });
-        } else if (dfmData.dimensions.max_wall_thickness > 4) {
-            indicators.push({
-                title: 'Parois épaisses',
-                description: 'Optimisation recommandée pour le refroidissement',
-                severity: 'ATTENTION',
-                icon: 'bi-exclamation-triangle',
-                iconClass: 'text-warning',
-                bgClass: 'border-warning bg-warning bg-opacity-10',
-                badgeClass: 'bg-warning'
-            });
-        } else if (dfmData.dimensions.max_wall_thickness < 0.8) {
-            indicators.push({
-                title: 'Parois très fines',
-                description: 'Risque de remplissage incomplet',
-                severity: 'CRITIQUE',
-                icon: 'bi-exclamation-triangle-fill',
-                iconClass: 'text-danger',
-                bgClass: 'border-danger bg-danger bg-opacity-10',
-                badgeClass: 'bg-danger'
-            });
+    enablePDFGeneration() {
+        const generatePdfBtn = document.getElementById('generatePdfBtn');
+        if (generatePdfBtn) {
+            generatePdfBtn.style.display = 'inline-block';
+            generatePdfBtn.disabled = false;
+            generatePdfBtn.innerHTML = '<i class="bi bi-file-earmark-pdf me-2"></i>Générer rapport PDF';
         }
-        
-        // Size-based risks
-        if (dfmData.dimensions.z > 60) {
-            indicators.push({
-                title: 'Hauteur excessive',
-                description: 'Dépouille et refroidissement critiques',
-                severity: 'CRITIQUE',
-                icon: 'bi-arrow-up-circle-fill',
-                iconClass: 'text-danger',
-                bgClass: 'border-danger bg-danger bg-opacity-10',
-                badgeClass: 'bg-danger'
-            });
-        }
-        
-        // Volume-based risks
-        if (dfmData.dimensions.volume > 100000) { // > 100 cm³
-            indicators.push({
-                title: 'Volume important',
-                description: 'Temps de cycle et retrait à surveiller',
-                severity: 'ATTENTION',
-                icon: 'bi-box-fill',
-                iconClass: 'text-warning',
-                bgClass: 'border-warning bg-warning bg-opacity-10',
-                badgeClass: 'bg-warning'
-            });
-        }
-        
-        // Score-based risks
-        if (dfmData.score <= 3) {
-            indicators.push({
-                title: 'Moulabilité faible',
-                description: 'Redesign fortement recommandé',
-                severity: 'CRITIQUE',
-                icon: 'bi-x-circle-fill',
-                iconClass: 'text-danger',
-                bgClass: 'border-danger bg-danger bg-opacity-10',
-                badgeClass: 'bg-danger'
-            });
-        } else if (dfmData.score <= 6) {
-            indicators.push({
-                title: 'Moulabilité moyenne',
-                description: 'Optimisations possibles',
-                severity: 'ATTENTION',
-                icon: 'bi-dash-circle-fill',
-                iconClass: 'text-warning',
-                bgClass: 'border-warning bg-warning bg-opacity-10',
-                badgeClass: 'bg-warning'
-            });
-        }
-        
-        // Complexity indicators
-        if (dfmData.issues_count > 5) {
-            indicators.push({
-                title: 'Complexité élevée',
-                description: 'Nombreux problèmes détectés',
-                severity: 'ATTENTION',
-                icon: 'bi-gear-wide-connected',
-                iconClass: 'text-warning',
-                bgClass: 'border-warning bg-warning bg-opacity-10',
-                badgeClass: 'bg-warning',
-                color: '#ffc107'
-            });
-        }
-        
-        // Success indicator
-        if (dfmData.score >= 8 && dfmData.issues_count <= 2) {
-            indicators.push({
-                title: 'Excellente moulabilité',
-                description: 'Pièce optimisée pour l\'injection',
-                severity: 'OPTIMAL',
-                icon: 'bi-check-circle-fill',
-                iconClass: 'text-success',
-                bgClass: 'border-success bg-success bg-opacity-10',
-                badgeClass: 'bg-success'
-            });
-        }
-        
-        return indicators;
     }
+    
+    generateModernDFMInterface(dfmData) {
+        const scoreColor = this.getScoreColor(dfmData.score);
+        const ratingText = this.getDFMRatingText(dfmData.rating);
+        const ratingBadgeClass = this.getRatingBadgeClass(dfmData.rating);
+        
+        return `
+            <!-- Carte de score principal -->
+            <div class="row mb-4">
+                <div class="col-lg-4 mb-3">
+                    <div class="dfm-score-card">
+                        <div class="dfm-score-circle" style="background: linear-gradient(135deg, ${scoreColor}, ${scoreColor}aa);">
+                            <div class="dfm-score-number">${dfmData.score}</div>
+                            <div class="dfm-score-max">/10</div>
+                        </div>
+                        <div class="dfm-rating-badge ${ratingBadgeClass}">${ratingText}</div>
+                        <div class="dfm-issues-count">${dfmData.issues_count} problème${dfmData.issues_count > 1 ? 's' : ''} détecté${dfmData.issues_count > 1 ? 's' : ''}</div>
+                    </div>
+                </div>
+                <div class="col-lg-8 mb-3">
+                    <!-- Grille de métriques -->
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <div class="dfm-metric-card">
+                                <div class="dfm-metric-icon">
+                                    <i class="bi bi-rulers"></i>
+                                </div>
+                                <div class="dfm-metric-content">
+                                    <div class="dfm-metric-label">Dimensions</div>
+                                    <div class="dfm-metric-value">${Math.max(dfmData.dimensions.x, dfmData.dimensions.y, dfmData.dimensions.z)} mm</div>
+                                    <div class="dfm-metric-detail">${dfmData.dimensions.x} × ${dfmData.dimensions.y} × ${dfmData.dimensions.z}</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="dfm-metric-card">
+                                <div class="dfm-metric-icon">
+                                    <i class="bi bi-box"></i>
+                                </div>
+                                <div class="dfm-metric-content">
+                                    <div class="dfm-metric-label">Volume</div>
+                                    <div class="dfm-metric-value">${(dfmData.dimensions.volume / 1000).toFixed(2)} cm³</div>
+                                    <div class="dfm-metric-detail">${dfmData.dimensions.volume.toFixed(0)} mm³</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="dfm-metric-card">
+                                <div class="dfm-metric-icon ${dfmData.dimensions.max_wall_thickness > 4 ? 'text-warning' : 'text-success'}">
+                                    <i class="bi bi-layers"></i>
+                                </div>
+                                <div class="dfm-metric-content">
+                                    <div class="dfm-metric-label">Épaisseur max</div>
+                                    <div class="dfm-metric-value">${dfmData.dimensions.max_wall_thickness.toFixed(1)} mm</div>
+                                    <div class="dfm-metric-detail">${dfmData.dimensions.max_wall_thickness > 4 ? 'Trop épais' : 'Acceptable'}</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="dfm-metric-card">
+                                <div class="dfm-metric-icon">
+                                    <i class="bi bi-clock"></i>
+                                </div>
+                                <div class="dfm-metric-content">
+                                    <div class="dfm-metric-label">Refroidissement</div>
+                                    <div class="dfm-metric-value">${Math.round(dfmData.dimensions.cooling_time)} s</div>
+                                    <div class="dfm-metric-detail">Temps estimé</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Surfaces projetées -->
+            <div class="row mb-4">
+                <div class="col-md-4">
+                    <div class="dfm-projection-card">
+                        <div class="dfm-projection-axis">X</div>
+                        <div class="dfm-projection-value">${dfmData.dimensions.projected_area_x ? dfmData.dimensions.projected_area_x.toFixed(1) : '0'} mm²</div>
+                        <div class="dfm-projection-label">Surface YZ</div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="dfm-projection-card">
+                        <div class="dfm-projection-axis">Y</div>
+                        <div class="dfm-projection-value">${dfmData.dimensions.projected_area_y ? dfmData.dimensions.projected_area_y.toFixed(1) : '0'} mm²</div>
+                        <div class="dfm-projection-label">Surface XZ</div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="dfm-projection-card">
+                        <div class="dfm-projection-axis">Z</div>
+                        <div class="dfm-projection-value">${dfmData.dimensions.projected_area_z ? dfmData.dimensions.projected_area_z.toFixed(1) : '0'} mm²</div>
+                        <div class="dfm-projection-label">Surface XY</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Problèmes détectés -->
+            ${dfmData.geometry_issues && dfmData.geometry_issues.length > 0 ? `
+            <div class="dfm-problems-section mb-4">
+                <h5 class="dfm-section-title">
+                    <i class="bi bi-exclamation-triangle me-2"></i>
+                    Problèmes détectés (${dfmData.geometry_issues.length})
+                </h5>
+                <div class="row g-3">
+                    ${dfmData.geometry_issues.map(issue => `
+                        <div class="col-md-6">
+                            <div class="dfm-problem-card ${this.getSeverityClass(issue.severity)}">
+                                <div class="dfm-problem-severity">${issue.severity}</div>
+                                <div class="dfm-problem-description">${issue.description}</div>
+                                <div class="dfm-problem-type">${issue.issue_type}</div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+            ` : ''}
+            
+            <!-- Recommandations -->
+            ${dfmData.recommendations && dfmData.recommendations.length > 0 ? `
+            <div class="dfm-recommendations-section">
+                <h5 class="dfm-section-title">
+                    <i class="bi bi-lightbulb me-2"></i>
+                    Recommandations (${dfmData.recommendations.length})
+                </h5>
+                <div class="dfm-recommendations-list">
+                    ${dfmData.recommendations.map((rec, index) => `
+                        <div class="dfm-recommendation-item">
+                            <div class="dfm-recommendation-number">${index + 1}</div>
+                            <div class="dfm-recommendation-text">${rec}</div>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+            ` : ''}
+        `;
+    }
+    
+    getScoreColor(score) {
+        if (score >= 8) return '#28a745';
+        if (score >= 6) return '#17a2b8';
+        if (score >= 4) return '#ffc107';
+        return '#dc3545';
+    }
+    
+    getDFMRatingText(rating) {
+        switch(rating) {
+            case 'excellent': return 'Excellent';
+            case 'good': return 'Bon';
+            case 'warning': return 'Attention';
+            case 'critical': return 'Critique';
+            default: return 'Inconnu';
+        }
+    }
+    
+    getRatingBadgeClass(rating) {
+        switch(rating) {
+            case 'excellent': return 'badge bg-success';
+            case 'good': return 'badge bg-info';
+            case 'warning': return 'badge bg-warning';
+            case 'critical': return 'badge bg-danger';
+            default: return 'badge bg-secondary';
+        }
+    }
+    
+    getSeverityClass(severity) {
+        switch(severity.toLowerCase()) {
+            case 'critical': return 'dfm-problem-critical';
+            case 'warning': return 'dfm-problem-warning';
+            default: return 'dfm-problem-info';
+        }
+    }
+}
+
+// Initialize the viewer when the page loads
+document.addEventListener('DOMContentLoaded', function() {
+    new STLViewer();
+});
     
     showChangeDemoldingAxisButton() {
         const changeDemoldingAxisBtn = document.getElementById('changeDemoldingAxisBtn');
