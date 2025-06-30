@@ -150,11 +150,23 @@ class DFMAnalyzer:
                 # Load with Trimesh
                 mesh = trimesh.load(temp_stl_path)
                 
+                # Handle Scene objects (when multiple objects are loaded)
+                if isinstance(mesh, trimesh.Scene):
+                    if len(mesh.geometry) > 0:
+                        mesh = list(mesh.geometry.values())[0]
+                    else:
+                        raise ValueError("No geometry found in the file")
+                
+                # Ensure mesh is valid
+                if not hasattr(mesh, 'face_normals') or not hasattr(mesh, 'area_faces'):
+                    raise ValueError("Invalid mesh format")
+                
                 # Calculate real projected areas using face normals
                 # Only count faces pointing in positive direction for each axis
                 projected_area_x = mesh.area_faces[(mesh.face_normals[:, 0] > 0)].sum()
                 projected_area_y = mesh.area_faces[(mesh.face_normals[:, 1] > 0)].sum()
                 projected_area_z = mesh.area_faces[(mesh.face_normals[:, 2] > 0)].sum()
+
                 
             except Exception as e:
                 print(f"Error calculating projected areas with Trimesh: {e}")
@@ -607,3 +619,38 @@ def analyze_dfm(step_file_path: str, demolding_axis: str = 'z') -> DFMReport:
     """Convenience function to analyze a STEP file"""
     analyzer = DFMAnalyzer()
     return analyzer.analyze_step_file(step_file_path, demolding_axis)
+
+
+def compute_projected_area(mesh, axis='z'):
+    # Cette fonction va calculer la surface visible de ta pièce, vue depuis un axe (X, Y ou Z)
+
+    # On définit ici quels axes garder selon la direction qu'on regarde
+    axis_map = {
+        'x': [1, 2],  # Si on regarde depuis X → on garde YZ
+        'y': [0, 2],  # Si on regarde depuis Y → on garde XZ
+        'z': [0, 1],  # Si on regarde depuis Z → on garde XY
+    }
+
+    if axis not in axis_map:
+        raise ValueError("Axe invalide, choisis 'x', 'y' ou 'z'")
+
+    # On va additionner les surfaces projetées
+    projected_areas = []
+
+    for face in mesh.faces:
+        vertices = mesh.vertices[face]
+        # On garde les 2 dimensions utiles
+        projected = vertices[:, axis_map[axis]]
+
+        # On récupère les 3 points du triangle
+        v0, v1, v2 = projected
+
+        # Formule pour calculer l'aire d'un triangle 2D
+        area = 0.5 * abs(
+            (v1[0] - v0[0]) * (v2[1] - v0[1]) -
+            (v2[0] - v0[0]) * (v1[1] - v0[1])
+        )
+
+        projected_areas.append(area)
+
+    return sum(projected_areas)
