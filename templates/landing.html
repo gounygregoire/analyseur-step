@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="fr" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CADlytics - Analyse DFM et Visualisation 3D</title>
+    <link href="https://cdn.replit.com/agent/bootstrap-agent-dark-theme.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <style>
+        :root {
+            --kaki-light: #a8a068;
+            --kaki-dark: #6d6843;
+            --brown-light: #8b6f47;
+            --brown-dark: #5c4933;
+            --accent-gold: #d4af37;
+        }
+
+        body {
+            background: linear-gradient(135deg, #1a1a1a 0%, #2d2d30 100%);
+            min-height: 100vh;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        /* Navigation */
+        .navbar {
+            background: rgba(26, 26, 26, 0.95) !important;
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--kaki-dark);
+        }
+
+        .navbar-brand {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--kaki-light) !important;
+            letter-spacing: -0.5px;
+        }
+
+        .nav-link {
+            color: rgba(255, 255, 255, 0.85) !important;
+            font-weight: 500;
+            transition: color 0.3s ease;
+        }
+
+        .nav-link:hover {
+            color: var(--kaki-light) !important;
+        }
+
+        /* Hero Section */
+        .hero-section {
+            padding: 100px 0;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero-section::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, var(--kaki-dark) 0%, transparent 70%);
+            opacity: 0.1;
+            animation: rotate 30s linear infinite;
+        }
+
+        @keyframes rotate {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .hero-title {
+            font-size: 4rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--kaki-light) 0%, var(--brown-light) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 1rem;
+            letter-spacing: -1px;
+        }
+
+        .hero-subtitle {
+            font-size: 1.5rem;
+            color: rgba(255, 255, 255, 0.8);
+            margin-bottom: 3rem;
+            font-weight: 300;
+        }
+
+        .cta-button {
+            background: linear-gradient(135deg, var(--kaki-light) 0%, var(--kaki-dark) 100%);
+            color: white;
+            padding: 1rem 3rem;
+            font-size: 1.1rem;
+            font-weight: 600;
+            border: none;
+            border-radius: 50px;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+            box-shadow: 0 4px 15px rgba(168, 160, 104, 0.3);
+        }
+
+        .cta-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(168, 160, 104, 0.4);
+            color: white;
+        }
+
+        /* Features Section */
+        .features-section {
+            padding: 80px 0;
+            background: rgba(45, 45, 48, 0.5);
+        }
+
+        .feature-card {
+            background: rgba(26, 26, 26, 0.8);
+            border: 1px solid var(--brown-dark);
+            border-radius: 15px;
+            padding: 2rem;
+            text-align: center;
+            transition: all 0.3s ease;
+            height: 100%;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-5px);
+            border-color: var(--kaki-light);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        .feature-icon {
+            font-size: 3rem;
+            color: var(--kaki-light);
+            margin-bottom: 1rem;
+        }
+
+        .feature-title {
+            color: var(--brown-light);
+            font-size: 1.3rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+
+        .feature-description {
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 0.95rem;
+            line-height: 1.6;
+        }
+
+        /* Benefits Section */
+        .benefits-section {
+            padding: 80px 0;
+        }
+
+        .benefit-item {
+            display: flex;
+            align-items: start;
+            margin-bottom: 2rem;
+        }
+
+        .benefit-icon {
+            color: var(--accent-gold);
+            font-size: 1.5rem;
+            margin-right: 1rem;
+            margin-top: 0.2rem;
+        }
+
+        .benefit-text {
+            flex: 1;
+        }
+
+        .benefit-title {
+            color: var(--kaki-light);
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        .benefit-description {
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 0.95rem;
+        }
+
+        /* Stats Section */
+        .stats-section {
+            padding: 60px 0;
+            background: linear-gradient(135deg, var(--brown-dark) 0%, var(--kaki-dark) 100%);
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 3rem;
+            font-weight: 800;
+            color: var(--accent-gold);
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-label {
+            color: rgba(255, 255, 255, 0.9);
+            font-size: 1.1rem;
+        }
+
+        /* Footer */
+        .footer {
+            padding: 40px 0;
+            background: rgba(26, 26, 26, 0.95);
+            border-top: 1px solid var(--kaki-dark);
+            text-align: center;
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .footer-links {
+            margin-bottom: 1rem;
+        }
+
+        .footer-link {
+            color: var(--kaki-light);
+            text-decoration: none;
+            margin: 0 1rem;
+            transition: color 0.3s ease;
+        }
+
+        .footer-link:hover {
+            color: var(--brown-light);
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero-title {
+                font-size: 2.5rem;
+            }
+            
+            .hero-subtitle {
+                font-size: 1.2rem;
+            }
+            
+            .stat-number {
+                font-size: 2rem;
+            }
+        }
+
+        /* Animations */
+        .fade-in {
+            opacity: 0;
+            transform: translateY(20px);
+            animation: fadeIn 0.8s ease forwards;
+        }
+
+        @keyframes fadeIn {
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .fade-in-delay-1 { animation-delay: 0.2s; }
+        .fade-in-delay-2 { animation-delay: 0.4s; }
+        .fade-in-delay-3 { animation-delay: 0.6s; }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-dark fixed-top">
+        <div class="container">
+            <a class="navbar-brand" href="/">
+                <i class="bi bi-box me-2"></i>CADlytics
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav ms-auto">
+                    <li class="nav-item">
+                        <a class="nav-link" href="#features">Fonctionnalités</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#benefits">Avantages</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/app" style="color: var(--kaki-light) !important;">
+                            <i class="bi bi-rocket-takeoff me-1"></i>Commencer
+                        </a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero-section">
+        <div class="container">
+            <h1 class="hero-title fade-in">CADlytics</h1>
+            <p class="hero-subtitle fade-in fade-in-delay-1">
+                Analyse DFM intelligente et visualisation 3D professionnelle<br>
+                pour l'injection plastique
+            </p>
+            <a href="/app" class="cta-button fade-in fade-in-delay-2">
+                <i class="bi bi-play-fill me-2"></i>Analyser un fichier STEP
+            </a>
+        </div>
+    </section>
+
+    <!-- Features Section -->
+    <section class="features-section" id="features">
+        <div class="container">
+            <h2 class="text-center mb-5" style="color: var(--kaki-light);">Fonctionnalités Puissantes</h2>
+            <div class="row g-4">
+                <div class="col-md-4">
+                    <div class="feature-card fade-in">
+                        <div class="feature-icon">
+                            <i class="bi bi-box-seam"></i>
+                        </div>
+                        <h3 class="feature-title">Visualisation 3D</h3>
+                        <p class="feature-description">
+                            Explorez vos modèles STEP en 3D avec des outils de mesure précis et des coupes transversales interactives
+                        </p>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="feature-card fade-in fade-in-delay-1">
+                        <div class="feature-icon">
+                            <i class="bi bi-cpu"></i>
+                        </div>
+                        <h3 class="feature-title">Analyse DFM Avancée</h3>
+                        <p class="feature-description">
+                            Détection automatique des problèmes de manufacturabilité avec recommandations personnalisées
+                        </p>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="feature-card fade-in fade-in-delay-2">
+                        <div class="feature-icon">
+                            <i class="bi bi-file-earmark-pdf"></i>
+                        </div>
+                        <h3 class="feature-title">Rapports PDF Détaillés</h3>
+                        <p class="feature-description">
+                            Générez des rapports professionnels avec vues 3D, analyse complète et recommandations
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Benefits Section -->
+    <section class="benefits-section" id="benefits">
+        <div class="container">
+            <div class="row align-items-center">
+                <div class="col-lg-6">
+                    <h2 style="color: var(--kaki-light); margin-bottom: 2rem;">
+                        Optimisez votre processus de conception
+                    </h2>
+                    <div class="benefit-item fade-in">
+                        <div class="benefit-icon">
+                            <i class="bi bi-check-circle-fill"></i>
+                        </div>
+                        <div class="benefit-text">
+                            <h4 class="benefit-title">Réduction des coûts</h4>
+                            <p class="benefit-description">
+                                Identifiez les problèmes de conception avant la production pour éviter les modifications coûteuses
+                            </p>
+                        </div>
+                    </div>
+                    <div class="benefit-item fade-in fade-in-delay-1">
+                        <div class="benefit-icon">
+                            <i class="bi bi-check-circle-fill"></i>
+                        </div>
+                        <div class="benefit-text">
+                            <h4 class="benefit-title">Gain de temps</h4>
+                            <p class="benefit-description">
+                                Analyse automatique en quelques secondes au lieu d'heures de vérification manuelle
+                            </p>
+                        </div>
+                    </div>
+                    <div class="benefit-item fade-in fade-in-delay-2">
+                        <div class="benefit-icon">
+                            <i class="bi bi-check-circle-fill"></i>
+                        </div>
+                        <div class="benefit-text">
+                            <h4 class="benefit-title">Qualité améliorée</h4>
+                            <p class="benefit-description">
+                                Conseils d'experts intégrés pour optimiser la manufacturabilité de vos pièces
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-6 text-center">
+                    <div style="background: radial-gradient(circle, var(--kaki-dark) 0%, transparent 70%); padding: 3rem; border-radius: 50%;">
+                        <i class="bi bi-gear-wide-connected" style="font-size: 10rem; color: var(--brown-light); opacity: 0.8;"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Stats Section -->
+    <section class="stats-section">
+        <div class="container">
+            <div class="row">
+                <div class="col-md-3 col-6">
+                    <div class="stat-item fade-in">
+                        <div class="stat-number">10+</div>
+                        <div class="stat-label">Points de contrôle DFM</div>
+                    </div>
+                </div>
+                <div class="col-md-3 col-6">
+                    <div class="stat-item fade-in fade-in-delay-1">
+                        <div class="stat-number">30s</div>
+                        <div class="stat-label">Analyse complète</div>
+                    </div>
+                </div>
+                <div class="col-md-3 col-6">
+                    <div class="stat-item fade-in fade-in-delay-2">
+                        <div class="stat-number">3</div>
+                        <div class="stat-label">Axes de démoulage</div>
+                    </div>
+                </div>
+                <div class="col-md-3 col-6">
+                    <div class="stat-item fade-in fade-in-delay-3">
+                        <div class="stat-number">100%</div>
+                        <div class="stat-label">En français</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA Section -->
+    <section class="hero-section" style="padding: 60px 0;">
+        <div class="container text-center">
+            <h2 style="color: var(--kaki-light); margin-bottom: 1rem;">Prêt à optimiser vos conceptions ?</h2>
+            <p style="color: rgba(255, 255, 255, 0.8); margin-bottom: 2rem;">
+                Commencez dès maintenant avec CADlytics
+            </p>
+            <a href="/app" class="cta-button">
+                <i class="bi bi-arrow-right-circle me-2"></i>Accéder à l'application
+            </a>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-links">
+                <a href="/" class="footer-link">Accueil</a>
+                <a href="/app" class="footer-link">Application</a>
+                <a href="#features" class="footer-link">Fonctionnalités</a>
+                <a href="#benefits" class="footer-link">Avantages</a>
+            </div>
+            <p class="mb-0">Créé par <strong>Grégoire GOUNY</strong> • CADlytics © 2025</p>
+        </div>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Smooth scrolling
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function (e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) {
+                    target.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'start'
+                    });
+                }
+            });
+        });
+
+        // Intersection Observer for animations
+        const observerOptions = {
+            threshold: 0.1,
+            rootMargin: '0px 0px -50px 0px'
+        };
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.style.opacity = '1';
+                    entry.target.style.transform = 'translateY(0)';
+                }
+            });
+        }, observerOptions);
+
+        document.querySelectorAll('.fade-in').forEach(el => {
+            observer.observe(el);
+        });
+    </script>
+</body>
+</html>

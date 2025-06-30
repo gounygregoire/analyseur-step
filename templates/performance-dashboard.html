@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CADlytics - Tableau de bord des performances</title>
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <!-- Custom CSS -->
+    <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+    
+    <!-- Chart.js for performance charts -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg" style="background: rgba(26, 26, 26, 0.95); border-bottom: 1px solid var(--kaki-dark);">
+        <div class="container">
+            <a class="navbar-brand" href="/" style="color: var(--kaki-light) !important; font-weight: 700;">
+                <i class="bi bi-box me-2"></i>
+                CADlytics
+            </a>
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a class="nav-link" href="/app" style="color: rgba(255, 255, 255, 0.7);">
+                        <i class="bi bi-arrow-left me-1"></i>Retour à l'application
+                    </a>
+                </li>
+            </ul>
+        </div>
+    </nav>
+
+    <div class="main-container">
+        <!-- Header -->
+        <div class="text-center mb-4 fade-in">
+            <h1 class="display-5 mb-3" style="color: var(--brown-dark); font-weight: 700;">
+                <i class="bi bi-speedometer2 me-3"></i>
+                Tableau de bord des performances
+            </h1>
+            <p class="lead" style="color: var(--brown-medium);">
+                Surveillance en temps réel des performances de rendu et d'analyse
+            </p>
+        </div>
+
+        <!-- Performance Controls -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card fade-in">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <h5 class="card-title mb-0" style="color: var(--brown-dark);">
+                                <i class="bi bi-gear me-2"></i>Contrôles de surveillance
+                            </h5>
+                            <div class="btn-group" role="group">
+                                <button type="button" class="btn btn-success" id="startMonitoringBtn">
+                                    <i class="bi bi-play-fill me-1"></i>Démarrer
+                                </button>
+                                <button type="button" class="btn btn-warning" id="pauseMonitoringBtn">
+                                    <i class="bi bi-pause-fill me-1"></i>Pause
+                                </button>
+                                <button type="button" class="btn btn-danger" id="clearMetricsBtn">
+                                    <i class="bi bi-trash me-1"></i>Effacer
+                                </button>
+                                <button type="button" class="btn btn-info" id="exportMetricsBtn">
+                                    <i class="bi bi-download me-1"></i>Exporter
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Real-time Performance Metrics -->
+        <div class="row mb-4">
+            <!-- Render Performance -->
+            <div class="col-md-3 mb-3">
+                <div class="card performance-card fade-in">
+                    <div class="card-body text-center">
+                        <i class="bi bi-display performance-icon" style="color: var(--kaki-dark);"></i>
+                        <h6 class="card-title mt-2" style="color: var(--brown-dark);">FPS Moyen</h6>
+                        <h3 class="performance-value" id="avgFpsValue">--</h3>
+                        <small class="text-muted">Images par seconde</small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Memory Usage -->
+            <div class="col-md-3 mb-3">
+                <div class="card performance-card fade-in">
+                    <div class="card-body text-center">
+                        <i class="bi bi-memory performance-icon" style="color: var(--kaki-dark);"></i>
+                        <h6 class="card-title mt-2" style="color: var(--brown-dark);">Mémoire utilisée</h6>
+                        <h3 class="performance-value" id="memoryUsageValue">--</h3>
+                        <small class="text-muted">MB</small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Rendering Time -->
+            <div class="col-md-3 mb-3">
+                <div class="card performance-card fade-in">
+                    <div class="card-body text-center">
+                        <i class="bi bi-stopwatch performance-icon" style="color: var(--kaki-dark);"></i>
+                        <h6 class="card-title mt-2" style="color: var(--brown-dark);">Temps de rendu</h6>
+                        <h3 class="performance-value" id="renderTimeValue">--</h3>
+                        <small class="text-muted">ms</small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Conversion Time -->
+            <div class="col-md-3 mb-3">
+                <div class="card performance-card fade-in">
+                    <div class="card-body text-center">
+                        <i class="bi bi-arrow-repeat performance-icon" style="color: var(--kaki-dark);"></i>
+                        <h6 class="card-title mt-2" style="color: var(--brown-dark);">Conversion</h6>
+                        <h3 class="performance-value" id="conversionTimeValue">--</h3>
+                        <small class="text-muted">secondes</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Performance Charts -->
+        <div class="row mb-4">
+            <!-- Frame Rate Chart -->
+            <div class="col-lg-6 mb-4">
+                <div class="card fade-in">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0" style="color: var(--brown-dark);">
+                            <i class="bi bi-graph-up me-2"></i>Fréquence d'images (FPS)
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="fpsChart" width="400" height="200"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Memory Usage Chart -->
+            <div class="col-lg-6 mb-4">
+                <div class="card fade-in">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0" style="color: var(--brown-dark);">
+                            <i class="bi bi-memory me-2"></i>Utilisation mémoire
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="memoryChart" width="400" height="200"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Performance Logs -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card fade-in">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0" style="color: var(--brown-dark);">
+                            <i class="bi bi-list-ul me-2"></i>Journal des performances
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-striped">
+                                <thead>
+                                    <tr>
+                                        <th>Heure</th>
+                                        <th>Opération</th>
+                                        <th>Durée</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="performanceLogBody">
+                                    <tr>
+                                        <td colspan="4" class="text-center text-muted">
+                                            Aucun événement de performance enregistré
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Detailed Statistics -->
+        <div class="row">
+            <div class="col-lg-4 mb-4">
+                <div class="card fade-in">
+                    <div class="card-header">
+                        <h6 class="card-title mb-0" style="color: var(--brown-dark);">
+                            <i class="bi bi-bar-chart me-2"></i>Statistiques de rendu
+                        </h6>
+                    </div>
+                    <div class="card-body">
+                        <div id="renderingStats">
+                            <div class="stat-item">
+                                <span class="stat-label">Moyenne:</span>
+                                <span class="stat-value" id="renderAvg">--</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Médiane:</span>
+                                <span class="stat-value" id="renderMedian">--</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">95e percentile:</span>
+                                <span class="stat-value" id="renderP95">--</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-lg-4 mb-4">
+                <div class="card fade-in">
+                    <div class="card-header">
+                        <h6 class="card-title mb-0" style="color: var(--brown-dark);">
+                            <i class="bi bi-upload me-2"></i>Statistiques de conversion
+                        </h6>
+                    </div>
+                    <div class="card-body">
+                        <div id="conversionStats">
+                            <div class="stat-item">
+                                <span class="stat-label">Conversions totales:</span>
+                                <span class="stat-value" id="conversionCount">--</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Temps moyen:</span>
+                                <span class="stat-value" id="conversionAvg">--</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Temps max:</span>
+                                <span class="stat-value" id="conversionMax">--</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-lg-4 mb-4">
+                <div class="card fade-in">
+                    <div class="card-header">
+                        <h6 class="card-title mb-0" style="color: var(--brown-dark);">
+                            <i class="bi bi-gear me-2"></i>Analyse DFM
+                        </h6>
+                    </div>
+                    <div class="card-body">
+                        <div id="dfmStats">
+                            <div class="stat-item">
+                                <span class="stat-label">Analyses totales:</span>
+                                <span class="stat-value" id="dfmCount">--</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Temps moyen:</span>
+                                <span class="stat-value" id="dfmAvg">--</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Temps max:</span>
+                                <span class="stat-value" id="dfmMax">--</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <!-- Performance Monitor -->
+    <script src="{{ url_for('static', filename='js/performance-monitor.js') }}"></script>
+    
+    <!-- Performance Dashboard -->
+    <script src="{{ url_for('static', filename='js/performance-dashboard.js') }}"></script>
+</body>
+</html>

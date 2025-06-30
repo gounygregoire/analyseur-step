@@ -1,0 +1,2362 @@
+// 3D Viewer Application
+class STEPViewer {
+    constructor() {
+        // Utility function for safe DOM access
+        this.safeGetElement = (id) => {
+            const element = document.getElementById(id);
+            if (!element) {
+                console.warn(`Element with id '${id}' not found`);
+            }
+            return element;
+        };
+        
+        // Utility function for safe style setting
+        this.safeSetStyle = (elementId, property, value) => {
+            const element = this.safeGetElement(elementId);
+            if (element && element.style) {
+                element.style[property] = value;
+            }
+        };
+        
+        // Utility function for safe display setting
+        this.safeSetDisplay = (elementId, display) => {
+            this.safeSetStyle(elementId, 'display', display);
+        };
+        this.scene = null;
+        this.camera = null;
+        this.renderer = null;
+        this.controls = null;
+        this.currentMesh = null;
+        this.isWireframe = false;
+        this.axesHelper = null;
+        this.axesLabels = [];
+        this.showAxes = true;
+        this.isDarkMode = true;
+        this.measurementMode = false;
+        this.measurementPoints = [];
+        this.measurementLines = [];
+        this.crossSectionMode = false;
+        this.crossSectionPlane = null;
+        this.clippingPlanes = [];
+        this.currentCrossSectionAxis = 'z';
+        this.showCrossSectionPlane = true;
+        this.selectedDemoldingAxis = 'z'; // Initialize demolding axis
+        
+
+        
+        // Initialize everything after DOM is ready
+        this.initializeViewer();
+        if (this.renderer) {
+            this.setupEventListeners();
+            this.initializeTooltips();
+            this.loadConversionHistory();
+        }
+    }
+    
+    initializeViewer() {
+        const container = this.safeGetElement('viewer3d');
+        
+        if (!container) {
+            console.error('Viewer container not found');
+            return;
+        }
+        
+        // Scene setup
+        this.scene = new THREE.Scene();
+        this.scene.background = new THREE.Color(0x2a2a2a); // Dark background with kaki theme
+        
+        // Camera setup
+        this.camera = new THREE.PerspectiveCamera(
+            75, 
+            container.clientWidth / container.clientHeight, 
+            0.1, 
+            1000
+        );
+        this.camera.position.set(10, 10, 10);
+        
+        // Renderer setup
+        this.renderer = new THREE.WebGLRenderer({ 
+            antialias: true,
+            alpha: true
+        });
+        this.renderer.setSize(container.clientWidth, container.clientHeight);
+        this.renderer.setClearColor(0x2a2a2a, 1); // Consistent with kaki theme
+        this.renderer.shadowMap.enabled = true;
+        this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        
+        // Add the renderer to the container
+        container.appendChild(this.renderer.domElement);
+        
+        // Add axes helper
+        this.axesHelper = new THREE.AxesHelper(50);
+        this.scene.add(this.axesHelper);
+        
+        // Add axes labels
+        this.createAxesLabels();
+        this.setupDemoldingAxisModal();
+        
+        // Controls setup
+        this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
+        this.controls.enableDamping = true;
+        this.controls.dampingFactor = 0.1;
+        
+        // Lighting setup
+        this.setupLighting();
+        
+        // Start render loop
+        this.animate();
+        
+        // Handle window resize
+        window.addEventListener('resize', () => this.onWindowResize());
+    }
+    
+    setupLighting() {
+        // Ambient light
+        const ambientLight = new THREE.AmbientLight(0x404040, 0.4);
+        this.scene.add(ambientLight);
+        
+        // Main directional light
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(10, 10, 5);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.mapSize.width = 2048;
+        directionalLight.shadow.mapSize.height = 2048;
+        this.scene.add(directionalLight);
+        
+        // Fill light
+        const fillLight = new THREE.DirectionalLight(0xffffff, 0.3);
+        fillLight.position.set(-10, -10, -5);
+        this.scene.add(fillLight);
+        
+        // Point light for highlights
+        const pointLight = new THREE.PointLight(0xffffff, 0.5, 100);
+        pointLight.position.set(0, 20, 0);
+        this.scene.add(pointLight);
+    }
+    
+    setupEventListeners() {
+        // Upload form
+        const uploadForm = this.safeGetElement('uploadForm');
+        if (uploadForm) {
+            uploadForm.addEventListener('submit', (e) => this.handleUpload(e));
+        }
+        
+        // File input change
+        const fileInput = this.safeGetElement('fileInput');
+        if (fileInput) {
+            fileInput.addEventListener('change', (e) => this.handleFileSelect(e));
+        }
+        
+        // DFM Analysis button
+        const dfmAnalyzeBtn = this.safeGetElement('dfmAnalyzeBtn');
+        if (dfmAnalyzeBtn) {
+            dfmAnalyzeBtn.addEventListener('click', () => this.showDemoldingAxisModal());
+        }
+        
+        // Change demolding axis button
+        const changeDemoldingAxisBtn = this.safeGetElement('changeDemoldingAxisBtn');
+        if (changeDemoldingAxisBtn) {
+            changeDemoldingAxisBtn.addEventListener('click', () => this.showDemoldingAxisModal());
+        }
+        
+        // PDF Generation button
+        const generatePdfBtn = this.safeGetElement('generatePdfBtn');
+        if (generatePdfBtn) {
+            generatePdfBtn.addEventListener('click', () => this.generatePDFReport());
+        }
+        
+        // Viewer controls
+        const resetViewBtn = this.safeGetElement('resetViewBtn');
+        if (resetViewBtn) {
+            resetViewBtn.addEventListener('click', () => this.resetView());
+        }
+        
+        const toggleWireframeBtn = this.safeGetElement('toggleWireframeBtn');
+        if (toggleWireframeBtn) {
+            toggleWireframeBtn.addEventListener('click', () => this.toggleWireframe());
+        }
+        
+        const toggleAxesBtn = this.safeGetElement('toggleAxesBtn');
+        if (toggleAxesBtn) {
+            toggleAxesBtn.addEventListener('click', () => this.toggleAxes());
+        }
+        
+        // Theme toggle
+        const themeToggleBtn = this.safeGetElement('themeToggleBtn');
+        if (themeToggleBtn) {
+            themeToggleBtn.addEventListener('click', () => this.toggleTheme());
+        }
+        
+        // Measurement tools
+        const measureBtn = this.safeGetElement('measureBtn');
+        if (measureBtn) {
+            measureBtn.addEventListener('click', () => this.toggleMeasurementMode());
+        }
+        
+        // Cross-section dropdown items
+        const crossSectionDropdown = document.querySelectorAll('[data-axis]');
+        crossSectionDropdown.forEach(item => {
+            item.addEventListener('click', (event) => {
+                event.preventDefault();
+                const axis = event.target.getAttribute('data-axis');
+                this.activateCrossSectionMode(axis);
+            });
+        });
+        
+        const clearMeasurementsBtn = this.safeGetElement('clearMeasurementsBtn');
+        if (clearMeasurementsBtn) {
+            clearMeasurementsBtn.addEventListener('click', () => this.clearMeasurements());
+        }
+        
+        // Mouse events for measurements
+        if (this.renderer && this.renderer.domElement) {
+            this.renderer.domElement.addEventListener('click', (event) => this.onMouseClick(event));
+        }
+        
+        // History refresh button
+        const refreshHistoryBtn = document.getElementById('refreshHistoryBtn');
+        if (refreshHistoryBtn) {
+            refreshHistoryBtn.addEventListener('click', () => this.loadConversionHistory());
+        }
+    }
+    
+    initializeTooltips() {
+        // Initialize Bootstrap tooltips
+        const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+        tooltipTriggerList.map(function (tooltipTriggerEl) {
+            return new bootstrap.Tooltip(tooltipTriggerEl);
+        });
+    }
+    
+    handleFileSelect(event) {
+        const file = event.target.files[0];
+        if (file) {
+            const uploadArea = document.getElementById('uploadArea');
+            // Préserver l'input file en le déplaçant temporairement
+            const fileInput = document.getElementById('fileInput');
+            const tempContainer = document.createElement('div');
+            tempContainer.appendChild(fileInput);
+            
+            uploadArea.innerHTML = `
+                <i class="bi bi-folder-check" style="font-size: 3rem; color: var(--kaki-dark); margin-bottom: 1rem;"></i>
+                <p class="mb-2" style="color: var(--brown-dark); font-weight: 600;">
+                    Fichier sélectionné
+                </p>
+                <p class="mb-3" style="color: var(--brown-medium);">
+                    ${file.name}<br>
+                    <small>${this.formatFileSize(file.size)}</small>
+                </p>
+                <button type="button" class="btn btn-secondary btn-sm" id="changeFileBtn">
+                    <i class="bi bi-arrow-repeat me-2"></i>Changer de fichier
+                </button>
+            `;
+            
+            // Réinsérer l'input file caché
+            uploadArea.appendChild(fileInput);
+            
+            // Ajouter l'événement au nouveau bouton
+            const changeFileBtn = document.getElementById('changeFileBtn');
+            if (changeFileBtn) {
+                changeFileBtn.addEventListener('click', () => fileInput.click());
+            }
+        }
+    }
+
+    formatFileSize(bytes) {
+        const sizes = ['octets', 'Ko', 'Mo', 'Go'];
+        if (bytes === 0) return '0 octets';
+        const i = Math.floor(Math.log(bytes) / Math.log(1024));
+        return Math.round(bytes / Math.pow(1024, i) * 100) / 100 + ' ' + sizes[i];
+    }
+
+    validateFile() {
+        const fileInputElement = this.safeGetElement('fileInput');
+        
+        if (!fileInputElement) {
+            this.showError('Élément de sélection de fichier non trouvé');
+            return false;
+        }
+        
+        const file = fileInputElement.files[0];
+        
+        if (!file) {
+            this.showError('Veuillez sélectionner un fichier');
+            return false;
+        }
+        
+        const fileSize = file.size / (1024 * 1024); // MB
+        if (fileSize > 50) {
+            this.showError('La taille du fichier dépasse la limite de 50 Mo');
+            fileInputElement.value = '';
+            return false;
+        }
+        
+        const validExtensions = ['step', 'stp'];
+        const fileExtension = file.name.split('.').pop().toLowerCase();
+        if (!validExtensions.includes(fileExtension)) {
+            this.showError('Type de fichier invalide. Seuls les fichiers STEP (.step, .stp) sont autorisés');
+            fileInputElement.value = '';
+            return false;
+        }
+        
+        return true;
+    }
+    
+    async handleUpload(event) {
+        event.preventDefault();
+        
+        if (!this.validateFile()) {
+            return;
+        }
+        
+        const formData = new FormData();
+        const fileInputElement = document.getElementById('fileInput');
+        const toleranceInput = document.getElementById('toleranceInput');
+        
+        if (!fileInputElement || !toleranceInput) {
+            this.showError('Éléments du formulaire non trouvés');
+            return;
+        }
+        
+        const file = fileInputElement.files[0];
+        
+        // Adjust tolerance based on file size for better performance
+        let tolerance = parseFloat(toleranceInput.value);
+        const fileSizeMB = file.size / (1024 * 1024);
+        
+        // For large files, increase tolerance slightly
+        if (fileSizeMB > 20) {
+            tolerance = Math.min(0.5, tolerance * 1.5);
+        }
+        
+        formData.append('file', file);
+        formData.append('tolerance', tolerance);
+        
+        this.showProgress();
+        
+        // Update progress message based on file size
+        if (fileSizeMB > 10) {
+            const progressText = document.querySelector('#progressIndicator p.small');
+            if (progressText) {
+                progressText.textContent = `La conversion peut prendre jusqu'à ${Math.ceil(fileSizeMB * 3)} secondes pour ce fichier de ${Math.round(fileSizeMB)} Mo.`;
+            }
+        }
+        
+        try {
+            // Create AbortController for timeout handling
+            const controller = new AbortController();
+            // Dynamic timeout based on file size (match server timeout + buffer)
+            const timeoutSeconds = Math.max(35, Math.min(310, fileSizeMB * 3 + 10));
+            const timeoutId = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
+            
+            const response = await fetch('/upload', {
+                method: 'POST',
+                body: formData,
+                signal: controller.signal
+            });
+            
+            clearTimeout(timeoutId);
+            
+            if (!response.ok) {
+                if (response.status === 413) {
+                    throw new Error('Le fichier est trop volumineux (max 50 Mo)');
+                } else if (response.status === 504) {
+                    throw new Error('La conversion prend trop de temps. Essayez avec un fichier plus simple.');
+                }
+                throw new Error(`Erreur serveur: ${response.status}`);
+            }
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                this.handleUploadSuccess(result);
+            } else {
+                this.showError(result.error || 'Upload failed');
+            }
+        } catch (error) {
+            console.error('Upload error:', error);
+            if (error.name === 'AbortError') {
+                this.showError('La conversion prend trop de temps. Essayez avec un fichier plus simple ou une tolérance plus élevée.');
+            } else {
+                this.showError(error.message || 'Une erreur réseau s\'est produite pendant le téléchargement');
+            }
+        } finally {
+            this.hideProgress();
+        }
+    }
+    
+    handleUploadSuccess(result) {
+        console.log('Upload successful:', result);
+        
+        // Store current conversion ID for DFM analysis
+        this.currentConversionId = result.file_id;
+        
+        // Show DFM controls panel
+        this.safeSetDisplay('dfmControlsPanel', 'block');
+
+        // Show viewer tools panel
+        this.safeSetDisplay('viewerToolsPanel', 'block');
+        
+        // Load and display the STL model directly
+        this.loadSTLModel(`/view/${result.stl_filename}`);
+        
+        // Show model info
+        this.safeSetDisplay('modelInfo', 'block');
+        
+        this.safeSetDisplay('volumeDisplay', 'block');
+        
+        // Refresh history to show the new conversion
+        this.loadConversionHistory();
+        
+        // Scroll to viewer
+        const viewer3d = this.safeGetElement('viewer3d');
+        if (viewer3d) {
+            viewer3d.scrollIntoView({ behavior: 'smooth' });
+        }
+    }
+
+    async loadSTLModel(url) {
+        try {
+            // Remove existing mesh
+            if (this.currentMesh) {
+                this.scene.remove(this.currentMesh);
+            }
+            
+            // Load STL
+            const loader = new THREE.STLLoader();
+            
+            loader.load(url, (geometry) => {
+                // Center geometry but keep real scale (1:1)
+                geometry.computeBoundingBox();
+                const center = new THREE.Vector3();
+                geometry.boundingBox.getCenter(center);
+                geometry.translate(-center.x, -center.y, -center.z);
+                
+                // Don't scale the geometry to maintain real dimensions
+                // The original STEP units are preserved
+                
+                // Create material
+                const material = new THREE.MeshPhysicalMaterial({
+                    color: 0x888888,
+                    metalness: 0.3,
+                    roughness: 0.4,
+                    clearcoat: 0.3,
+                    clearcoatRoughness: 0.25,
+                });
+                
+                // Create mesh
+                this.currentMesh = new THREE.Mesh(geometry, material);
+                this.currentMesh.castShadow = true;
+                this.currentMesh.receiveShadow = true;
+                
+                this.scene.add(this.currentMesh);
+                
+                // Calculate and display volume
+                this.calculateAndDisplayVolume(geometry);
+                
+                // Position axes helper at the center of the mesh
+                if (this.axesHelper) {
+                    const box = new THREE.Box3().setFromObject(this.currentMesh);
+                    const center = box.getCenter(new THREE.Vector3());
+                    this.axesHelper.position.copy(center);
+                    
+                    // Scale axes based on model size
+                    const size = box.getSize(new THREE.Vector3());
+                    const maxDim = Math.max(size.x, size.y, size.z);
+                    const axesScale = maxDim * 0.5;
+                    this.axesHelper.scale.set(axesScale, axesScale, axesScale);
+                    
+                    // Update labels position and scale relative to the axes (real scale)
+                    this.axesLabels.forEach((label, index) => {
+                        const offset = axesScale * 1.2; // Slightly beyond the axes
+                        switch(index) {
+                            case 0: // X axis - Red
+                                label.position.set(center.x + offset, center.y, center.z);
+                                break;
+                            case 1: // Y axis - Green
+                                label.position.set(center.x, center.y + offset, center.z);
+                                break;
+                            case 2: // Z axis - Blue
+                                label.position.set(center.x, center.y, center.z + offset);
+                                break;
+                        }
+                        // Scale labels appropriately for real dimensions
+                        const labelScale = maxDim * 0.1;
+                        label.scale.set(labelScale, labelScale, 1);
+                    });
+                }
+                
+                // Reset camera view
+                this.resetView();
+                
+                console.log('STL model loaded successfully');
+                
+            }, (progress) => {
+                console.log('Loading progress:', progress);
+            }, (error) => {
+                console.error('Error loading STL:', error);
+                this.showError('Échec du chargement du modèle STL pour la visualisation');
+            });
+            
+        } catch (error) {
+            console.error('Load STL error:', error);
+            this.showError('Erreur lors du chargement du modèle 3D');
+        }
+    }
+    
+    resetView() {
+        if (this.currentMesh) {
+            // Calculate bounding box for optimal camera positioning
+            const box = new THREE.Box3().setFromObject(this.currentMesh);
+            const center = box.getCenter(new THREE.Vector3());
+            const size = box.getSize(new THREE.Vector3());
+            
+            // Position camera
+            const maxDim = Math.max(size.x, size.y, size.z);
+            const fov = this.camera.fov * (Math.PI / 180);
+            let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
+            cameraZ *= 2; // Add some padding
+            
+            this.camera.position.set(cameraZ, cameraZ, cameraZ);
+            this.camera.lookAt(center);
+            this.controls.target.copy(center);
+            this.controls.update();
+        }
+    }
+    
+    toggleWireframe() {
+        if (this.currentMesh) {
+            this.isWireframe = !this.isWireframe;
+            this.currentMesh.material.wireframe = this.isWireframe;
+            
+            const btn = this.safeGetElement('toggleWireframeBtn');
+            if (btn) {
+                if (this.isWireframe) {
+                    btn.innerHTML = '<i class="bi bi-square me-1"></i>Solide';
+                } else {
+                    btn.innerHTML = '<i class="bi bi-grid-3x3 me-1"></i>Filaire';
+                }
+            }
+        }
+    }
+    
+    toggleAxes() {
+        if (this.axesHelper) {
+            this.showAxes = !this.showAxes;
+            this.axesHelper.visible = this.showAxes;
+            
+            // Also toggle labels visibility
+            this.axesLabels.forEach(label => {
+                label.visible = this.showAxes;
+            });
+            
+            const btn = this.safeGetElement('toggleAxesBtn');
+            if (btn) {
+                if (this.showAxes) {
+                    btn.innerHTML = '<i class="bi bi-compass me-1"></i>Axes';
+                } else {
+                    btn.innerHTML = '<i class="bi bi-compass me-1"></i>Masquer axes';
+                }
+            }
+        }
+    }
+    
+    toggleTheme() {
+        this.isDarkMode = !this.isDarkMode;
+        const html = document.documentElement;
+        const btn = this.safeGetElement('themeToggleBtn');
+        
+        if (this.isDarkMode) {
+            html.setAttribute('data-bs-theme', 'dark');
+            // Darker gray background for better contrast with 3D models
+            if (this.scene) this.scene.background = new THREE.Color(0x2d2d30);
+            if (this.renderer) this.renderer.setClearColor(0x2d2d30, 1);
+            if (btn) btn.innerHTML = '<i class="bi bi-sun me-1"></i>Mode clair';
+        } else {
+            html.setAttribute('data-bs-theme', 'light');
+            // Light gray background for better contrast with 3D models
+            if (this.scene) this.scene.background = new THREE.Color(0xe8e9ea);
+            if (this.renderer) this.renderer.setClearColor(0xe8e9ea, 1);
+            if (btn) btn.innerHTML = '<i class="bi bi-moon me-1"></i>Mode sombre';
+        }
+    }
+    
+    showProgress() {
+        this.safeSetDisplay('progressSection', 'block');
+        this.safeSetDisplay('uploadResults', 'none');
+        this.safeSetDisplay('errorAlert', 'none');
+        const uploadBtn = this.safeGetElement('uploadBtn');
+        if (uploadBtn) {
+            uploadBtn.disabled = true;
+        }
+    }
+    
+    hideProgress() {
+        this.safeSetDisplay('progressSection', 'none');
+        const uploadBtn = this.safeGetElement('uploadBtn');
+        if (uploadBtn) {
+            uploadBtn.disabled = false;
+        }
+    }
+    
+    showError(message) {
+        const errorMessage = this.safeGetElement('errorMessage');
+        if (errorMessage) {
+            errorMessage.textContent = message;
+        }
+        
+        this.safeSetDisplay('errorAlert', 'block');
+        this.safeSetDisplay('uploadResults', 'none');
+        
+        console.error('Error:', message);
+    }
+    
+    formatFileSize(bytes) {
+        if (bytes === 0) return '0 octets';
+        const k = 1024;
+        const sizes = ['octets', 'Ko', 'Mo', 'Go'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+    
+    animate() {
+        requestAnimationFrame(() => this.animate());
+        
+        this.controls.update();
+        this.renderer.render(this.scene, this.camera);
+    }
+    
+    calculateAndDisplayVolume(geometry) {
+        // Calculate volume using the divergence theorem (signed volume)
+        let volume = 0;
+        const position = geometry.attributes.position;
+        
+        // Iterate through triangles (3 vertices per triangle)
+        for (let i = 0; i < position.count; i += 3) {
+            const v0 = new THREE.Vector3(
+                position.getX(i),
+                position.getY(i),
+                position.getZ(i)
+            );
+            const v1 = new THREE.Vector3(
+                position.getX(i + 1),
+                position.getY(i + 1),
+                position.getZ(i + 1)
+            );
+            const v2 = new THREE.Vector3(
+                position.getX(i + 2),
+                position.getY(i + 2),
+                position.getZ(i + 2)
+            );
+            
+            // Calculate signed volume of tetrahedron formed by origin and triangle
+            const signedVolume = v0.x * (v1.y * v2.z - v1.z * v2.y) +
+                               v1.x * (v2.y * v0.z - v2.z * v0.y) +
+                               v2.x * (v0.y * v1.z - v0.z * v1.y);
+            
+            volume += signedVolume;
+        }
+        
+        // Divide by 6 and take absolute value
+        volume = Math.abs(volume) / 6.0;
+        
+        // Display volume in the UI
+        this.displayVolume(volume);
+    }
+    
+    calculateSurfaceArea(axis) {
+        if (!this.currentMesh) return;
+        
+        const geometry = this.currentMesh.geometry;
+        const position = geometry.attributes.position;
+        const boundingBox = new THREE.Box3().setFromObject(this.currentMesh);
+        const size = boundingBox.getSize(new THREE.Vector3());
+        
+        let maxProjectedArea = 0;
+        const triangleNormals = [];
+        
+        // First pass: calculate normals and find triangles facing the projection direction
+        for (let i = 0; i < position.count; i += 3) {
+            const v0 = new THREE.Vector3(
+                position.getX(i),
+                position.getY(i),
+                position.getZ(i)
+            );
+            const v1 = new THREE.Vector3(
+                position.getX(i + 1),
+                position.getY(i + 1),
+                position.getZ(i + 1)
+            );
+            const v2 = new THREE.Vector3(
+                position.getX(i + 2),
+                position.getY(i + 2),
+                position.getZ(i + 2)
+            );
+            
+            // Calculate triangle normal
+            const edge1 = v1.clone().sub(v0);
+            const edge2 = v2.clone().sub(v0);
+            const normal = edge1.cross(edge2).normalize();
+            
+            // Calculate actual triangle area
+            const triangleArea = edge1.cross(edge2).length() / 2;
+            
+            // Determine projection direction
+            let projectionDirection;
+            switch(axis) {
+                case 'x':
+                    projectionDirection = new THREE.Vector3(1, 0, 0);
+                    break;
+                case 'y':
+                    projectionDirection = new THREE.Vector3(0, 1, 0);
+                    break;
+                case 'z':
+                default:
+                    projectionDirection = new THREE.Vector3(0, 0, 1);
+                    break;
+            }
+            
+            // Calculate projected area using dot product with normal
+            const dot = Math.abs(normal.dot(projectionDirection));
+            const projectedTriangleArea = triangleArea * dot;
+            
+            maxProjectedArea += projectedTriangleArea;
+        }
+        
+        // Use bounding box dimensions as reference for axis-based surface calculation
+        let axisBasedArea;
+        switch(axis) {
+            case 'x': // YZ plane
+                axisBasedArea = size.y * size.z;
+                break;
+            case 'y': // XZ plane  
+                axisBasedArea = size.x * size.z;
+                break;
+            case 'z': // XY plane
+            default:
+                axisBasedArea = size.x * size.y;
+                break;
+        }
+        
+        // Use the smaller of the two calculations for more accuracy
+        const finalArea = Math.min(maxProjectedArea, axisBasedArea);
+        
+        console.log(`Axis ${axis}: Projected area = ${maxProjectedArea.toFixed(2)}, Bounding box area = ${axisBasedArea.toFixed(2)}, Final = ${finalArea.toFixed(2)}`);
+        
+        // Display the calculated surface area
+        this.displaySurfaceArea(finalArea, axis);
+    }
+    
+    displaySurfaceArea(area, axis) {
+        const surfaceElement = document.getElementById('surfaceValue');
+        const surfaceBtn = document.getElementById('surfaceBtn');
+        
+        if (surfaceElement && surfaceBtn) {
+            // Convert to mm² (multiply by 100 since 1 cm² = 100 mm²)
+            const areaInMm2 = area * 100;
+            
+            // Format area based on size with better thresholds
+            let displayText;
+            if (areaInMm2 >= 1000000) {
+                displayText = `${(areaInMm2 / 1000000).toFixed(2)} m²`;
+            } else if (areaInMm2 >= 10000) {
+                displayText = `${(areaInMm2 / 100).toFixed(1)} cm²`;
+            } else {
+                displayText = `${areaInMm2.toFixed(0)} mm²`;
+            }
+            
+            surfaceElement.textContent = displayText;
+            surfaceElement.className = 'badge bg-success ms-2';
+            surfaceBtn.innerHTML = `Axe ${axis.toUpperCase()}`;
+            surfaceBtn.classList.remove('btn-outline-secondary');
+            surfaceBtn.classList.add('btn-secondary');
+            
+            console.log(`Surface area calculated for axis ${axis}: ${displayText}`);
+        }
+    }
+    
+    displayVolume(volume) {
+        // Create or update volume display element
+        let volumeDisplay = document.getElementById('volumeDisplay');
+        if (!volumeDisplay) {
+            volumeDisplay = document.createElement('div');
+            volumeDisplay.id = 'volumeDisplay';
+            volumeDisplay.className = 'alert alert-info mt-2';
+            volumeDisplay.innerHTML = `
+                <i class="bi bi-info-circle me-2"></i>
+                <strong>Volume de la pièce :</strong> 
+                <span id="volumeValue">${volume.toFixed(0)} mm³</span>
+            `;
+            
+            // Insert after viewer controls
+            const viewerSection = document.querySelector('.card .card-body');
+            viewerSection.appendChild(volumeDisplay);
+        } else {
+            document.getElementById('volumeValue').textContent = `${volume.toFixed(0)} mm³`;
+        }
+    }
+    
+    displayDFMAnalysis(dfmData) {
+        // Create or update DFM analysis display
+        let dfmDisplay = document.getElementById('dfmDisplay');
+        if (!dfmDisplay) {
+            dfmDisplay = document.createElement('div');
+            dfmDisplay.id = 'dfmDisplay';
+            dfmDisplay.className = 'alert mt-2';
+            
+            // Insert after volume display
+            const volumeDisplay = document.getElementById('volumeDisplay');
+            if (volumeDisplay && volumeDisplay.parentNode) {
+                volumeDisplay.parentNode.insertBefore(dfmDisplay, volumeDisplay.nextSibling);
+            } else {
+                const viewerSection = document.querySelector('.card .card-body');
+                viewerSection.appendChild(dfmDisplay);
+            }
+        }
+        
+        // Set alert class based on rating
+        dfmDisplay.className = 'alert mt-2 ' + this.getDFMAlertClass(dfmData.rating);
+        
+        dfmDisplay.innerHTML = `
+            <div class="row">
+                <div class="col-md-6">
+                    <h6 class="mb-2"><i class="bi bi-gear me-2"></i>Analyse DFM Injection</h6>
+                    <div><strong>Score:</strong> ${dfmData.score}/10 (${this.getDFMRatingText(dfmData.rating)})</div>
+                    <div><strong>Problèmes:</strong> ${dfmData.issues_count} détecté(s)</div>
+                </div>
+                <div class="col-md-6">
+                    <h6 class="mb-2"><i class="bi bi-rulers me-2"></i>Dimensions</h6>
+                    <div><strong>Taille:</strong> ${dfmData.dimensions.x} × ${dfmData.dimensions.y} × ${dfmData.dimensions.z} mm</div>
+                    <div><strong>Ratio finesse:</strong> ${dfmData.dimensions.fineness_ratio}</div>
+                </div>
+            </div>
+            ${dfmData.recommendations.length > 0 ? `
+                <div class="mt-2">
+                    <small><strong>Recommandations:</strong></small>
+                    <ul class="mb-0 mt-1">
+                        ${dfmData.recommendations.map(rec => `<li><small>${rec}</small></li>`).join('')}
+                    </ul>
+                </div>
+            ` : ''}
+        `;
+    }
+    
+    showDemoldingAxisModal() {
+        try {
+            const modalElement = document.getElementById('demoldingAxisModal');
+            if (!modalElement) {
+                console.error('Modal element not found');
+                alert('Erreur: Interface de sélection non disponible');
+                return;
+            }
+            
+            const modal = new bootstrap.Modal(modalElement);
+            modal.show();
+            
+            // Setup event listeners for this instance
+            const axisButtons = modalElement.querySelectorAll('[data-axis]');
+            axisButtons.forEach(btn => {
+                btn.onclick = (e) => {
+                    const axis = e.currentTarget.getAttribute('data-axis');
+                    this.analyzeDFM(axis);
+                    modal.hide();
+                };
+            });
+        } catch (error) {
+            console.error('Error showing modal:', error);
+            // Fallback: direct analysis with default axis
+            if (confirm('Erreur d\'interface. Utiliser l\'axe Z par défaut pour l\'analyse DFM?')) {
+                this.analyzeDFM('z');
+            }
+        }
+    }
+    
+    setupDemoldingAxisModal() {
+        // Setup axis selection buttons
+        document.addEventListener('DOMContentLoaded', () => {
+            const axisButtons = document.querySelectorAll('.axis-btn');
+            axisButtons.forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const axis = e.currentTarget.getAttribute('data-axis');
+                    
+                    // Close modal first
+                    const modalElement = document.getElementById('demolding-axis-modal');
+                    if (modalElement) {
+                        const modal = bootstrap.Modal.getInstance(modalElement);
+                        if (modal) {
+                            modal.hide();
+                        }
+                    }
+                    
+                    // Start DFM analysis without creating cross-section
+                    this.analyzeDFM(axis);
+                });
+            });
+        });
+    }
+    
+    async analyzeDFM(demoldingAxis = 'z') {
+        if (!this.currentConversionId) {
+            alert('Aucun fichier converti disponible pour l\'analyse DFM');
+            return;
+        }
+        
+        // Save the selected demolding axis
+        this.selectedDemoldingAxis = demoldingAxis;
+        
+        const dfmBtn = document.getElementById('dfmAnalyzeBtn');
+        const originalText = dfmBtn.innerHTML;
+        
+        try {
+            // Show loading state
+            dfmBtn.innerHTML = '<i class="bi bi-gear-fill me-2"></i>Analyse en cours...';
+            dfmBtn.disabled = true;
+            
+            const response = await fetch(`/api/analyze-dfm/${this.currentConversionId}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    demolding_axis: demoldingAxis
+                })
+            });
+            
+            const result = await response.json();
+            
+            if (!response.ok) {
+                throw new Error(result.error || 'Erreur lors de l\'analyse DFM');
+            }
+            
+            if (result.success && result.dfm_analysis) {
+                this.displayDFMAnalysis(result.dfm_analysis);
+                // Show change demolding axis button after analysis
+                this.showChangeDemoldingAxisButton();
+                // Enable PDF generation
+                this.enablePDFGeneration();
+            }
+            
+        } catch (error) {
+            console.error('DFM Analysis error:', error);
+            alert(`Erreur lors de l'analyse DFM: ${error.message}`);
+        } finally {
+            // Restore button state
+            dfmBtn.innerHTML = originalText;
+            dfmBtn.disabled = false;
+        }
+    }
+    
+    displayDFMAnalysis(dfmData) {
+        // Show the DFM results section
+        const dfmResultsSection = document.getElementById('dfmResultsSection');
+        if (dfmResultsSection) {
+            dfmResultsSection.style.display = 'block';
+        }
+        
+        // Get the DFM panel container
+        const dfmPanel = document.getElementById('dfmAnalysisPanel');
+        if (!dfmPanel) {
+            console.error('DFM analysis panel not found');
+            return;
+        }
+        
+        // Clear any existing content
+        dfmPanel.innerHTML = '';
+        
+        const alertClass = this.getDFMAlertClass(dfmData.rating);
+        const riskIndicators = this.generateRiskIndicators(dfmData);
+        
+        dfmPanel.innerHTML = `
+            <!-- Score principal et résumé -->
+            <div class="row mb-4">
+                <div class="col-lg-4 mb-3">
+                    <div class="score-card text-center p-4 rounded-3 shadow-sm" style="background: white; border: 2px solid ${this.getScoreColor(dfmData.score)};">
+                        <div class="score-circle mx-auto mb-3" style="width: 120px; height: 120px; border-radius: 50%; background: linear-gradient(135deg, ${this.getScoreColor(dfmData.score)}, ${this.getScoreColor(dfmData.score)}aa); display: flex; flex-direction: column; justify-content: center; align-items: center; color: white; box-shadow: 0 8px 16px rgba(0,0,0,0.1);">
+                            <h1 class="mb-0 fw-bold">${dfmData.score}</h1>
+                            <small>/10</small>
+                        </div>
+                        <h5 class="mb-2">${this.getDFMRatingText(dfmData.rating)}</h5>
+                        <div class="progress" style="height: 8px;">
+                            <div class="progress-bar" role="progressbar" style="width: ${dfmData.score * 10}%; background: ${this.getScoreColor(dfmData.score)};"></div>
+                        </div>
+                        <p class="mt-2 mb-0 text-muted small">${dfmData.issues_count} problème${dfmData.issues_count > 1 ? 's' : ''} détecté${dfmData.issues_count > 1 ? 's' : ''}</p>
+                    </div>
+                </div>
+                <div class="col-lg-8">
+                    <div class="summary-card p-4 rounded-3 shadow-sm h-100" style="background: white;">
+                        <h6 class="mb-3"><i class="bi bi-info-circle-fill me-2 text-primary"></i>Résumé de l'analyse</h6>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="summary-item mb-3">
+                                    <div class="d-flex justify-content-between">
+                                        <span class="text-muted">Moulabilité générale</span>
+                                        <span class="badge ${this.getRatingBadgeClass(dfmData.rating)}">${this.getDFMRatingText(dfmData.rating)}</span>
+                                    </div>
+                                </div>
+                                <div class="summary-item mb-3">
+                                    <div class="d-flex justify-content-between">
+                                        <span class="text-muted">Épaisseur maximale</span>
+                                        <span class="${dfmData.dimensions.max_wall_thickness > 4 ? 'text-warning' : 'text-success'} fw-bold">${dfmData.dimensions.max_wall_thickness} mm</span>
+                                    </div>
+                                </div>
+                                <div class="summary-item mb-3">
+                                    <div class="d-flex justify-content-between">
+                                        <span class="text-muted">Surface projetée (${(this.selectedDemoldingAxis || 'Z').toUpperCase()})</span>
+                                        <span class="fw-bold">${this.formatArea(this.getProjectedArea(dfmData.dimensions))}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="summary-item mb-3">
+                                    <div class="d-flex justify-content-between">
+                                        <span class="text-muted">Volume total</span>
+                                        <span class="fw-bold">${(dfmData.dimensions.volume / 1000).toFixed(2)} cm³</span>
+                                    </div>
+                                </div>
+                                <div class="summary-item mb-3">
+                                    <div class="d-flex justify-content-between">
+                                        <span class="text-muted">Plus grande dimension</span>
+                                        <span class="fw-bold">${Math.max(dfmData.dimensions.x, dfmData.dimensions.y, dfmData.dimensions.z)} mm</span>
+                                    </div>
+                                </div>
+                                <div class="summary-item mb-3">
+                                    <div class="d-flex justify-content-between">
+                                        <span class="text-muted">Temps de refroidissement</span>
+                                        <span class="fw-bold text-info">${Math.round(dfmData.dimensions.cooling_time)} s</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        ${dfmData.recommendations.length > 0 ? `
+                        <div class="mt-3">
+                            <small class="text-muted d-block mb-2">Recommandation principale :</small>
+                            <div class="alert alert-light border-start border-4 border-warning p-2 mb-0">
+                                <small><i class="bi bi-lightbulb me-1"></i>${dfmData.recommendations[0]}</small>
+                            </div>
+                        </div>
+                        ` : ''}
+                    </div>
+                </div>
+            </div>
+                
+            <!-- Détails techniques en accordéon -->
+            <div class="row">
+                <div class="col-12">
+                    <div class="accordion" id="dfmDetailsAccordion">
+                        
+                        <!-- Dimensions détaillées -->
+                        <div class="accordion-item border-0 shadow-sm mb-3">
+                            <h2 class="accordion-header">
+                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#dimensionsCollapse">
+                                    <i class="bi bi-rulers me-2 text-primary"></i>
+                                    <strong>Dimensions et géométrie</strong>
+                                </button>
+                            </h2>
+                            <div id="dimensionsCollapse" class="accordion-collapse collapse" data-bs-parent="#dfmDetailsAccordion">
+                                <div class="accordion-body">
+                                    <div class="row g-3">
+                                        <div class="col-md-4">
+                                            <div class="dimension-item text-center p-3 rounded bg-light">
+                                                <i class="bi bi-arrow-right text-danger fs-4 mb-2"></i>
+                                                <h6 class="mb-1">Longueur (X)</h6>
+                                                <h5 class="mb-0 text-primary">${dfmData.dimensions.x} mm</h5>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-4">
+                                            <div class="dimension-item text-center p-3 rounded bg-light">
+                                                <i class="bi bi-arrow-up text-success fs-4 mb-2"></i>
+                                                <h6 class="mb-1">Largeur (Y)</h6>
+                                                <h5 class="mb-0 text-success">${dfmData.dimensions.y} mm</h5>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-4">
+                                            <div class="dimension-item text-center p-3 rounded bg-light">
+                                                <i class="bi bi-arrow-down text-info fs-4 mb-2"></i>
+                                                <h6 class="mb-1">Hauteur (Z)</h6>
+                                                <h5 class="mb-0 text-info">${dfmData.dimensions.z} mm</h5>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Indicateurs de risque -->
+                        ${riskIndicators.length > 0 ? `
+                        <div class="accordion-item border-0 shadow-sm mb-3">
+                            <h2 class="accordion-header">
+                                <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#risksCollapse">
+                                    <i class="bi bi-exclamation-triangle-fill me-2 text-warning"></i>
+                                    <strong>Indicateurs de risque (${riskIndicators.length})</strong>
+                                </button>
+                            </h2>
+                            <div id="risksCollapse" class="accordion-collapse collapse show" data-bs-parent="#dfmDetailsAccordion">
+                                <div class="accordion-body">
+                                    <div class="row g-3">
+                                        ${riskIndicators.map(indicator => `
+                                            <div class="col-md-6">
+                                                <div class="risk-card p-3 rounded-3 border h-100" style="background: white; border-left: 4px solid ${indicator.color} !important;">
+                                                    <div class="d-flex align-items-start">
+                                                        <div class="risk-icon me-3" style="font-size: 1.5rem;">
+                                                            <i class="bi ${indicator.icon} ${indicator.iconClass}"></i>
+                                                        </div>
+                                                        <div class="flex-grow-1">
+                                                            <h6 class="mb-1">${indicator.title}</h6>
+                                                            <p class="mb-2 text-muted small">${indicator.description}</p>
+                                                            <span class="badge ${indicator.badgeClass}">${indicator.severity}</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        ` : ''}
+                
+                        <!-- Recommandations complètes -->
+                        ${dfmData.recommendations.length > 1 ? `
+                        <div class="accordion-item border-0 shadow-sm mb-3">
+                            <h2 class="accordion-header">
+                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#recommendationsCollapse">
+                                    <i class="bi bi-lightbulb-fill me-2 text-warning"></i>
+                                    <strong>Toutes les recommandations (${dfmData.recommendations.length})</strong>
+                                </button>
+                            </h2>
+                            <div id="recommendationsCollapse" class="accordion-collapse collapse" data-bs-parent="#dfmDetailsAccordion">
+                                <div class="accordion-body">
+                                    <div class="recommendations-grid">
+                                        ${dfmData.recommendations.map((rec, index) => `
+                                            <div class="recommendation-item d-flex align-items-start mb-3 p-3 rounded bg-light">
+                                                <span class="recommendation-number me-3" style="min-width: 32px; height: 32px; background: var(--kaki-light); color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold;">${index + 1}</span>
+                                                <div class="flex-grow-1">
+                                                    <p class="mb-0">${rec}</p>
+                                                </div>
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        ` : ''}
+                    </div>
+                </div>
+            </div>
+                        
+                        <!-- Detailed Issues with Design Insights -->
+                        ${dfmData.wall_thickness_issues && dfmData.wall_thickness_issues.length > 0 ? `
+                        <h6 class="mt-3">
+                            <i class="bi bi-layers me-2"></i>Problèmes d'épaisseur
+                            <i class="bi bi-info-circle-fill text-primary ms-2 insight-icon" 
+                               style="cursor: help; font-size: 0.9em;" 
+                               data-bs-toggle="tooltip" 
+                               data-bs-placement="top"
+                               data-bs-html="true"
+                               title="<div class='text-start'><strong>Conseils pour l'épaisseur des parois:</strong><br/>• Optimal: 1.2-3.0mm<br/>• Minimum: 0.8mm<br/>• Maximum: 4.0mm<br/>• Éviter les variations importantes</div>"></i>
+                        </h6>
+                        <div class="small">
+                            ${dfmData.wall_thickness_issues.map((issue, index) => `
+                                <div class="d-flex align-items-center mb-2 p-2 border rounded bg-light position-relative">
+                                    <span class="badge ${this.getSeverityBadgeClass(issue.severity)} me-2">${issue.severity}</span>
+                                    <span class="flex-grow-1">${this.getWallThicknessDescription(issue)}</span>
+                                    <i class="bi bi-lightbulb-fill text-warning ms-2 insight-icon" 
+                                       style="cursor: help;" 
+                                       data-bs-toggle="tooltip" 
+                                       data-bs-placement="left"
+                                       data-bs-html="true"
+                                       data-issue-index="${index}"
+                                       data-issue-category="wall_thickness"
+                                       data-issue-type="${issue.issue_type}"
+                                       title="${this.createWallThicknessInsight(issue)}"></i>
+                                </div>
+                            `).join('')}
+                        </div>
+                        ` : ''}
+                        
+                        ${dfmData.geometry_issues && dfmData.geometry_issues.length > 0 ? `
+                        <h6 class="mt-3">
+                            <i class="bi bi-gear me-2"></i>Problèmes géométriques
+                            <i class="bi bi-info-circle-fill text-primary ms-2 insight-icon" 
+                               style="cursor: help; font-size: 0.9em;" 
+                               data-bs-toggle="tooltip" 
+                               data-bs-placement="top"
+                               data-bs-html="true"
+                               title="<div class='text-start'><strong>Règles géométriques clés:</strong><br/>• Dépouille: min 0.5°<br/>• Congés: min 0.2mm<br/>• Ratio trous: max 3:1<br/>• Hauteur: max 60mm</div>"></i>
+                        </h6>
+                        <div class="small">
+                            ${dfmData.geometry_issues.map((issue, index) => `
+                                <div class="d-flex align-items-center mb-2 p-2 border rounded bg-light position-relative">
+                                    <span class="badge ${this.getSeverityBadgeClass(issue.severity)} me-2">${issue.severity}</span>
+                                    <span class="flex-grow-1">${issue.description}</span>
+                                    <i class="bi bi-lightbulb-fill text-warning ms-2 insight-icon" 
+                                       style="cursor: help;" 
+                                       data-bs-toggle="tooltip" 
+                                       data-bs-placement="left"
+                                       data-bs-html="true"
+                                       data-issue-index="${index}"
+                                       data-issue-category="geometry"
+                                       data-issue-type="${issue.issue_type}"
+                                       title="${this.createGeometryInsight(issue)}"></i>
+                                </div>
+                            `).join('')}
+                        </div>
+                        ` : ''}
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        // Insert after the viewer section
+        const viewerSection = document.querySelector('.card .card-body');
+        viewerSection.appendChild(dfmPanel);
+        
+        // Initialize tooltips for the new content
+        this.initializeDFMTooltips();
+    }
+    
+    generateRiskIndicators(dfmData) {
+        const indicators = [];
+        
+        // Wall thickness risk based on max thickness
+        if (dfmData.dimensions.max_wall_thickness > 6) {
+            indicators.push({
+                title: 'Parois très épaisses',
+                description: 'Risque de retrait et temps de cycle élevé',
+                severity: 'CRITIQUE',
+                icon: 'bi-exclamation-triangle-fill',
+                iconClass: 'text-danger',
+                bgClass: 'border-danger bg-danger bg-opacity-10',
+                badgeClass: 'bg-danger'
+            });
+        } else if (dfmData.dimensions.max_wall_thickness > 4) {
+            indicators.push({
+                title: 'Parois épaisses',
+                description: 'Optimisation recommandée pour le refroidissement',
+                severity: 'ATTENTION',
+                icon: 'bi-exclamation-triangle',
+                iconClass: 'text-warning',
+                bgClass: 'border-warning bg-warning bg-opacity-10',
+                badgeClass: 'bg-warning'
+            });
+        } else if (dfmData.dimensions.max_wall_thickness < 0.8) {
+            indicators.push({
+                title: 'Parois très fines',
+                description: 'Risque de remplissage incomplet',
+                severity: 'CRITIQUE',
+                icon: 'bi-exclamation-triangle-fill',
+                iconClass: 'text-danger',
+                bgClass: 'border-danger bg-danger bg-opacity-10',
+                badgeClass: 'bg-danger'
+            });
+        }
+        
+        // Size-based risks
+        if (dfmData.dimensions.z > 60) {
+            indicators.push({
+                title: 'Hauteur excessive',
+                description: 'Dépouille et refroidissement critiques',
+                severity: 'CRITIQUE',
+                icon: 'bi-arrow-up-circle-fill',
+                iconClass: 'text-danger',
+                bgClass: 'border-danger bg-danger bg-opacity-10',
+                badgeClass: 'bg-danger'
+            });
+        }
+        
+        // Volume-based risks
+        if (dfmData.dimensions.volume > 100000) { // > 100 cm³
+            indicators.push({
+                title: 'Volume important',
+                description: 'Temps de cycle et retrait à surveiller',
+                severity: 'ATTENTION',
+                icon: 'bi-box-fill',
+                iconClass: 'text-warning',
+                bgClass: 'border-warning bg-warning bg-opacity-10',
+                badgeClass: 'bg-warning'
+            });
+        }
+        
+        // Score-based risks
+        if (dfmData.score <= 3) {
+            indicators.push({
+                title: 'Moulabilité faible',
+                description: 'Redesign fortement recommandé',
+                severity: 'CRITIQUE',
+                icon: 'bi-x-circle-fill',
+                iconClass: 'text-danger',
+                bgClass: 'border-danger bg-danger bg-opacity-10',
+                badgeClass: 'bg-danger'
+            });
+        } else if (dfmData.score <= 6) {
+            indicators.push({
+                title: 'Moulabilité moyenne',
+                description: 'Optimisations possibles',
+                severity: 'ATTENTION',
+                icon: 'bi-dash-circle-fill',
+                iconClass: 'text-warning',
+                bgClass: 'border-warning bg-warning bg-opacity-10',
+                badgeClass: 'bg-warning'
+            });
+        }
+        
+        // Complexity indicators
+        if (dfmData.issues_count > 5) {
+            indicators.push({
+                title: 'Complexité élevée',
+                description: 'Nombreux problèmes détectés',
+                severity: 'ATTENTION',
+                icon: 'bi-gear-wide-connected',
+                iconClass: 'text-warning',
+                bgClass: 'border-warning bg-warning bg-opacity-10',
+                badgeClass: 'bg-warning',
+                color: '#ffc107'
+            });
+        }
+        
+        // Success indicator
+        if (dfmData.score >= 8 && dfmData.issues_count <= 2) {
+            indicators.push({
+                title: 'Excellente moulabilité',
+                description: 'Pièce optimisée pour l\'injection',
+                severity: 'OPTIMAL',
+                icon: 'bi-check-circle-fill',
+                iconClass: 'text-success',
+                bgClass: 'border-success bg-success bg-opacity-10',
+                badgeClass: 'bg-success'
+            });
+        }
+        
+        return indicators;
+    }
+    
+    showChangeDemoldingAxisButton() {
+        const changeDemoldingAxisBtn = document.getElementById('changeDemoldingAxisBtn');
+        if (changeDemoldingAxisBtn) {
+            changeDemoldingAxisBtn.style.display = 'inline-block';
+        }
+    }
+    
+    enablePDFGeneration() {
+        const generatePdfBtn = document.getElementById('generatePdfBtn');
+        if (generatePdfBtn) {
+            generatePdfBtn.style.display = 'inline-block';
+            generatePdfBtn.disabled = false;
+            generatePdfBtn.innerHTML = '<i class="bi bi-file-earmark-pdf me-2"></i>Générer rapport PDF';
+        }
+    }
+    
+    async generatePDFReport() {
+        if (!this.currentConversionId) {
+            alert('Aucune analyse DFM disponible pour la génération du rapport');
+            return;
+        }
+        
+        const pdfBtn = document.getElementById('generatePdfBtn');
+        const originalText = pdfBtn.innerHTML;
+        
+        try {
+            // Show loading state
+            pdfBtn.innerHTML = '<i class="bi bi-file-earmark-pdf me-2"></i>Génération en cours...';
+            pdfBtn.disabled = true;
+            
+            const response = await fetch(`/api/generate-pdf/${this.currentConversionId}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            });
+            
+            const result = await response.json();
+            
+            if (!response.ok) {
+                throw new Error(result.error || 'Erreur lors de la génération du PDF');
+            }
+            
+            if (result.success && result.pdf_filename) {
+                // Automatically download the PDF
+                const downloadLink = document.createElement('a');
+                downloadLink.href = `/download-pdf/${result.pdf_filename}`;
+                downloadLink.download = result.pdf_filename;
+                document.body.appendChild(downloadLink);
+                downloadLink.click();
+                document.body.removeChild(downloadLink);
+                
+                // Show success message
+                this.showPDFSuccess(result.message);
+            }
+            
+        } catch (error) {
+            console.error('PDF Generation error:', error);
+            alert(`Erreur lors de la génération du PDF: ${error.message}`);
+        } finally {
+            // Restore button state
+            pdfBtn.innerHTML = originalText;
+            pdfBtn.disabled = false;
+        }
+    }
+    
+    showPDFSuccess(message) {
+        // Create success notification
+        const notification = document.createElement('div');
+        notification.className = 'alert alert-success alert-dismissible fade show position-fixed';
+        notification.style.cssText = 'top: 20px; right: 20px; z-index: 1050; max-width: 300px;';
+        notification.innerHTML = `
+            <i class="bi bi-check-circle me-2"></i>
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        `;
+        
+        document.body.appendChild(notification);
+        
+        // Auto-remove after 5 seconds
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.parentNode.removeChild(notification);
+            }
+        }, 5000);
+    }
+
+    getSeverityBadgeClass(severity) {
+        switch(severity.toLowerCase()) {
+            case 'critical': return 'bg-danger text-white';
+            case 'warning': return 'bg-warning text-dark';
+            case 'info': return 'bg-info text-white';
+            default: return 'bg-secondary text-white';
+        }
+    }
+    
+    getWallThicknessDescription(issue) {
+        const thickness = issue.thickness.toFixed(2);
+        switch(issue.issue_type) {
+            case 'too_thin': return `Paroi trop fine: ${thickness}mm (min. 0.8mm)`;
+            case 'too_thick': return `Paroi trop épaisse: ${thickness}mm (max. 4mm)`;
+            default: return `Épaisseur: ${thickness}mm`;
+        }
+    }
+
+    getDFMAlertClass(rating) {
+        switch(rating) {
+            case 'excellent': return 'alert-success';
+            case 'good': return 'alert-info';
+            case 'warning': return 'alert-warning';
+            case 'critical': return 'alert-danger';
+            default: return 'alert-secondary';
+        }
+    }
+    
+    getScoreColor(score) {
+        if (score >= 8) return '#28a745';
+        if (score >= 6) return '#17a2b8';
+        if (score >= 4) return '#ffc107';
+        return '#dc3545';
+    }
+    
+    getProjectedArea(dimensions) {
+        // Calcule la surface projetée selon l'axe de démoulage sélectionné
+        const axis = this.selectedDemoldingAxis || 'z';
+        switch(axis.toLowerCase()) {
+            case 'x':
+                return dimensions.projected_area_x || 0;
+            case 'y':
+                return dimensions.projected_area_y || 0;
+            case 'z':
+                return dimensions.projected_area_z || 0;
+            default:
+                return dimensions.projected_area_z || 0;
+        }
+    }
+    
+    formatArea(area) {
+        // Formate la surface selon la taille
+        if (area < 100) {
+            return `${area.toFixed(1)} mm²`;
+        } else if (area < 10000) {
+            return `${area.toFixed(0)} mm²`;
+        } else {
+            return `${(area / 100).toFixed(1)} cm²`;
+        }
+    }
+    
+    getProgressBarClass(score) {
+        if (score >= 8) return 'bg-success';
+        if (score >= 6) return 'bg-info';
+        if (score >= 4) return 'bg-warning';
+        return 'bg-danger';
+    }
+    
+    getDFMRatingText(rating) {
+        switch(rating) {
+            case 'excellent': return 'Excellent';
+            case 'good': return 'Bon';
+            case 'warning': return 'Attention';
+            case 'critical': return 'Critique';
+            default: return 'Inconnu';
+        }
+    }
+
+    getRatingBadgeClass(rating) {
+        switch(rating) {
+            case 'excellent': return 'bg-success';
+            case 'good': return 'bg-primary';
+            case 'warning': return 'bg-warning';
+            case 'critical': return 'bg-danger';
+            default: return 'bg-secondary';
+        }
+    }
+    
+    setupSurfaceCalculationListeners() {
+        // Surface calculation dropdown items
+        const surfaceDropdown = document.querySelectorAll('[data-surface-axis]');
+        surfaceDropdown.forEach(item => {
+            item.addEventListener('click', (event) => {
+                event.preventDefault();
+                const axis = event.target.getAttribute('data-surface-axis');
+                this.calculateSurfaceArea(axis);
+            });
+        });
+    }
+    
+    createAxesLabels() {
+        // Create text labels for X, Y, Z axes
+        const labels = ['X', 'Y', 'Z'];
+        const colors = [0xff0000, 0x00ff00, 0x0000ff]; // Red, Green, Blue
+        const positions = [
+            new THREE.Vector3(60, 0, 0),  // X axis
+            new THREE.Vector3(0, 60, 0),  // Y axis  
+            new THREE.Vector3(0, 0, 60)   // Z axis
+        ];
+        
+        labels.forEach((label, index) => {
+            // Create canvas for text
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            canvas.width = 64;
+            canvas.height = 64;
+            
+            // Draw text
+            context.font = 'Bold 32px Arial';
+            context.fillStyle = `#${colors[index].toString(16).padStart(6, '0')}`;
+            context.textAlign = 'center';
+            context.textBaseline = 'middle';
+            context.fillText(label, 32, 32);
+            
+            // Create texture and material
+            const texture = new THREE.CanvasTexture(canvas);
+            const material = new THREE.SpriteMaterial({ map: texture });
+            
+            // Create sprite
+            const sprite = new THREE.Sprite(material);
+            sprite.position.copy(positions[index]);
+            sprite.scale.set(10, 10, 1);
+            
+            this.axesLabels.push(sprite);
+            this.scene.add(sprite);
+        });
+    }
+    
+    toggleMeasurementMode() {
+        this.measurementMode = !this.measurementMode;
+        const btn = document.getElementById('measureBtn');
+        
+        if (this.measurementMode) {
+            btn.classList.remove('btn-outline-primary');
+            btn.classList.add('btn-primary');
+            btn.innerHTML = '<i class="bi bi-rulers me-1"></i>Mesure ON';
+            this.crossSectionMode = false;
+            this.updateCrossSectionButton();
+            this.showMeasurementInstructions();
+        } else {
+            btn.classList.remove('btn-primary');
+            btn.classList.add('btn-outline-primary');
+            btn.innerHTML = '<i class="bi bi-rulers me-1"></i>Mesurer';
+            this.hideMeasurementInstructions();
+        }
+    }
+    
+    activateCrossSectionMode(axis) {
+        // Turn off measurement mode
+        this.measurementMode = false;
+        this.updateMeasurementButton();
+        
+        // Activate cross-section mode
+        this.crossSectionMode = true;
+        this.currentCrossSectionAxis = axis;
+        this.updateCrossSectionButton();
+        
+        this.createCrossSectionPlane(axis);
+        this.showCrossSectionInstructions(axis);
+    }
+    
+    toggleCrossSectionMode() {
+        this.crossSectionMode = !this.crossSectionMode;
+        this.updateCrossSectionButton();
+        
+        if (this.crossSectionMode) {
+            this.measurementMode = false;
+            this.updateMeasurementButton();
+            this.createCrossSectionPlane('z'); // Default to Z axis
+            this.showCrossSectionInstructions('z');
+        } else {
+            this.removeCrossSectionPlane();
+            this.hideCrossSectionInstructions();
+        }
+    }
+    
+    updateMeasurementButton() {
+        const btn = document.getElementById('measureBtn');
+        btn.classList.remove('btn-primary');
+        btn.classList.add('btn-outline-primary');
+        btn.innerHTML = '<i class="bi bi-rulers me-1"></i>Mesurer';
+    }
+    
+    updateCrossSectionButton() {
+        const btn = document.getElementById('crossSectionBtn');
+        if (this.crossSectionMode) {
+            btn.classList.remove('btn-outline-info');
+            btn.classList.add('btn-info');
+            const axisName = this.currentCrossSectionAxis ? this.currentCrossSectionAxis.toUpperCase() : 'Z';
+            btn.innerHTML = `<i class="bi bi-scissors me-1"></i>Coupe ${axisName}`;
+        } else {
+            btn.classList.remove('btn-info');
+            btn.classList.add('btn-outline-info');
+            btn.innerHTML = '<i class="bi bi-scissors me-1"></i>Coupe';
+        }
+    }
+    
+    onMouseClick(event) {
+        if (!this.measurementMode || !this.currentMesh) return;
+        
+        event.preventDefault();
+        
+        const rect = this.renderer.domElement.getBoundingClientRect();
+        const mouse = new THREE.Vector2();
+        mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+        
+        const raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera(mouse, this.camera);
+        
+        // Increase precision by setting raycaster parameters
+        raycaster.params.Points.threshold = 0.1;
+        raycaster.params.Line.threshold = 0.1;
+        
+        const intersects = raycaster.intersectObject(this.currentMesh);
+        
+        if (intersects.length > 0) {
+            // Use the closest intersection point for better precision
+            const point = intersects[0].point.clone();
+            
+            // Snap to nearest vertex for even better precision
+            const snappedPoint = this.snapToNearestVertex(point, intersects[0].object.geometry);
+            this.addMeasurementPoint(snappedPoint || point);
+        }
+    }
+    
+    snapToNearestVertex(point, geometry) {
+        const position = geometry.attributes.position;
+        let minDistance = Infinity;
+        let closestVertex = null;
+        const snapThreshold = 1.0; // Adjust this value for snap sensitivity
+        
+        for (let i = 0; i < position.count; i++) {
+            const vertex = new THREE.Vector3(
+                position.getX(i),
+                position.getY(i),
+                position.getZ(i)
+            );
+            
+            const distance = point.distanceTo(vertex);
+            if (distance < minDistance && distance < snapThreshold) {
+                minDistance = distance;
+                closestVertex = vertex;
+            }
+        }
+        
+        return closestVertex;
+    }
+    
+    addMeasurementPoint(point) {
+        // Calculate appropriate point size based on model scale
+        const box = new THREE.Box3().setFromObject(this.currentMesh);
+        const size = box.getSize(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const pointSize = maxDim * 0.005; // Much smaller relative size
+        
+        // Create point marker
+        const pointGeometry = new THREE.SphereGeometry(pointSize, 12, 8);
+        const pointMaterial = new THREE.MeshBasicMaterial({ 
+            color: 0xff3333,
+            transparent: true,
+            opacity: 0.8
+        });
+        const pointMesh = new THREE.Mesh(pointGeometry, pointMaterial);
+        pointMesh.position.copy(point);
+        
+        this.scene.add(pointMesh);
+        this.measurementPoints.push({ point: point, mesh: pointMesh });
+        
+        // If we have two points, create measurement line
+        if (this.measurementPoints.length === 2) {
+            this.createMeasurementLine();
+            this.measurementPoints = []; // Reset for next measurement
+        }
+    }
+    
+    createMeasurementLine() {
+        const point1 = this.measurementPoints[0].point;
+        const point2 = this.measurementPoints[1].point;
+        const distance = point1.distanceTo(point2);
+        
+        // Create line geometry with better styling
+        const lineGeometry = new THREE.BufferGeometry().setFromPoints([point1, point2]);
+        const lineMaterial = new THREE.LineBasicMaterial({ 
+            color: 0x00ff88,
+            linewidth: 3,
+            transparent: true,
+            opacity: 0.9
+        });
+        const line = new THREE.Line(lineGeometry, lineMaterial);
+        
+        this.scene.add(line);
+        
+        // Create distance label
+        const midPoint = new THREE.Vector3().addVectors(point1, point2).multiplyScalar(0.5);
+        const label = this.createDistanceLabel(distance, midPoint);
+        
+        this.measurementLines.push({ line: line, label: label, distance: distance });
+        
+        // Update measurements display
+        this.updateMeasurementsDisplay();
+    }
+    
+    createDistanceLabel(distance, position) {
+        // Always display in mm as requested
+        const displayText = `${distance.toFixed(1)} mm`;
+        
+        // Create canvas for distance text with high contrast styling
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        canvas.width = 300;
+        canvas.height = 80;
+        
+        // Clear canvas
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Draw bright yellow background for maximum visibility
+        context.fillStyle = 'rgba(255, 255, 0, 0.95)';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Draw thick black border
+        context.strokeStyle = 'black';
+        context.lineWidth = 4;
+        context.strokeRect(0, 0, canvas.width, canvas.height);
+        
+        // Draw text with maximum contrast
+        context.font = 'Bold 28px Arial';
+        context.fillStyle = 'black';
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillText(displayText, canvas.width / 2, canvas.height / 2);
+        
+        
+        // Create sprite with maximum visibility settings
+        const texture = new THREE.CanvasTexture(canvas);
+        const material = new THREE.SpriteMaterial({ 
+            map: texture,
+            transparent: false,  // No transparency for better visibility
+            depthTest: false,    // Always render in front
+            depthWrite: false    // Don't write to depth buffer
+        });
+        const sprite = new THREE.Sprite(material);
+        
+        // Position label above the measurement line for better visibility
+        const cameraDirection = new THREE.Vector3();
+        this.camera.getWorldDirection(cameraDirection);
+        
+        // Calculate appropriate scale based on distance to camera
+        const distanceToCamera = position.distanceTo(this.camera.position);
+        const scale = Math.max(distanceToCamera * 0.1, 2);
+        
+        sprite.position.copy(position);
+        // Offset label towards camera for better visibility
+        sprite.position.add(cameraDirection.multiplyScalar(-scale * 0.5));
+        sprite.scale.set(scale, scale * 0.4, 1);
+        
+        // Set high render order to ensure it's always in front
+        sprite.renderOrder = 1000;
+        
+        this.scene.add(sprite);
+        this.measurementLabels.push(sprite);
+        
+        return sprite;
+    }
+    
+    createCrossSectionPlane(axis = 'z') {
+        if (!this.currentMesh) return;
+        
+        // Remove existing plane if any
+        this.removeCrossSectionPlane();
+        
+        // Define plane normal based on axis
+        let normal;
+        let rotation = new THREE.Euler(0, 0, 0);
+        
+        switch(axis) {
+            case 'x':
+                normal = new THREE.Vector3(1, 0, 0);
+                rotation.set(0, Math.PI/2, 0);
+                break;
+            case 'y':
+                normal = new THREE.Vector3(0, 1, 0);
+                rotation.set(Math.PI/2, 0, 0);
+                break;
+            case 'z':
+            default:
+                normal = new THREE.Vector3(0, 0, 1);
+                rotation.set(0, 0, 0);
+                break;
+        }
+        
+        // Create clipping plane
+        const plane = new THREE.Plane(normal, 0);
+        this.clippingPlanes = [plane];
+        this.currentCrossSectionAxis = axis;
+        
+        // Update material to use clipping planes
+        if (this.currentMesh.material) {
+            this.currentMesh.material.clippingPlanes = this.clippingPlanes;
+            this.currentMesh.material.needsUpdate = true;
+        }
+        
+        // Enable local clipping
+        this.renderer.localClippingEnabled = true;
+        
+        // Create visual representation of the plane with better styling
+        const box = new THREE.Box3().setFromObject(this.currentMesh);
+        const size = box.getSize(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z);
+        
+        const planeGeometry = new THREE.PlaneGeometry(maxDim * 1.5, maxDim * 1.5);
+        const planeMaterial = new THREE.MeshBasicMaterial({ 
+            color: 0x00ff88, 
+            transparent: true, 
+            opacity: 0.15,
+            side: THREE.DoubleSide,
+            wireframe: false
+        });
+        
+        // Add a wireframe outline for better visibility when transparent
+        const wireframeGeometry = new THREE.EdgesGeometry(planeGeometry);
+        const wireframeMaterial = new THREE.LineBasicMaterial({ 
+            color: 0x00ff88,
+            transparent: true,
+            opacity: 0.6
+        });
+        this.crossSectionWireframe = new THREE.LineSegments(wireframeGeometry, wireframeMaterial);
+        
+        this.crossSectionPlane = new THREE.Mesh(planeGeometry, planeMaterial);
+        this.crossSectionPlane.position.copy(box.getCenter(new THREE.Vector3()));
+        this.crossSectionPlane.rotation.copy(rotation);
+        this.crossSectionPlane.visible = this.showCrossSectionPlane;
+        this.scene.add(this.crossSectionPlane);
+        
+        // Add wireframe outline
+        this.crossSectionWireframe.position.copy(this.crossSectionPlane.position);
+        this.crossSectionWireframe.rotation.copy(this.crossSectionPlane.rotation);
+        this.crossSectionWireframe.visible = this.showCrossSectionPlane;
+        this.scene.add(this.crossSectionWireframe);
+        
+        // Add plane controls
+        this.addCrossSectionControls();
+    }
+    
+    addCrossSectionControls() {
+        // Add keyboard controls for moving the plane
+        const handleKeyDown = (event) => {
+            if (!this.crossSectionMode || !this.crossSectionPlane) return;
+            
+            const moveStep = 1;
+            const axis = this.currentCrossSectionAxis || 'z';
+            
+            switch(event.key) {
+                case 'ArrowUp':
+                    if (axis === 'x') {
+                        this.crossSectionPlane.position.x += moveStep;
+                        this.clippingPlanes[0].constant = -this.crossSectionPlane.position.x;
+                        if (this.crossSectionWireframe) {
+                            this.crossSectionWireframe.position.x = this.crossSectionPlane.position.x;
+                        }
+                    } else if (axis === 'y') {
+                        this.crossSectionPlane.position.y += moveStep;
+                        this.clippingPlanes[0].constant = -this.crossSectionPlane.position.y;
+                        if (this.crossSectionWireframe) {
+                            this.crossSectionWireframe.position.y = this.crossSectionPlane.position.y;
+                        }
+                    } else {
+                        this.crossSectionPlane.position.z += moveStep;
+                        this.clippingPlanes[0].constant = -this.crossSectionPlane.position.z;
+                        if (this.crossSectionWireframe) {
+                            this.crossSectionWireframe.position.z = this.crossSectionPlane.position.z;
+                        }
+                    }
+                    break;
+                case 'ArrowDown':
+                    if (axis === 'x') {
+                        this.crossSectionPlane.position.x -= moveStep;
+                        this.clippingPlanes[0].constant = -this.crossSectionPlane.position.x;
+                        if (this.crossSectionWireframe) {
+                            this.crossSectionWireframe.position.x = this.crossSectionPlane.position.x;
+                        }
+                    } else if (axis === 'y') {
+                        this.crossSectionPlane.position.y -= moveStep;
+                        this.clippingPlanes[0].constant = -this.crossSectionPlane.position.y;
+                        if (this.crossSectionWireframe) {
+                            this.crossSectionWireframe.position.y = this.crossSectionPlane.position.y;
+                        }
+                    } else {
+                        this.crossSectionPlane.position.z -= moveStep;
+                        this.clippingPlanes[0].constant = -this.crossSectionPlane.position.z;
+                        if (this.crossSectionWireframe) {
+                            this.crossSectionWireframe.position.z = this.crossSectionPlane.position.z;
+                        }
+                    }
+                    break;
+                case ' ': // Spacebar to toggle plane visibility
+                    event.preventDefault();
+                    this.toggleCrossSectionPlaneVisibility();
+                    break;
+            }
+            
+            if (this.currentMesh.material) {
+                this.currentMesh.material.needsUpdate = true;
+            }
+        };
+        
+        document.addEventListener('keydown', handleKeyDown);
+        this.crossSectionKeyHandler = handleKeyDown;
+    }
+    
+    removeCrossSectionPlane() {
+        if (this.crossSectionPlane) {
+            this.scene.remove(this.crossSectionPlane);
+            this.crossSectionPlane = null;
+        }
+        
+        if (this.crossSectionWireframe) {
+            this.scene.remove(this.crossSectionWireframe);
+            this.crossSectionWireframe = null;
+        }
+        
+        if (this.currentMesh && this.currentMesh.material) {
+            this.currentMesh.material.clippingPlanes = [];
+            this.currentMesh.material.needsUpdate = true;
+        }
+        
+        this.renderer.localClippingEnabled = false;
+        this.clippingPlanes = [];
+        
+        if (this.crossSectionKeyHandler) {
+            document.removeEventListener('keydown', this.crossSectionKeyHandler);
+            this.crossSectionKeyHandler = null;
+        }
+    }
+    
+    clearMeasurements() {
+        // Remove measurement points (including pending points)
+        this.measurementPoints.forEach(point => {
+            if (point.mesh) {
+                this.scene.remove(point.mesh);
+                point.mesh.geometry.dispose();
+                point.mesh.material.dispose();
+            }
+        });
+        this.measurementPoints = [];
+        
+        // Remove measurement lines and labels
+        this.measurementLines.forEach(measurement => {
+            if (measurement.line) {
+                this.scene.remove(measurement.line);
+                measurement.line.geometry.dispose();
+                measurement.line.material.dispose();
+            }
+            if (measurement.label) {
+                this.scene.remove(measurement.label);
+                measurement.label.material.map.dispose();
+                measurement.label.material.dispose();
+            }
+        });
+        this.measurementLines = [];
+        
+        // Update display
+        this.updateMeasurementsDisplay();
+        
+        console.log('Measurements cleared');
+    }
+    
+    updateMeasurementsDisplay() {
+        let display = document.getElementById('measurementsDisplay');
+        if (!display) {
+            display = document.createElement('div');
+            display.id = 'measurementsDisplay';
+            display.className = 'alert alert-secondary mt-2';
+            display.style.display = 'none';
+            
+            const viewerSection = document.querySelector('.card .card-body');
+            viewerSection.appendChild(display);
+        }
+        
+        if (this.measurementLines.length > 0) {
+            let html = '<i class="bi bi-rulers me-2"></i><strong>Mesures :</strong><br>';
+            this.measurementLines.forEach((measurement, index) => {
+                html += `Mesure ${index + 1}: ${measurement.distance.toFixed(2)} cm<br>`;
+            });
+            display.innerHTML = html;
+            display.style.display = 'block';
+        } else {
+            display.style.display = 'none';
+        }
+    }
+    
+    showMeasurementInstructions() {
+        this.showInstructions('Cliquez sur deux points de la pièce pour mesurer la distance');
+    }
+    
+    toggleCrossSectionPlaneVisibility() {
+        if (this.crossSectionPlane) {
+            this.showCrossSectionPlane = !this.showCrossSectionPlane;
+            this.crossSectionPlane.visible = this.showCrossSectionPlane;
+            
+            if (this.crossSectionWireframe) {
+                this.crossSectionWireframe.visible = this.showCrossSectionPlane;
+            }
+            
+            // Update instructions
+            const axis = this.currentCrossSectionAxis || 'z';
+            this.showCrossSectionInstructions(axis);
+        }
+    }
+    
+    showCrossSectionInstructions(axis) {
+        const axisName = axis === 'x' ? 'X (YZ)' : axis === 'y' ? 'Y (XZ)' : 'Z (XY)';
+        const visibilityText = this.showCrossSectionPlane ? 'ESPACE pour masquer le plan' : 'ESPACE pour afficher le plan';
+        this.showInstructions(`Plan de coupe ${axisName} actif. Flèches ↑↓ pour déplacer, ${visibilityText}`);
+    }
+    
+    hideMeasurementInstructions() {
+        this.hideInstructions();
+    }
+    
+    hideCrossSectionInstructions() {
+        this.hideInstructions();
+    }
+    
+    showInstructions(text) {
+        let instructions = document.getElementById('toolInstructions');
+        if (!instructions) {
+            instructions = document.createElement('div');
+            instructions.id = 'toolInstructions';
+            instructions.className = 'alert alert-primary mt-2';
+            
+            const viewerSection = document.querySelector('.card .card-body');
+            viewerSection.appendChild(instructions);
+        }
+        
+        instructions.innerHTML = `<i class="bi bi-info-circle me-2"></i>${text}`;
+        this.safeSetStyle('toolInstructions', 'display', 'block');
+    }
+    
+    hideInstructions() {
+        this.safeSetDisplay('toolInstructions', 'none');
+    }
+    
+    onWindowResize() {
+        const container = this.safeGetElement('viewer3d');
+        
+        if (!container || !this.camera || !this.renderer) {
+            return;
+        }
+        
+        this.camera.aspect = container.clientWidth / container.clientHeight;
+        this.camera.updateProjectionMatrix();
+        
+        this.renderer.setSize(container.clientWidth, container.clientHeight);
+    }
+    
+
+    
+    async loadConversionHistory() {
+        const historyLoading = this.safeGetElement('historyLoading');
+        const historyTableBody = this.safeGetElement('historyTableBody');
+        
+        if (!historyLoading || !historyTableBody) {
+            return;
+        }
+        
+        try {
+            this.safeSetDisplay('historyLoading', 'block');
+            
+            const response = await fetch('/api/conversions?per_page=20');
+            const data = await response.json();
+            
+            if (data.conversions && data.conversions.length > 0) {
+                historyTableBody.innerHTML = '';
+                
+                data.conversions.forEach(conversion => {
+                    const row = this.createHistoryRow(conversion);
+                    historyTableBody.appendChild(row);
+                });
+            } else {
+                historyTableBody.innerHTML = `
+                    <tr>
+                        <td colspan="6" class="text-center text-muted py-4">
+                            Aucun historique de conversion disponible
+                        </td>
+                    </tr>
+                `;
+            }
+        } catch (error) {
+            console.error('Error loading conversion history:', error);
+            historyTableBody.innerHTML = `
+                <tr>
+                    <td colspan="6" class="text-center text-danger py-4">
+                        Erreur lors du chargement de l'historique des conversions
+                    </td>
+                </tr>
+            `;
+        } finally {
+            this.safeSetDisplay('historyLoading', 'none');
+        }
+    }
+    
+    createHistoryRow(conversion) {
+        const row = document.createElement('tr');
+        
+        // Status badge with DFM score
+        let statusBadge = '';
+        if (conversion.status === 'completed') {
+            statusBadge = '<span class="badge bg-success">Terminé</span>';
+            // Add DFM badge if available
+            if (conversion.dfm_overall_rating && conversion.dfm_score) {
+                const dfmClass = this.getDFMAlertClass(conversion.dfm_overall_rating).replace('alert-', 'bg-');
+                statusBadge += ` <span class="badge ${dfmClass} ms-1">${conversion.dfm_score}/10</span>`;
+            }
+        } else if (conversion.status === 'failed') {
+            statusBadge = '<span class="badge bg-danger">Échec</span>';
+        } else {
+            statusBadge = '<span class="badge bg-warning">En cours</span>';
+        }
+        
+        // File sizes
+        const stepSize = this.formatFileSize(conversion.step_file_size);
+        const stlSize = conversion.stl_file_size ? this.formatFileSize(conversion.stl_file_size) : 'N/A';
+        const sizeText = `${stepSize} → ${stlSize}`;
+        
+        // Date formatting
+        const date = new Date(conversion.created_at);
+        const dateText = date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+        
+        // Actions
+        let actions = '';
+        if (conversion.status === 'completed') {
+            actions = `
+                <button class="btn btn-sm btn-outline-primary" onclick="viewer.loadSTLFromHistory('${conversion.stl_filename}')">
+                    <i class="bi bi-eye"></i>
+                </button>
+            `;
+        } else if (conversion.status === 'failed') {
+            actions = `
+                <button class="btn btn-sm btn-outline-danger" onclick="alert('${conversion.error_message || 'Échec de la conversion'}')">
+                    <i class="bi bi-exclamation-triangle"></i>
+                </button>
+            `;
+        }
+        
+        row.innerHTML = `
+            <td>
+                <div class="fw-medium">${conversion.original_filename}</div>
+                <small class="text-muted">${conversion.id}</small>
+            </td>
+            <td>${statusBadge}</td>
+            <td>${conversion.tolerance}</td>
+            <td>${sizeText}</td>
+            <td>
+                <small>${dateText}</small>
+            </td>
+            <td>${actions}</td>
+        `;
+        
+        return row;
+    }
+    
+    loadSTLFromHistory(stlFilename) {
+        this.loadSTLModel(`/view/${stlFilename}`);
+        document.getElementById('viewerControls').style.display = 'block';
+        
+        // Scroll to viewer
+        document.getElementById('viewer3d').scrollIntoView({ behavior: 'smooth' });
+    }
+
+    createWallThicknessInsight(issue) {
+        const insights = {
+            too_thin: {
+                title: "Parois trop fines",
+                description: `Épaisseur de ${issue.thickness?.toFixed(2) || 'N/A'}mm détectée. Minimum recommandé: 0.8mm.`,
+                causes: [
+                    "Optimisation excessive du poids",
+                    "Contraintes d'espace dans l'assemblage",
+                    "Méconnaissance des limites de moulage"
+                ],
+                solutions: [
+                    "Augmenter à 1.2-2.0mm pour injection standard",
+                    "Ajouter des nervures de renfort",
+                    "Optimiser les points d'injection",
+                    "Utiliser un matériau haute fluidité"
+                ],
+                impact: "Remplissage incomplet, pièces fragiles, rebuts élevés"
+            },
+            too_thick: {
+                title: "Parois trop épaisses", 
+                description: `Épaisseur de ${issue.thickness?.toFixed(2) || 'N/A'}mm détectée. Maximum recommandé: 4.0mm.`,
+                causes: [
+                    "Sur-dimensionnement par sécurité",
+                    "Contraintes mécaniques élevées",
+                    "Conception issue d'usinage"
+                ],
+                solutions: [
+                    "Réduire à 2-4mm maximum",
+                    "Créer des sections creuses",
+                    "Utiliser des nervures plutôt qu'épaissir",
+                    "Considérer des inserts métalliques"
+                ],
+                impact: "Temps de cycle longs, retrait important, coûts matière"
+            }
+        };
+
+        const insight = insights[issue.issue_type];
+        if (!insight) return "Conseil non disponible";
+
+        return `
+            <div class="insight-tooltip text-start" style="max-width: 350px;">
+                <h6 class="text-warning mb-2"><i class="bi bi-lightbulb-fill me-1"></i>${insight.title}</h6>
+                <p class="mb-2 small">${insight.description}</p>
+                
+                <div class="mb-2">
+                    <strong class="small text-info">Causes fréquentes:</strong>
+                    <ul class="small mb-1 ms-3">
+                        ${insight.causes.map(cause => `<li>${cause}</li>`).join('')}
+                    </ul>
+                </div>
+                
+                <div class="mb-2">
+                    <strong class="small text-success">Solutions:</strong>
+                    <ul class="small mb-1 ms-3">
+                        ${insight.solutions.map(solution => `<li>${solution}</li>`).join('')}
+                    </ul>
+                </div>
+                
+                <div class="alert alert-warning alert-sm mb-0 p-2">
+                    <small><strong>Impact:</strong> ${insight.impact}</small>
+                </div>
+            </div>
+        `;
+    }
+
+    createGeometryInsight(issue) {
+        const insights = {
+            sharp_edge: {
+                title: "Arêtes vives détectées",
+                description: "Les arêtes vives créent des concentrations de contraintes et compliquent le démoulage.",
+                solutions: [
+                    "Ajouter des congés de 0.3-0.5mm minimum",
+                    "Prévoir des congés plus importants sur les arêtes extérieures",
+                    "Adapter selon l'épaisseur des parois",
+                    "Considérer l'orientation par rapport au plan de joint"
+                ],
+                impact: "Usure des moules, concentrations de contraintes"
+            },
+            no_draft: {
+                title: "Dépouille insuffisante",
+                description: "Les surfaces verticales sans dépouille compliquent l'éjection et usent le moule.",
+                solutions: [
+                    "Ajouter 0.5-2° de dépouille sur surfaces verticales",
+                    "Adapter selon la hauteur (plus haute = plus de dépouille)",
+                    "Prévoir des interruptions si nécessaire",
+                    "Optimiser l'orientation dans le moule"
+                ],
+                impact: "Force d'éjection élevée, marquage, usure moule"
+            },
+            deep_blind_hole: {
+                title: "Trous borgnes profonds",
+                description: "Rapport profondeur/diamètre > 3:1 difficile à mouler et ventiler.",
+                solutions: [
+                    "Limiter le rapport à 3:1 maximum",
+                    "Prévoir des évents en fond de trou",
+                    "Considérer des trous débouchants",
+                    "Utiliser des inserts filetés pour fixations"
+                ],
+                impact: "Problèmes de ventilation, marques de brûlure"
+            },
+            excessive_height: {
+                title: "Hauteur excessive",
+                description: "Pièces hautes (>60mm) augmentent les risques de déformation.",
+                solutions: [
+                    "Diviser en plusieurs pièces plus basses",
+                    "Optimiser la géométrie pour réduire la hauteur",
+                    "Prévoir des nervures de rigidification",
+                    "Adapter les paramètres de moulage"
+                ],
+                impact: "Déformations, retrait non uniforme"
+            }
+        };
+
+        const insight = insights[issue.issue_type];
+        if (!insight) {
+            return `
+                <div class="insight-tooltip text-start" style="max-width: 300px;">
+                    <h6 class="text-warning mb-2"><i class="bi bi-gear-fill me-1"></i>Problème géométrique</h6>
+                    <p class="mb-2 small">${issue.description}</p>
+                    <div class="alert alert-info alert-sm mb-0 p-2">
+                        <small><strong>Recommandation:</strong> ${issue.recommendation || 'Consulter un expert en injection plastique'}</small>
+                    </div>
+                </div>
+            `;
+        }
+
+        return `
+            <div class="insight-tooltip text-start" style="max-width: 350px;">
+                <h6 class="text-warning mb-2"><i class="bi bi-gear-fill me-1"></i>${insight.title}</h6>
+                <p class="mb-2 small">${insight.description}</p>
+                
+                <div class="mb-2">
+                    <strong class="small text-success">Solutions recommandées:</strong>
+                    <ul class="small mb-1 ms-3">
+                        ${insight.solutions.map(solution => `<li>${solution}</li>`).join('')}
+                    </ul>
+                </div>
+                
+                <div class="alert alert-warning alert-sm mb-0 p-2">
+                    <small><strong>Impact:</strong> ${insight.impact}</small>
+                </div>
+            </div>
+        `;
+    }
+
+    initializeDFMTooltips() {
+        // Initialize all tooltips in the DFM panel
+        setTimeout(() => {
+            const tooltipElements = document.querySelectorAll('.insight-icon[data-bs-toggle="tooltip"]');
+            tooltipElements.forEach(element => {
+                if (typeof bootstrap !== 'undefined') {
+                    new bootstrap.Tooltip(element, {
+                        html: true,
+                        trigger: 'hover focus',
+                        container: 'body'
+                    });
+                }
+            });
+        }, 100);
+    }
+}
+
+// Viewer will be initialized in index.html
