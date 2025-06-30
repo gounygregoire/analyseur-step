@@ -797,48 +797,268 @@ class STEPViewer {
     }
     
     displayDFMAnalysis(dfmData) {
-        // Create or update DFM analysis display
-        let dfmDisplay = document.getElementById('dfmDisplay');
-        if (!dfmDisplay) {
-            dfmDisplay = document.createElement('div');
-            dfmDisplay.id = 'dfmDisplay';
-            dfmDisplay.className = 'alert mt-2';
-            
-            // Insert after volume display
-            const volumeDisplay = document.getElementById('volumeDisplay');
-            if (volumeDisplay && volumeDisplay.parentNode) {
-                volumeDisplay.parentNode.insertBefore(dfmDisplay, volumeDisplay.nextSibling);
-            } else {
-                const viewerSection = document.querySelector('.card .card-body');
-                viewerSection.appendChild(dfmDisplay);
-            }
+        // Show the DFM results section
+        const dfmResultsSection = document.getElementById('dfmResultsSection');
+        if (dfmResultsSection) {
+            dfmResultsSection.style.display = 'block';
         }
         
-        // Set alert class based on rating
-        dfmDisplay.className = 'alert mt-2 ' + this.getDFMAlertClass(dfmData.rating);
+        // Get the DFM panel container
+        const dfmPanel = document.getElementById('dfmAnalysisPanel');
+        if (!dfmPanel) {
+            console.error('DFM analysis panel not found');
+            return;
+        }
         
-        dfmDisplay.innerHTML = `
-            <div class="row">
-                <div class="col-md-6">
-                    <h6 class="mb-2"><i class="bi bi-gear me-2"></i>Analyse DFM Injection</h6>
-                    <div><strong>Score:</strong> ${dfmData.score}/10 (${this.getDFMRatingText(dfmData.rating)})</div>
-                    <div><strong>Problèmes:</strong> ${dfmData.issues_count} détecté(s)</div>
+        // Clear any existing content
+        dfmPanel.innerHTML = '';
+        
+        // Generate the modern DFM interface
+        dfmPanel.innerHTML = this.generateModernDFMInterface(dfmData);
+        
+        // Show action buttons
+        this.showChangeDemoldingAxisButton();
+        this.enablePDFGeneration();
+    }
+    
+    generateModernDFMInterface(dfmData) {
+        const scoreColor = this.getScoreColor(dfmData.score);
+        const ratingText = this.getDFMRatingText(dfmData.rating);
+        const ratingBadgeClass = this.getRatingBadgeClass(dfmData.rating);
+        
+        return `
+            <!-- Carte de score principal -->
+            <div class="row mb-4">
+                <div class="col-lg-4 mb-3">
+                    <div class="dfm-score-card">
+                        <div class="dfm-score-circle" style="background: linear-gradient(135deg, ${scoreColor}, ${scoreColor}aa);">
+                            <div class="dfm-score-number">${dfmData.score}</div>
+                            <div class="dfm-score-max">/10</div>
+                        </div>
+                        <div class="dfm-rating-badge ${ratingBadgeClass}">${ratingText}</div>
+                        <p class="text-muted mb-0">${dfmData.issues_count} problème${dfmData.issues_count > 1 ? 's' : ''} détecté${dfmData.issues_count > 1 ? 's' : ''}</p>
+                    </div>
                 </div>
-                <div class="col-md-6">
-                    <h6 class="mb-2"><i class="bi bi-rulers me-2"></i>Dimensions</h6>
-                    <div><strong>Taille:</strong> ${dfmData.dimensions.x} × ${dfmData.dimensions.y} × ${dfmData.dimensions.z} mm</div>
-                    <div><strong>Ratio finesse:</strong> ${dfmData.dimensions.fineness_ratio}</div>
+                
+                <div class="col-lg-8">
+                    <!-- Métriques principales -->
+                    <div class="dfm-metrics-row">
+                        <div class="dfm-metric-card">
+                            <div class="dfm-metric-header">
+                                <div class="dfm-metric-icon" style="background: linear-gradient(135deg, #6f42c1, #563d7c);">
+                                    <i class="bi bi-rulers"></i>
+                                </div>
+                                <h6 class="dfm-metric-title">Dimensions</h6>
+                            </div>
+                            <div class="dfm-metric-value">${dfmData.dimensions.x} × ${dfmData.dimensions.y} × ${dfmData.dimensions.z}</div>
+                            <div class="dfm-metric-unit">mm</div>
+                        </div>
+                        
+                        <div class="dfm-metric-card">
+                            <div class="dfm-metric-header">
+                                <div class="dfm-metric-icon" style="background: linear-gradient(135deg, #20c997, #17a2b8);">
+                                    <i class="bi bi-box"></i>
+                                </div>
+                                <h6 class="dfm-metric-title">Volume</h6>
+                            </div>
+                            <div class="dfm-metric-value">${this.formatVolume(dfmData.dimensions.volume)}</div>
+                            <div class="dfm-metric-unit">mm³</div>
+                        </div>
+                        
+                        <div class="dfm-metric-card">
+                            <div class="dfm-metric-header">
+                                <div class="dfm-metric-icon" style="background: linear-gradient(135deg, #fd7e14, #dc3545);">
+                                    <i class="bi bi-layers"></i>
+                                </div>
+                                <h6 class="dfm-metric-title">Épaisseur max</h6>
+                            </div>
+                            <div class="dfm-metric-value">${dfmData.dimensions.max_wall_thickness}</div>
+                            <div class="dfm-metric-unit">mm</div>
+                        </div>
+                        
+                        <div class="dfm-metric-card">
+                            <div class="dfm-metric-header">
+                                <div class="dfm-metric-icon" style="background: linear-gradient(135deg, #ffc107, #fd7e14);">
+                                    <i class="bi bi-clock"></i>
+                                </div>
+                                <h6 class="dfm-metric-title">Refroidissement</h6>
+                            </div>
+                            <div class="dfm-metric-value">${dfmData.dimensions.cooling_time}</div>
+                            <div class="dfm-metric-unit">sec</div>
+                        </div>
+                    </div>
                 </div>
             </div>
-            ${dfmData.recommendations.length > 0 ? `
-                <div class="mt-2">
-                    <small><strong>Recommandations:</strong></small>
-                    <ul class="mb-0 mt-1">
-                        ${dfmData.recommendations.map(rec => `<li><small>${rec}</small></li>`).join('')}
-                    </ul>
+            
+            <!-- Surface projetée -->
+            <div class="dfm-metrics-row mb-4">
+                <div class="dfm-metric-card">
+                    <div class="dfm-metric-header">
+                        <div class="dfm-metric-icon" style="background: linear-gradient(135deg, #e83e8c, #dc3545);">
+                            <i class="bi bi-aspect-ratio"></i>
+                        </div>
+                        <h6 class="dfm-metric-title">Surface projetée X</h6>
+                    </div>
+                    <div class="dfm-metric-value">${this.formatArea(dfmData.dimensions.projected_area_x)}</div>
+                    <div class="dfm-metric-unit">mm²</div>
                 </div>
-            ` : ''}
+                
+                <div class="dfm-metric-card">
+                    <div class="dfm-metric-header">
+                        <div class="dfm-metric-icon" style="background: linear-gradient(135deg, #28a745, #20c997);">
+                            <i class="bi bi-aspect-ratio-fill"></i>
+                        </div>
+                        <h6 class="dfm-metric-title">Surface projetée Y</h6>
+                    </div>
+                    <div class="dfm-metric-value">${this.formatArea(dfmData.dimensions.projected_area_y)}</div>
+                    <div class="dfm-metric-unit">mm²</div>
+                </div>
+                
+                <div class="dfm-metric-card">
+                    <div class="dfm-metric-header">
+                        <div class="dfm-metric-icon" style="background: linear-gradient(135deg, #007bff, #6f42c1);">
+                            <i class="bi bi-bounding-box"></i>
+                        </div>
+                        <h6 class="dfm-metric-title">Surface projetée Z</h6>
+                    </div>
+                    <div class="dfm-metric-value">${this.formatArea(dfmData.dimensions.projected_area_z)}</div>
+                    <div class="dfm-metric-unit">mm²</div>
+                </div>
+            </div>
+            
+            ${this.generateIssuesSection(dfmData.wall_thickness_issues, dfmData.geometry_issues)}
+            
+            ${this.generateRecommendationsSection(dfmData.recommendations)}
         `;
+    }
+    
+    generateIssuesSection(wallIssues, geometryIssues) {
+        if (wallIssues.length === 0 && geometryIssues.length === 0) {
+            return `
+                <div class="dfm-issues-section">
+                    <div class="dfm-issues-header">
+                        <i class="bi bi-check-circle-fill text-success me-2"></i>
+                        <h5 class="dfm-issues-title">Aucun problème détecté</h5>
+                    </div>
+                    <p class="text-muted mb-0">Votre pièce respecte les bonnes pratiques d'injection plastique.</p>
+                </div>
+            `;
+        }
+        
+        let issuesHtml = `
+            <div class="dfm-issues-section">
+                <div class="dfm-issues-header">
+                    <i class="bi bi-exclamation-triangle-fill text-warning me-2"></i>
+                    <h5 class="dfm-issues-title">Problèmes détectés</h5>
+                </div>
+        `;
+        
+        // Wall thickness issues
+        if (wallIssues.length > 0) {
+            issuesHtml += `
+                <h6 class="mt-3 mb-2"><i class="bi bi-layers me-2"></i>Épaisseur des parois</h6>
+            `;
+            wallIssues.forEach(issue => {
+                issuesHtml += `
+                    <div class="dfm-issue-item severity-${issue.severity}">
+                        <div class="dfm-issue-header">
+                            <span class="dfm-issue-severity">${this.getSeverityText(issue.severity)}</span>
+                        </div>
+                        <div class="dfm-issue-description">
+                            Épaisseur ${issue.thickness}mm - ${this.getIssueTypeText(issue.issue_type)}
+                        </div>
+                        <div class="dfm-issue-recommendation">
+                            ${this.getWallThicknessRecommendation(issue.issue_type, issue.thickness)}
+                        </div>
+                    </div>
+                `;
+            });
+        }
+        
+        // Geometry issues
+        if (geometryIssues.length > 0) {
+            issuesHtml += `
+                <h6 class="mt-3 mb-2"><i class="bi bi-shapes me-2"></i>Géométrie</h6>
+            `;
+            geometryIssues.forEach(issue => {
+                issuesHtml += `
+                    <div class="dfm-issue-item severity-${issue.severity}">
+                        <div class="dfm-issue-header">
+                            <span class="dfm-issue-severity">${this.getSeverityText(issue.severity)}</span>
+                        </div>
+                        <div class="dfm-issue-description">${issue.description}</div>
+                        <div class="dfm-issue-recommendation">${issue.recommendation}</div>
+                    </div>
+                `;
+            });
+        }
+        
+        issuesHtml += `</div>`;
+        return issuesHtml;
+    }
+    
+    generateRecommendationsSection(recommendations) {
+        if (recommendations.length === 0) return '';
+        
+        return `
+            <div class="dfm-recommendations">
+                <div class="dfm-issues-header">
+                    <i class="bi bi-lightbulb-fill text-primary me-2"></i>
+                    <h5 class="dfm-issues-title">Recommandations</h5>
+                </div>
+                ${recommendations.map(rec => `
+                    <div class="dfm-recommendation-item">
+                        <i class="bi bi-arrow-right me-2 text-primary"></i>
+                        ${rec}
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    }
+    
+    formatVolume(volume) {
+        if (volume >= 1000000) {
+            return (volume / 1000000).toFixed(1) + 'M';
+        } else if (volume >= 1000) {
+            return (volume / 1000).toFixed(1) + 'K';
+        }
+        return Math.round(volume).toString();
+    }
+    
+    formatArea(area) {
+        if (area >= 1000000) {
+            return (area / 1000000).toFixed(1) + 'M';
+        } else if (area >= 1000) {
+            return (area / 1000).toFixed(1) + 'K';
+        }
+        return Math.round(area).toString();
+    }
+    
+    getSeverityText(severity) {
+        const texts = {
+            'critical': 'Critique',
+            'warning': 'Attention',
+            'info': 'Info'
+        };
+        return texts[severity] || severity;
+    }
+    
+    getIssueTypeText(issueType) {
+        const texts = {
+            'too_thin': 'trop fine',
+            'too_thick': 'trop épaisse',
+            'acceptable': 'acceptable'
+        };
+        return texts[issueType] || issueType;
+    }
+    
+    getWallThicknessRecommendation(issueType, thickness) {
+        if (issueType === 'too_thin') {
+            return `Augmenter l'épaisseur à minimum 0.8mm pour éviter les problèmes de remplissage`;
+        } else if (issueType === 'too_thick') {
+            return `Réduire l'épaisseur à maximum 4mm pour éviter les retassures et déformations`;
+        }
+        return 'Épaisseur optimale pour l\'injection plastique';
     }
     
     showDemoldingAxisModal() {
