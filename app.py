@@ -313,6 +313,15 @@ def analyze_dfm_endpoint(conversion_id):
                 'error': 'Fichier STEP non trouvé'
             }), 404
         
+        # Check user authentication and credits
+        if current_user.is_authenticated:
+            if not current_user.has_access():
+                logger.warning(f"User {current_user.id} has no credits left")
+                return jsonify({
+                    'success': False,
+                    'error': 'Crédits insuffisants. Veuillez acheter des crédits ou vous abonner.'
+                }), 403
+        
         logger.info(f"Starting DFM analysis for job {conversion_id} with demolding axis: {demolding_axis}")
         
         # Perform DFM analysis
@@ -325,6 +334,11 @@ def analyze_dfm_endpoint(conversion_id):
                 'error': 'Échec de l\'analyse DFM'
             }), 500
         
+        # Deduct credit after successful analysis
+        if current_user.is_authenticated:
+            current_user.use_credit()
+            logger.info(f"Credit used. User {current_user.id} has {current_user.credits} credits remaining")
+        
         # Update database with DFM results
         conversion_job.dfm_score = dfm_report.moldability_rating
         conversion_job.dfm_issues_count = len(dfm_report.wall_thickness_issues) + len(dfm_report.geometry_issues)
@@ -332,8 +346,6 @@ def analyze_dfm_endpoint(conversion_id):
         db.session.commit()
         
         logger.info(f"DFM Analysis completed - Score: {dfm_report.moldability_rating}/10, Rating: {dfm_report.overall_score}")
-        
-        # No need to store DFM data separately
         
         return jsonify({
             'success': True,

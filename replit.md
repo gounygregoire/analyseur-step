@@ -94,6 +94,12 @@ CADlytics est une application SaaS basée sur Flask qui permet aux utilisateurs 
 
 ## Changelog
 
+- 30 juin 2025 : Correction système de crédits et authentification Google
+  - Résolution erreur Google OAuth : colonnes manquantes ajoutées à la base de données
+  - Système de crédits corrigé : décompte automatique après analyse DFM
+  - Vérification des crédits avant analyse DFM avec messages d'erreur appropriés
+  - Logs détaillés pour suivi de l'utilisation des crédits
+  - Base de données mise à jour avec toutes les colonnes utilisateur nécessaires
 - 30 juin 2025 : Correction finale de l'interface d'authentification et page tarifs
   - Champs de saisie avec fond blanc et texte noir pour visibilité maximale
   - Titres H2 en blanc avec ombre portée sur pages login/register
