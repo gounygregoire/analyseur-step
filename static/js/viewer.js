@@ -820,10 +820,55 @@ class STEPViewer {
         // Generate the modern DFM interface
         dfmPanel.innerHTML = this.generateModernDFMInterface(dfmData);
         
+        // Initialize Bootstrap tabs after HTML insertion
+        setTimeout(() => {
+            this.initializeDFMTabs();
+        }, 100);
+        
         // Show action buttons
         this.showChangeDemoldingAxisButton();
         this.enablePDFGeneration();
         console.log('DFM analysis displayed successfully');
+    }
+
+    initializeDFMTabs() {
+        // Initialize Bootstrap tabs manually
+        const tabElements = document.querySelectorAll('#dfmTabs .nav-link');
+        tabElements.forEach(tabElement => {
+            if (typeof bootstrap !== 'undefined' && bootstrap.Tab) {
+                new bootstrap.Tab(tabElement);
+            }
+        });
+        
+        // Add click event listeners as fallback
+        tabElements.forEach(tabElement => {
+            tabElement.addEventListener('click', (e) => {
+                e.preventDefault();
+                const targetId = tabElement.getAttribute('data-bs-target');
+                if (targetId) {
+                    // Hide all tab panels
+                    document.querySelectorAll('.tab-pane').forEach(panel => {
+                        panel.classList.remove('show', 'active');
+                    });
+                    
+                    // Remove active from all tab buttons
+                    document.querySelectorAll('#dfmTabs .nav-link').forEach(btn => {
+                        btn.classList.remove('active');
+                    });
+                    
+                    // Show target panel
+                    const targetPanel = document.querySelector(targetId);
+                    if (targetPanel) {
+                        targetPanel.classList.add('show', 'active');
+                    }
+                    
+                    // Activate clicked tab
+                    tabElement.classList.add('active');
+                }
+            });
+        });
+        
+        console.log('DFM tabs initialized');
     }
     
     generateModernDFMInterface(dfmData) {
