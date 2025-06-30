@@ -1360,13 +1360,7 @@ class STEPViewer {
             default: return 'dfm-problem-info';
         }
     }
-}
 
-// Initialize the viewer when the page loads
-document.addEventListener('DOMContentLoaded', function() {
-    new STLViewer();
-});
-    
     showChangeDemoldingAxisButton() {
         const changeDemoldingAxisBtn = document.getElementById('changeDemoldingAxisBtn');
         if (changeDemoldingAxisBtn) {
@@ -2396,4 +2390,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 }
 
-// Viewer will be initialized in index.html
+// Initialize the viewer when the page loads
+document.addEventListener('DOMContentLoaded', function() {
+    window.viewer = new STEPViewer();
+});
