@@ -148,24 +148,62 @@ class DFMAnalyzer:
                 cq.exporters.export(workplane, temp_stl_path)
                 
                 # Load with Trimesh
-                mesh = trimesh.load(temp_stl_path)
+                mesh_loaded = trimesh.load(temp_stl_path)
                 
                 # Handle Scene objects (when multiple objects are loaded)
-                if isinstance(mesh, trimesh.Scene):
-                    if len(mesh.geometry) > 0:
-                        mesh = list(mesh.geometry.values())[0]
+                if isinstance(mesh_loaded, trimesh.Scene):
+                    if len(mesh_loaded.geometry) > 0:
+                        mesh = list(mesh_loaded.geometry.values())[0]
                     else:
                         raise ValueError("No geometry found in the file")
+                else:
+                    mesh = mesh_loaded
                 
-                # Ensure mesh is valid
-                if not hasattr(mesh, 'face_normals') or not hasattr(mesh, 'area_faces'):
-                    raise ValueError("Invalid mesh format")
+                # Clean and validate mesh
+                print(f"Original mesh: {len(mesh.faces)} faces, {len(mesh.vertices)} vertices")
                 
-                # Calculate real projected areas using face normals
-                # Only count faces pointing in positive direction for each axis
-                projected_area_x = mesh.area_faces[(mesh.face_normals[:, 0] > 0)].sum()
-                projected_area_y = mesh.area_faces[(mesh.face_normals[:, 1] > 0)].sum()
-                projected_area_z = mesh.area_faces[(mesh.face_normals[:, 2] > 0)].sum()
+                # Nettoyage du mesh pour de bons calculs
+                mesh.remove_duplicate_faces()
+                mesh.remove_degenerate_faces()
+                mesh.remove_unreferenced_vertices()
+                
+                # Fix normals if needed
+                if not mesh.is_winding_consistent:
+                    mesh.fix_normals()
+                
+                # Ensure we have a single watertight component
+                if hasattr(mesh, 'split') and callable(mesh.split):
+                    components = mesh.split(only_watertight=False)
+                    if len(components) > 0:
+                        # Take largest component by volume
+                        mesh = max(components, key=lambda m: m.volume if hasattr(m, 'volume') else 0)
+                
+                mesh.rezero()
+                
+                print(f"Cleaned mesh: {len(mesh.faces)} faces, {len(mesh.vertices)} vertices")
+                print(f"Mesh volume: {mesh.volume:.2f} mm³")
+                print(f"Mesh surface area: {mesh.area:.2f} mm²")
+                
+                # Calculate projected areas using improved method
+                projected_area_x = self._calculate_projected_area_robust(mesh, 'x')
+                projected_area_y = self._calculate_projected_area_robust(mesh, 'y')
+                projected_area_z = self._calculate_projected_area_robust(mesh, 'z')
+                
+                print(f"Projected areas - X: {projected_area_x:.2f}, Y: {projected_area_y:.2f}, Z: {projected_area_z:.2f}")
+                
+                # Generate debug visualization
+                try:
+                    from projection_debug import visualize_projections, debug_mesh_stats
+                    debug_mesh_stats(mesh)
+                    viz_path = visualize_projections(mesh, "static/debug_projections.png")
+                    print(f"Debug visualization saved to: {viz_path}")
+                except Exception as viz_error:
+                    print(f"Debug visualization failed: {viz_error}")
+                
+                # Validation: projected area should be reasonable
+                max_projected = max(projected_area_x, projected_area_y, projected_area_z)
+                if max_projected > mesh.area * 0.8:  # Allow up to 80% of total surface area
+                    print(f"Warning: Max projected area ({max_projected:.2f}) is high vs surface area ({mesh.area:.2f})")
 
                 
             except Exception as e:
@@ -412,6 +450,65 @@ class DFMAnalyzer:
             return 'warning'
         else:
             return 'info'
+    
+    def _calculate_projected_area_robust(self, mesh, axis: str) -> float:
+        """Calculate projected area using robust 2D projection with overlap handling"""
+        try:
+            vertices = mesh.vertices
+            faces = mesh.faces
+            
+            # Project vertices onto 2D plane
+            if axis.lower() == 'x':
+                projected = vertices[:, [1, 2]]  # YZ plane
+            elif axis.lower() == 'y':
+                projected = vertices[:, [0, 2]]  # XZ plane  
+            elif axis.lower() == 'z':
+                projected = vertices[:, [0, 1]]  # XY plane
+            else:
+                raise ValueError(f"Invalid axis: {axis}")
+            
+            # Method 1: Sum of projected triangle areas
+            total_area_triangles = 0.0
+            for face in faces:
+                v0, v1, v2 = projected[face]
+                # Triangle area using cross product
+                area = 0.5 * abs((v1[0] - v0[0]) * (v2[1] - v0[1]) - (v2[0] - v0[0]) * (v1[1] - v0[1]))
+                total_area_triangles += area
+            
+            # Method 2: Convex hull area (fallback for validation)
+            try:
+                from scipy.spatial import ConvexHull
+                if len(projected) >= 3:  # Need at least 3 points for hull
+                    hull = ConvexHull(projected)
+                    convex_hull_area = hull.volume  # In 2D, volume = area
+                else:
+                    convex_hull_area = 0.0
+            except Exception:
+                convex_hull_area = 0.0
+            
+            # Validation and selection
+            if total_area_triangles > 0 and convex_hull_area > 0:
+                ratio = total_area_triangles / convex_hull_area
+                print(f"Axis {axis.upper()}: Triangles={total_area_triangles:.2f}, Hull={convex_hull_area:.2f}, Ratio={ratio:.1f}")
+                
+                # If ratio is too high, there's significant overlap - use a hybrid approach
+                if ratio > 2.5:
+                    # Use average weighted toward the more conservative estimate
+                    result = (total_area_triangles + 2 * convex_hull_area) / 3
+                    print(f"High overlap detected, using hybrid: {result:.2f}")
+                    return result
+                else:
+                    return total_area_triangles
+            elif total_area_triangles > 0:
+                return total_area_triangles
+            elif convex_hull_area > 0:
+                return convex_hull_area
+            else:
+                return 0.0
+                
+        except Exception as e:
+            print(f"Error in robust projection for axis {axis}: {e}")
+            return 0.0
     
     def _find_sharp_edges(self, workplane) -> List[Tuple[float, float, float]]:
         """Find sharp edges that need fillets (simplified for performance)"""
