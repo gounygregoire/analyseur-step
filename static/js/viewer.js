@@ -1005,20 +1005,28 @@ class STEPViewer {
     }
     
     generateMaterialRecommendationsSection() {
-        if (!this.materialRecommendations || this.materialRecommendations.length === 0) {
+        // Check both class property and global variable
+        const materials = this.materialRecommendations || window.materialRecommendations || [];
+        console.log('Generating material recommendations section, materials:', materials);
+        
+        if (!materials || materials.length === 0) {
+            console.log('No material recommendations available');
             return '';
         }
+        
+        // Store for later use
+        this.materialRecommendations = materials;
         
         return `
             <div class="dfm-materials-section mb-4">
                 <div class="dfm-issues-header">
                     <i class="bi bi-palette-fill text-success me-2"></i>
                     <h5 class="dfm-issues-title">Recommandations Matériaux</h5>
-                    <span class="badge bg-success ms-2">${this.materialRecommendations.length} matériaux suggérés</span>
+                    <span class="badge bg-success ms-2">${materials.length} matériaux suggérés</span>
                 </div>
                 
                 <div class="material-recommendations-grid">
-                    ${this.materialRecommendations.map((material, index) => `
+                    ${materials.map((material, index) => `
                         <div class="material-recommendation-card">
                             <div class="material-card-header">
                                 <div class="material-rank">#${index + 1}</div>
@@ -1289,8 +1297,10 @@ class STEPViewer {
                             throw new Error(result.error || 'Erreur lors de l\'analyse des matériaux');
                         }
                         
-                        // Store material recommendations
+                        // Store material recommendations globally
+                        window.materialRecommendations = result.recommendations;
                         this.materialRecommendations = result.recommendations;
+                        console.log('Material recommendations stored:', this.materialRecommendations);
                         
                         // Now run DFM analysis
                         await this.analyzeDFM(axis);

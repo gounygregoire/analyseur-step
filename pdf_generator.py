@@ -480,7 +480,7 @@ class DFMReportGenerator:
         return base64.b64encode(svg_content.encode()).decode()
         
     def generate_report(self, dfm_data: Dict[str, Any], step_file_path: str, 
-                       filename: str, original_filename: str) -> str:
+                       filename: str, original_filename: str, material_recommendations: List[Dict] = None) -> str:
         """Generate complete DFM PDF report"""
         try:
             # Generate 3D views from STEP file
@@ -514,6 +514,11 @@ class DFMReportGenerator:
             # Detailed analysis
             story.extend(self._create_detailed_analysis(dfm_data))
             story.append(PageBreak())
+            
+            # Material recommendations
+            if material_recommendations:
+                story.extend(self._create_material_recommendations_section(material_recommendations))
+                story.append(PageBreak())
             
             # Recommendations
             story.extend(self._create_recommendations_section(dfm_data))
@@ -790,6 +795,67 @@ class DFMReportGenerator:
             content.append(Spacer(1, 10))
         
         return content
+    
+    def _create_material_recommendations_section(self, material_recommendations: List[Dict]) -> List:
+        """Create material recommendations section"""
+        content = []
+        
+        content.append(Paragraph("Recommandations Matériaux", self.styles['SectionHeader']))
+        
+        content.append(Paragraph(
+            "Basé sur votre questionnaire d'usage, voici 3 matériaux plastiques recommandés pour votre pièce :",
+            self.styles['Normal']
+        ))
+        content.append(Spacer(1, 15))
+        
+        for i, material in enumerate(material_recommendations[:3], 1):
+            # Material header
+            content.append(Paragraph(
+                f"{i}. {material.get('name', 'Matériau inconnu')} - {material.get('category', '')}",
+                self.styles['Heading3']
+            ))
+            
+            # Score
+            score = material.get('score', 0)
+            content.append(Paragraph(
+                f"Score de compatibilité: {score:.1f}/100",
+                self.styles['Normal']
+            ))
+            
+            # Description
+            description = material.get('description', '')
+            if description:
+                content.append(Paragraph(f"Description: {description}", self.styles['Normal']))
+            
+            # Properties
+            properties = material.get('properties', {})
+            if properties:
+                content.append(Paragraph("Propriétés principales:", self.styles['Normal']))
+                for prop, value in properties.items():
+                    if isinstance(value, (int, float)):
+                        content.append(Paragraph(f"• {prop}: {value}", self.styles['Normal']))
+                    else:
+                        content.append(Paragraph(f"• {prop}: {value}", self.styles['Normal']))
+            
+            # Advantages
+            advantages = material.get('advantages', [])
+            if advantages:
+                content.append(Paragraph("Avantages:", self.styles['Normal']))
+                for advantage in advantages[:3]:  # Limit to 3
+                    content.append(Paragraph(f"✓ {advantage}", self.styles['Normal']))
+            
+            # Cost level
+            cost_level = material.get('cost_level', 'balanced')
+            cost_text = {
+                'economy': 'Économique',
+                'balanced': 'Équilibré',
+                'premium': 'Premium'
+            }.get(cost_level, 'Équilibré')
+            content.append(Paragraph(f"Niveau de coût: {cost_text}", self.styles['Normal']))
+            
+            content.append(Spacer(1, 15))
+        
+        return content
         
     def _create_recommendations_section(self, dfm_data: Dict[str, Any]) -> List:
         """Create recommendations section"""
@@ -851,11 +917,11 @@ class DFMReportGenerator:
 
 # Convenience function
 def generate_dfm_pdf_report(dfm_data: Dict[str, Any], step_file_path: str, 
-                           output_path: str, original_filename: str) -> str:
+                           output_path: str, original_filename: str, material_recommendations: List[Dict] = None) -> str:
     """Generate DFM PDF report with 3D views from STEP file"""
     try:
         generator = DFMReportGenerator()
-        return generator.generate_report(dfm_data, step_file_path, output_path, original_filename)
+        return generator.generate_report(dfm_data, step_file_path, output_path, original_filename, material_recommendations)
     except Exception as e:
         print(f"Error generating DFM PDF report: {e}")
         # Return the output path even on error to prevent None return

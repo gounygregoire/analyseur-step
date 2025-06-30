@@ -1,6 +1,6 @@
 import os
 import logging
-from flask import Flask, render_template, request, jsonify, send_file, send_from_directory
+from flask import Flask, render_template, request, jsonify, send_file, send_from_directory, session
 from flask_cors import CORS
 from flask_migrate import Migrate
 from werkzeug.utils import secure_filename
@@ -296,6 +296,8 @@ def analyze_dfm_endpoint(conversion_id):
         
         logger.info(f"DFM Analysis completed - Score: {dfm_report.moldability_rating}/10, Rating: {dfm_report.overall_score}")
         
+        # No need to store DFM data separately
+        
         return jsonify({
             'success': True,
             'dfm_analysis': {
@@ -402,6 +404,9 @@ def generate_pdf_report(conversion_id):
         # Create reports directory if it doesn't exist
         os.makedirs('reports', exist_ok=True)
         
+        # Get material recommendations from session if available
+        material_recommendations = session.get('material_recommendations', [])
+        
         # Use STEP file path for 3D views generation
         step_file_path = os.path.join(app.config['UPLOAD_FOLDER'], conversion_job.step_filename)
         
@@ -409,7 +414,8 @@ def generate_pdf_report(conversion_id):
             dfm_data, 
             step_file_path, 
             pdf_path, 
-            conversion_job.original_filename
+            conversion_job.original_filename,
+            material_recommendations
         )
         
         logger.info(f"PDF report generated: {generated_path}")
@@ -450,33 +456,11 @@ def get_material_recommendations():
         questionnaire_data = data.get('questionnaire', {})
         conversion_id = data.get('conversion_id')
         
-        # Get DFM data if available
-        dfm_data = None
-        if conversion_id:
-            conversion_job = ConversionJob.query.get(conversion_id)
-            if conversion_job and conversion_job.status == 'completed':
-                # Get the DFM analysis for this conversion
-                try:
-                    step_file_path = os.path.join(app.config['UPLOAD_FOLDER'], conversion_job.step_filename)
-                    if os.path.exists(step_file_path):
-                        # Re-run DFM analysis to get data structure
-                        dfm_report = analyze_dfm(step_file_path, questionnaire_data.get('demolding_axis', 'z'))
-                        dfm_data = {
-                            'overall_rating': dfm_report.overall_score,
-                            'wall_thickness_issues': [
-                                {
-                                    'issue_type': issue.issue_type,
-                                    'thickness': issue.thickness,
-                                    'severity': issue.severity,
-                                    'location': issue.location
-                                } for issue in dfm_report.wall_thickness_issues
-                            ]
-                        }
-                except Exception as e:
-                    logger.warning(f"Could not get DFM data for material recommendations: {str(e)}")
+        # Get material recommendations without DFM data for now
+        recommendations = recommend_materials_for_questionnaire(questionnaire_data, {})
         
-        # Get material recommendations
-        recommendations = recommend_materials_for_questionnaire(questionnaire_data, dfm_data)
+        # Store material recommendations in session for later use in PDF
+        session['material_recommendations'] = recommendations
         
         logger.info(f"Generated {len(recommendations)} material recommendations")
         
