@@ -94,6 +94,12 @@ CADlytics est une application SaaS basée sur Flask qui permet aux utilisateurs 
 
 ## Changelog
 
+- 30 juin 2025 : Réorganisation ergonomique de l'interface utilisateur
+  - Outils 3D (mesure, coupe, filaire, axes) intégrés directement au visualisateur
+  - Analyse DFM repositionnée juste sous le visualisateur pour flux logique
+  - Boutons d'action compacts et organisés par thématiques
+  - Suppression de la sidebar redondante pour l'analyse DFM
+  - Interface plus fluide avec contrôles groupés par contexte d'usage
 - 30 juin 2025 : Refonte visuelle moderne de l'analyse DFM
   - Interface DFM complètement redessinée avec design cohérent kaki/brun
   - Cartes de métriques interactives avec icônes colorées et animations

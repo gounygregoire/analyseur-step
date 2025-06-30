@@ -390,11 +390,8 @@ class STEPViewer {
         
         // Store current conversion ID for DFM analysis
         this.currentConversionId = result.file_id;
-        
-        // Show DFM controls panel
-        this.safeSetDisplay('dfmControlsPanel', 'block');
 
-        // Show viewer tools panel
+        // Show viewer tools panel (which now includes DFM controls)
         this.safeSetDisplay('viewerToolsPanel', 'block');
         
         // Load and display the STL model directly
