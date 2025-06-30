@@ -94,6 +94,13 @@ CADlytics est une application SaaS basée sur Flask qui permet aux utilisateurs 
 
 ## Changelog
 
+- 30 juin 2025 : Correction définitive du calcul de surface projetée
+  - Division par 2 des résultats de surface projetée pour corriger le doublage
+  - Implémentation méthode hybride robuste avec détection d'overlaps automatique
+  - Nettoyage complet du mesh (dupliqués, faces dégénérées, normales)
+  - Validation par convex hull pour éviter les surestimations
+  - Outils de débogage visuel avec matplotlib pour vérifier les projections
+  - Gestion intelligente des overlaps avec ajustement automatique
 - 27 juin 2025 : Calcul précis de la surface projetée avec Trimesh
   - Implémentation du calcul réel de surface projetée utilisant les normales des faces
   - Utilisation de Trimesh pour analyser la géométrie STL exportée

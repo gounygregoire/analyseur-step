@@ -185,9 +185,9 @@ class DFMAnalyzer:
                 print(f"Mesh surface area: {mesh.area:.2f} mm²")
                 
                 # Calculate projected areas using improved method
-                projected_area_x = self._calculate_projected_area_robust(mesh, 'x')
-                projected_area_y = self._calculate_projected_area_robust(mesh, 'y')
-                projected_area_z = self._calculate_projected_area_robust(mesh, 'z')
+                projected_area_x = self._calculate_projected_area_robust(mesh, 'x') / 2.0
+                projected_area_y = self._calculate_projected_area_robust(mesh, 'y') / 2.0
+                projected_area_z = self._calculate_projected_area_robust(mesh, 'z') / 2.0
                 
                 print(f"Projected areas - X: {projected_area_x:.2f}, Y: {projected_area_y:.2f}, Z: {projected_area_z:.2f}")
                 
