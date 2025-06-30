@@ -9,9 +9,10 @@ import uuid
 import time
 from pathlib import Path
 from datetime import datetime
-from models import db, ConversionJob, UserSession
+from models import db, ConversionJob, UserSession, User, OAuth
 from dfm_analyzer import analyze_dfm, DFMReport
 from material_recommender import recommend_materials_for_questionnaire
+from flask_login import LoginManager, login_required, current_user
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)

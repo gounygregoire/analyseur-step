@@ -20,4 +20,8 @@ dependencies = [
     "trimesh>=4.6.13",
     "matplotlib>=3.10.3",
     "scipy>=1.16.0",
+    "pyjwt>=2.10.1",
+    "flask-dance>=7.1.0",
+    "flask-login>=0.6.3",
+    "oauthlib>=3.3.1",
 ]

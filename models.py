@@ -1,5 +1,8 @@
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import DeclarativeBase
+from flask_dance.consumer.storage.sqla import OAuthConsumerMixin
+from flask_login import UserMixin
+from sqlalchemy import UniqueConstraint
 from datetime import datetime
 import uuid
 
@@ -61,3 +64,28 @@ class UserSession(db.Model):
     
     def __repr__(self):
         return f'<UserSession {self.session_id}>'
+
+# Tables requises pour l'authentification Replit
+class User(UserMixin, db.Model):
+    __tablename__ = 'users'
+    id = db.Column(db.String, primary_key=True)
+    email = db.Column(db.String, unique=True, nullable=True)
+    first_name = db.Column(db.String, nullable=True)
+    last_name = db.Column(db.String, nullable=True)
+    profile_image_url = db.Column(db.String, nullable=True)
+    
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+# Table OAuth pour stocker les tokens d'authentification
+class OAuth(OAuthConsumerMixin, db.Model):
+    user_id = db.Column(db.String, db.ForeignKey(User.id))
+    browser_session_key = db.Column(db.String, nullable=False)
+    user = db.relationship(User)
+
+    __table_args__ = (UniqueConstraint(
+        'user_id',
+        'browser_session_key',
+        'provider',
+        name='uq_user_browser_session_key_provider',
+    ),)
