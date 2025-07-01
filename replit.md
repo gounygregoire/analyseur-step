@@ -107,6 +107,13 @@ CADlytics est une application SaaS basée sur Flask qui permet aux utilisateurs 
   - Bouton de coupe affiche l'axe actuel : "Arrêter coupe (X)" par exemple
   - Menu déroulant apparaît automatiquement quand mode coupe activé
   - Instructions mises à jour pour refléter les nouveaux contrôles ergonomiques
+- 1er juillet 2025 : Nouvelles fonctionnalités d'analyse avancée
+  - Indicateur "Prêt pour injection" avec feu vert/jaune/rouge selon qualité DFM
+  - Check-list interactive de préparation au moulage avec validation automatique
+  - Viewer 3D avec surbrillance des défauts (sphères rouges/oranges pour problèmes)
+  - Téléchargement ZIP complet avec fichier STEP, rapport PDF et données JSON
+  - Stockage des données DFM complètes en session pour export
+  - Bouton "Défauts" pour afficher/masquer les zones problématiques en 3D
 - 30 juin 2025 : Correction système de crédits et authentification Google
   - Résolution erreur Google OAuth : colonnes manquantes ajoutées à la base de données
   - Système de crédits corrigé : décompte automatique après analyse DFM

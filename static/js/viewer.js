@@ -910,9 +910,282 @@ class STEPViewer {
         // Show action buttons
         this.showChangeDemoldingAxisButton();
         this.enablePDFGeneration();
+        
+        // Afficher l'indicateur "Prêt pour injection"
+        this.updateInjectionReadyIndicator(dfmData);
+        
+        // Afficher la checklist interactive
+        this.updateMoldingChecklist(dfmData);
+        
+        // Mettre en évidence les défauts dans le viewer 3D
+        this.highlightDefectsIn3D(dfmData);
+        
+        // Activer le bouton de téléchargement ZIP
+        this.enableZipDownload();
+        
         console.log('DFM analysis displayed successfully');
     }
 
+    updateInjectionReadyIndicator(dfmData) {
+        const indicator = document.getElementById('injectionReadyIndicator');
+        const badge = document.getElementById('injectionReadyBadge');
+        const icon = document.getElementById('injectionReadyIcon');
+        const text = document.getElementById('injectionReadyText');
+        
+        if (!indicator || !badge || !icon || !text) return;
+        
+        // Déterminer l'état en fonction du score et des problèmes
+        let status = 'green'; // Par défaut vert
+        let statusText = 'Prêt pour injection';
+        let badgeClass = 'bg-success';
+        
+        if (dfmData.score < 5 || dfmData.rating === 'critical') {
+            status = 'red';
+            statusText = 'Non prêt - Corrections majeures';
+            badgeClass = 'bg-danger';
+        } else if (dfmData.score < 7 || dfmData.rating === 'warning') {
+            status = 'yellow';
+            statusText = 'Prêt avec réserves';
+            badgeClass = 'bg-warning';
+        }
+        
+        // Mettre à jour l'affichage
+        indicator.style.display = 'inline-block';
+        badge.className = `badge fs-5 ${badgeClass}`;
+        text.textContent = statusText;
+        
+        // Animation d'apparition
+        setTimeout(() => {
+            indicator.style.opacity = '0';
+            indicator.style.transform = 'scale(0.8)';
+            setTimeout(() => {
+                indicator.style.transition = 'all 0.3s ease';
+                indicator.style.opacity = '1';
+                indicator.style.transform = 'scale(1)';
+            }, 100);
+        }, 100);
+    }
+    
+    updateMoldingChecklist(dfmData) {
+        const checklist = document.getElementById('moldingChecklist');
+        const checklistItems = document.getElementById('checklistItems');
+        
+        if (!checklist || !checklistItems) return;
+        
+        // Définir les critères de la checklist
+        const criteria = [
+            {
+                id: 'wall_thickness',
+                label: 'Épaisseur de paroi correcte (0.8-4mm)',
+                check: () => {
+                    const wallIssues = dfmData.wall_thickness_issues || [];
+                    return wallIssues.filter(i => i.severity === 'critical').length === 0;
+                },
+                details: () => {
+                    const wallIssues = dfmData.wall_thickness_issues || [];
+                    const critical = wallIssues.filter(i => i.severity === 'critical').length;
+                    if (critical > 0) return `${critical} zones avec épaisseur critique`;
+                    return 'Toutes les épaisseurs sont conformes';
+                }
+            },
+            {
+                id: 'draft_angles',
+                label: 'Dépouilles présentes sur faces verticales',
+                check: () => {
+                    const geomIssues = dfmData.geometry_issues || [];
+                    return geomIssues.filter(i => i.issue_type === 'no_draft_angle').length === 0;
+                },
+                details: () => {
+                    const draftIssues = (dfmData.geometry_issues || []).filter(i => i.issue_type === 'no_draft_angle');
+                    if (draftIssues.length > 0) return `${draftIssues.length} faces sans dépouille`;
+                    return 'Toutes les faces ont une dépouille suffisante';
+                }
+            },
+            {
+                id: 'sharp_edges',
+                label: 'Arêtes vives avec congés',
+                check: () => {
+                    const geomIssues = dfmData.geometry_issues || [];
+                    return geomIssues.filter(i => i.issue_type === 'sharp_edge').length === 0;
+                },
+                details: () => {
+                    const sharpEdges = (dfmData.geometry_issues || []).filter(i => i.issue_type === 'sharp_edge');
+                    if (sharpEdges.length > 0) return `${sharpEdges.length} arêtes vives détectées`;
+                    return 'Toutes les arêtes ont des congés';
+                }
+            },
+            {
+                id: 'undercuts',
+                label: 'Absence d\'enclaves complexes',
+                check: () => {
+                    const geomIssues = dfmData.geometry_issues || [];
+                    return geomIssues.filter(i => i.issue_type === 'deep_blind_hole').length === 0;
+                },
+                details: () => {
+                    const undercuts = (dfmData.geometry_issues || []).filter(i => i.issue_type === 'deep_blind_hole');
+                    if (undercuts.length > 0) return `${undercuts.length} enclaves détectées`;
+                    return 'Aucune enclave complexe';
+                }
+            },
+            {
+                id: 'cooling_time',
+                label: 'Temps de refroidissement optimal',
+                check: () => {
+                    const coolingTime = dfmData.dimensions?.cooling_time || 0;
+                    return coolingTime < 60; // Moins de 60 secondes
+                },
+                details: () => {
+                    const coolingTime = dfmData.dimensions?.cooling_time || 0;
+                    return `Temps estimé : ${coolingTime.toFixed(1)}s`;
+                }
+            }
+        ];
+        
+        // Générer le HTML de la checklist
+        checklistItems.innerHTML = criteria.map(criterion => {
+            const isChecked = criterion.check();
+            const details = criterion.details();
+            const itemClass = isChecked ? 'list-group-item-success' : 'list-group-item-danger';
+            const iconClass = isChecked ? 'bi-check-circle-fill text-success' : 'bi-x-circle-fill text-danger';
+            
+            return `
+                <div class="list-group-item list-group-item-action ${itemClass}" 
+                     data-criterion="${criterion.id}" style="cursor: pointer;">
+                    <div class="d-flex align-items-center">
+                        <i class="bi ${iconClass} me-3 fs-4"></i>
+                        <div class="flex-grow-1">
+                            <div class="fw-bold">${criterion.label}</div>
+                            <small class="text-muted">${details}</small>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+        
+        // Afficher la checklist
+        checklist.style.display = 'block';
+        
+        // Ajouter les événements de clic pour afficher plus de détails
+        checklistItems.querySelectorAll('.list-group-item').forEach(item => {
+            item.addEventListener('click', (e) => {
+                const criterionId = e.currentTarget.dataset.criterion;
+                // Ici on pourrait ouvrir un modal avec plus de détails
+                console.log('Clicked on criterion:', criterionId);
+            });
+        });
+    }
+    
+    highlightDefectsIn3D(dfmData) {
+        if (!this.currentMesh) return;
+        
+        // Stocker les données DFM pour référence
+        this.currentDfmData = dfmData;
+        
+        // Créer des marqueurs visuels pour les défauts
+        const defectMarkers = new THREE.Group();
+        defectMarkers.name = 'defectMarkers';
+        
+        // Supprimer les anciens marqueurs s'ils existent
+        const oldMarkers = this.scene.getObjectByName('defectMarkers');
+        if (oldMarkers) {
+            this.scene.remove(oldMarkers);
+        }
+        
+        // Ajouter des sphères rouges pour les zones à problème
+        const wallIssues = dfmData.wall_thickness_issues || [];
+        wallIssues.forEach(issue => {
+            if (issue.severity === 'critical' || issue.severity === 'warning') {
+                const geometry = new THREE.SphereGeometry(1, 16, 16);
+                const material = new THREE.MeshBasicMaterial({
+                    color: issue.severity === 'critical' ? 0xff0000 : 0xffa500,
+                    transparent: true,
+                    opacity: 0.6
+                });
+                const sphere = new THREE.Mesh(geometry, material);
+                sphere.position.set(issue.location[0], issue.location[1], issue.location[2]);
+                defectMarkers.add(sphere);
+            }
+        });
+        
+        // Ajouter des marqueurs pour les problèmes géométriques
+        const geomIssues = dfmData.geometry_issues || [];
+        geomIssues.forEach(issue => {
+            if (issue.severity === 'critical' || issue.severity === 'warning') {
+                const geometry = new THREE.ConeGeometry(0.8, 2, 8);
+                const material = new THREE.MeshBasicMaterial({
+                    color: issue.issue_type === 'sharp_edge' ? 0xff6600 : 0xff0066,
+                    transparent: true,
+                    opacity: 0.6
+                });
+                const cone = new THREE.Mesh(geometry, material);
+                cone.position.set(issue.location[0], issue.location[1], issue.location[2]);
+                defectMarkers.add(cone);
+            }
+        });
+        
+        // Ajouter les marqueurs à la scène
+        this.scene.add(defectMarkers);
+        
+        // Ajouter un bouton pour afficher/masquer les défauts
+        this.addDefectToggleButton();
+    }
+    
+    addDefectToggleButton() {
+        // Vérifier si le bouton existe déjà
+        if (document.getElementById('toggleDefectsBtn')) return;
+        
+        // Créer le bouton
+        const toolsContainer = document.querySelector('.viewer-tools');
+        if (toolsContainer) {
+            const toggleBtn = document.createElement('button');
+            toggleBtn.id = 'toggleDefectsBtn';
+            toggleBtn.className = 'btn btn-outline-danger btn-sm';
+            toggleBtn.innerHTML = '<i class="bi bi-exclamation-triangle me-1"></i>Défauts';
+            toggleBtn.title = 'Afficher/Masquer les zones problématiques';
+            
+            toggleBtn.addEventListener('click', () => {
+                const markers = this.scene.getObjectByName('defectMarkers');
+                if (markers) {
+                    markers.visible = !markers.visible;
+                    toggleBtn.classList.toggle('btn-danger');
+                    toggleBtn.classList.toggle('btn-outline-danger');
+                }
+            });
+            
+            toolsContainer.appendChild(toggleBtn);
+        }
+    }
+    
+    enableZipDownload() {
+        const downloadBtn = document.getElementById('downloadZipBtn');
+        if (downloadBtn) {
+            downloadBtn.style.display = 'inline-block';
+            downloadBtn.onclick = () => {
+                this.downloadZipFile();
+            };
+        }
+    }
+    
+    async downloadZipFile() {
+        if (!this.currentConversionId) {
+            alert('Aucune analyse disponible pour le téléchargement');
+            return;
+        }
+        
+        try {
+            // Créer un lien de téléchargement
+            const link = document.createElement('a');
+            link.href = `/download/zip/${this.currentConversionId}`;
+            link.download = `cadlytics_analysis_${this.currentConversionId}.zip`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        } catch (error) {
+            console.error('Error downloading ZIP:', error);
+            alert('Erreur lors du téléchargement du fichier ZIP');
+        }
+    }
+    
     initializeDFMTabs() {
         // Initialize Bootstrap tabs manually
         const tabElements = document.querySelectorAll('#dfmTabs .nav-link');

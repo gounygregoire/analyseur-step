@@ -347,42 +347,49 @@ def analyze_dfm_endpoint(conversion_id):
         
         logger.info(f"DFM Analysis completed - Score: {dfm_report.moldability_rating}/10, Rating: {dfm_report.overall_score}")
         
+        # Prepare DFM data
+        dfm_data = {
+            'score': dfm_report.moldability_rating,
+            'rating': dfm_report.overall_score,
+            'issues_count': len(dfm_report.wall_thickness_issues) + len(dfm_report.geometry_issues),
+            'dimensions': {
+                'x': round(dfm_report.dimensions.x_max, 2),
+                'y': round(dfm_report.dimensions.y_max, 2),
+                'z': round(dfm_report.dimensions.z_max, 2),
+                'volume': round(dfm_report.dimensions.volume, 2),
+                'max_wall_thickness': round(dfm_report.dimensions.max_wall_thickness, 2),
+                'projected_area_x': round(dfm_report.dimensions.projected_area_x, 2),
+                'projected_area_y': round(dfm_report.dimensions.projected_area_y, 2),
+                'projected_area_z': round(dfm_report.dimensions.projected_area_z, 2),
+                'cooling_time': round(dfm_report.dimensions.cooling_time, 1)
+            },
+            'recommendations': dfm_report.recommendations[:3],  # First 3 recommendations
+            'wall_thickness_issues': [
+                {
+                    'location': issue.location,
+                    'thickness': issue.thickness,
+                    'issue_type': issue.issue_type,
+                    'severity': issue.severity
+                } for issue in dfm_report.wall_thickness_issues[:5]  # Limit to 5 issues
+            ],
+            'geometry_issues': [
+                {
+                    'location': issue.location,
+                    'issue_type': issue.issue_type,
+                    'description': issue.description,
+                    'severity': issue.severity,
+                    'recommendation': issue.recommendation
+                } for issue in dfm_report.geometry_issues[:5]  # Limit to 5 issues
+            ]
+        }
+        
+        # Store complete DFM data in session for ZIP download
+        session[f'dfm_analysis_{conversion_id}'] = dfm_data
+        session.permanent = True
+        
         return jsonify({
             'success': True,
-            'dfm_analysis': {
-                'score': dfm_report.moldability_rating,
-                'rating': dfm_report.overall_score,
-                'issues_count': len(dfm_report.wall_thickness_issues) + len(dfm_report.geometry_issues),
-                'dimensions': {
-                    'x': round(dfm_report.dimensions.x_max, 2),
-                    'y': round(dfm_report.dimensions.y_max, 2),
-                    'z': round(dfm_report.dimensions.z_max, 2),
-                    'volume': round(dfm_report.dimensions.volume, 2),
-                    'max_wall_thickness': round(dfm_report.dimensions.max_wall_thickness, 2),
-                    'projected_area_x': round(dfm_report.dimensions.projected_area_x, 2),
-                    'projected_area_y': round(dfm_report.dimensions.projected_area_y, 2),
-                    'projected_area_z': round(dfm_report.dimensions.projected_area_z, 2),
-                    'cooling_time': round(dfm_report.dimensions.cooling_time, 1)
-                },
-                'recommendations': dfm_report.recommendations[:3],  # First 3 recommendations
-                'wall_thickness_issues': [
-                    {
-                        'location': issue.location,
-                        'thickness': issue.thickness,
-                        'issue_type': issue.issue_type,
-                        'severity': issue.severity
-                    } for issue in dfm_report.wall_thickness_issues[:5]  # Limit to 5 issues
-                ],
-                'geometry_issues': [
-                    {
-                        'location': issue.location,
-                        'issue_type': issue.issue_type,
-                        'description': issue.description,
-                        'severity': issue.severity,
-                        'recommendation': issue.recommendation
-                    } for issue in dfm_report.geometry_issues[:5]  # Limit to 5 issues
-                ]
-            }
+            'dfm_analysis': dfm_data
         })
         
     except Exception as e:
@@ -492,6 +499,96 @@ def download_pdf(filename):
     except Exception as e:
         logger.error(f"PDF download error: {str(e)}")
         return jsonify({'error': 'Erreur lors du téléchargement'}), 500
+
+@app.route('/download/zip/<conversion_id>')
+@login_required
+def download_zip(conversion_id):
+    """Generate and download a ZIP file with all analysis data"""
+    import zipfile
+    import json
+    from io import BytesIO
+    
+    try:
+        # Récupérer les données de conversion
+        conversion = ConversionJob.query.get(conversion_id)
+        if not conversion:
+            return jsonify({'error': 'Conversion non trouvée'}), 404
+        
+        # Créer un fichier ZIP en mémoire
+        zip_buffer = BytesIO()
+        
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            # 1. Ajouter le fichier STEP original
+            step_path = os.path.join(UPLOAD_FOLDER, conversion.step_filename)
+            if os.path.exists(step_path):
+                zip_file.write(step_path, f"original/{conversion.original_filename}")
+            
+            # 2. Ajouter le rapport PDF s'il existe
+            pdf_filename = f"rapport_dfm_{conversion_id}.pdf"
+            pdf_path = os.path.join('reports', pdf_filename)
+            if os.path.exists(pdf_path):
+                zip_file.write(pdf_path, f"reports/{pdf_filename}")
+            
+            # 3. Créer et ajouter le fichier d'analyse JSON
+            analysis_data = {
+                'conversion_id': conversion_id,
+                'original_filename': conversion.original_filename,
+                'created_at': conversion.created_at.isoformat(),
+                'status': conversion.status,
+                'analysis': {}
+            }
+            
+            # Récupérer l'analyse DFM complète depuis la session
+            dfm_session_key = f'dfm_analysis_{conversion_id}'
+            if dfm_session_key in session:
+                analysis_data['analysis'] = session[dfm_session_key]
+            
+            # Ajouter les métriques de base
+            analysis_data['metrics'] = {
+                'dfm_score': conversion.dfm_score,
+                'dfm_issues_count': conversion.dfm_issues_count,
+                'dfm_overall_rating': conversion.dfm_overall_rating,
+                'step_file_size': conversion.step_file_size,
+                'stl_file_size': conversion.stl_file_size
+            }
+            
+            # Convertir en JSON et ajouter au ZIP
+            json_data = json.dumps(analysis_data, indent=2, ensure_ascii=False)
+            zip_file.writestr('analysis/dfm_analysis.json', json_data)
+            
+            # 4. Ajouter un fichier README
+            readme_content = f"""CADlytics - Analyse DFM
+========================
+
+Fichier: {conversion.original_filename}
+Date d'analyse: {conversion.created_at.strftime('%Y-%m-%d %H:%M:%S')}
+Score DFM: {conversion.dfm_score}/10
+Évaluation: {conversion.dfm_overall_rating or 'N/A'}
+
+Contenu de l'archive:
+- original/ : Fichier STEP original
+- reports/ : Rapport PDF détaillé
+- analysis/ : Données d'analyse au format JSON
+
+Pour plus d'informations, visitez CADlytics.
+
+Créé par Grégoire GOUNY
+"""
+            zip_file.writestr('README.txt', readme_content)
+        
+        # Préparer le téléchargement
+        zip_buffer.seek(0)
+        
+        return send_file(
+            zip_buffer,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=f'cadlytics_analysis_{conversion_id}.zip'
+        )
+        
+    except Exception as e:
+        logger.error(f"Error creating ZIP file: {str(e)}")
+        return jsonify({'error': 'Erreur lors de la création du fichier ZIP'}), 500
 
 @app.route('/api/material-recommendations', methods=['POST'])
 def get_material_recommendations():

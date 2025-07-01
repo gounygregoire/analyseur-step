@@ -166,3 +166,42 @@
 * {
     transition: color 0.15s ease-in-out, background-color 0.15s ease-in-out, border-color 0.15s ease-in-out;
 }
+
+/* Injection Ready Indicator */
+#injectionReadyIndicator {
+    transition: all 0.3s ease;
+}
+
+#injectionReadyBadge {
+    padding: 0.5rem 1rem;
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Checklist Styles */
+#moldingChecklist .list-group-item {
+    transition: all 0.2s ease;
+    border: 1px solid #dee2e6;
+    margin-bottom: 0.25rem;
+}
+
+#moldingChecklist .list-group-item:hover {
+    transform: translateX(5px);
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
+
+#moldingChecklist .list-group-item-success {
+    background-color: #d4edda;
+    border-color: #c3e6cb;
+}
+
+#moldingChecklist .list-group-item-danger {
+    background-color: #f8d7da;
+    border-color: #f5c6cb;
+}
+
+/* Defect Toggle Button */
+#toggleDefectsBtn {
+    margin-left: 0.5rem;
+}
