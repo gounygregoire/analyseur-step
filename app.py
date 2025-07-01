@@ -462,46 +462,55 @@ def generate_pdf_report(conversion_id):
         from dfm_analyzer import analyze_dfm
         
         # Get demolding axis from request or use default
-        demolding_axis = request.json.get('demolding_axis', 'z')
-        material_type = request.json.get('material_type', 'GENERIC')
+        request_data = request.get_json() or {}
+        demolding_axis = request_data.get('demolding_axis', 'z')
+        material_type = request_data.get('material_type', 'GENERIC')
         
         # Perform DFM analysis
         dfm_report = analyze_dfm(step_path, demolding_axis, material_type)
         
+        # Check if analysis was successful
+        if not dfm_report:
+            return jsonify({'error': 'Échec de l\'analyse DFM'}), 500
+        
         # Convert DFM report to dict format
-        dfm_data = {
-            'overall_score': dfm_report.overall_score,
-            'moldability_rating': dfm_report.moldability_rating,
-            'dimensions': {
-                'x': dfm_report.dimensions.x_max,
-                'y': dfm_report.dimensions.y_max,
-                'z': dfm_report.dimensions.z_max,
-                'volume': dfm_report.dimensions.volume,
-                'max_wall_thickness': dfm_report.dimensions.max_wall_thickness,
-                'projected_area_x': dfm_report.dimensions.projected_area_x,
-                'projected_area_y': dfm_report.dimensions.projected_area_y,
-                'projected_area_z': dfm_report.dimensions.projected_area_z,
-                'cooling_time': dfm_report.dimensions.cooling_time
-            },
-            'wall_thickness_issues': [
-                {
-                    'location': list(issue.location),
-                    'thickness': issue.thickness,
-                    'type': issue.issue_type,
-                    'severity': issue.severity
-                } for issue in dfm_report.wall_thickness_issues
-            ],
-            'geometry_issues': [
-                {
-                    'location': list(issue.location),
-                    'type': issue.issue_type,
-                    'description': issue.description,
-                    'severity': issue.severity,
-                    'recommendation': issue.recommendation
-                } for issue in dfm_report.geometry_issues
-            ],
-            'recommendations': dfm_report.recommendations
-        }
+        try:
+            dfm_data = {
+                'overall_score': getattr(dfm_report, 'overall_score', 'critical'),
+                'moldability_rating': getattr(dfm_report, 'moldability_rating', 1),
+                'dimensions': {
+                    'x': getattr(dfm_report.dimensions, 'x_max', 0),
+                    'y': getattr(dfm_report.dimensions, 'y_max', 0),
+                    'z': getattr(dfm_report.dimensions, 'z_max', 0),
+                    'volume': getattr(dfm_report.dimensions, 'volume', 0),
+                    'max_wall_thickness': getattr(dfm_report.dimensions, 'max_wall_thickness', 0),
+                    'projected_area_x': getattr(dfm_report.dimensions, 'projected_area_x', 0),
+                    'projected_area_y': getattr(dfm_report.dimensions, 'projected_area_y', 0),
+                    'projected_area_z': getattr(dfm_report.dimensions, 'projected_area_z', 0),
+                    'cooling_time': getattr(dfm_report.dimensions, 'cooling_time', 0)
+                },
+                'wall_thickness_issues': [
+                    {
+                        'location': list(issue.location),
+                        'thickness': issue.thickness,
+                        'type': issue.issue_type,
+                        'severity': issue.severity
+                    } for issue in getattr(dfm_report, 'wall_thickness_issues', [])
+                ],
+                'geometry_issues': [
+                    {
+                        'location': list(issue.location),
+                        'type': issue.issue_type,
+                        'description': issue.description,
+                        'severity': issue.severity,
+                        'recommendation': issue.recommendation
+                    } for issue in getattr(dfm_report, 'geometry_issues', [])
+                ],
+                'recommendations': getattr(dfm_report, 'recommendations', [])
+            }
+        except AttributeError as e:
+            logger.error(f"Error accessing DFM report attributes: {e}")
+            return jsonify({'error': f'Erreur lors du traitement des données DFM: {str(e)}'}), 500
         
         # Generate PDF
         pdf_filename = f"rapport_dfm_{conversion_id}.pdf"
