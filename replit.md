@@ -101,6 +101,12 @@ CADlytics est une application SaaS basée sur Flask qui permet aux utilisateurs 
   - Plan de coupe orange visible avec contrôles clavier intuitifs (↑↓ déplacer, Espace masquer, Échap quitter)
   - Instructions contextuelles claires affichées pendant l'utilisation
   - Gestion propre des événements et nettoyage automatique des ressources
+- 1er juillet 2025 : Amélioration fonction coupe 3D et thème viewer
+  - Mode clair/sombre n'affecte que le viewer 3D (pas toute l'interface)
+  - Menu déroulant pour choisir l'axe de coupe (X, Y, Z) remplaçant les touches clavier
+  - Bouton de coupe affiche l'axe actuel : "Arrêter coupe (X)" par exemple
+  - Menu déroulant apparaît automatiquement quand mode coupe activé
+  - Instructions mises à jour pour refléter les nouveaux contrôles ergonomiques
 - 30 juin 2025 : Correction système de crédits et authentification Google
   - Résolution erreur Google OAuth : colonnes manquantes ajoutées à la base de données
   - Système de crédits corrigé : décompte automatique après analyse DFM

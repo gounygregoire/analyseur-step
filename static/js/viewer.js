@@ -284,6 +284,18 @@ class STEPViewer {
             newClearBtn.addEventListener('click', () => this.clearMeasurements());
         }
         
+        // Menu déroulant pour l'axe de coupe
+        const axisSelect = document.getElementById('crossSectionAxisSelect');
+        if (axisSelect) {
+            axisSelect.addEventListener('change', (event) => {
+                const newAxis = event.target.value;
+                if (this.crossSectionMode && this.crossSectionAxis !== newAxis) {
+                    this.createSimpleCrossSectionPlane(newAxis);
+                    this.showSimpleCrossSectionInstructions();
+                }
+            });
+        }
+        
         console.log('Viewer tools events setup complete');
     }
     
@@ -1905,6 +1917,7 @@ class STEPViewer {
     
     updateCrossSectionButton() {
         const btn = document.getElementById('crossSectionBtn');
+        const axisSelect = document.getElementById('crossSectionAxisSelect');
         if (!btn) return;
         
         if (this.crossSectionMode) {
@@ -1913,13 +1926,24 @@ class STEPViewer {
             btn.classList.add('btn-warning');
             btn.style.fontWeight = 'bold';
             btn.innerHTML = `<i class="bi bi-stop-circle me-1"></i>Arrêter coupe (${axisName})`;
-            btn.title = 'Mode coupe actif - Utilisez ↑↓ pour déplacer, X/Y/Z pour changer d\'axe, Espace pour masquer le plan, Échap pour désactiver';
+            btn.title = 'Mode coupe actif - Utilisez ↑↓ pour déplacer, menu pour changer d\'axe, Espace pour masquer le plan, Échap pour désactiver';
+            
+            // Afficher le menu déroulant
+            if (axisSelect) {
+                axisSelect.classList.remove('d-none');
+                axisSelect.value = this.crossSectionAxis || 'z';
+            }
         } else {
             btn.classList.remove('btn-warning');
             btn.classList.add('btn-outline-secondary');
             btn.style.fontWeight = 'normal';
             btn.innerHTML = '<i class="bi bi-scissors me-1"></i>Coupe 3D';
             btn.title = 'Activer la coupe transversale pour voir l\'intérieur de la pièce';
+            
+            // Masquer le menu déroulant
+            if (axisSelect) {
+                axisSelect.classList.add('d-none');
+            }
         }
     }
     
@@ -2472,27 +2496,7 @@ class STEPViewer {
                     event.preventDefault();
                     this.toggleCrossSectionPlaneVisibility();
                     break;
-                case 'x':
-                    event.preventDefault();
-                    if (this.crossSectionAxis !== 'x') {
-                        this.createSimpleCrossSectionPlane('x');
-                        this.showSimpleCrossSectionInstructions();
-                    }
-                    break;
-                case 'y':
-                    event.preventDefault();
-                    if (this.crossSectionAxis !== 'y') {
-                        this.createSimpleCrossSectionPlane('y');
-                        this.showSimpleCrossSectionInstructions();
-                    }
-                    break;
-                case 'z':
-                    event.preventDefault();
-                    if (this.crossSectionAxis !== 'z') {
-                        this.createSimpleCrossSectionPlane('z');
-                        this.showSimpleCrossSectionInstructions();
-                    }
-                    break;
+
                 case 'escape':
                     event.preventDefault();
                     this.toggleCrossSectionMode(); // Désactiver avec Échap
@@ -2576,7 +2580,7 @@ class STEPViewer {
         const instructionText = `
             <strong>Mode Coupe Activé - Axe ${axisName}</strong><br>
             • <kbd>↑</kbd> <kbd>↓</kbd> : Déplacer le plan de coupe<br>
-            • <kbd>X</kbd> <kbd>Y</kbd> <kbd>Z</kbd> : Changer l'axe de coupe<br>
+            • Menu déroulant : Changer l'axe de coupe<br>
             • <kbd>Espace</kbd> : Masquer/Afficher le plan orange<br>
             • <kbd>Échap</kbd> : Désactiver la coupe
         `;
