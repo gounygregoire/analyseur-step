@@ -421,9 +421,9 @@ def analyze_dfm_endpoint(conversion_id):
         
         # Store only essential DFM data in session (avoid cookie size limit)
         session[f'dfm_analysis_{conversion_id}'] = {
-            'overall_score': dfm_data['overall_score'],
-            'moldability_rating': dfm_data['moldability_rating'],
-            'generated_at': dfm_data['generated_at']
+            'overall_score': dfm_data['rating'],
+            'moldability_rating': dfm_data['score'],
+            'generated_at': datetime.utcnow().isoformat()
         }
         session.permanent = True
         
