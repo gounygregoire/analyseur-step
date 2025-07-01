@@ -540,20 +540,22 @@ def download_zip(conversion_id):
                     material_recommendations = session.get('material_recommendations', [])
                     
                     # Générer le PDF
-                    pdf_filename = pdf_generator.generate_dfm_pdf(
-                        conversion,
+                    pdf_path = f"reports/rapport_dfm_{conversion_id}.pdf"
+                    pdf_filename = pdf_generator.generate_dfm_pdf_report(
                         dfm_data,
+                        step_path,
+                        pdf_path,
+                        conversion.original_filename,
                         material_recommendations
                     )
-                    pdf_path = os.path.join('reports', pdf_filename)
                     logger.info(f"PDF generated for ZIP: {pdf_filename}")
                 except Exception as pdf_error:
                     logger.error(f"PDF generation failed for ZIP: {pdf_error}")
             
             # Ajouter le PDF au ZIP s'il existe maintenant
             if os.path.exists(pdf_path):
-                zip_file.write(pdf_path, f"reports/{pdf_filename}")
-                logger.info(f"PDF added to ZIP: {pdf_filename}")
+                zip_file.write(pdf_path, f"rapport_dfm_{conversion_id}.pdf")
+                logger.info(f"PDF added to ZIP: {pdf_path}")
             else:
                 logger.warning(f"PDF not found for ZIP: {pdf_path}")
             
