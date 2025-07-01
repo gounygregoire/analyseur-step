@@ -94,6 +94,17 @@ CADlytics est une application SaaS basée sur Flask qui permet aux utilisateurs 
 
 ## Changelog
 
+- 1er juillet 2025 : Refonte complète de la logique d'analyse DFM pour intelligence contextuelle
+  - Nouveau système de scoring adaptatif basé sur le type de pièce détecté (plaque, profilé, volumique)
+  - Analyse intelligente de l'épaisseur dominante avec ratios d'aspect et volume/surface
+  - Intégration de profils matériaux spécifiques (PP, PE, ABS, PC, PA66, POM, PS) avec tolérances adaptées
+  - Pondération contextuelle des défauts : ne sanctionne plus excessivement les défauts isolés
+  - Système de recommandations proportionnelles avec codes couleur (🔴🟡🟢)
+  - Seuils de tolérance pour dépouille et congés (ex: 1-2 congés manquants = acceptable)
+  - Adaptation automatique selon le matériau (ex: PC tolère mieux les parois épaisses)
+  - Scoring "humainement logique" évitant les notes catastrophiques injustifiées
+  - Messages détaillés dans la console pour comprendre la logique de notation
+  - Bonus pour les conceptions optimales avec peu ou pas de défauts
 - 1er juillet 2025 : Refonte complète fonction de coupe 3D pour ergonomie optimale
   - Réécriture complète avec implémentation simplifiée et intuitive
   - Nouvelle fonction createSimpleCrossSectionPlane() avec clipping planes fonctionnel

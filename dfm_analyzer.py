@@ -56,21 +56,39 @@ class DFMReport:
     recommendations: List[str]
 
 class DFMAnalyzer:
-    """Main DFM analyzer class"""
+    """Main DFM analyzer class with intelligent contextual analysis"""
     
-    def __init__(self):
-        # DFM thresholds for plastic injection molding
-        self.min_wall_thickness = 0.8  # mm
-        self.max_wall_thickness = 4.0  # mm
-        self.optimal_wall_thickness_min = 1.2  # mm
-        self.optimal_wall_thickness_max = 3.0  # mm
+    def __init__(self, material_type: str = 'GENERIC'):
+        """
+        Initialize analyzer with material-specific thresholds
         
-        self.max_height = 60.0  # mm
+        Args:
+            material_type: Type of plastic material (PP, PE, ABS, PC, PA66, POM, PS, GENERIC)
+        """
+        # Import material profiles
+        from models import MATERIAL_PROFILES
+        
+        # Get material profile or use generic
+        self.material_profile = MATERIAL_PROFILES.get(material_type.upper(), MATERIAL_PROFILES['GENERIC'])
+        self.material_type = material_type.upper()
+        
+        # DFM thresholds adapted to material
+        self.min_wall_thickness = self.material_profile['min_wall_thickness']
+        self.max_wall_thickness = self.material_profile['max_wall_thickness']
+        self.optimal_wall_thickness_min = self.material_profile['optimal_wall_thickness_min']
+        self.optimal_wall_thickness_max = self.material_profile['optimal_wall_thickness_max']
+        
+        # Generic thresholds for injection molding
+        self.max_height = 100.0  # mm
         self.min_draft_angle = 0.5  # degrees
         self.min_radius = 0.2  # mm
         self.max_blind_hole_depth_ratio = 10.0  # depth/diameter ratio
         
-    def analyze_step_file(self, step_file_path: str, demolding_axis: str = 'z') -> DFMReport:
+        # Contextual analysis parameters
+        self.thickness_tolerance_percentage = 0.15  # 15% de tolérance pour zones isolées
+        self.minimum_significant_area = 10.0  # mm² - aire minimale pour considérer un défaut
+        
+    def analyze_step_file(self, step_file_path: str, demolding_axis: str = 'z', material_type: str = None) -> DFMReport:
         """
         Complete DFM analysis of a STEP file
         """
@@ -120,23 +138,64 @@ class DFMAnalyzer:
             volume = workplane.val().Volume()
             surface_area = workplane.val().Area()
             
-            # Find largest and smallest dimensions
+            # LOGIQUE INTELLIGENTE D'ÉPAISSEUR DOMINANTE
             dimensions = [x_size, y_size, z_size]
-            largest_dim = max(dimensions)
-            smallest_dim = min(dimensions)
+            dimensions_sorted = sorted(dimensions)
+            smallest_dim = dimensions_sorted[0]
+            middle_dim = dimensions_sorted[1]
+            largest_dim = dimensions_sorted[2]
             
-            # Estimate maximum wall thickness based on smallest dimension (more realistic)
-            # For injection molding, wall thickness is typically the smallest feature
-            # Use a conservative approach: assume max thickness is related to smallest dimension
-            dimensions_sorted = sorted([x_size, y_size, z_size])
+            # Calcul des ratios d'aspect pour identifier le type de pièce
+            aspect_ratio_1 = largest_dim / smallest_dim if smallest_dim > 0 else 1000
+            aspect_ratio_2 = middle_dim / smallest_dim if smallest_dim > 0 else 1000
             
-            # Conservative estimate: wall thickness shouldn't exceed 1/10 of smallest dimension
-            # but also consider typical injection molding constraints
-            max_wall_thickness = min(dimensions_sorted[0] / 5, 10.0)  # Cap at 10mm max
+            # ANALYSE CONTEXTUELLE DU TYPE DE PIÈCE
+            if aspect_ratio_1 > 5 and aspect_ratio_2 > 3:
+                # PLAQUE MINCE : exemple 100×100×3 mm
+                # L'épaisseur dominante est clairement la plus petite dimension
+                dominant_thickness = smallest_dim
+                print(f"🔍 Type détecté: PLAQUE MINCE - Épaisseur dominante = {dominant_thickness:.2f}mm")
+                
+            elif aspect_ratio_1 > 10 and aspect_ratio_2 < 2:
+                # PROFILÉ/POUTRE : exemple 200×20×15 mm
+                # L'épaisseur est probablement la dimension moyenne ou petite
+                dominant_thickness = min(smallest_dim, middle_dim * 0.5)
+                print(f"🔍 Type détecté: PROFILÉ - Épaisseur estimée = {dominant_thickness:.2f}mm")
+                
+            elif aspect_ratio_1 < 3:
+                # PIÈCE CUBIQUE/VOLUMIQUE : exemple 50×40×35 mm
+                # Utilise le rapport volume/surface pour estimer l'épaisseur moyenne
+                if surface_area > 0:
+                    volume_surface_ratio = volume / surface_area
+                    # Pour une pièce creuse, ce ratio donne une estimation de l'épaisseur
+                    dominant_thickness = min(volume_surface_ratio * 6, smallest_dim * 0.8)
+                else:
+                    dominant_thickness = smallest_dim * 0.4
+                print(f"🔍 Type détecté: VOLUMIQUE - Épaisseur estimée = {dominant_thickness:.2f}mm")
+                
+            else:
+                # PIÈCE COMPLEXE : utilise une approche hybride
+                # Combine l'analyse dimensionnelle et le rapport volume/surface
+                thickness_from_dims = smallest_dim if smallest_dim < 10 else smallest_dim * 0.3
+                thickness_from_volume = (volume / surface_area * 6) if surface_area > 0 else 3.0
+                dominant_thickness = (thickness_from_dims + thickness_from_volume) / 2
+                print(f"🔍 Type détecté: COMPLEXE - Épaisseur hybride = {dominant_thickness:.2f}mm")
             
-            # If part is very thin in one direction, that's likely the wall thickness
-            if dimensions_sorted[0] < 10:  # If smallest dimension < 10mm
-                max_wall_thickness = dimensions_sorted[0]
+            # Ajustement selon l'axe de démoulage spécifié
+            if demolding_axis.lower() == 'z' and z_size == smallest_dim:
+                dominant_thickness = z_size
+                print(f"   Ajustement démoulage Z: épaisseur = {dominant_thickness:.2f}mm")
+                
+            # Bornes intelligentes selon le matériau
+            if hasattr(self, 'material_profile'):
+                min_allowed = self.material_profile['min_wall_thickness'] * 0.8  # Tolérance
+                max_allowed = self.material_profile['max_wall_thickness'] * 1.5  # Tolérance
+                dominant_thickness = max(min_allowed, min(dominant_thickness, max_allowed))
+            else:
+                # Bornes génériques pour injection plastique
+                dominant_thickness = max(0.5, min(dominant_thickness, 12.0))
+                
+            max_wall_thickness = dominant_thickness
             
             # Calculate real projected areas using Trimesh
             # Export to temporary STL file for Trimesh processing
@@ -629,87 +688,268 @@ class DFMAnalyzer:
     def _calculate_overall_rating(self, dimensions: DimensionAnalysis, 
                                 wall_issues: List[WallThicknessIssue],
                                 geometry_issues: List[GeometryIssue]) -> Tuple[str, int]:
-        """Calculate overall DFM rating"""
+        """
+        NOUVEAU SYSTÈME DE NOTATION INTELLIGENT ET CONTEXTUEL
+        Prend en compte le contexte global de la pièce et non des défauts isolés
+        """
         
-        # Start with perfect score
-        score = 10
+        # Score de base selon l'épaisseur dominante
+        score = 10.0
         
-        # Deduct points for various issues
-        critical_issues = len([i for i in wall_issues if i.severity == 'critical'])
-        warning_issues = len([i for i in wall_issues if i.severity == 'warning'])
+        # ANALYSE CONTEXTUELLE DE L'ÉPAISSEUR DOMINANTE
+        thickness = dimensions.max_wall_thickness
         
-        critical_geo_issues = len([i for i in geometry_issues if i.severity == 'critical'])
-        warning_geo_issues = len([i for i in geometry_issues if i.severity == 'warning'])
+        # Adaptation selon le matériau
+        if hasattr(self, 'material_profile'):
+            min_thickness = self.material_profile['min_wall_thickness']
+            max_thickness = self.material_profile['max_wall_thickness']
+            optimal_min = self.material_profile['optimal_wall_thickness_min']
+            optimal_max = self.material_profile['optimal_wall_thickness_max']
+        else:
+            min_thickness = 0.8
+            max_thickness = 4.0
+            optimal_min = 1.2
+            optimal_max = 3.0
         
-        # Deduct points
-        score -= critical_issues * 2
-        score -= warning_issues * 1
-        score -= critical_geo_issues * 2
-        score -= warning_geo_issues * 1
+        # SCORING INTELLIGENT DE L'ÉPAISSEUR
+        if optimal_min <= thickness <= optimal_max:
+            # Épaisseur optimale : pas de pénalité
+            thickness_penalty = 0
+            print(f"✅ Épaisseur dominante {thickness:.2f}mm OPTIMALE pour {self.material_type}")
+        elif min_thickness <= thickness < optimal_min:
+            # Un peu fin mais acceptable
+            thickness_penalty = (optimal_min - thickness) / optimal_min * 1.5
+            print(f"⚠️ Épaisseur {thickness:.2f}mm légèrement fine mais acceptable")
+        elif optimal_max < thickness <= max_thickness:
+            # Un peu épais mais acceptable
+            if self.material_profile.get('tolerates_thick_walls', False):
+                thickness_penalty = (thickness - optimal_max) / max_thickness * 0.8  # Moins sévère
+            else:
+                thickness_penalty = (thickness - optimal_max) / max_thickness * 1.5
+            print(f"⚠️ Épaisseur {thickness:.2f}mm légèrement épaisse")
+        elif thickness < min_thickness:
+            # Trop fin - problématique
+            severity = 'high' if self.material_profile.get('sensitivity_to_thin_walls') == 'high' else 'medium'
+            thickness_penalty = 2.0 if severity == 'high' else 1.5
+            print(f"❌ Épaisseur {thickness:.2f}mm TROP FINE pour injection")
+        else:  # thickness > max_thickness
+            # Trop épais
+            if self.material_profile.get('tolerates_thick_walls', False):
+                thickness_penalty = 1.5  # Matériau tolère mieux
+            else:
+                thickness_penalty = 2.5  # Problématique
+            print(f"❌ Épaisseur {thickness:.2f}mm TROP ÉPAISSE - risque de retassures")
         
-        # Check max wall thickness
-        if dimensions.max_wall_thickness > 6:
-            score -= 3  # Very thick walls are problematic  
-        elif dimensions.max_wall_thickness < 0.8:
-            score -= 2  # Very thin walls are problematic
+        score -= thickness_penalty
         
-        # Ensure score is within bounds
-        score = max(1, min(10, score))
+        # ANALYSE PONDÉRÉE DES PROBLÈMES D'ÉPAISSEUR LOCAUX
+        if wall_issues:
+            # Calcul du pourcentage de zones problématiques
+            total_issues = len(wall_issues)
+            critical_issues = len([i for i in wall_issues if i.severity == 'critical'])
+            warning_issues = len([i for i in wall_issues if i.severity == 'warning'])
+            
+            # Pondération contextuelle : ne pas sur-pénaliser quelques défauts isolés
+            if total_issues <= 2:
+                # Peu de défauts : impact minimal
+                wall_penalty = critical_issues * 0.3 + warning_issues * 0.1
+                print(f"📊 {total_issues} zone(s) d'épaisseur problématique(s) - impact minimal")
+            elif total_issues <= 5:
+                # Quelques défauts : impact modéré
+                wall_penalty = critical_issues * 0.5 + warning_issues * 0.2
+                print(f"📊 {total_issues} zones problématiques - impact modéré")
+            else:
+                # Nombreux défauts : impact significatif
+                wall_penalty = critical_issues * 0.8 + warning_issues * 0.3
+                print(f"📊 {total_issues} zones problématiques - impact significatif")
+            
+            score -= wall_penalty
         
-        # Convert to qualitative rating
-        if score >= 8:
+        # ANALYSE INTELLIGENTE DES PROBLÈMES GÉOMÉTRIQUES
+        draft_issues = [i for i in geometry_issues if i.issue_type == 'missing_draft']
+        fillet_issues = [i for i in geometry_issues if i.issue_type == 'sharp_edge']
+        hole_issues = [i for i in geometry_issues if i.issue_type == 'deep_blind_hole']
+        height_issues = [i for i in geometry_issues if i.issue_type == 'excessive_height']
+        
+        # DÉPOUILLE : Pondération proportionnelle
+        if draft_issues:
+            draft_count = len(draft_issues)
+            # Estimation : si plus de 5 faces sans dépouille, c'est significatif
+            if draft_count >= 5:
+                draft_penalty = 2.0  # Problème majeur
+                print(f"❌ {draft_count} faces sans dépouille - PROBLÉMATIQUE")
+            elif draft_count >= 3:
+                draft_penalty = 1.0  # Problème modéré
+                print(f"⚠️ {draft_count} faces sans dépouille - à corriger")
+            else:
+                draft_penalty = 0.3  # Problème mineur
+                print(f"📌 {draft_count} face(s) sans dépouille - impact limité")
+            score -= draft_penalty
+        
+        # CONGÉS : Seuil de tolérance
+        if fillet_issues:
+            fillet_count = len(fillet_issues)
+            if fillet_count >= 10:
+                # Aucun congé sur la pièce : problématique
+                fillet_penalty = 1.5
+                print(f"❌ {fillet_count} arêtes vives - manque total de congés")
+            elif fillet_count >= 5:
+                # Plusieurs congés manquants
+                fillet_penalty = 0.8
+                print(f"⚠️ {fillet_count} arêtes vives - congés insuffisants")
+            else:
+                # Quelques congés manquants : acceptable
+                fillet_penalty = 0.2
+                print(f"📌 {fillet_count} arête(s) vive(s) - acceptable")
+            score -= fillet_penalty
+        
+        # AUTRES PROBLÈMES
+        if hole_issues:
+            score -= len(hole_issues) * 0.3  # Impact modéré par trou
+            
+        if height_issues:
+            score -= len(height_issues) * 0.5  # Impact significatif
+        
+        # BONUS POUR CONCEPTION OPTIMALE
+        # Si la pièce a peu ou pas de défauts, bonus
+        total_issues = len(wall_issues) + len(geometry_issues)
+        if total_issues == 0:
+            score += 0.5  # Bonus conception parfaite
+            print("🌟 Conception sans défaut détecté - BONUS!")
+        elif total_issues <= 3:
+            score += 0.2  # Petit bonus
+            print("✨ Très peu de défauts - bonne conception")
+        
+        # AJUSTEMENT FINAL SELON LA TAILLE DE LA PIÈCE
+        if dimensions.largest_dimension > 200:
+            # Grande pièce : plus de tolérance sur certains défauts
+            score += 0.3
+            print("📏 Grande pièce - ajustement de tolérance appliqué")
+        elif dimensions.smallest_dimension < 2:
+            # Pièce très fine : vérifier la faisabilité
+            score -= 0.5
+            print("📏 Pièce très fine - attention à la faisabilité")
+        
+        # Bornes du score final
+        score = max(1.0, min(10.0, score))
+        
+        # Conversion en note entière et rating qualitatif
+        int_score = int(round(score))
+        
+        # SEUILS AJUSTÉS POUR ÊTRE PLUS RÉALISTES
+        if int_score >= 9:
             overall = 'excellent'
-        elif score >= 6:
+            print(f"🎯 Score final: {int_score}/10 - EXCELLENT")
+        elif int_score >= 7:
             overall = 'good'
-        elif score >= 4:
+            print(f"✅ Score final: {int_score}/10 - BON")
+        elif int_score >= 5:
             overall = 'warning'
+            print(f"⚠️ Score final: {int_score}/10 - ATTENTION REQUISE")
         else:
             overall = 'critical'
+            print(f"❌ Score final: {int_score}/10 - RÉVISION NÉCESSAIRE")
         
-        return overall, score
+        return overall, int_score
     
     def _generate_recommendations(self, dimensions: DimensionAnalysis,
                                 wall_issues: List[WallThicknessIssue],
                                 geometry_issues: List[GeometryIssue]) -> List[str]:
-        """Generate specific recommendations"""
+        """
+        Génère des recommandations INTELLIGENTES et CONTEXTUELLES
+        Adaptées au matériau et au type de pièce
+        """
         recommendations = []
         
-        # Wall thickness recommendations
-        thin_walls = len([i for i in wall_issues if i.issue_type == 'too_thin'])
-        thick_walls = len([i for i in wall_issues if i.issue_type == 'too_thick'])
+        # ANALYSE CONTEXTUELLE DE L'ÉPAISSEUR DOMINANTE
+        thickness = dimensions.max_wall_thickness
+        material_name = self.material_profile.get('name', 'Matériau générique') if hasattr(self, 'material_profile') else 'Matériau générique'
         
-        if thin_walls > 0:
-            recommendations.append(f"Augmenter l'épaisseur de {thin_walls} zone(s) trop fine(s) à minimum 0.8mm")
+        # Recommandations sur l'épaisseur dominante
+        if hasattr(self, 'material_profile'):
+            optimal_min = self.material_profile['optimal_wall_thickness_min']
+            optimal_max = self.material_profile['optimal_wall_thickness_max']
+            
+            if thickness < optimal_min:
+                if self.material_type == 'PA66':
+                    recommendations.append(f"⚡ Épaisseur {thickness:.1f}mm fine pour {material_name} : risque de déformation au démoulage. Cible : {optimal_min}-{optimal_max}mm")
+                else:
+                    recommendations.append(f"📏 Augmenter l'épaisseur dominante de {thickness:.1f}mm à {optimal_min}mm minimum pour {material_name}")
+            elif thickness > optimal_max:
+                if self.material_profile.get('tolerates_thick_walls'):
+                    recommendations.append(f"💡 Épaisseur {thickness:.1f}mm acceptable pour {material_name}, mais surveiller le temps de cycle (+{dimensions.cooling_time:.0f}s)")
+                else:
+                    recommendations.append(f"⚠️ Réduire l'épaisseur de {thickness:.1f}mm à {optimal_max}mm max ou ajouter des nervures de renfort")
         
-        if thick_walls > 0:
-            recommendations.append(f"Réduire l'épaisseur de {thick_walls} zone(s) trop épaisse(s) pour éviter les retassures")
+        # RECOMMANDATIONS PROPORTIONNELLES AUX PROBLÈMES
+        # Épaisseurs locales
+        thin_walls = [i for i in wall_issues if i.issue_type == 'too_thin']
+        thick_walls = [i for i in wall_issues if i.issue_type == 'too_thick']
         
-        # Geometry recommendations
-        draft_issues = len([i for i in geometry_issues if i.issue_type == 'missing_draft'])
-        if draft_issues > 0:
-            recommendations.append("Ajouter des angles de dépouille de 0.5° minimum sur les faces verticales")
+        if thin_walls:
+            count = len(thin_walls)
+            if count > 5:
+                recommendations.append(f"🔴 {count} zones trop fines détectées : révision globale de la conception nécessaire")
+            elif count > 2:
+                recommendations.append(f"🟡 {count} zones fines : renforcer localement ou utiliser des nervures")
+            else:
+                recommendations.append(f"🟢 {count} zone(s) fine(s) ponctuelle(s) : impact limité, renforcer si critique")
         
-        sharp_edges = len([i for i in geometry_issues if i.issue_type == 'sharp_edge'])
-        if sharp_edges > 0:
-            recommendations.append("Ajouter des congés d'au moins 0.2mm sur les arêtes vives")
+        # Problèmes de dépouille - PONDÉRATION INTELLIGENTE
+        draft_issues = [i for i in geometry_issues if i.issue_type == 'missing_draft']
+        if draft_issues:
+            count = len(draft_issues)
+            if count >= 5:
+                recommendations.append(f"🔴 {count} faces sans dépouille : ajouter 1-2° sur TOUTES les faces verticales")
+            elif count >= 3:
+                recommendations.append(f"🟡 {count} faces sans dépouille : corriger les principales faces d'éjection")
+            else:
+                recommendations.append(f"🟢 {count} face(s) sans dépouille : impact mineur si hors zone critique")
         
-        # Max wall thickness recommendation
-        if dimensions.max_wall_thickness > 6:
-            recommendations.append("Épaisseur paroi critique (>6mm): réduire ou ajouter des nervures")
-        elif dimensions.max_wall_thickness < 0.8:
-            recommendations.append("Épaisseur paroi insuffisante (<0.8mm): renforcer la structure")
-        elif 0.8 <= dimensions.max_wall_thickness <= 4:
-            recommendations.append("Épaisseur paroi optimale pour injection plastique")
+        # Congés - SEUIL DE TOLÉRANCE
+        sharp_edges = [i for i in geometry_issues if i.issue_type == 'sharp_edge']
+        if sharp_edges:
+            count = len(sharp_edges)
+            if count >= 10:
+                recommendations.append(f"🔴 Aucun congé détecté ({count} arêtes) : ajouter R0.3-0.5mm sur TOUTES les arêtes")
+            elif count >= 5:
+                recommendations.append(f"🟡 {count} arêtes vives : ajouter des congés sur les zones de contrainte")
+            else:
+                recommendations.append(f"🟢 {count} arête(s) vive(s) : acceptable si zones non critiques")
         
-        # Material recommendations based on dimensions
-        if dimensions.largest_dimension > 100:
-            recommendations.append("Pièce volumineuse: privilégier PP ou PE pour réduire les contraintes")
-        elif dimensions.smallest_dimension < 1:
-            recommendations.append("Pièce fine: privilégier ABS ou PC pour rigidité")
+        # RECOMMANDATIONS SELON LE TYPE DE PIÈCE
+        aspect_ratio = dimensions.largest_dimension / dimensions.smallest_dimension if dimensions.smallest_dimension > 0 else 100
         
-        # Default recommendation if no issues
-        if not recommendations:
-            recommendations.append("Conception acceptable pour injection plastique")
+        if aspect_ratio > 10:
+            # Pièce très allongée ou fine
+            recommendations.append("📐 Pièce à fort ratio d'aspect : prévoir maintiens/supports pendant l'injection")
+            if self.material_type in ['PP', 'PE']:
+                recommendations.append("💡 Matériau souple : risque de déformation, considérer PA ou ABS pour plus de rigidité")
+        
+        # Temps de cycle
+        if dimensions.cooling_time > 30:
+            recommendations.append(f"⏱️ Temps de refroidissement élevé ({dimensions.cooling_time:.0f}s) : optimiser l'épaisseur ou le circuit de refroidissement")
+        
+        # RECOMMANDATIONS SPÉCIFIQUES AU MATÉRIAU
+        if hasattr(self, 'material_type'):
+            if self.material_type == 'PA66' and dimensions.surface_area > 10000:
+                recommendations.append("💧 PA66 + grande surface : prévoir séchage matière (4h à 80°C) et moule chauffé")
+            elif self.material_type in ['PC', 'ABS'] and thickness < 1.5:
+                recommendations.append("⚡ PC/ABS en paroi fine : température moule élevée (80-120°C) pour bon remplissage")
+            elif self.material_type in ['PP', 'PE'] and sharp_edges:
+                recommendations.append("🔄 PP/PE + arêtes vives : congés généreux (R0.5mm+) pour éviter les concentrations de contrainte")
+        
+        # Surface projetée et force de fermeture
+        max_projected = max(dimensions.projected_area_x, dimensions.projected_area_y, dimensions.projected_area_z)
+        if max_projected > 10000:  # 100 cm²
+            force_fermeture = max_projected * 0.5  # Estimation 0.5 tonne/cm²
+            recommendations.append(f"🏭 Grande surface projetée ({max_projected/100:.0f}cm²) : presse >{force_fermeture:.0f}T nécessaire")
+        
+        # RECOMMANDATION FINALE POSITIVE
+        if len(recommendations) <= 2:
+            recommendations.append("✅ Conception globalement adaptée à l'injection plastique - optimisations mineures suggérées")
+        elif len(recommendations) <= 4:
+            recommendations.append("📋 Plusieurs améliorations suggérées mais conception viable avec ajustements")
         
         return recommendations
     
@@ -730,10 +970,17 @@ class DFMAnalyzer:
             recommendations=["Impossible d'analyser le fichier - vérifier le format STEP"]
         )
 
-def analyze_dfm(step_file_path: str, demolding_axis: str = 'z') -> DFMReport:
-    """Convenience function to analyze a STEP file"""
-    analyzer = DFMAnalyzer()
-    return analyzer.analyze_step_file(step_file_path, demolding_axis)
+def analyze_dfm(step_file_path: str, demolding_axis: str = 'z', material_type: str = 'GENERIC') -> DFMReport:
+    """
+    Convenience function to analyze a STEP file with intelligent material-aware analysis
+    
+    Args:
+        step_file_path: Path to the STEP file
+        demolding_axis: Axis of demolding ('x', 'y', or 'z')
+        material_type: Type of plastic material (PP, PE, ABS, PC, PA66, POM, PS, GENERIC)
+    """
+    analyzer = DFMAnalyzer(material_type=material_type)
+    return analyzer.analyze_step_file(step_file_path, demolding_axis, material_type)
 
 
 def compute_projected_area(mesh, axis='z'):

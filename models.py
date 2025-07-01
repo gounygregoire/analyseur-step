@@ -111,3 +111,87 @@ class OAuth(OAuthConsumerMixin, db.Model):
         'provider',
         name='uq_user_browser_session_key_provider',
     ),)
+
+# Profils de matériaux pour l'analyse DFM
+MATERIAL_PROFILES = {
+    'PP': {  # Polypropylène
+        'name': 'Polypropylène (PP)',
+        'min_wall_thickness': 0.8,
+        'max_wall_thickness': 5.0,
+        'optimal_wall_thickness_min': 1.0,
+        'optimal_wall_thickness_max': 3.5,
+        'shrinkage_rate': 0.015,  # 1.5%
+        'tolerates_thick_walls': True,
+        'sensitivity_to_thin_walls': 'medium'
+    },
+    'PE': {  # Polyéthylène
+        'name': 'Polyéthylène (PE)',
+        'min_wall_thickness': 0.8,
+        'max_wall_thickness': 5.0,
+        'optimal_wall_thickness_min': 1.0,
+        'optimal_wall_thickness_max': 3.5,
+        'shrinkage_rate': 0.02,  # 2%
+        'tolerates_thick_walls': True,
+        'sensitivity_to_thin_walls': 'medium'
+    },
+    'ABS': {  # Acrylonitrile Butadiène Styrène
+        'name': 'ABS',
+        'min_wall_thickness': 0.7,
+        'max_wall_thickness': 4.5,
+        'optimal_wall_thickness_min': 1.0,
+        'optimal_wall_thickness_max': 3.0,
+        'shrinkage_rate': 0.006,  # 0.6%
+        'tolerates_thick_walls': True,
+        'sensitivity_to_thin_walls': 'low'
+    },
+    'PC': {  # Polycarbonate
+        'name': 'Polycarbonate (PC)',
+        'min_wall_thickness': 0.6,
+        'max_wall_thickness': 6.0,
+        'optimal_wall_thickness_min': 1.0,
+        'optimal_wall_thickness_max': 4.0,
+        'shrinkage_rate': 0.007,  # 0.7%
+        'tolerates_thick_walls': True,
+        'sensitivity_to_thin_walls': 'low'
+    },
+    'PA66': {  # Polyamide 66 (Nylon)
+        'name': 'Polyamide 66 (PA66)',
+        'min_wall_thickness': 0.5,
+        'max_wall_thickness': 3.0,
+        'optimal_wall_thickness_min': 0.8,
+        'optimal_wall_thickness_max': 2.5,
+        'shrinkage_rate': 0.015,  # 1.5%
+        'tolerates_thick_walls': False,
+        'sensitivity_to_thin_walls': 'high'
+    },
+    'POM': {  # Polyoxyméthylène (Acétal)
+        'name': 'POM (Acétal)',
+        'min_wall_thickness': 0.5,
+        'max_wall_thickness': 3.5,
+        'optimal_wall_thickness_min': 0.8,
+        'optimal_wall_thickness_max': 2.5,
+        'shrinkage_rate': 0.02,  # 2%
+        'tolerates_thick_walls': False,
+        'sensitivity_to_thin_walls': 'high'
+    },
+    'PS': {  # Polystyrène
+        'name': 'Polystyrène (PS)',
+        'min_wall_thickness': 0.7,
+        'max_wall_thickness': 4.0,
+        'optimal_wall_thickness_min': 1.0,
+        'optimal_wall_thickness_max': 3.0,
+        'shrinkage_rate': 0.005,  # 0.5%
+        'tolerates_thick_walls': True,
+        'sensitivity_to_thin_walls': 'medium'
+    },
+    'GENERIC': {  # Profil générique par défaut
+        'name': 'Matériau générique',
+        'min_wall_thickness': 0.8,
+        'max_wall_thickness': 4.0,
+        'optimal_wall_thickness_min': 1.2,
+        'optimal_wall_thickness_max': 3.0,
+        'shrinkage_rate': 0.01,  # 1%
+        'tolerates_thick_walls': False,
+        'sensitivity_to_thin_walls': 'medium'
+    }
+}
