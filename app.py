@@ -154,6 +154,7 @@ def upload_file():
         # Create database record
         conversion_job = ConversionJob(
             id=file_id,
+            user_id=current_user.id if current_user.is_authenticated else None,
             original_filename=original_filename,
             step_filename=step_filename,
             stl_filename=stl_filename,
@@ -282,10 +283,14 @@ def view_file(filename):
 
 @app.route('/api/conversions')
 def get_conversions():
-    """Get list of conversion jobs - limited to 5 most recent"""
+    """Get list of conversion jobs - limited to 5 most recent for current user"""
     try:
-        # Always return only the 5 most recent conversions
-        conversions = ConversionJob.query.order_by(ConversionJob.created_at.desc()).limit(5).all()
+        # Filter by current user if logged in
+        if current_user.is_authenticated:
+            conversions = ConversionJob.query.filter_by(user_id=current_user.id).order_by(ConversionJob.created_at.desc()).limit(5).all()
+        else:
+            # Return empty list for non-authenticated users
+            conversions = []
         
         return jsonify({
             'conversions': [job.to_dict() for job in conversions],

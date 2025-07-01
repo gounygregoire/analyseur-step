@@ -7,7 +7,7 @@ import os
 import io
 import base64
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 
 try:
     import cadquery as cq

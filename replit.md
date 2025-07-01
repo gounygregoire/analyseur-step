@@ -94,6 +94,12 @@ CADlytics est une application SaaS basée sur Flask qui permet aux utilisateurs 
 
 ## Changelog
 
+- 1er juillet 2025 : Historique personnel et correction génération PDF
+  - Ajout colonne user_id dans ConversionJob pour lier l'historique au compte utilisateur
+  - Filtrage des conversions par utilisateur connecté dans l'API /api/conversions
+  - Correction de l'import manquant Tuple dans pdf_generator.py
+  - Génération de vues 3D simplifiées avec wireframe pour éviter les timeouts
+  - L'historique est maintenant personnel et lié à chaque compte utilisateur
 - 1er juillet 2025 : Refonte complète de la logique d'analyse DFM pour intelligence contextuelle
   - Nouveau système de scoring adaptatif basé sur le type de pièce détecté (plaque, profilé, volumique)
   - Analyse intelligente de l'épaisseur dominante avec ratios d'aspect et volume/surface

@@ -15,6 +15,7 @@ class ConversionJob(db.Model):
     __tablename__ = 'conversion_jobs'
     
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=True)  # Link to user
     original_filename = db.Column(db.String(255), nullable=False)
     step_filename = db.Column(db.String(255), nullable=False)
     stl_filename = db.Column(db.String(255), nullable=False)
@@ -30,6 +31,9 @@ class ConversionJob(db.Model):
     dfm_score = db.Column(db.Integer, nullable=True)  # 1-10 moldability score
     dfm_issues_count = db.Column(db.Integer, nullable=True)  # Number of issues found
     dfm_overall_rating = db.Column(db.String(20), nullable=True)  # excellent, good, warning, critical
+    
+    # Relationship
+    user = db.relationship('User', backref='conversions')
     
     def __repr__(self):
         return f'<ConversionJob {self.id}: {self.original_filename}>'
