@@ -193,6 +193,12 @@ class STEPViewer {
             measureBtn.addEventListener('click', () => this.toggleMeasurementMode());
         }
         
+        // Cross-section button (toggle mode)
+        const crossSectionBtn = this.safeGetElement('crossSectionBtn');
+        if (crossSectionBtn) {
+            crossSectionBtn.addEventListener('click', () => this.toggleCrossSectionMode());
+        }
+        
         // Cross-section dropdown items
         const crossSectionDropdown = document.querySelectorAll('[data-axis]');
         crossSectionDropdown.forEach(item => {
@@ -1830,15 +1836,19 @@ class STEPViewer {
     
     updateCrossSectionButton() {
         const btn = document.getElementById('crossSectionBtn');
+        if (!btn) return;
+        
         if (this.crossSectionMode) {
-            btn.classList.remove('btn-outline-info');
+            btn.classList.remove('btn-outline-secondary');
             btn.classList.add('btn-info');
             const axisName = this.currentCrossSectionAxis ? this.currentCrossSectionAxis.toUpperCase() : 'Z';
-            btn.innerHTML = `<i class="bi bi-scissors me-1"></i>Coupe ${axisName}`;
+            btn.innerHTML = `<i class="bi bi-x-circle me-1"></i>Désactiver coupe`;
+            btn.title = `Coupe ${axisName} active - Cliquer pour désactiver`;
         } else {
             btn.classList.remove('btn-info');
-            btn.classList.add('btn-outline-info');
+            btn.classList.add('btn-outline-secondary');
             btn.innerHTML = '<i class="bi bi-scissors me-1"></i>Coupe';
+            btn.title = 'Activer la coupe transversale';
         }
     }
     
