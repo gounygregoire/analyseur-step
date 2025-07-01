@@ -69,36 +69,26 @@ class DFMReportGenerator:
         """Generate 3D views from STEP file using CadQuery"""
         views = {}
         
-        # Temporarily disable 3D view generation to avoid timeout
-        # Generate views from the STEP file
+        # Generate simple wireframe views for each axis
         try:
             import cadquery as cq
             
             # Load the STEP file
             workplane = cq.importers.importStep(step_file_path)
             
-            # Generate views for each axis
-            configs = [
-                {'name': 'Vue selon X', 'rotation': (0, 90, 0)},
-                {'name': 'Vue selon Y', 'rotation': (90, 0, 0)},
-                {'name': 'Vue selon Z', 'rotation': (0, 0, 0)}
-            ]
+            # Get bounding box
+            bbox = workplane.val().BoundingBox()
+            dimensions = (bbox.xlen, bbox.ylen, bbox.zlen)
             
-            for i, config in enumerate(configs):
-                axis = ['x', 'y', 'z'][i]
-                svg_view = self._generate_enhanced_svg_view(workplane, config)
-                if svg_view:
-                    # Convert SVG to base64 for embedding in PDF
-                    import base64
-                    views[axis] = base64.b64encode(svg_view.encode()).decode()
-                else:
-                    views[axis] = self._create_placeholder_view(config['name'])
+            # Create simple wireframe representations for each view
+            for axis in ['x', 'y', 'z']:
+                views[axis] = self._create_simple_wireframe_view(axis.upper(), dimensions)
                     
         except Exception as e:
             print(f"Error generating 3D views: {e}")
             # Fallback to placeholder views
             for axis in ['x', 'y', 'z']:
-                views[axis] = self._create_placeholder_view(f'Vue selon {axis.upper()}')
+                views[axis] = self._create_simple_wireframe_view(axis.upper(), (100, 100, 100))
         
         return views
     
@@ -445,6 +435,73 @@ class DFMReportGenerator:
         except Exception as e:
             print(f"Error in enhanced SVG generation: {e}")
             return None
+    
+    def _create_simple_wireframe_view(self, axis: str, dimensions: Tuple[float, float, float]) -> str:
+        """Create a simple wireframe view representation as PNG"""
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+            import io
+            import base64
+            
+            # Create image
+            img_size = 200
+            img = Image.new('RGB', (img_size, img_size), color='white')
+            draw = ImageDraw.Draw(img)
+            
+            # Draw border
+            draw.rectangle([0, 0, img_size-1, img_size-1], outline='#dee2e6', width=2)
+            
+            # Draw title
+            title = f"Vue selon {axis}"
+            draw.text((img_size//2, 20), title, fill='black', anchor='mt')
+            
+            # Draw a simple box representation based on axis
+            center_x, center_y = img_size//2, img_size//2 + 20
+            
+            # Scale dimensions to fit in image
+            width, height, depth = dimensions
+            max_dim = max(width, height, depth)
+            scale = 60 / max_dim if max_dim > 0 else 1
+            
+            # Draw wireframe box based on axis
+            if axis == 'X':
+                # YZ plane view
+                w, h = height * scale, depth * scale
+            elif axis == 'Y':
+                # XZ plane view  
+                w, h = width * scale, depth * scale
+            else:  # Z
+                # XY plane view
+                w, h = width * scale, height * scale
+                
+            # Draw front rectangle
+            x1, y1 = center_x - w/2, center_y - h/2
+            x2, y2 = center_x + w/2, center_y + h/2
+            draw.rectangle([x1, y1, x2, y2], outline='#0066cc', width=2)
+            
+            # Draw back rectangle (offset for 3D effect)
+            offset = min(20, w * 0.3, h * 0.3)
+            draw.rectangle([x1+offset, y1-offset, x2+offset, y2-offset], outline='#0066cc', width=1)
+            
+            # Draw connecting lines
+            draw.line([x1, y1, x1+offset, y1-offset], fill='#0066cc', width=1)
+            draw.line([x2, y1, x2+offset, y1-offset], fill='#0066cc', width=1)
+            draw.line([x1, y2, x1+offset, y2-offset], fill='#0066cc', width=1)
+            draw.line([x2, y2, x2+offset, y2-offset], fill='#0066cc', width=1)
+            
+            # Draw dimensions
+            dim_text = f"{width:.1f} × {height:.1f} × {depth:.1f} mm"
+            draw.text((img_size//2, img_size-15), dim_text, fill='#666', anchor='mt')
+            
+            # Convert to base64 PNG
+            buffer = io.BytesIO()
+            img.save(buffer, format='PNG')
+            buffer.seek(0)
+            return base64.b64encode(buffer.getvalue()).decode()
+            
+        except Exception as e:
+            print(f"Error creating wireframe view: {e}")
+            return self._create_placeholder_view(f'Vue selon {axis}')
     
     def _create_placeholder_view(self, view_name: str) -> str:
         """Create a placeholder view representation"""
