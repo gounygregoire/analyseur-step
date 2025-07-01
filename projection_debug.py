@@ -14,44 +14,66 @@ def visualize_projections(mesh, output_path="projections_debug.png"):
     """
     Create visual debug output showing 3 orthogonal projections
     """
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    
-    # Project mesh onto 3 orthogonal planes
-    projections = {
-        'YZ (X view)': (mesh.vertices[:, [1, 2]], 0),
-        'XZ (Y view)': (mesh.vertices[:, [0, 2]], 1), 
-        'XY (Z view)': (mesh.vertices[:, [0, 1]], 2)
-    }
-    
-    for idx, (title, (projected_verts, axis_idx)) in enumerate(projections.items()):
-        ax = axes[idx]
+    try:
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
         
-        # Create 2D triangles from projected vertices
-        triangles = []
-        for face in mesh.faces:
-            triangle = projected_verts[face]
-            triangles.append(triangle)
+        # Project mesh onto 3 orthogonal planes
+        projections = {
+            'YZ (X view)': (mesh.vertices[:, [1, 2]], 0),
+            'XZ (Y view)': (mesh.vertices[:, [0, 2]], 1), 
+            'XY (Z view)': (mesh.vertices[:, [0, 1]], 2)
+        }
         
-        # Plot triangles
-        collection = PolyCollection(triangles, alpha=0.7, facecolors='lightblue', edgecolors='black', linewidths=0.5)
-        ax.add_collection(collection)
+        for idx, (title, (projected_verts, axis_idx)) in enumerate(projections.items()):
+            ax = axes[idx]
+            
+            try:
+                # Create 2D triangles from projected vertices
+                triangles = []
+                for face in mesh.faces:
+                    triangle = projected_verts[face]
+                    # Validate triangle has proper shape and no NaN values
+                    if triangle.shape == (3, 2) and not np.any(np.isnan(triangle)):
+                        triangles.append(triangle)
+                
+                if triangles:
+                    # Plot triangles
+                    collection = PolyCollection(triangles, alpha=0.7, facecolors='lightblue', edgecolors='black', linewidths=0.5)
+                    ax.add_collection(collection)
+                    
+                    # Set axis limits
+                    all_points = np.vstack(triangles)
+                    if all_points.size > 0:
+                        margin = 0.1 * (np.max(all_points, axis=0) - np.min(all_points, axis=0))
+                        ax.set_xlim(np.min(all_points[:, 0]) - margin[0], np.max(all_points[:, 0]) + margin[0])
+                        ax.set_ylim(np.min(all_points[:, 1]) - margin[1], np.max(all_points[:, 1]) + margin[1])
+                else:
+                    # Fallback: just show bounds
+                    bounds = np.array([[0, 0], [1, 1]])
+                    ax.set_xlim(0, 1)
+                    ax.set_ylim(0, 1)
+                    ax.text(0.5, 0.5, 'No valid triangles', ha='center', va='center')
+                    
+            except Exception as e:
+                print(f"Error plotting projection {title}: {e}")
+                ax.text(0.5, 0.5, f'Error: {str(e)[:50]}', ha='center', va='center')
+                ax.set_xlim(0, 1)
+                ax.set_ylim(0, 1)
+            
+            ax.set_aspect('equal')
+            ax.set_title(title)
+            ax.grid(True, alpha=0.3)
         
-        # Set axis limits
-        if len(triangles) > 0:
-            all_points = np.vstack(triangles)
-            margin = 0.1 * (np.max(all_points, axis=0) - np.min(all_points, axis=0))
-            ax.set_xlim(np.min(all_points[:, 0]) - margin[0], np.max(all_points[:, 0]) + margin[0])
-            ax.set_ylim(np.min(all_points[:, 1]) - margin[1], np.max(all_points[:, 1]) + margin[1])
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.close()
         
-        ax.set_aspect('equal')
-        ax.set_title(title)
-        ax.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
-    plt.close()
-    
-    return output_path
+        return output_path
+        
+    except Exception as e:
+        print(f"Visualization failed completely: {e}")
+        # Return a dummy path to indicate failure
+        return None
 
 def calculate_projected_area_simple(mesh, axis='z'):
     """

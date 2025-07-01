@@ -531,13 +531,13 @@ def download_zip(conversion_id):
             dfm_session_key = f'dfm_analysis_{conversion_id}'
             if dfm_session_key in session:
                 try:
-                    from pdf_generator import generate_dfm_pdf
+                    import pdf_generator
                     
                     dfm_data = session[dfm_session_key]
                     material_recommendations = session.get('material_recommendations', [])
                     
                     # Générer le PDF
-                    pdf_filename = generate_dfm_pdf(
+                    pdf_filename = pdf_generator.generate_dfm_pdf(
                         conversion,
                         dfm_data,
                         material_recommendations
