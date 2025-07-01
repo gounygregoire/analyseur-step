@@ -105,6 +105,13 @@ CADlytics est une application SaaS basée sur Flask qui permet aux utilisateurs 
   - Scoring "humainement logique" évitant les notes catastrophiques injustifiées
   - Messages détaillés dans la console pour comprendre la logique de notation
   - Bonus pour les conceptions optimales avec peu ou pas de défauts
+- 1er juillet 2025 : Optimisation pour gros fichiers STL et amélioration des performances
+  - Tolérance adaptative pour conversion STEP→STL : augmente automatiquement pour fichiers >10MB
+  - Streaming par chunks pour servir les gros fichiers STL (>10MB) évitant les timeouts
+  - Optimisation viewer 3D : matériaux simplifiés pour modèles >500k vertices
+  - Indicateur de chargement avec barre de progression pour STL
+  - Réduction pixel ratio automatique pour gros modèles (performance GPU)
+  - Gestion d'erreur améliorée avec messages spécifiques selon le problème
 - 1er juillet 2025 : Refonte complète fonction de coupe 3D pour ergonomie optimale
   - Réécriture complète avec implémentation simplifiée et intuitive
   - Nouvelle fonction createSimpleCrossSectionPlane() avec clipping planes fonctionnel

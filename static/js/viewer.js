@@ -501,10 +501,91 @@ class STEPViewer {
                 this.scene.remove(this.currentMesh);
             }
             
-            // Load STL
+            // Show loading indicator
+            this.showLoadingIndicator('Chargement du modèle 3D...');
+            
+            // Load STL with progress tracking
             const loader = new THREE.STLLoader();
             
             loader.load(url, (geometry) => {
+                // Hide loading indicator
+                this.hideLoadingIndicator();
+                
+                // Check if geometry is too complex
+                const vertexCount = geometry.attributes.position.count;
+                console.log(`Model loaded with ${vertexCount} vertices`);
+                
+                if (vertexCount > 500000) {
+                    console.warn('Large model detected, applying optimizations...');
+                    // For very large models, use simplified material
+                    geometry.computeBoundingBox();
+                    geometry.computeVertexNormals();
+                }
+                
+                // Center geometry but keep real scale (1:1)
+                geometry.computeBoundingBox();
+                const center = new THREE.Vector3();
+                geometry.boundingBox.getCenter(center);
+                geometry.translate(-center.x, -center.y, -center.z);
+                
+                // Create material - use simpler material for large models
+                let material;
+                if (vertexCount > 500000) {
+                    // Simplified material for performance
+                    material = new THREE.MeshLambertMaterial({
+                        color: 0x888888,
+                        side: THREE.DoubleSide
+                    });
+                } else {
+                    // Standard material for normal models
+                    material = new THREE.MeshPhysicalMaterial({
+                        color: 0x888888,
+                        metalness: 0.3,
+                        roughness: 0.4,
+                        clearcoat: 0.3,
+                        clearcoatRoughness: 0.25,
+                    });
+                }
+                
+                // Create mesh
+                this.currentMesh = new THREE.Mesh(geometry, material);
+                this.currentMesh.castShadow = true;
+                this.currentMesh.receiveShadow = true;
+                
+                // Add to scene
+                this.scene.add(this.currentMesh);
+                
+                // Optimize renderer for large models
+                if (vertexCount > 500000) {
+                    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+                }
+                
+                // Calculate and display volume
+                this.calculateVolume();
+                
+                // Update model info
+                this.updateModelInfo(url);
+                
+                // Manage axes visibility
+                this.manageAxesVisibility();
+                
+                // Reset camera view
+                this.resetView();
+                
+                console.log('STL model loaded successfully');
+                
+            }, (progress) => {
+                // Progress callback
+                if (progress.lengthComputable) {
+                    const percentComplete = (progress.loaded / progress.total) * 100;
+                    this.updateLoadingProgress(percentComplete);
+                }
+            }, (error) => {
+                // Error callback
+                console.error('Error loading STL:', error);
+                this.hideLoadingIndicator();
+                this.showError('Échec du chargement du modèle 3D. Le fichier pourrait être trop volumineux.');
+            });
                 // Center geometry but keep real scale (1:1)
                 geometry.computeBoundingBox();
                 const center = new THREE.Vector3();
@@ -579,7 +660,55 @@ class STEPViewer {
             
         } catch (error) {
             console.error('Load STL error:', error);
+            this.hideLoadingIndicator();
             this.showError('Erreur lors du chargement du modèle 3D');
+        }
+    }
+    
+    showLoadingIndicator(message = 'Chargement...') {
+        // Create or update loading indicator
+        let loadingDiv = document.getElementById('stlLoadingIndicator');
+        if (!loadingDiv) {
+            loadingDiv = document.createElement('div');
+            loadingDiv.id = 'stlLoadingIndicator';
+            loadingDiv.className = 'position-absolute top-50 start-50 translate-middle text-center';
+            loadingDiv.style.zIndex = '1000';
+            
+            const viewerContainer = document.getElementById('viewer3d');
+            if (viewerContainer) {
+                viewerContainer.appendChild(loadingDiv);
+            }
+        }
+        
+        loadingDiv.innerHTML = `
+            <div class="spinner-border text-primary mb-3" role="status">
+                <span class="visually-hidden">Chargement...</span>
+            </div>
+            <div class="text-white bg-dark bg-opacity-75 p-2 rounded">
+                <p class="mb-0">${message}</p>
+                <div class="progress mt-2" style="height: 4px; display: none;" id="loadingProgressBar">
+                    <div class="progress-bar" role="progressbar" style="width: 0%"></div>
+                </div>
+            </div>
+        `;
+        
+        loadingDiv.style.display = 'block';
+    }
+    
+    updateLoadingProgress(percent) {
+        const progressBar = document.querySelector('#loadingProgressBar');
+        const progressBarInner = document.querySelector('#loadingProgressBar .progress-bar');
+        
+        if (progressBar && progressBarInner) {
+            progressBar.style.display = 'block';
+            progressBarInner.style.width = `${percent}%`;
+        }
+    }
+    
+    hideLoadingIndicator() {
+        const loadingDiv = document.getElementById('stlLoadingIndicator');
+        if (loadingDiv) {
+            loadingDiv.style.display = 'none';
         }
     }
     

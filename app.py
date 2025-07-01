@@ -1,6 +1,6 @@
 import os
 import logging
-from flask import Flask, render_template, request, jsonify, send_file, send_from_directory, session
+from flask import Flask, render_template, request, jsonify, send_file, send_from_directory, session, Response
 from flask_cors import CORS
 from flask_migrate import Migrate
 from werkzeug.utils import secure_filename
@@ -143,6 +143,14 @@ def upload_file():
         
         logger.info(f"Saved STEP file: {step_path}")
         
+        # Adaptive tolerance for large files to improve performance
+        file_size_mb = step_size / (1024 * 1024)
+        if file_size_mb > 10:
+            # For large files, adjust tolerance to avoid creating too many triangles
+            min_tolerance = 0.5 if file_size_mb > 20 else 0.3
+            tolerance = max(tolerance, min_tolerance)
+            logger.info(f"Large file ({file_size_mb:.1f}MB), adjusted tolerance to {tolerance} for performance")
+        
         # Create database record
         conversion_job = ConversionJob(
             id=file_id,
@@ -242,12 +250,35 @@ def upload_file():
 
 @app.route('/view/<filename>')
 def view_file(filename):
-    """Serve STL files for 3D viewer"""
+    """Serve STL files for 3D viewer with chunked streaming for large files"""
     try:
-        return send_from_directory(app.config['CONVERTED_FOLDER'], filename, 
-                                 mimetype='application/octet-stream')
-    except FileNotFoundError:
-        return jsonify({'error': 'Fichier non trouvé'}), 404
+        file_path = os.path.join(app.config['CONVERTED_FOLDER'], filename)
+        if not os.path.exists(file_path):
+            return jsonify({'error': 'Fichier non trouvé'}), 404
+        
+        file_size = os.path.getsize(file_path)
+        
+        # For large files (>10MB), use chunked streaming
+        if file_size > 10 * 1024 * 1024:
+            def generate():
+                with open(file_path, 'rb') as f:
+                    while True:
+                        data = f.read(4096)  # Read in 4KB chunks
+                        if not data:
+                            break
+                        yield data
+            
+            response = Response(generate(), mimetype='application/octet-stream')
+            response.headers['Content-Length'] = str(file_size)
+            response.headers['Content-Disposition'] = f'inline; filename={filename}'
+            return response
+        else:
+            # For smaller files, use normal send_from_directory
+            return send_from_directory(app.config['CONVERTED_FOLDER'], filename, 
+                                     mimetype='application/octet-stream')
+    except Exception as e:
+        logger.error(f"Error serving file {filename}: {str(e)}")
+        return jsonify({'error': 'Erreur lors du chargement du fichier'}), 500
 
 @app.route('/api/conversions')
 def get_conversions():
