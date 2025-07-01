@@ -191,14 +191,8 @@ class DFMAnalyzer:
                 
                 print(f"Projected areas - X: {projected_area_x:.2f}, Y: {projected_area_y:.2f}, Z: {projected_area_z:.2f}")
                 
-                # Generate debug visualization
-                try:
-                    from projection_debug import visualize_projections, debug_mesh_stats
-                    debug_mesh_stats(mesh)
-                    viz_path = visualize_projections(mesh, "static/debug_projections.png")
-                    print(f"Debug visualization saved to: {viz_path}")
-                except Exception as viz_error:
-                    print(f"Debug visualization failed: {viz_error}")
+                # Skip debug visualization to avoid timeout
+                # Debug visualization disabled for performance
                 
                 # Validation: projected area should be reasonable
                 max_projected = max(projected_area_x, projected_area_y, projected_area_z)
