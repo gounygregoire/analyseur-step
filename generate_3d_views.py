@@ -89,34 +89,23 @@ def create_orthographic_views(step_file_path: str) -> Dict[str, str]:
 
 def create_model_image(workplane, config: Dict, dimensions: Tuple[float, float, float]) -> str:
     """
-    Create a rendered image of the model from a specific viewpoint
+    Create a rendered image of the model from a specific viewpoint with realistic shading
     """
     if not Image:
         return None
         
     try:
-        # Create high-res image for better quality
-        img_size = (800, 800)
-        img = Image.new('RGB', img_size, color='#f8f9fa')
-        
-        # Create layers for different render passes
-        shadow_layer = Image.new('RGBA', img_size, (0, 0, 0, 0))
-        face_layer = Image.new('RGBA', img_size, (0, 0, 0, 0))
-        edge_layer = Image.new('RGBA', img_size, (0, 0, 0, 0))
-        
-        shadow_draw = ImageDraw.Draw(shadow_layer)
-        face_draw = ImageDraw.Draw(face_layer)
-        edge_draw = ImageDraw.Draw(edge_layer)
+        # Create image with anti-aliasing
+        img_size = 400
+        img = Image.new('RGB', (img_size, img_size), color='#f0f0f0')
+        draw = ImageDraw.Draw(img)
         
         width, height, depth = dimensions
-        
-        # Calculate scale with padding
-        padding = 0.15  # 15% padding
         max_dim = max(width, height, depth)
-        scale = (img_size[0] * (1 - 2*padding)) / max_dim if max_dim > 0 else 1
-        cx, cy = img_size[0] // 2, img_size[1] // 2
+        scale = img_size * 0.6 / max_dim if max_dim > 0 else 1
+        cx, cy = img_size // 2, img_size // 2
         
-        # Get faces for shaded rendering
+        # Try to get actual geometry
         try:
             faces = workplane.faces()
             

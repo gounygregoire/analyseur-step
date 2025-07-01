@@ -66,10 +66,9 @@ class DFMReportGenerator:
         ))
         
     def generate_3d_views(self, step_file_path: str) -> Dict[str, str]:
-        """Generate 3D views from STEP file using CadQuery"""
+        """Generate 3D views from STEP file using CadQuery and STL"""
         views = {}
         
-        # Generate simple wireframe views for each axis
         try:
             import cadquery as cq
             
@@ -80,9 +79,32 @@ class DFMReportGenerator:
             bbox = workplane.val().BoundingBox()
             dimensions = (bbox.xlen, bbox.ylen, bbox.zlen)
             
-            # Create simple wireframe representations for each view
-            for axis in ['x', 'y', 'z']:
-                views[axis] = self._create_simple_wireframe_view(axis.upper(), dimensions)
+            # Try to use STL file for realistic rendering
+            try:
+                # Find the corresponding STL file
+                base_name = os.path.splitext(os.path.basename(step_file_path))[0]
+                stl_path = os.path.join('converted', f"{base_name.split('_', 1)[0]}.stl")
+                
+                if os.path.exists(stl_path):
+                    from generate_realistic_views import create_all_views_from_stl
+                    realistic_views = create_all_views_from_stl(stl_path)
+                    
+                    # Use realistic views if available
+                    for axis in ['x', 'y', 'z']:
+                        if axis in realistic_views and realistic_views[axis]:
+                            views[axis] = realistic_views[axis]
+                        else:
+                            views[axis] = self._create_simple_wireframe_view(axis.upper(), dimensions)
+                else:
+                    # Fallback to wireframe if STL not found
+                    for axis in ['x', 'y', 'z']:
+                        views[axis] = self._create_simple_wireframe_view(axis.upper(), dimensions)
+                        
+            except Exception as e:
+                print(f"Error with realistic views: {e}")
+                # Fallback to simple wireframe views
+                for axis in ['x', 'y', 'z']:
+                    views[axis] = self._create_simple_wireframe_view(axis.upper(), dimensions)
                     
         except Exception as e:
             print(f"Error generating 3D views: {e}")
@@ -437,61 +459,91 @@ class DFMReportGenerator:
             return None
     
     def _create_simple_wireframe_view(self, axis: str, dimensions: Tuple[float, float, float]) -> str:
-        """Create a simple wireframe view representation as PNG"""
+        """Create a realistic 3D view representation as PNG with shading"""
         try:
             from PIL import Image, ImageDraw, ImageFont
             import io
             import base64
+            import math
             
-            # Create image
+            # Create image with light background
             img_size = 200
-            img = Image.new('RGB', (img_size, img_size), color='white')
+            img = Image.new('RGB', (img_size, img_size), color='#f8f9fa')
             draw = ImageDraw.Draw(img)
             
-            # Draw border
-            draw.rectangle([0, 0, img_size-1, img_size-1], outline='#dee2e6', width=2)
+            # Draw subtle border
+            draw.rectangle([0, 0, img_size-1, img_size-1], outline='#e0e0e0', width=1)
             
             # Draw title
             title = f"Vue selon {axis}"
-            draw.text((img_size//2, 20), title, fill='black', anchor='mt')
+            draw.text((img_size//2, 15), title, fill='#333333', anchor='mt')
             
-            # Draw a simple box representation based on axis
+            # Draw a 3D box with shading
             center_x, center_y = img_size//2, img_size//2 + 20
             
             # Scale dimensions to fit in image
             width, height, depth = dimensions
             max_dim = max(width, height, depth)
-            scale = 60 / max_dim if max_dim > 0 else 1
+            scale = 70 / max_dim if max_dim > 0 else 1
             
-            # Draw wireframe box based on axis
+            # Calculate view dimensions based on axis
             if axis == 'X':
                 # YZ plane view
                 w, h = height * scale, depth * scale
+                view_depth = width * scale
             elif axis == 'Y':
                 # XZ plane view  
                 w, h = width * scale, depth * scale
+                view_depth = height * scale
             else:  # Z
                 # XY plane view
                 w, h = width * scale, height * scale
+                view_depth = depth * scale
                 
-            # Draw front rectangle
+            # 3D offset for isometric effect
+            offset_x = min(25, w * 0.4)
+            offset_y = min(25, h * 0.4)
+            
+            # Define corners for the box
             x1, y1 = center_x - w/2, center_y - h/2
             x2, y2 = center_x + w/2, center_y + h/2
-            draw.rectangle([x1, y1, x2, y2], outline='#0066cc', width=2)
             
-            # Draw back rectangle (offset for 3D effect)
-            offset = min(20, w * 0.3, h * 0.3)
-            draw.rectangle([x1+offset, y1-offset, x2+offset, y2-offset], outline='#0066cc', width=1)
+            # Draw the 3D box with faces (back to front)
+            # Top face (darkest)
+            if offset_y > 0:
+                top_face = [
+                    (x1, y1),
+                    (x1 + offset_x, y1 - offset_y),
+                    (x2 + offset_x, y1 - offset_y),
+                    (x2, y1)
+                ]
+                draw.polygon(top_face, fill='#808080', outline='#606060')
             
-            # Draw connecting lines
-            draw.line([x1, y1, x1+offset, y1-offset], fill='#0066cc', width=1)
-            draw.line([x2, y1, x2+offset, y1-offset], fill='#0066cc', width=1)
-            draw.line([x1, y2, x1+offset, y2-offset], fill='#0066cc', width=1)
-            draw.line([x2, y2, x2+offset, y2-offset], fill='#0066cc', width=1)
+            # Right face (medium)
+            if offset_x > 0:
+                right_face = [
+                    (x2, y1),
+                    (x2 + offset_x, y1 - offset_y),
+                    (x2 + offset_x, y2 - offset_y),
+                    (x2, y2)
+                ]
+                draw.polygon(right_face, fill='#a0a0a0', outline='#808080')
+            
+            # Front face (lightest)
+            front_face = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+            draw.polygon(front_face, fill='#c0c0c0', outline='#999999')
+            
+            # Add subtle gradient effect on front face
+            for i in range(int(h/4)):
+                shade = int(192 + i * 16 / (h/4))
+                if shade > 216:
+                    shade = 216
+                color = f'#{shade:02x}{shade:02x}{shade:02x}'
+                draw.rectangle([x1+1, y1+i*4, x2-1, y1+i*4+4], fill=color, outline=None)
             
             # Draw dimensions
             dim_text = f"{width:.1f} × {height:.1f} × {depth:.1f} mm"
-            draw.text((img_size//2, img_size-15), dim_text, fill='#666', anchor='mt')
+            draw.text((img_size//2, img_size-10), dim_text, fill='#666666', anchor='mt')
             
             # Convert to base64 PNG
             buffer = io.BytesIO()
@@ -500,7 +552,7 @@ class DFMReportGenerator:
             return base64.b64encode(buffer.getvalue()).decode()
             
         except Exception as e:
-            print(f"Error creating wireframe view: {e}")
+            print(f"Error creating realistic view: {e}")
             return self._create_placeholder_view(f'Vue selon {axis}')
     
     def _create_placeholder_view(self, view_name: str) -> str:
