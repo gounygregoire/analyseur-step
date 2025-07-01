@@ -1844,6 +1844,18 @@ class STEPViewer {
                         this.materialRecommendations = result.recommendations;
                         console.log('Material recommendations stored:', this.materialRecommendations);
                         
+                        // Store the first recommended material type
+                        if (result.recommendations && result.recommendations.length > 0) {
+                            // Extract material type from the name (e.g., "Polypropylène (PP)" -> "PP")
+                            const firstMaterial = result.recommendations[0].name;
+                            const match = firstMaterial.match(/\(([^)]+)\)/);
+                            if (match) {
+                                this.currentMaterialType = match[1];
+                            } else {
+                                this.currentMaterialType = 'GENERIC';
+                            }
+                        }
+                        
                         // Now run DFM analysis
                         await this.analyzeDFM(axis);
                         
@@ -1917,7 +1929,8 @@ class STEPViewer {
         }
         
         // Save the selected demolding axis
-        this.selectedDemoldingAxis = demoldingAxis;
+        this.currentDemoldingAxis = demoldingAxis;
+        this.currentMaterialType = 'GENERIC'; // Default material type
         
         const dfmBtn = document.getElementById('dfmAnalyzeBtn');
         const originalText = dfmBtn.innerHTML;
@@ -1933,7 +1946,8 @@ class STEPViewer {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    demolding_axis: demoldingAxis
+                    demolding_axis: demoldingAxis,
+                    material_type: this.currentMaterialType || 'GENERIC'
                 })
             });
             
@@ -2046,7 +2060,11 @@ class STEPViewer {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                }
+                },
+                body: JSON.stringify({
+                    demolding_axis: this.currentDemoldingAxis || 'z',
+                    material_type: this.currentMaterialType || 'GENERIC'
+                })
             });
             
             const result = await response.json();
