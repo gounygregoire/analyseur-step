@@ -561,13 +561,17 @@ class STEPViewer {
                 }
                 
                 // Calculate and display volume
-                this.calculateVolume();
+                this.calculateAndDisplayVolume(geometry);
                 
                 // Update model info
-                this.updateModelInfo(url);
+                if (this.updateModelInfo) {
+                    this.updateModelInfo(url);
+                }
                 
                 // Manage axes visibility
-                this.manageAxesVisibility();
+                if (this.manageAxesVisibility) {
+                    this.manageAxesVisibility();
+                }
                 
                 // Reset camera view
                 this.resetView();
@@ -799,6 +803,45 @@ class STEPViewer {
         
         // Display volume in the UI
         this.displayVolume(volume);
+    }
+    
+    updateModelInfo(url) {
+        // Update model information in the UI
+        console.log('Model loaded from:', url);
+    }
+    
+    manageAxesVisibility() {
+        // Manage axes visibility based on current state
+        if (this.axesHelper && this.currentMesh) {
+            const box = new THREE.Box3().setFromObject(this.currentMesh);
+            const center = box.getCenter(new THREE.Vector3());
+            const size = box.getSize(new THREE.Vector3());
+            const maxDim = Math.max(size.x, size.y, size.z);
+            const axesScale = maxDim * 0.5;
+            
+            this.axesHelper.position.copy(center);
+            this.axesHelper.scale.set(axesScale, axesScale, axesScale);
+            
+            // Update axes labels if they exist
+            if (this.axesLabels) {
+                this.axesLabels.forEach((label, index) => {
+                    const offset = axesScale * 1.2;
+                    switch(index) {
+                        case 0: // X axis
+                            label.position.set(center.x + offset, center.y, center.z);
+                            break;
+                        case 1: // Y axis
+                            label.position.set(center.x, center.y + offset, center.z);
+                            break;
+                        case 2: // Z axis
+                            label.position.set(center.x, center.y, center.z + offset);
+                            break;
+                    }
+                    const labelScale = maxDim * 0.1;
+                    label.scale.set(labelScale, labelScale, 1);
+                });
+            }
+        }
     }
     
     calculateSurfaceArea(axis) {
