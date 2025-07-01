@@ -1868,18 +1868,23 @@ class STEPViewer {
     }
     
     toggleCrossSectionMode() {
+        console.log('Toggling cross-section mode, current state:', this.crossSectionMode);
+        
         this.crossSectionMode = !this.crossSectionMode;
-        this.updateCrossSectionButton();
         
         if (this.crossSectionMode) {
+            console.log('Activating cross-section mode');
             this.measurementMode = false;
             this.updateMeasurementButton();
-            this.createCrossSectionPlane('z'); // Default to Z axis
-            this.showCrossSectionInstructions('z');
+            this.createSimpleCrossSectionPlane();
+            this.showSimpleCrossSectionInstructions();
         } else {
-            this.removeCrossSectionPlane();
-            this.hideCrossSectionInstructions();
+            console.log('Deactivating cross-section mode');
+            this.removeSimpleCrossSectionPlane();
+            this.hideInstructions();
         }
+        
+        this.updateCrossSectionButton();
     }
     
     updateMeasurementButton() {
@@ -1895,15 +1900,16 @@ class STEPViewer {
         
         if (this.crossSectionMode) {
             btn.classList.remove('btn-outline-secondary');
-            btn.classList.add('btn-info');
-            const axisName = this.currentCrossSectionAxis ? this.currentCrossSectionAxis.toUpperCase() : 'Z';
-            btn.innerHTML = `<i class="bi bi-x-circle me-1"></i>Désactiver coupe`;
-            btn.title = `Coupe ${axisName} active - Cliquer pour désactiver`;
+            btn.classList.add('btn-warning');
+            btn.style.fontWeight = 'bold';
+            btn.innerHTML = `<i class="bi bi-stop-circle me-1"></i>Arrêter coupe`;
+            btn.title = 'Mode coupe actif - Utilisez ↑↓ pour déplacer, Espace pour masquer le plan, Échap pour désactiver';
         } else {
-            btn.classList.remove('btn-info');
+            btn.classList.remove('btn-warning');
             btn.classList.add('btn-outline-secondary');
-            btn.innerHTML = '<i class="bi bi-scissors me-1"></i>Coupe';
-            btn.title = 'Activer la coupe transversale';
+            btn.style.fontWeight = 'normal';
+            btn.innerHTML = '<i class="bi bi-scissors me-1"></i>Coupe 3D';
+            btn.title = 'Activer la coupe transversale pour voir l\'intérieur de la pièce';
         }
     }
     
@@ -2332,6 +2338,162 @@ class STEPViewer {
     
     hideCrossSectionInstructions() {
         this.hideInstructions();
+    }
+    
+    // Nouvelle implémentation simplifiée de la coupe transversale
+    createSimpleCrossSectionPlane() {
+        if (!this.currentMesh) {
+            console.error('No mesh available for cross-section');
+            return;
+        }
+        
+        console.log('Creating simple cross-section plane');
+        
+        // Nettoyer les anciens plans
+        this.removeSimpleCrossSectionPlane();
+        
+        // Obtenir les dimensions de la pièce
+        const box = new THREE.Box3().setFromObject(this.currentMesh);
+        const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3());
+        
+        console.log('Mesh center:', center, 'Size:', size);
+        
+        // Créer un plan de coupe simple selon l'axe Z
+        const normal = new THREE.Vector3(0, 0, 1);
+        const plane = new THREE.Plane(normal, 0);
+        
+        // Stocker le plan de coupe
+        this.clippingPlanes = [plane];
+        this.crossSectionPosition = 0;
+        
+        // Activer le clipping sur le matériau du mesh
+        if (this.currentMesh.material) {
+            this.currentMesh.material.clippingPlanes = this.clippingPlanes;
+            this.currentMesh.material.needsUpdate = true;
+            console.log('Clipping planes applied to material');
+        }
+        
+        // Activer le clipping local dans le renderer
+        this.renderer.localClippingEnabled = true;
+        console.log('Local clipping enabled');
+        
+        // Créer une représentation visuelle du plan (optionnelle)
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const planeGeometry = new THREE.PlaneGeometry(maxDim * 1.2, maxDim * 1.2);
+        const planeMaterial = new THREE.MeshBasicMaterial({
+            color: 0xff6b35,
+            transparent: true,
+            opacity: 0.3,
+            side: THREE.DoubleSide
+        });
+        
+        this.crossSectionPlane = new THREE.Mesh(planeGeometry, planeMaterial);
+        this.crossSectionPlane.position.copy(center);
+        this.crossSectionPlane.position.z = center.z + this.crossSectionPosition;
+        
+        this.scene.add(this.crossSectionPlane);
+        console.log('Visual plane added to scene');
+        
+        // Ajouter les contrôles clavier simplifiés
+        this.addSimpleCrossSectionControls();
+    }
+    
+    addSimpleCrossSectionControls() {
+        console.log('Adding simple cross-section controls');
+        
+        // Supprimer les anciens gestionnaires d'événements
+        if (this.crossSectionKeyHandler) {
+            document.removeEventListener('keydown', this.crossSectionKeyHandler);
+        }
+        
+        this.crossSectionKeyHandler = (event) => {
+            if (!this.crossSectionMode || !this.crossSectionPlane) return;
+            
+            const moveStep = 0.5; // Pas de déplacement plus fin
+            
+            switch(event.key) {
+                case 'ArrowUp':
+                    event.preventDefault();
+                    this.moveCrossSectionPlane(moveStep);
+                    break;
+                case 'ArrowDown':
+                    event.preventDefault();
+                    this.moveCrossSectionPlane(-moveStep);
+                    break;
+                case ' ': // Espace pour masquer/afficher le plan
+                    event.preventDefault();
+                    this.toggleCrossSectionPlaneVisibility();
+                    break;
+                case 'Escape':
+                    event.preventDefault();
+                    this.toggleCrossSectionMode(); // Désactiver avec Échap
+                    break;
+            }
+        };
+        
+        document.addEventListener('keydown', this.crossSectionKeyHandler);
+        console.log('Keyboard controls attached');
+    }
+    
+    moveCrossSectionPlane(step) {
+        if (!this.crossSectionPlane || !this.clippingPlanes[0]) return;
+        
+        this.crossSectionPosition += step;
+        
+        // Mettre à jour la position du plan visuel
+        const box = new THREE.Box3().setFromObject(this.currentMesh);
+        const center = box.getCenter(new THREE.Vector3());
+        this.crossSectionPlane.position.z = center.z + this.crossSectionPosition;
+        
+        // Mettre à jour le plan de coupe
+        this.clippingPlanes[0].constant = -this.crossSectionPosition;
+        
+        // Forcer la mise à jour du matériau
+        if (this.currentMesh.material) {
+            this.currentMesh.material.needsUpdate = true;
+        }
+        
+        console.log('Cross-section moved to position:', this.crossSectionPosition);
+    }
+    
+    removeSimpleCrossSectionPlane() {
+        console.log('Removing simple cross-section plane');
+        
+        // Supprimer le plan visuel
+        if (this.crossSectionPlane) {
+            this.scene.remove(this.crossSectionPlane);
+            this.crossSectionPlane.geometry.dispose();
+            this.crossSectionPlane.material.dispose();
+            this.crossSectionPlane = null;
+        }
+        
+        // Désactiver le clipping
+        if (this.currentMesh && this.currentMesh.material) {
+            this.currentMesh.material.clippingPlanes = [];
+            this.currentMesh.material.needsUpdate = true;
+        }
+        
+        this.renderer.localClippingEnabled = false;
+        this.clippingPlanes = [];
+        
+        // Supprimer les gestionnaires d'événements
+        if (this.crossSectionKeyHandler) {
+            document.removeEventListener('keydown', this.crossSectionKeyHandler);
+            this.crossSectionKeyHandler = null;
+        }
+        
+        console.log('Cross-section cleanup completed');
+    }
+    
+    showSimpleCrossSectionInstructions() {
+        const instructionText = `
+            <strong>Mode Coupe Activé</strong><br>
+            • <kbd>↑</kbd> <kbd>↓</kbd> : Déplacer le plan de coupe<br>
+            • <kbd>Espace</kbd> : Masquer/Afficher le plan orange<br>
+            • <kbd>Échap</kbd> : Désactiver la coupe
+        `;
+        this.showInstructions(instructionText);
     }
     
     showInstructions(text) {
