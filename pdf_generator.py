@@ -69,44 +69,11 @@ class DFMReportGenerator:
         """Generate 3D views from STEP file using CadQuery"""
         views = {}
         
-        try:
-            # Try to use the dedicated 3D view generator
-            from generate_3d_views import create_orthographic_views
-            views = create_orthographic_views(step_file_path)
-            if views:
-                return views
-        except Exception as e:
-            print(f"Could not use dedicated 3D view generator: {e}")
-        
-        # Fallback to SVG generation
-        try:
-            if not cq:
-                return views
-                
-            # Load STEP file
-            workplane = cq.importers.importStep(step_file_path)
-            
-            # Generate views for each axis
-            axes_configs = {
-                'x': {'direction': (1, 0, 0), 'name': 'Vue selon X', 'rotation': (0, 90, 0)},
-                'y': {'direction': (0, 1, 0), 'name': 'Vue selon Y', 'rotation': (90, 0, 0)},
-                'z': {'direction': (0, 0, 1), 'name': 'Vue selon Z', 'rotation': (0, 0, 0)}
-            }
-            
-            for axis, config in axes_configs.items():
-                try:
-                    # Generate enhanced SVG view
-                    svg_content = self._generate_enhanced_svg_view(workplane, config)
-                    if svg_content:
-                        views[axis] = base64.b64encode(svg_content.encode()).decode()
-                    else:
-                        views[axis] = self._create_placeholder_view(config['name'])
-                except Exception as e:
-                    print(f"Error generating {axis} view: {e}")
-                    views[axis] = self._create_placeholder_view(config['name'])
-                    
-        except Exception as e:
-            print(f"Error loading STEP file for views: {e}")
+        # Temporarily disable 3D view generation to avoid timeout
+        # Return placeholder views for now
+        print("3D view generation disabled to prevent timeout")
+        for axis in ['x', 'y', 'z']:
+            views[axis] = self._create_placeholder_view(f'Vue selon {axis.upper()}')
             
         return views
     

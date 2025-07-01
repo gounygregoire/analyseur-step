@@ -413,45 +413,17 @@ def generate_pdf_report(conversion_id):
         if not conversion_job.dfm_score:
             return jsonify({'error': 'L\'analyse DFM doit être effectuée avant la génération du rapport'}), 400
         
-        # Get STEP file path for re-analysis
+        # Get DFM data from session to avoid re-analysis
+        dfm_session_key = f'dfm_analysis_{conversion_id}'
+        if dfm_session_key not in session:
+            return jsonify({'error': 'Données DFM non trouvées dans la session. Veuillez relancer l\'analyse DFM.'}), 400
+        
+        dfm_data = session[dfm_session_key]
+        
+        # Get STEP file path for 3D views generation only
         step_path = os.path.join(app.config['UPLOAD_FOLDER'], conversion_job.step_filename)
         if not os.path.exists(step_path):
             return jsonify({'error': 'Fichier STEP non trouvé'}), 404
-        
-        # Perform fresh DFM analysis to get complete data
-        dfm_report = analyze_dfm(step_path)
-        
-        # Prepare DFM data for PDF
-        dfm_data = {
-            'score': dfm_report.moldability_rating,
-            'rating': dfm_report.overall_score,
-            'issues_count': len(dfm_report.wall_thickness_issues) + len(dfm_report.geometry_issues),
-            'dimensions': {
-                'x': round(dfm_report.dimensions.x_max, 2),
-                'y': round(dfm_report.dimensions.y_max, 2),
-                'z': round(dfm_report.dimensions.z_max, 2),
-                'volume': round(dfm_report.dimensions.volume, 2),
-                'max_wall_thickness': round(dfm_report.dimensions.max_wall_thickness, 2)
-            },
-            'recommendations': dfm_report.recommendations,
-            'wall_thickness_issues': [
-                {
-                    'location': issue.location,
-                    'thickness': issue.thickness,
-                    'issue_type': issue.issue_type,
-                    'severity': issue.severity
-                } for issue in dfm_report.wall_thickness_issues
-            ],
-            'geometry_issues': [
-                {
-                    'location': issue.location,
-                    'issue_type': issue.issue_type,
-                    'description': issue.description,
-                    'severity': issue.severity,
-                    'recommendation': issue.recommendation
-                } for issue in dfm_report.geometry_issues
-            ]
-        }
         
         # Generate PDF
         pdf_filename = f"rapport_dfm_{conversion_id}.pdf"
