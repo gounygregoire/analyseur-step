@@ -613,9 +613,11 @@ class STEPViewer {
             this.axesHelper.visible = this.showAxes;
             
             // Also toggle labels visibility
-            this.axesLabels.forEach(label => {
-                label.visible = this.showAxes;
-            });
+            if (this.axesLabels && Array.isArray(this.axesLabels)) {
+                this.axesLabels.forEach(label => {
+                    label.visible = this.showAxes;
+                });
+            }
             
             const btn = this.safeGetElement('toggleAxesBtn');
             if (btn) {
@@ -630,21 +632,19 @@ class STEPViewer {
     
     toggleTheme() {
         this.isDarkMode = !this.isDarkMode;
-        const html = document.documentElement;
         const btn = this.safeGetElement('themeToggleBtn');
         
+        // Ne changer que la couleur du viewer 3D, pas tout le thème de l'interface
         if (this.isDarkMode) {
-            html.setAttribute('data-bs-theme', 'dark');
             // Darker gray background for better contrast with 3D models
             if (this.scene) this.scene.background = new THREE.Color(0x2d2d30);
             if (this.renderer) this.renderer.setClearColor(0x2d2d30, 1);
-            if (btn) btn.innerHTML = '<i class="bi bi-sun me-1"></i>Mode clair';
+            if (btn) btn.innerHTML = '<i class="bi bi-sun me-1"></i>Fond clair';
         } else {
-            html.setAttribute('data-bs-theme', 'light');
             // Light gray background for better contrast with 3D models
             if (this.scene) this.scene.background = new THREE.Color(0xe8e9ea);
             if (this.renderer) this.renderer.setClearColor(0xe8e9ea, 1);
-            if (btn) btn.innerHTML = '<i class="bi bi-moon me-1"></i>Mode sombre';
+            if (btn) btn.innerHTML = '<i class="bi bi-moon me-1"></i>Fond sombre';
         }
     }
     
@@ -1908,11 +1908,12 @@ class STEPViewer {
         if (!btn) return;
         
         if (this.crossSectionMode) {
+            const axisName = this.crossSectionAxis ? this.crossSectionAxis.toUpperCase() : 'Z';
             btn.classList.remove('btn-outline-secondary');
             btn.classList.add('btn-warning');
             btn.style.fontWeight = 'bold';
-            btn.innerHTML = `<i class="bi bi-stop-circle me-1"></i>Arrêter coupe`;
-            btn.title = 'Mode coupe actif - Utilisez ↑↓ pour déplacer, Espace pour masquer le plan, Échap pour désactiver';
+            btn.innerHTML = `<i class="bi bi-stop-circle me-1"></i>Arrêter coupe (${axisName})`;
+            btn.title = 'Mode coupe actif - Utilisez ↑↓ pour déplacer, X/Y/Z pour changer d\'axe, Espace pour masquer le plan, Échap pour désactiver';
         } else {
             btn.classList.remove('btn-warning');
             btn.classList.add('btn-outline-secondary');
@@ -2350,16 +2351,19 @@ class STEPViewer {
     }
     
     // Nouvelle implémentation simplifiée de la coupe transversale
-    createSimpleCrossSectionPlane() {
+    createSimpleCrossSectionPlane(axis = 'z') {
         if (!this.currentMesh) {
             console.error('No mesh available for cross-section');
             return;
         }
         
-        console.log('Creating simple cross-section plane');
+        console.log('Creating simple cross-section plane on axis:', axis);
         
         // Nettoyer les anciens plans
         this.removeSimpleCrossSectionPlane();
+        
+        // Sauvegarder l'axe actuel
+        this.crossSectionAxis = axis || 'z';
         
         // Obtenir les dimensions de la pièce
         const box = new THREE.Box3().setFromObject(this.currentMesh);
@@ -2368,8 +2372,27 @@ class STEPViewer {
         
         console.log('Mesh center:', center, 'Size:', size);
         
-        // Créer un plan de coupe simple selon l'axe Z
-        const normal = new THREE.Vector3(0, 0, 1);
+        // Créer le plan de coupe selon l'axe choisi
+        let normal, planeWidth, planeHeight;
+        switch(this.crossSectionAxis) {
+            case 'x':
+                normal = new THREE.Vector3(1, 0, 0);
+                planeWidth = size.y * 1.2;
+                planeHeight = size.z * 1.2;
+                break;
+            case 'y':
+                normal = new THREE.Vector3(0, 1, 0);
+                planeWidth = size.x * 1.2;
+                planeHeight = size.z * 1.2;
+                break;
+            case 'z':
+            default:
+                normal = new THREE.Vector3(0, 0, 1);
+                planeWidth = size.x * 1.2;
+                planeHeight = size.y * 1.2;
+                break;
+        }
+        
         const plane = new THREE.Plane(normal, 0);
         
         // Stocker le plan de coupe
@@ -2387,9 +2410,8 @@ class STEPViewer {
         this.renderer.localClippingEnabled = true;
         console.log('Local clipping enabled');
         
-        // Créer une représentation visuelle du plan (optionnelle)
-        const maxDim = Math.max(size.x, size.y, size.z);
-        const planeGeometry = new THREE.PlaneGeometry(maxDim * 1.2, maxDim * 1.2);
+        // Créer une représentation visuelle du plan
+        const planeGeometry = new THREE.PlaneGeometry(planeWidth, planeHeight);
         const planeMaterial = new THREE.MeshBasicMaterial({
             color: 0xff6b35,
             transparent: true,
@@ -2398,8 +2420,24 @@ class STEPViewer {
         });
         
         this.crossSectionPlane = new THREE.Mesh(planeGeometry, planeMaterial);
-        this.crossSectionPlane.position.copy(center);
-        this.crossSectionPlane.position.z = center.z + this.crossSectionPosition;
+        
+        // Orienter le plan selon l'axe
+        switch(this.crossSectionAxis) {
+            case 'x':
+                this.crossSectionPlane.rotation.y = Math.PI / 2;
+                this.crossSectionPlane.position.copy(center);
+                this.crossSectionPlane.position.x = center.x + this.crossSectionPosition;
+                break;
+            case 'y':
+                this.crossSectionPlane.rotation.x = -Math.PI / 2;
+                this.crossSectionPlane.position.copy(center);
+                this.crossSectionPlane.position.y = center.y + this.crossSectionPosition;
+                break;
+            case 'z':
+                this.crossSectionPlane.position.copy(center);
+                this.crossSectionPlane.position.z = center.z + this.crossSectionPosition;
+                break;
+        }
         
         this.scene.add(this.crossSectionPlane);
         console.log('Visual plane added to scene');
@@ -2421,12 +2459,12 @@ class STEPViewer {
             
             const moveStep = 0.5; // Pas de déplacement plus fin
             
-            switch(event.key) {
-                case 'ArrowUp':
+            switch(event.key.toLowerCase()) {
+                case 'arrowup':
                     event.preventDefault();
                     this.moveCrossSectionPlane(moveStep);
                     break;
-                case 'ArrowDown':
+                case 'arrowdown':
                     event.preventDefault();
                     this.moveCrossSectionPlane(-moveStep);
                     break;
@@ -2434,7 +2472,28 @@ class STEPViewer {
                     event.preventDefault();
                     this.toggleCrossSectionPlaneVisibility();
                     break;
-                case 'Escape':
+                case 'x':
+                    event.preventDefault();
+                    if (this.crossSectionAxis !== 'x') {
+                        this.createSimpleCrossSectionPlane('x');
+                        this.showSimpleCrossSectionInstructions();
+                    }
+                    break;
+                case 'y':
+                    event.preventDefault();
+                    if (this.crossSectionAxis !== 'y') {
+                        this.createSimpleCrossSectionPlane('y');
+                        this.showSimpleCrossSectionInstructions();
+                    }
+                    break;
+                case 'z':
+                    event.preventDefault();
+                    if (this.crossSectionAxis !== 'z') {
+                        this.createSimpleCrossSectionPlane('z');
+                        this.showSimpleCrossSectionInstructions();
+                    }
+                    break;
+                case 'escape':
                     event.preventDefault();
                     this.toggleCrossSectionMode(); // Désactiver avec Échap
                     break;
@@ -2450,10 +2509,21 @@ class STEPViewer {
         
         this.crossSectionPosition += step;
         
-        // Mettre à jour la position du plan visuel
+        // Mettre à jour la position du plan visuel selon l'axe
         const box = new THREE.Box3().setFromObject(this.currentMesh);
         const center = box.getCenter(new THREE.Vector3());
-        this.crossSectionPlane.position.z = center.z + this.crossSectionPosition;
+        
+        switch(this.crossSectionAxis) {
+            case 'x':
+                this.crossSectionPlane.position.x = center.x + this.crossSectionPosition;
+                break;
+            case 'y':
+                this.crossSectionPlane.position.y = center.y + this.crossSectionPosition;
+                break;
+            case 'z':
+                this.crossSectionPlane.position.z = center.z + this.crossSectionPosition;
+                break;
+        }
         
         // Mettre à jour le plan de coupe
         this.clippingPlanes[0].constant = -this.crossSectionPosition;
@@ -2463,7 +2533,7 @@ class STEPViewer {
             this.currentMesh.material.needsUpdate = true;
         }
         
-        console.log('Cross-section moved to position:', this.crossSectionPosition);
+        console.log('Cross-section moved to position:', this.crossSectionPosition, 'on axis:', this.crossSectionAxis);
     }
     
     removeSimpleCrossSectionPlane() {
@@ -2502,9 +2572,11 @@ class STEPViewer {
     }
     
     showSimpleCrossSectionInstructions() {
+        const axisName = this.crossSectionAxis ? this.crossSectionAxis.toUpperCase() : 'Z';
         const instructionText = `
-            <strong>Mode Coupe Activé</strong><br>
+            <strong>Mode Coupe Activé - Axe ${axisName}</strong><br>
             • <kbd>↑</kbd> <kbd>↓</kbd> : Déplacer le plan de coupe<br>
+            • <kbd>X</kbd> <kbd>Y</kbd> <kbd>Z</kbd> : Changer l'axe de coupe<br>
             • <kbd>Espace</kbd> : Masquer/Afficher le plan orange<br>
             • <kbd>Échap</kbd> : Désactiver la coupe
         `;
