@@ -230,49 +230,58 @@ class STEPViewer {
         // This function ensures viewer tool events are attached after the panel becomes visible
         console.log('Setting up viewer tools events...');
         
-        // Viewer controls
-        const resetViewBtn = this.safeGetElement('resetViewBtn');
-        if (resetViewBtn) {
-            resetViewBtn.addEventListener('click', () => this.resetView());
+        // First remove any existing event listeners to prevent duplicates
+        const oldResetBtn = this.safeGetElement('resetViewBtn');
+        if (oldResetBtn) {
+            const newResetBtn = oldResetBtn.cloneNode(true);
+            oldResetBtn.parentNode.replaceChild(newResetBtn, oldResetBtn);
+            newResetBtn.addEventListener('click', () => this.resetView());
         }
         
-        const toggleWireframeBtn = this.safeGetElement('toggleWireframeBtn');
-        if (toggleWireframeBtn) {
-            toggleWireframeBtn.addEventListener('click', () => this.toggleWireframe());
+        const oldWireframeBtn = this.safeGetElement('toggleWireframeBtn');
+        if (oldWireframeBtn) {
+            const newWireframeBtn = oldWireframeBtn.cloneNode(true);
+            oldWireframeBtn.parentNode.replaceChild(newWireframeBtn, oldWireframeBtn);
+            newWireframeBtn.addEventListener('click', () => this.toggleWireframe());
         }
         
-        const toggleAxesBtn = this.safeGetElement('toggleAxesBtn');
-        if (toggleAxesBtn) {
-            toggleAxesBtn.addEventListener('click', () => this.toggleAxes());
+        const oldAxesBtn = this.safeGetElement('toggleAxesBtn');
+        if (oldAxesBtn) {
+            const newAxesBtn = oldAxesBtn.cloneNode(true);
+            oldAxesBtn.parentNode.replaceChild(newAxesBtn, oldAxesBtn);
+            newAxesBtn.addEventListener('click', () => this.toggleAxes());
         }
         
-        // Theme toggle
-        const themeToggleBtn = this.safeGetElement('themeToggleBtn');
-        if (themeToggleBtn) {
-            themeToggleBtn.addEventListener('click', () => this.toggleTheme());
+        const oldThemeBtn = this.safeGetElement('themeToggleBtn');
+        if (oldThemeBtn) {
+            const newThemeBtn = oldThemeBtn.cloneNode(true);
+            oldThemeBtn.parentNode.replaceChild(newThemeBtn, oldThemeBtn);
+            newThemeBtn.addEventListener('click', () => this.toggleTheme());
         }
         
-        // Measurement tools
-        const measureBtn = this.safeGetElement('measureBtn');
-        if (measureBtn) {
-            measureBtn.addEventListener('click', () => this.toggleMeasurementMode());
+        const oldMeasureBtn = this.safeGetElement('measureBtn');
+        if (oldMeasureBtn) {
+            const newMeasureBtn = oldMeasureBtn.cloneNode(true);
+            oldMeasureBtn.parentNode.replaceChild(newMeasureBtn, oldMeasureBtn);
+            newMeasureBtn.addEventListener('click', () => this.toggleMeasurementMode());
         }
         
-        // Cross-section button (toggle mode) - THIS IS THE IMPORTANT ONE
-        const crossSectionBtn = this.safeGetElement('crossSectionBtn');
-        if (crossSectionBtn) {
-            crossSectionBtn.addEventListener('click', () => {
+        const oldCrossSectionBtn = this.safeGetElement('crossSectionBtn');
+        if (oldCrossSectionBtn) {
+            const newCrossSectionBtn = oldCrossSectionBtn.cloneNode(true);
+            oldCrossSectionBtn.parentNode.replaceChild(newCrossSectionBtn, oldCrossSectionBtn);
+            newCrossSectionBtn.addEventListener('click', () => {
                 console.log('Cross-section button clicked!');
                 this.toggleCrossSectionMode();
             });
             console.log('Cross-section button event attached');
-        } else {
-            console.error('Cross-section button not found!');
         }
         
-        const clearMeasurementsBtn = this.safeGetElement('clearMeasurementsBtn');
-        if (clearMeasurementsBtn) {
-            clearMeasurementsBtn.addEventListener('click', () => this.clearMeasurements());
+        const oldClearBtn = this.safeGetElement('clearMeasurementsBtn');
+        if (oldClearBtn) {
+            const newClearBtn = oldClearBtn.cloneNode(true);
+            oldClearBtn.parentNode.replaceChild(newClearBtn, oldClearBtn);
+            newClearBtn.addEventListener('click', () => this.clearMeasurements());
         }
         
         console.log('Viewer tools events setup complete');
@@ -2463,8 +2472,12 @@ class STEPViewer {
         // Supprimer le plan visuel
         if (this.crossSectionPlane) {
             this.scene.remove(this.crossSectionPlane);
-            this.crossSectionPlane.geometry.dispose();
-            this.crossSectionPlane.material.dispose();
+            if (this.crossSectionPlane.geometry) {
+                this.crossSectionPlane.geometry.dispose();
+            }
+            if (this.crossSectionPlane.material) {
+                this.crossSectionPlane.material.dispose();
+            }
             this.crossSectionPlane = null;
         }
         
@@ -2474,7 +2487,9 @@ class STEPViewer {
             this.currentMesh.material.needsUpdate = true;
         }
         
-        this.renderer.localClippingEnabled = false;
+        if (this.renderer) {
+            this.renderer.localClippingEnabled = false;
+        }
         this.clippingPlanes = [];
         
         // Supprimer les gestionnaires d'événements
@@ -2494,6 +2509,13 @@ class STEPViewer {
             • <kbd>Échap</kbd> : Désactiver la coupe
         `;
         this.showInstructions(instructionText);
+    }
+    
+    toggleCrossSectionPlaneVisibility() {
+        if (this.crossSectionPlane) {
+            this.crossSectionPlane.visible = !this.crossSectionPlane.visible;
+            console.log('Cross-section plane visibility:', this.crossSectionPlane.visible);
+        }
     }
     
     showInstructions(text) {
