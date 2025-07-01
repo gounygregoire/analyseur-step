@@ -81,8 +81,7 @@ class STEPViewer {
         });
         this.renderer.setSize(container.clientWidth, container.clientHeight);
         this.renderer.setClearColor(0x2a2a2a, 1); // Consistent with kaki theme
-        this.renderer.shadowMap.enabled = true;
-        this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        this.renderer.shadowMap.enabled = false; // Désactiver les ombres pour améliorer les performances
         
         // Add the renderer to the container
         container.appendChild(this.renderer.domElement);
@@ -115,12 +114,10 @@ class STEPViewer {
         const ambientLight = new THREE.AmbientLight(0x404040, 0.4);
         this.scene.add(ambientLight);
         
-        // Main directional light
+        // Main directional light (sans ombres)
         const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
         directionalLight.position.set(10, 10, 5);
-        directionalLight.castShadow = true;
-        directionalLight.shadow.mapSize.width = 2048;
-        directionalLight.shadow.mapSize.height = 2048;
+        directionalLight.castShadow = false; // Désactiver les ombres
         this.scene.add(directionalLight);
         
         // Fill light

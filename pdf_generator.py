@@ -70,11 +70,36 @@ class DFMReportGenerator:
         views = {}
         
         # Temporarily disable 3D view generation to avoid timeout
-        # Return placeholder views for now
-        print("3D view generation disabled to prevent timeout")
-        for axis in ['x', 'y', 'z']:
-            views[axis] = self._create_placeholder_view(f'Vue selon {axis.upper()}')
+        # Generate views from the STEP file
+        try:
+            import cadquery as cq
             
+            # Load the STEP file
+            workplane = cq.importers.importStep(step_file_path)
+            
+            # Generate views for each axis
+            configs = [
+                {'name': 'Vue selon X', 'rotation': (0, 90, 0)},
+                {'name': 'Vue selon Y', 'rotation': (90, 0, 0)},
+                {'name': 'Vue selon Z', 'rotation': (0, 0, 0)}
+            ]
+            
+            for i, config in enumerate(configs):
+                axis = ['x', 'y', 'z'][i]
+                svg_view = self._generate_enhanced_svg_view(workplane, config)
+                if svg_view:
+                    # Convert SVG to base64 for embedding in PDF
+                    import base64
+                    views[axis] = base64.b64encode(svg_view.encode()).decode()
+                else:
+                    views[axis] = self._create_placeholder_view(config['name'])
+                    
+        except Exception as e:
+            print(f"Error generating 3D views: {e}")
+            # Fallback to placeholder views
+            for axis in ['x', 'y', 'z']:
+                views[axis] = self._create_placeholder_view(f'Vue selon {axis.upper()}')
+        
         return views
     
     def _generate_svg_view(self, workplane, config) -> str:
