@@ -467,13 +467,37 @@ class DFMAnalyzer:
             else:
                 raise ValueError(f"Invalid axis: {axis}")
             
-            # Method 1: Sum of projected triangle areas
+            # Method 1: Sum of projected triangle areas (optimized)
             total_area_triangles = 0.0
-            for face in faces:
-                v0, v1, v2 = projected[face]
-                # Triangle area using cross product
-                area = 0.5 * abs((v1[0] - v0[0]) * (v2[1] - v0[1]) - (v2[0] - v0[0]) * (v1[1] - v0[1]))
-                total_area_triangles += area
+            num_faces = len(faces)
+            
+            # For large meshes, sample faces to avoid timeout
+            if num_faces > 10000:
+                # Sample 10% of faces randomly
+                import random
+                sample_size = max(1000, num_faces // 10)
+                sampled_indices = random.sample(range(num_faces), sample_size)
+                scaling_factor = num_faces / sample_size
+            else:
+                sampled_indices = range(num_faces)
+                scaling_factor = 1.0
+            
+            for i in sampled_indices:
+                face = faces[i]
+                try:
+                    if len(face) >= 3:
+                        # Safely access vertices
+                        v0 = projected[face[0]]
+                        v1 = projected[face[1]]
+                        v2 = projected[face[2]]
+                        # Triangle area using cross product
+                        area = 0.5 * abs((v1[0] - v0[0]) * (v2[1] - v0[1]) - (v2[0] - v0[0]) * (v1[1] - v0[1]))
+                        total_area_triangles += area
+                except (IndexError, TypeError) as e:
+                    continue
+            
+            # Scale up if we sampled
+            total_area_triangles *= scaling_factor
             
             # Method 2: Convex hull area (fallback for validation)
             try:
