@@ -523,11 +523,36 @@ def download_zip(conversion_id):
             if os.path.exists(step_path):
                 zip_file.write(step_path, f"original/{conversion.original_filename}")
             
-            # 2. Ajouter le rapport PDF s'il existe
+            # 2. Générer et ajouter le rapport PDF
             pdf_filename = f"rapport_dfm_{conversion_id}.pdf"
             pdf_path = os.path.join('reports', pdf_filename)
+            
+            # Générer le PDF automatiquement si les données DFM existent
+            dfm_session_key = f'dfm_analysis_{conversion_id}'
+            if dfm_session_key in session:
+                try:
+                    from pdf_generator import generate_dfm_pdf
+                    
+                    dfm_data = session[dfm_session_key]
+                    material_recommendations = session.get('material_recommendations', [])
+                    
+                    # Générer le PDF
+                    pdf_filename = generate_dfm_pdf(
+                        conversion,
+                        dfm_data,
+                        material_recommendations
+                    )
+                    pdf_path = os.path.join('reports', pdf_filename)
+                    logger.info(f"PDF generated for ZIP: {pdf_filename}")
+                except Exception as pdf_error:
+                    logger.error(f"PDF generation failed for ZIP: {pdf_error}")
+            
+            # Ajouter le PDF au ZIP s'il existe maintenant
             if os.path.exists(pdf_path):
                 zip_file.write(pdf_path, f"reports/{pdf_filename}")
+                logger.info(f"PDF added to ZIP: {pdf_filename}")
+            else:
+                logger.warning(f"PDF not found for ZIP: {pdf_path}")
             
             # 3. Créer et ajouter le fichier d'analyse JSON
             analysis_data = {

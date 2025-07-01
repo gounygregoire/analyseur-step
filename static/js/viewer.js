@@ -831,17 +831,17 @@ class STEPViewer {
         const surfaceBtn = document.getElementById('surfaceBtn');
         
         if (surfaceElement && surfaceBtn) {
-            // Convert to mm² (multiply by 100 since 1 cm² = 100 mm²)
-            const areaInMm2 = area * 100;
+            // Convert from mm² to cm² (divide by 100)
+            const areaInCm2 = area / 100;
             
-            // Format area based on size with better thresholds
+            // Format area in cm²
             let displayText;
-            if (areaInMm2 >= 1000000) {
-                displayText = `${(areaInMm2 / 1000000).toFixed(2)} m²`;
-            } else if (areaInMm2 >= 10000) {
-                displayText = `${(areaInMm2 / 100).toFixed(1)} cm²`;
+            if (areaInCm2 >= 10000) {
+                displayText = `${(areaInCm2 / 10000).toFixed(2)} m²`;
+            } else if (areaInCm2 >= 1) {
+                displayText = `${areaInCm2.toFixed(1)} cm²`;
             } else {
-                displayText = `${areaInMm2.toFixed(0)} mm²`;
+                displayText = `${areaInCm2.toFixed(2)} cm²`;
             }
             
             surfaceElement.textContent = displayText;
@@ -855,6 +855,9 @@ class STEPViewer {
     }
     
     displayVolume(volume) {
+        // Convert from mm³ to cm³
+        const volumeInCm3 = volume / 1000;
+        
         // Create or update volume display element
         let volumeDisplay = document.getElementById('volumeDisplay');
         if (!volumeDisplay) {
@@ -864,14 +867,14 @@ class STEPViewer {
             volumeDisplay.innerHTML = `
                 <i class="bi bi-info-circle me-2"></i>
                 <strong>Volume de la pièce :</strong> 
-                <span id="volumeValue">${volume.toFixed(0)} mm³</span>
+                <span id="volumeValue">${volumeInCm3.toFixed(1)} cm³</span>
             `;
             
             // Insert after viewer controls
             const viewerSection = document.querySelector('.card .card-body');
             viewerSection.appendChild(volumeDisplay);
         } else {
-            document.getElementById('volumeValue').textContent = `${volume.toFixed(0)} mm³`;
+            document.getElementById('volumeValue').textContent = `${volumeInCm3.toFixed(1)} cm³`;
         }
     }
     
@@ -1267,7 +1270,7 @@ class STEPViewer {
                                 <h6 class="dfm-metric-title">Volume</h6>
                             </div>
                             <div class="dfm-metric-value">${this.formatVolume(dfmData.dimensions.volume)}</div>
-                            <div class="dfm-metric-unit">mm³</div>
+                            <div class="dfm-metric-unit">cm³</div>
                         </div>
                         
                         <div class="dfm-metric-card">
@@ -1305,7 +1308,7 @@ class STEPViewer {
                         <h6 class="dfm-metric-title">Surface projetée X</h6>
                     </div>
                     <div class="dfm-metric-value">${this.formatArea(dfmData.dimensions.projected_area_x)}</div>
-                    <div class="dfm-metric-unit">mm²</div>
+                    <div class="dfm-metric-unit">cm²</div>
                 </div>
                 
                 <div class="dfm-metric-card">
@@ -1316,7 +1319,7 @@ class STEPViewer {
                         <h6 class="dfm-metric-title">Surface projetée Y</h6>
                     </div>
                     <div class="dfm-metric-value">${this.formatArea(dfmData.dimensions.projected_area_y)}</div>
-                    <div class="dfm-metric-unit">mm²</div>
+                    <div class="dfm-metric-unit">cm²</div>
                 </div>
                 
                 <div class="dfm-metric-card">
@@ -1327,7 +1330,7 @@ class STEPViewer {
                         <h6 class="dfm-metric-title">Surface projetée Z</h6>
                     </div>
                     <div class="dfm-metric-value">${this.formatArea(dfmData.dimensions.projected_area_z)}</div>
-                    <div class="dfm-metric-unit">mm²</div>
+                    <div class="dfm-metric-unit">cm²</div>
                 </div>
             </div>
             
@@ -1546,21 +1549,29 @@ class STEPViewer {
     }
     
     formatVolume(volume) {
-        if (volume >= 1000000) {
-            return (volume / 1000000).toFixed(1) + 'M';
-        } else if (volume >= 1000) {
-            return (volume / 1000).toFixed(1) + 'K';
+        // Convert from mm³ to cm³ (divide by 1000)
+        const volumeInCm3 = volume / 1000;
+        
+        if (volumeInCm3 >= 1000) {
+            return (volumeInCm3 / 1000).toFixed(1) + 'K';
+        } else if (volumeInCm3 >= 1) {
+            return volumeInCm3.toFixed(1);
+        } else {
+            return volumeInCm3.toFixed(2);
         }
-        return Math.round(volume).toString();
     }
     
-    formatArea(area) {
-        if (area >= 1000000) {
-            return (area / 1000000).toFixed(1) + 'M';
-        } else if (area >= 1000) {
-            return (area / 1000).toFixed(1) + 'K';
+    formatAreaShort(area) {
+        // Convert from mm² to cm² (divide by 100)
+        const areaInCm2 = area / 100;
+        
+        if (areaInCm2 >= 10000) {
+            return (areaInCm2 / 10000).toFixed(1) + 'K';
+        } else if (areaInCm2 >= 1) {
+            return areaInCm2.toFixed(1);
+        } else {
+            return areaInCm2.toFixed(2);
         }
-        return Math.round(area).toString();
     }
     
     getSeverityText(severity) {
@@ -2041,13 +2052,16 @@ class STEPViewer {
     }
     
     formatArea(area) {
-        // Formate la surface selon la taille
-        if (area < 100) {
-            return `${area.toFixed(1)} mm²`;
-        } else if (area < 10000) {
-            return `${area.toFixed(0)} mm²`;
+        // Convert from mm² to cm² (divide by 100)
+        const areaInCm2 = area / 100;
+        
+        // Format the area in cm²
+        if (areaInCm2 < 1) {
+            return `${areaInCm2.toFixed(2)} cm²`;
+        } else if (areaInCm2 < 100) {
+            return `${areaInCm2.toFixed(1)} cm²`;
         } else {
-            return `${(area / 100).toFixed(1)} cm²`;
+            return `${areaInCm2.toFixed(0)} cm²`;
         }
     }
     
