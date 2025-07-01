@@ -419,8 +419,12 @@ def analyze_dfm_endpoint(conversion_id):
             ]
         }
         
-        # Store complete DFM data in session for ZIP download
-        session[f'dfm_analysis_{conversion_id}'] = dfm_data
+        # Store only essential DFM data in session (avoid cookie size limit)
+        session[f'dfm_analysis_{conversion_id}'] = {
+            'overall_score': dfm_data['overall_score'],
+            'moldability_rating': dfm_data['moldability_rating'],
+            'generated_at': dfm_data['generated_at']
+        }
         session.permanent = True
         
         return jsonify({
@@ -449,17 +453,55 @@ def generate_pdf_report(conversion_id):
         if not conversion_job.dfm_score:
             return jsonify({'error': 'L\'analyse DFM doit être effectuée avant la génération du rapport'}), 400
         
-        # Get DFM data from session to avoid re-analysis
-        dfm_session_key = f'dfm_analysis_{conversion_id}'
-        if dfm_session_key not in session:
-            return jsonify({'error': 'Données DFM non trouvées dans la session. Veuillez relancer l\'analyse DFM.'}), 400
-        
-        dfm_data = session[dfm_session_key]
-        
-        # Get STEP file path for 3D views generation only
+        # Get STEP file path
         step_path = os.path.join(app.config['UPLOAD_FOLDER'], conversion_job.step_filename)
         if not os.path.exists(step_path):
             return jsonify({'error': 'Fichier STEP non trouvé'}), 404
+        
+        # Re-analyze DFM to get full data for PDF generation
+        from dfm_analyzer import analyze_dfm
+        
+        # Get demolding axis from request or use default
+        demolding_axis = request.json.get('demolding_axis', 'z')
+        material_type = request.json.get('material_type', 'GENERIC')
+        
+        # Perform DFM analysis
+        dfm_report = analyze_dfm(step_path, demolding_axis, material_type)
+        
+        # Convert DFM report to dict format
+        dfm_data = {
+            'overall_score': dfm_report.overall_score,
+            'moldability_rating': dfm_report.moldability_rating,
+            'dimensions': {
+                'x': dfm_report.dimensions.x_max,
+                'y': dfm_report.dimensions.y_max,
+                'z': dfm_report.dimensions.z_max,
+                'volume': dfm_report.dimensions.volume,
+                'max_wall_thickness': dfm_report.dimensions.max_wall_thickness,
+                'projected_area_x': dfm_report.dimensions.projected_area_x,
+                'projected_area_y': dfm_report.dimensions.projected_area_y,
+                'projected_area_z': dfm_report.dimensions.projected_area_z,
+                'cooling_time': dfm_report.dimensions.cooling_time
+            },
+            'wall_thickness_issues': [
+                {
+                    'location': list(issue.location),
+                    'thickness': issue.thickness,
+                    'type': issue.issue_type,
+                    'severity': issue.severity
+                } for issue in dfm_report.wall_thickness_issues
+            ],
+            'geometry_issues': [
+                {
+                    'location': list(issue.location),
+                    'type': issue.issue_type,
+                    'description': issue.description,
+                    'severity': issue.severity,
+                    'recommendation': issue.recommendation
+                } for issue in dfm_report.geometry_issues
+            ],
+            'recommendations': dfm_report.recommendations
+        }
         
         # Generate PDF
         pdf_filename = f"rapport_dfm_{conversion_id}.pdf"
@@ -471,12 +513,9 @@ def generate_pdf_report(conversion_id):
         # Get material recommendations from session if available
         material_recommendations = session.get('material_recommendations', [])
         
-        # Use STEP file path for 3D views generation
-        step_file_path = os.path.join(app.config['UPLOAD_FOLDER'], conversion_job.step_filename)
-        
         generated_path = generate_dfm_pdf_report(
             dfm_data, 
-            step_file_path, 
+            step_path, 
             pdf_path, 
             conversion_job.original_filename,
             material_recommendations
