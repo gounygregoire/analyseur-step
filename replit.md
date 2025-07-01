@@ -94,6 +94,12 @@ CADlytics est une application SaaS basée sur Flask qui permet aux utilisateurs 
 
 ## Changelog
 
+- 1er juillet 2025 : Correction fonction de coupe 3D dans le viewer
+  - Résolution problème bouton de coupe non-fonctionnel
+  - Ajout de setupViewerToolsEvents() pour connecter événements après affichage du panel
+  - Bouton de coupe maintenant avec fonction toggle (activer/désactiver)
+  - Interface améliorée avec indication claire de l'état actif/inactif
+  - Logs de débogage pour vérifier la connexion des événements
 - 30 juin 2025 : Correction système de crédits et authentification Google
   - Résolution erreur Google OAuth : colonnes manquantes ajoutées à la base de données
   - Système de crédits corrigé : décompte automatique après analyse DFM

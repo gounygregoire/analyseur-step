@@ -226,6 +226,58 @@ class STEPViewer {
         }
     }
     
+    setupViewerToolsEvents() {
+        // This function ensures viewer tool events are attached after the panel becomes visible
+        console.log('Setting up viewer tools events...');
+        
+        // Viewer controls
+        const resetViewBtn = this.safeGetElement('resetViewBtn');
+        if (resetViewBtn) {
+            resetViewBtn.addEventListener('click', () => this.resetView());
+        }
+        
+        const toggleWireframeBtn = this.safeGetElement('toggleWireframeBtn');
+        if (toggleWireframeBtn) {
+            toggleWireframeBtn.addEventListener('click', () => this.toggleWireframe());
+        }
+        
+        const toggleAxesBtn = this.safeGetElement('toggleAxesBtn');
+        if (toggleAxesBtn) {
+            toggleAxesBtn.addEventListener('click', () => this.toggleAxes());
+        }
+        
+        // Theme toggle
+        const themeToggleBtn = this.safeGetElement('themeToggleBtn');
+        if (themeToggleBtn) {
+            themeToggleBtn.addEventListener('click', () => this.toggleTheme());
+        }
+        
+        // Measurement tools
+        const measureBtn = this.safeGetElement('measureBtn');
+        if (measureBtn) {
+            measureBtn.addEventListener('click', () => this.toggleMeasurementMode());
+        }
+        
+        // Cross-section button (toggle mode) - THIS IS THE IMPORTANT ONE
+        const crossSectionBtn = this.safeGetElement('crossSectionBtn');
+        if (crossSectionBtn) {
+            crossSectionBtn.addEventListener('click', () => {
+                console.log('Cross-section button clicked!');
+                this.toggleCrossSectionMode();
+            });
+            console.log('Cross-section button event attached');
+        } else {
+            console.error('Cross-section button not found!');
+        }
+        
+        const clearMeasurementsBtn = this.safeGetElement('clearMeasurementsBtn');
+        if (clearMeasurementsBtn) {
+            clearMeasurementsBtn.addEventListener('click', () => this.clearMeasurements());
+        }
+        
+        console.log('Viewer tools events setup complete');
+    }
+    
     initializeTooltips() {
         // Initialize Bootstrap tooltips
         const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
@@ -399,6 +451,9 @@ class STEPViewer {
 
         // Show viewer tools panel (which now includes DFM controls)
         this.safeSetDisplay('viewerToolsPanel', 'block');
+        
+        // Re-attach event listeners for viewer tools since they were just made visible
+        this.setupViewerToolsEvents();
         
         // Load and display the STL model directly
         this.loadSTLModel(`/view/${result.stl_filename}`);
