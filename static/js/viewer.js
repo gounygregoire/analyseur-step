@@ -1182,80 +1182,10 @@ class STEPViewer {
         // Stocker les données DFM pour référence
         this.currentDfmData = dfmData;
         
-        // Créer des marqueurs visuels pour les défauts
-        const defectMarkers = new THREE.Group();
-        defectMarkers.name = 'defectMarkers';
+        // Ne pas créer de marqueurs visuels - désactivé à la demande de l'utilisateur
+        // Les défauts sont maintenant uniquement visibles dans l'interface texte
         
-        // Supprimer les anciens marqueurs s'ils existent
-        const oldMarkers = this.scene.getObjectByName('defectMarkers');
-        if (oldMarkers) {
-            this.scene.remove(oldMarkers);
-        }
-        
-        // Calculer le centre du modèle pour aligner les défauts
-        // Le modèle a été centré lors du chargement, donc nous devons appliquer la même transformation
-        const modelBox = new THREE.Box3().setFromObject(this.currentMesh);
-        const modelCenter = new THREE.Vector3();
-        
-        // Obtenir le centre original du modèle depuis les dimensions DFM
-        // Les coordonnées DFM sont dans l'espace du modèle original (non centré)
-        const dfmDimensions = dfmData.dimensions || {};
-        const dfmCenterX = (dfmDimensions.x || 0) / 2;
-        const dfmCenterY = (dfmDimensions.y || 0) / 2;
-        const dfmCenterZ = (dfmDimensions.z || 0) / 2;
-        
-        // Ajouter des sphères rouges pour les zones à problème
-        const wallIssues = dfmData.wall_thickness_issues || [];
-        wallIssues.forEach(issue => {
-            if (issue.severity === 'critical' || issue.severity === 'warning') {
-                const geometry = new THREE.SphereGeometry(1, 16, 16);
-                const material = new THREE.MeshBasicMaterial({
-                    color: issue.severity === 'critical' ? 0xff0000 : 0xffa500,
-                    transparent: true,
-                    opacity: 0.6
-                });
-                const sphere = new THREE.Mesh(geometry, material);
-                
-                // Appliquer la même transformation que le modèle 3D
-                // Les coordonnées DFM sont dans l'espace original, nous devons les centrer
-                sphere.position.set(
-                    issue.location[0] - dfmCenterX,
-                    issue.location[1] - dfmCenterY,
-                    issue.location[2] - dfmCenterZ
-                );
-                
-                defectMarkers.add(sphere);
-            }
-        });
-        
-        // Ajouter des marqueurs pour les problèmes géométriques
-        const geomIssues = dfmData.geometry_issues || [];
-        geomIssues.forEach(issue => {
-            if (issue.severity === 'critical' || issue.severity === 'warning') {
-                const geometry = new THREE.ConeGeometry(0.8, 2, 8);
-                const material = new THREE.MeshBasicMaterial({
-                    color: issue.issue_type === 'sharp_edge' ? 0xff6600 : 0xff0066,
-                    transparent: true,
-                    opacity: 0.6
-                });
-                const cone = new THREE.Mesh(geometry, material);
-                
-                // Appliquer la même transformation que le modèle 3D
-                cone.position.set(
-                    issue.location[0] - dfmCenterX,
-                    issue.location[1] - dfmCenterY,
-                    issue.location[2] - dfmCenterZ
-                );
-                
-                defectMarkers.add(cone);
-            }
-        });
-        
-        // Ajouter les marqueurs à la scène
-        this.scene.add(defectMarkers);
-        
-        // Ajouter un bouton pour afficher/masquer les défauts
-        this.addDefectToggleButton();
+        // Note: Le bouton défauts ne sera pas ajouté non plus
     }
     
     addDefectToggleButton() {

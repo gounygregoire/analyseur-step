@@ -23,7 +23,7 @@ def create_realistic_view_from_stl(stl_path: str, axis: str = 'z') -> str:
     Returns base64 encoded PNG
     """
     if not trimesh or not Image:
-        return None
+        return ""
         
     try:
         # Load the STL file with process=False to avoid expensive operations
@@ -187,7 +187,7 @@ def create_realistic_view_from_stl(stl_path: str, axis: str = 'z') -> str:
         print(f"Error creating realistic view: {e}")
         import traceback
         traceback.print_exc()
-        return None
+        return ""
 
 
 def create_all_views_from_stl(stl_path: str) -> Dict[str, str]:

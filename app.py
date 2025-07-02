@@ -147,9 +147,17 @@ def upload_file():
         file_size_mb = step_size / (1024 * 1024)
         if file_size_mb > 10:
             # For large files, adjust tolerance to avoid creating too many triangles
-            min_tolerance = 0.5 if file_size_mb > 20 else 0.3
+            if file_size_mb > 25:
+                min_tolerance = 1.0  # Très haute tolérance pour fichiers > 25MB
+            elif file_size_mb > 20:
+                min_tolerance = 0.8  # Haute tolérance pour fichiers > 20MB  
+            elif file_size_mb > 10:
+                min_tolerance = 0.5  # Tolérance moyenne pour fichiers > 10MB
+            else:
+                min_tolerance = 0.3  # Tolérance normale pour petits fichiers
+            
             tolerance = max(tolerance, min_tolerance)
-            logger.info(f"Large file ({file_size_mb:.1f}MB), adjusted tolerance to {tolerance} for performance")
+            logger.info(f"File size: {file_size_mb:.1f}MB, adjusted tolerance to {tolerance} for performance")
         
         # Create database record
         conversion_job = ConversionJob(
@@ -261,10 +269,16 @@ def view_file(filename):
         
         # For large files (>10MB), use chunked streaming
         if file_size > 10 * 1024 * 1024:
+            # Check if file is too large (>100MB)
+            if file_size > 100 * 1024 * 1024:
+                logger.warning(f"File {filename} is very large ({file_size / (1024*1024):.1f}MB)")
+            
             def generate():
                 with open(file_path, 'rb') as f:
                     while True:
-                        data = f.read(4096)  # Read in 4KB chunks
+                        # Use larger chunks for very large files
+                        chunk_size = 65536 if file_size > 50 * 1024 * 1024 else 16384
+                        data = f.read(chunk_size)
                         if not data:
                             break
                         yield data
@@ -272,6 +286,8 @@ def view_file(filename):
             response = Response(generate(), mimetype='application/octet-stream')
             response.headers['Content-Length'] = str(file_size)
             response.headers['Content-Disposition'] = f'inline; filename={filename}'
+            # Add cache headers to improve performance
+            response.headers['Cache-Control'] = 'public, max-age=3600'
             return response
         else:
             # For smaller files, use normal send_from_directory
