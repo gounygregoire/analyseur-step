@@ -32,6 +32,10 @@ class ConversionJob(db.Model):
     dfm_issues_count = db.Column(db.Integer, nullable=True)  # Number of issues found
     dfm_overall_rating = db.Column(db.String(20), nullable=True)  # excellent, good, warning, critical
     
+    # Viewer fields
+    viewer_ready = db.Column(db.Boolean, nullable=False, default=True)  # Whether 3D viewer can display the model
+    viewer_error = db.Column(db.Text, nullable=True)  # Error message if viewer failed
+    
     # Relationship
     user = db.relationship('User', backref='conversions')
     
@@ -53,7 +57,9 @@ class ConversionJob(db.Model):
             'completed_at': self.completed_at.isoformat() if self.completed_at else None,
             'dfm_score': self.dfm_score,
             'dfm_issues_count': self.dfm_issues_count,
-            'dfm_overall_rating': self.dfm_overall_rating
+            'dfm_overall_rating': self.dfm_overall_rating,
+            'viewer_ready': self.viewer_ready,
+            'viewer_error': self.viewer_error
         }
 
 class UserSession(db.Model):

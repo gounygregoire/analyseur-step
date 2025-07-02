@@ -475,26 +475,68 @@ class STEPViewer {
         // Store current conversion ID for DFM analysis
         this.currentConversionId = result.file_id;
 
-        // Show viewer tools panel (which now includes DFM controls)
-        this.safeSetDisplay('viewerToolsPanel', 'block');
-        
-        // Re-attach event listeners for viewer tools since they were just made visible
-        this.setupViewerToolsEvents();
-        
-        // Load and display the STL model directly
-        this.loadSTLModel(`/view/${result.stl_filename}`);
-        
-        // Show model info
-        this.safeSetDisplay('modelInfo', 'block');
-        
-        this.safeSetDisplay('volumeDisplay', 'block');
+        // Check if viewer is ready
+        if (result.viewer_ready === false) {
+            // Hide 3D viewer and show alert message
+            this.safeSetDisplay('viewer3d', 'none');
+            
+            // Create alert message
+            const alertHtml = `
+                <div class="alert alert-warning alert-dismissible fade show" role="alert">
+                    <h5 class="alert-heading"><i class="bi bi-exclamation-triangle-fill me-2"></i>Visualisation 3D non disponible</h5>
+                    <p>⚠️ La visualisation 3D a échoué, mais l'analyse DFM a bien été effectuée.</p>
+                    ${result.viewer_error ? `<p class="mb-0"><small>Raison : ${result.viewer_error}</small></p>` : ''}
+                    <hr>
+                    <p class="mb-0">Vous pouvez toujours :</p>
+                    <ul class="mb-0">
+                        <li>Effectuer l'analyse DFM</li>
+                        <li>Télécharger le rapport PDF après l'analyse</li>
+                    </ul>
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+            `;
+            
+            // Insert alert before the viewer tools panel
+            const viewerSection = document.querySelector('.viewer-section');
+            if (viewerSection) {
+                viewerSection.insertAdjacentHTML('afterbegin', alertHtml);
+            }
+            
+            // Still show DFM controls and model info
+            this.safeSetDisplay('viewerToolsPanel', 'block');
+            this.safeSetDisplay('modelInfo', 'block');
+            this.safeSetDisplay('volumeDisplay', 'none'); // Hide volume since we can't calculate it
+            
+            // Hide 3D viewer specific tools
+            const viewerTools = ['toggleWireframeBtn', 'toggleAxesBtn', 'toggleThemeBtn', 'resetViewBtn', 
+                                'toggleMeasurementBtn', 'toggleCrossSectionBtn'];
+            viewerTools.forEach(toolId => {
+                const tool = this.safeGetElement(toolId);
+                if (tool) tool.style.display = 'none';
+            });
+            
+        } else {
+            // Normal flow: show viewer and load model
+            this.safeSetDisplay('viewer3d', 'block');
+            this.safeSetDisplay('viewerToolsPanel', 'block');
+            
+            // Re-attach event listeners for viewer tools since they were just made visible
+            this.setupViewerToolsEvents();
+            
+            // Load and display the STL model directly
+            this.loadSTLModel(`/view/${result.stl_filename}`);
+            
+            // Show model info
+            this.safeSetDisplay('modelInfo', 'block');
+            this.safeSetDisplay('volumeDisplay', 'block');
+        }
         
         // Refresh history to show the new conversion
         this.loadConversionHistory();
         
         // Scroll to viewer
         const viewer3d = this.safeGetElement('viewer3d');
-        if (viewer3d) {
+        if (viewer3d && result.viewer_ready !== false) {
             viewer3d.scrollIntoView({ behavior: 'smooth' });
         }
     }

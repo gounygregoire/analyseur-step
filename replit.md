@@ -94,6 +94,15 @@ CADlytics est une application SaaS basée sur Flask qui permet aux utilisateurs 
 
 ## Changelog
 
+- 2 juillet 2025 : Support du mode dégradé pour la visualisation 3D
+  - Ajout des champs viewer_ready et viewer_error dans ConversionJob model
+  - Détection automatique des fichiers STL incompatibles avec le viewer 3D (trimesh validation)
+  - Simplification automatique du mesh pour fichiers avec >50k faces (réduit à 50k triangles)
+  - Message d'alerte spécifique "⚠️ La visualisation 3D a échoué, mais l'analyse DFM a bien été effectuée"
+  - L'analyse DFM continue de fonctionner même si la visualisation 3D échoue
+  - Masquage des outils 3D (wireframe, axes, etc.) quand le viewer n'est pas disponible
+  - Interface adaptative qui cache le viewer 3D mais garde les fonctionnalités DFM actives
+  - Gestion robuste des erreurs de conversion avec messages utilisateur détaillés
 - 2 juillet 2025 : Système de tracking complet et dashboard admin
   - Implémentation de logging JSONL pour toutes les actions (upload, analyze, download, login)
   - Création du module log.py avec fonctions thread-safe log_action() et get_stats()

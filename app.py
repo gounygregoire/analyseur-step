@@ -359,12 +359,56 @@ def upload_file():
             # Get STL file size and update database (without DFM analysis for now)
             stl_size = os.path.getsize(stl_path)
             
+            # Check if STL can be loaded for 3D viewer
+            viewer_ready = True
+            viewer_error = None
+            try:
+                import trimesh
+                logger.info(f"Checking if STL can be loaded for viewer: {stl_path}")
+                
+                # Try to load the mesh with trimesh
+                mesh = trimesh.load(stl_path)
+                
+                # Check if mesh is valid and not too complex
+                if mesh is None:
+                    viewer_ready = False
+                    viewer_error = "Le modèle 3D ne peut pas être chargé"
+                elif hasattr(mesh, 'vertices') and hasattr(mesh, 'faces'):
+                    vertex_count = len(mesh.vertices)
+                    face_count = len(mesh.faces)
+                    logger.info(f"Mesh loaded: {vertex_count} vertices, {face_count} faces")
+                    
+                    # If mesh is too complex, try to simplify it
+                    if face_count > 100000:
+                        logger.warning(f"Mesh is very complex ({face_count} faces)")
+                        try:
+                            # Try to simplify the mesh
+                            simplified = mesh.simplify_quadric_decimation(50000)
+                            if simplified:
+                                simplified.export(stl_path)
+                                logger.info(f"Mesh simplified from {face_count} to {len(simplified.faces)} faces")
+                                mesh = simplified
+                        except Exception as simplify_error:
+                            logger.warning(f"Could not simplify mesh: {simplify_error}")
+                            viewer_ready = False
+                            viewer_error = f"Le modèle 3D est trop complexe ({face_count} faces)"
+                else:
+                    viewer_ready = False
+                    viewer_error = "Le modèle 3D n'est pas valide"
+                    
+            except Exception as viewer_check_error:
+                logger.warning(f"Viewer check failed: {viewer_check_error}")
+                viewer_ready = False
+                viewer_error = f"Impossible de vérifier le modèle 3D: {str(viewer_check_error)}"
+            
             # Update database with error handling
             if conversion_job and hasattr(conversion_job, '__dict__'):
                 try:
                     conversion_job.stl_file_size = stl_size
                     conversion_job.status = 'completed'
                     conversion_job.completed_at = datetime.utcnow()
+                    conversion_job.viewer_ready = viewer_ready
+                    conversion_job.viewer_error = viewer_error
                     if hasattr(conversion_job, 'id') and hasattr(db.session, 'commit'):
                         db.session.commit()
                 except Exception as db_update_error:
@@ -390,6 +434,8 @@ def upload_file():
                 'tolerance': tolerance,
                 'step_size': step_size,
                 'stl_size': stl_size,
+                'viewer_ready': viewer_ready,
+                'viewer_error': viewer_error,
                 'message': f'Fichier converti avec succès. Tolérance: {tolerance}'
             })
             
