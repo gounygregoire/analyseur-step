@@ -94,12 +94,11 @@ CADlytics est une application SaaS basée sur Flask qui permet aux utilisateurs 
 
 ## Changelog
 
-- 2 juillet 2025 : Optimisation conversion STL avec angularTolerance
-  - Ajout du paramètre angularTolerance=0.5 dans l'export CadQuery
-  - Réduction significative de la taille des fichiers STL (ex: Hexaflex de 2.3MB à 1MB)
-  - Amélioration des performances de conversion pour fichiers complexes
+- 2 juillet 2025 : Retour à la conversion STL standard
+  - Suppression de la tolérance minimale forcée pour permettre à tous les fichiers de se charger
+  - Retour à la méthode de conversion simple qui fonctionnait ce matin
   - Suppression des imports OCC non disponibles sur Replit
-  - Le fichier Hexaflex et autres fichiers complexes se convertissent maintenant correctement
+  - Priorité donnée à la compatibilité maximale plutôt qu'à l'optimisation de taille
 - 2 juillet 2025 : Support du mode dégradé pour la visualisation 3D
   - Ajout des champs viewer_ready et viewer_error dans ConversionJob model
   - Détection automatique des fichiers STL incompatibles avec le viewer 3D (trimesh validation)

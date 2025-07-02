@@ -317,13 +317,10 @@ def upload_file():
                     
                     logger.info(f"Shape type: {type(shape_to_export)}")
                     
-                    # Use higher tolerance for complex files to ensure export success
-                    export_tolerance = max(tolerance, 0.5) if file_size_mb > 10 else tolerance
-                    logger.info(f"Using export tolerance: {export_tolerance}")
+                    # Use the tolerance as specified without minimum
+                    logger.info(f"Using export tolerance: {tolerance}")
                     
-                    cq.exporters.export(shape_to_export, stl_path, "STL", 
-                                      tolerance=export_tolerance,
-                                      angularTolerance=0.5)
+                    cq.exporters.export(shape_to_export, stl_path, "STL", tolerance=tolerance)
                     export_success = True
                     logger.info("Strategy 1: CadQuery exporters successful")
                     
