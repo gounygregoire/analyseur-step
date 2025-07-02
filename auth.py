@@ -37,7 +37,7 @@ def login():
         if user and user.password_hash and check_password_hash(user.password_hash, password):
             login_user(user, remember=True)
             next_page = request.args.get('next')
-            return redirect(next_page) if next_page else redirect(url_for('index'))
+            return redirect(next_page) if next_page else redirect(url_for('upload_page'))
         else:
             flash('Email ou mot de passe incorrect', 'danger')
     
@@ -86,7 +86,7 @@ def register():
         # Connecter automatiquement
         login_user(user, remember=True)
         flash('Compte créé avec succès ! Vous avez 5 analyses gratuites.', 'success')
-        return redirect(url_for('index'))
+        return redirect(url_for('upload_page'))
     
     return render_template('auth/register.html')
 

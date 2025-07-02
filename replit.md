@@ -94,6 +94,14 @@ CADlytics est une application SaaS basée sur Flask qui permet aux utilisateurs 
 
 ## Changelog
 
+- 2 juillet 2025 : Séparation de l'application en deux pages distinctes
+  - Création de /upload : page dédiée au téléchargement de fichiers STEP
+  - Création de /result/<conversion_id> : page pour afficher les résultats, viewer 3D et analyse DFM
+  - Nouveaux templates : upload.html et result.html
+  - Navigation améliorée avec bouton "Retour à l'upload" sur la page résultats
+  - Redirection automatique après téléchargement vers la page de résultats
+  - Mise à jour de tous les liens dans landing.html pour pointer vers /upload
+  - La route /app redirige maintenant vers /upload pour la compatibilité arrière
 - 1er juillet 2025 : Historique personnel et correction génération PDF
   - Ajout colonne user_id dans ConversionJob pour lier l'historique au compte utilisateur
   - Filtrage des conversions par utilisateur connecté dans l'API /api/conversions
