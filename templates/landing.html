@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CADlytics - Analyse DFM et Visualisation 3D</title>
+    <title>Analyse DFM Injection Plastique – Validez vos pièces STEP/STL en ligne | CADlytics</title>
+    <meta name="description" content="Vérifiez instantanément si vos pièces 3D sont prêtes pour l'injection plastique. Analyse DFM automatique, rapport PDF professionnel et recommandation de matières. Premier test gratuit."
     <link href="https://cdn.replit.com/agent/bootstrap-agent-dark-theme.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     <style>
@@ -181,6 +182,163 @@
             font-size: 0.95rem;
         }
 
+        /* Pricing Section */
+        .pricing-section {
+            padding: 80px 0;
+            background: rgba(45, 45, 48, 0.5);
+        }
+
+        .pricing-card {
+            background: rgba(26, 26, 26, 0.9);
+            border: 1px solid var(--brown-dark);
+            border-radius: 15px;
+            padding: 0;
+            overflow: hidden;
+            transition: all 0.3s ease;
+            height: 100%;
+            position: relative;
+        }
+
+        .pricing-card:hover {
+            transform: translateY(-5px);
+            border-color: var(--kaki-light);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        .pricing-featured {
+            border-color: var(--accent-gold);
+        }
+
+        .pricing-badge {
+            position: absolute;
+            top: 20px;
+            right: -30px;
+            background: var(--accent-gold);
+            color: #1a1a1a;
+            padding: 5px 40px;
+            transform: rotate(45deg);
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .pricing-header {
+            background: rgba(45, 45, 48, 0.8);
+            padding: 2rem;
+            text-align: center;
+            border-bottom: 1px solid var(--brown-dark);
+        }
+
+        .pricing-title {
+            color: var(--kaki-light);
+            font-size: 1.3rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+
+        .pricing-price {
+            margin-bottom: 0.5rem;
+        }
+
+        .price-number {
+            font-size: 2.5rem;
+            font-weight: 800;
+            color: var(--accent-gold);
+        }
+
+        .price-period {
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 1rem;
+        }
+
+        .pricing-desc {
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 0.9rem;
+        }
+
+        .pricing-features {
+            list-style: none;
+            padding: 2rem;
+            margin: 0;
+        }
+
+        .pricing-features li {
+            padding: 0.8rem 0;
+            color: rgba(255, 255, 255, 0.8);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .pricing-features li i {
+            color: var(--accent-gold);
+            font-size: 1.1rem;
+        }
+
+        .pricing-features li.disabled {
+            color: rgba(255, 255, 255, 0.4);
+        }
+
+        .pricing-features li.disabled i {
+            color: rgba(255, 255, 255, 0.4);
+        }
+
+        .pricing-cta {
+            display: block;
+            width: calc(100% - 4rem);
+            margin: 0 2rem 2rem;
+            padding: 1rem;
+            background: var(--brown-dark);
+            color: white;
+            text-align: center;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .pricing-cta:hover {
+            background: var(--brown-light);
+            color: white;
+            transform: translateY(-2px);
+        }
+
+        .pricing-cta-primary {
+            background: linear-gradient(135deg, var(--kaki-light) 0%, var(--kaki-dark) 100%);
+        }
+
+        .pricing-cta-primary:hover {
+            background: linear-gradient(135deg, var(--kaki-dark) 0%, var(--kaki-light) 100%);
+        }
+
+        .cta-secondary {
+            background: transparent;
+            border: 2px solid var(--kaki-light);
+            color: var(--kaki-light);
+        }
+
+        .cta-secondary:hover {
+            background: var(--kaki-light);
+            color: #1a1a1a;
+        }
+
+        .hero-cta-group {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .feature-badge {
+            margin-top: 1rem;
+            padding: 0.5rem 1rem;
+            background: rgba(212, 175, 55, 0.2);
+            border: 1px solid var(--accent-gold);
+            border-radius: 20px;
+            font-size: 0.85rem;
+            color: var(--accent-gold);
+            display: inline-block;
+        }
+
         /* Stats Section */
         .stats-section {
             padding: 60px 0;
@@ -277,7 +435,7 @@
                         <a class="nav-link" href="#features">Fonctionnalités</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="#benefits">Avantages</a>
+                        <a class="nav-link" href="#pricing">Offres</a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('pricing') }}">Tarifs</a>
@@ -307,104 +465,150 @@
     <!-- Hero Section -->
     <section class="hero-section">
         <div class="container">
-            <h1 class="hero-title fade-in">CADlytics</h1>
+            <h1 class="hero-title fade-in">Votre pièce est-elle prête pour l'injection ?<br>Obtenez la réponse en 1 clic.</h1>
             <p class="hero-subtitle fade-in fade-in-delay-1">
-                Analyse DFM intelligente et visualisation 3D professionnelle<br>
-                pour l'injection plastique
+                Analyse DFM automatique • Rapport PDF professionnel • Recommandation matières<br>
+                <span style="color: var(--accent-gold);">✓ Premier test gratuit</span>
             </p>
-            <a href="/app" class="cta-button fade-in fade-in-delay-2">
-                <i class="bi bi-play-fill me-2"></i>Analyser un fichier STEP
-            </a>
+            <div class="hero-cta-group fade-in fade-in-delay-2">
+                <a href="/app" class="cta-button cta-primary">
+                    <i class="bi bi-box-seam me-2"></i>Analyser ma pièce
+                </a>
+                <a href="{{ url_for('auth.register') }}" class="cta-button cta-secondary ms-3">
+                    <i class="bi bi-person-plus me-2"></i>Créer un compte
+                </a>
+            </div>
         </div>
     </section>
 
-    <!-- Features Section -->
+    <!-- Blocs de Valeur Section -->
     <section class="features-section" id="features">
         <div class="container">
-            <h2 class="text-center mb-5" style="color: var(--kaki-light);">Fonctionnalités Puissantes</h2>
+            <h2 class="text-center mb-5" style="color: var(--kaki-light);">3 outils essentiels pour valider vos pièces</h2>
             <div class="row g-4">
                 <div class="col-md-4">
                     <div class="feature-card fade-in">
                         <div class="feature-icon">
-                            <i class="bi bi-box-seam"></i>
+                            <i class="bi bi-lightning-charge-fill"></i>
                         </div>
-                        <h3 class="feature-title">Visualisation 3D</h3>
+                        <h3 class="feature-title">Analyse DFM automatique</h3>
                         <p class="feature-description">
-                            Explorez vos modèles STEP en 3D avec des outils de mesure précis et des coupes transversales interactives
+                            <strong>10+ points de contrôle</strong> critiques vérifiés en temps réel : épaisseur de paroi, dépouille, congés, rapport de forme... Score /10 instantané.
                         </p>
+                        <div class="feature-badge">⚡ Résultats en 30 secondes</div>
                     </div>
                 </div>
                 <div class="col-md-4">
                     <div class="feature-card fade-in fade-in-delay-1">
                         <div class="feature-icon">
-                            <i class="bi bi-cpu"></i>
+                            <i class="bi bi-file-earmark-pdf-fill"></i>
                         </div>
-                        <h3 class="feature-title">Analyse DFM Avancée</h3>
+                        <h3 class="feature-title">Rapport PDF professionnel</h3>
                         <p class="feature-description">
-                            Détection automatique des problèmes de manufacturabilité avec recommandations personnalisées
+                            Document technique complet avec <strong>vues 3D haute résolution</strong>, cartographie des défauts et recommandations détaillées. Prêt à partager.
                         </p>
+                        <div class="feature-badge">📊 Export en 1 clic</div>
                     </div>
                 </div>
                 <div class="col-md-4">
                     <div class="feature-card fade-in fade-in-delay-2">
                         <div class="feature-icon">
-                            <i class="bi bi-file-earmark-pdf"></i>
+                            <i class="bi bi-gem"></i>
                         </div>
-                        <h3 class="feature-title">Rapports PDF Détaillés</h3>
+                        <h3 class="feature-title">Suggestion matières intelligente</h3>
                         <p class="feature-description">
-                            Générez des rapports professionnels avec vues 3D, analyse complète et recommandations
+                            Questionnaire guidé + analyse DFM = <strong>3 matières optimales</strong> recommandées (PP, ABS, PC...) avec fiches techniques complètes.
                         </p>
+                        <div class="feature-badge">🎯 Choix optimal garanti</div>
                     </div>
                 </div>
             </div>
         </div>
     </section>
 
-    <!-- Benefits Section -->
-    <section class="benefits-section" id="benefits">
+    <!-- Section Tarifs -->
+    <section class="pricing-section" id="pricing">
         <div class="container">
-            <div class="row align-items-center">
-                <div class="col-lg-6">
-                    <h2 style="color: var(--kaki-light); margin-bottom: 2rem;">
-                        Optimisez votre processus de conception
-                    </h2>
-                    <div class="benefit-item fade-in">
-                        <div class="benefit-icon">
-                            <i class="bi bi-check-circle-fill"></i>
+            <h2 class="text-center mb-5" style="color: var(--kaki-light);">Choisissez votre offre</h2>
+            <div class="row g-4">
+                <div class="col-lg-3 col-md-6">
+                    <div class="pricing-card fade-in">
+                        <div class="pricing-header">
+                            <h3 class="pricing-title">Test gratuit</h3>
+                            <div class="pricing-price">
+                                <span class="price-number">0€</span>
+                            </div>
+                            <p class="pricing-desc">1 analyse offerte</p>
                         </div>
-                        <div class="benefit-text">
-                            <h4 class="benefit-title">Réduction des coûts</h4>
-                            <p class="benefit-description">
-                                Identifiez les problèmes de conception avant la production pour éviter les modifications coûteuses
-                            </p>
-                        </div>
-                    </div>
-                    <div class="benefit-item fade-in fade-in-delay-1">
-                        <div class="benefit-icon">
-                            <i class="bi bi-check-circle-fill"></i>
-                        </div>
-                        <div class="benefit-text">
-                            <h4 class="benefit-title">Gain de temps</h4>
-                            <p class="benefit-description">
-                                Analyse automatique en quelques secondes au lieu d'heures de vérification manuelle
-                            </p>
-                        </div>
-                    </div>
-                    <div class="benefit-item fade-in fade-in-delay-2">
-                        <div class="benefit-icon">
-                            <i class="bi bi-check-circle-fill"></i>
-                        </div>
-                        <div class="benefit-text">
-                            <h4 class="benefit-title">Qualité améliorée</h4>
-                            <p class="benefit-description">
-                                Conseils d'experts intégrés pour optimiser la manufacturabilité de vos pièces
-                            </p>
-                        </div>
+                        <ul class="pricing-features">
+                            <li><i class="bi bi-check-circle-fill"></i> 1 analyse DFM complète</li>
+                            <li><i class="bi bi-check-circle-fill"></i> Rapport PDF basique</li>
+                            <li><i class="bi bi-check-circle-fill"></i> Sans création de compte</li>
+                            <li class="disabled"><i class="bi bi-x-circle"></i> Recommandation matières</li>
+                            <li class="disabled"><i class="bi bi-x-circle"></i> Historique</li>
+                        </ul>
+                        <a href="/app" class="pricing-cta">Tester maintenant</a>
                     </div>
                 </div>
-                <div class="col-lg-6 text-center">
-                    <div style="background: radial-gradient(circle, var(--kaki-dark) 0%, transparent 70%); padding: 3rem; border-radius: 50%;">
-                        <i class="bi bi-gear-wide-connected" style="font-size: 10rem; color: var(--brown-light); opacity: 0.8;"></i>
+                <div class="col-lg-3 col-md-6">
+                    <div class="pricing-card fade-in fade-in-delay-1">
+                        <div class="pricing-header">
+                            <h3 class="pricing-title">Pack 5 crédits</h3>
+                            <div class="pricing-price">
+                                <span class="price-number">5€</span>
+                                <span class="price-period">pack unique</span>
+                            </div>
+                            <p class="pricing-desc">1€ par analyse</p>
+                        </div>
+                        <ul class="pricing-features">
+                            <li><i class="bi bi-check-circle-fill"></i> 5 analyses DFM</li>
+                            <li><i class="bi bi-check-circle-fill"></i> Rapports PDF complets</li>
+                            <li><i class="bi bi-check-circle-fill"></i> Recommandation matières</li>
+                            <li><i class="bi bi-check-circle-fill"></i> Historique 30 jours</li>
+                            <li><i class="bi bi-check-circle-fill"></i> Support email</li>
+                        </ul>
+                        <a href="{{ url_for('auth.register') }}" class="pricing-cta">Acheter le pack</a>
+                    </div>
+                </div>
+                <div class="col-lg-3 col-md-6">
+                    <div class="pricing-card pricing-featured fade-in fade-in-delay-2">
+                        <div class="pricing-badge">Plus populaire</div>
+                        <div class="pricing-header">
+                            <h3 class="pricing-title">Abonnement Pro</h3>
+                            <div class="pricing-price">
+                                <span class="price-number">23,99€</span>
+                                <span class="price-period">/mois</span>
+                            </div>
+                            <p class="pricing-desc">Analyses illimitées</p>
+                        </div>
+                        <ul class="pricing-features">
+                            <li><i class="bi bi-check-circle-fill"></i> <strong>Analyses illimitées</strong></li>
+                            <li><i class="bi bi-check-circle-fill"></i> Rapports PDF premium</li>
+                            <li><i class="bi bi-check-circle-fill"></i> Recommandation matières</li>
+                            <li><i class="bi bi-check-circle-fill"></i> Historique illimité</li>
+                            <li><i class="bi bi-check-circle-fill"></i> Support prioritaire</li>
+                        </ul>
+                        <a href="{{ url_for('pricing') }}" class="pricing-cta pricing-cta-primary">Passer en Premium</a>
+                    </div>
+                </div>
+                <div class="col-lg-3 col-md-6">
+                    <div class="pricing-card fade-in fade-in-delay-3">
+                        <div class="pricing-header">
+                            <h3 class="pricing-title">Entreprise</h3>
+                            <div class="pricing-price">
+                                <span class="price-number">49€</span>
+                                <span class="price-period">/mois</span>
+                            </div>
+                            <p class="pricing-desc">Multi-utilisateurs</p>
+                        </div>
+                        <ul class="pricing-features">
+                            <li><i class="bi bi-check-circle-fill"></i> Tout du plan Pro</li>
+                            <li><i class="bi bi-check-circle-fill"></i> <strong>5 utilisateurs</strong></li>
+                            <li><i class="bi bi-check-circle-fill"></i> API dédiée</li>
+                            <li><i class="bi bi-check-circle-fill"></i> Formation incluse</li>
+                            <li><i class="bi bi-check-circle-fill"></i> Support téléphonique</li>
+                        </ul>
+                        <a href="mailto:contact@cadlytics.fr" class="pricing-cta">Nous contacter</a>
                     </div>
                 </div>
             </div>
@@ -459,13 +663,45 @@
     <!-- Footer -->
     <footer class="footer">
         <div class="container">
-            <div class="footer-links">
-                <a href="/" class="footer-link">Accueil</a>
-                <a href="/app" class="footer-link">Application</a>
-                <a href="#features" class="footer-link">Fonctionnalités</a>
-                <a href="#benefits" class="footer-link">Avantages</a>
+            <div class="row">
+                <div class="col-md-4 mb-4">
+                    <h5 style="color: var(--kaki-light); margin-bottom: 1rem;">CADlytics</h5>
+                    <p style="color: rgba(255, 255, 255, 0.6); font-size: 0.9rem;">
+                        Solution professionnelle d'analyse DFM pour l'injection plastique. 
+                        Validez vos conceptions en quelques clics.
+                    </p>
+                    <p class="mb-0" style="color: rgba(255, 255, 255, 0.6);">
+                        Créé par <strong style="color: var(--kaki-light);">Grégoire GOUNY</strong>
+                    </p>
+                </div>
+                <div class="col-md-4 mb-4">
+                    <h5 style="color: var(--kaki-light); margin-bottom: 1rem;">Navigation</h5>
+                    <div class="footer-links d-flex flex-column">
+                        <a href="/" class="footer-link mb-2">Accueil</a>
+                        <a href="/app" class="footer-link mb-2">Application</a>
+                        <a href="#features" class="footer-link mb-2">Fonctionnalités</a>
+                        <a href="#pricing" class="footer-link mb-2">Tarifs</a>
+                        <a href="{{ url_for('pricing') }}" class="footer-link mb-2">Abonnements</a>
+                    </div>
+                </div>
+                <div class="col-md-4 mb-4">
+                    <h5 style="color: var(--kaki-light); margin-bottom: 1rem;">Informations légales</h5>
+                    <div class="footer-links d-flex flex-column">
+                        <a href="/mentions-legales" class="footer-link mb-2">Mentions légales</a>
+                        <a href="/rgpd" class="footer-link mb-2">Politique RGPD</a>
+                        <a href="/cgv" class="footer-link mb-2">CGV</a>
+                        <a href="mailto:contact@cadlytics.fr" class="footer-link mb-2">
+                            <i class="bi bi-envelope me-1"></i>contact@cadlytics.fr
+                        </a>
+                    </div>
+                </div>
             </div>
-            <p class="mb-0">Créé par <strong>Grégoire GOUNY</strong> • CADlytics © 2025</p>
+            <hr style="border-color: var(--brown-dark); margin: 2rem 0;">
+            <div class="text-center">
+                <p class="mb-0" style="color: rgba(255, 255, 255, 0.6);">
+                    CADlytics © 2025 • Tous droits réservés
+                </p>
+            </div>
         </div>
     </footer>
 
