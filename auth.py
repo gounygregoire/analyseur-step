@@ -7,6 +7,7 @@ from flask_login import login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from models import db, User
 import re
+from urllib.parse import urlparse
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -18,6 +19,21 @@ def validate_email(email):
 def validate_password(password):
     """Vérifie que le mot de passe est assez fort (min 8 caractères)"""
     return len(password) >= 8
+
+def is_safe_url(target):
+    """Vérifie que l'URL de redirection est sûre (pas d'open redirect)"""
+    if not target:
+        return False
+    
+    # Parse l'URL pour vérifier qu'elle est relative ou sur le même domaine
+    parsed = urlparse(target)
+    
+    # Si pas de netloc, c'est une URL relative, donc safe
+    if not parsed.netloc:
+        return True
+    
+    # Sinon, rejeter toute URL externe pour éviter l'open redirect
+    return False
 
 @auth_bp.route('/login', methods=['GET', 'POST'])
 def login():
@@ -37,7 +53,9 @@ def login():
         if user and user.password_hash and check_password_hash(user.password_hash, password):
             login_user(user, remember=True)
             next_page = request.args.get('next')
-            return redirect(next_page) if next_page else redirect(url_for('index'))
+            if next_page and is_safe_url(next_page):
+                return redirect(next_page)
+            return redirect(url_for('index'))
         else:
             flash('Email ou mot de passe incorrect', 'danger')
     
