@@ -411,18 +411,24 @@ class STEPViewer {
         this.showProgress();
         
         // Update progress message based on file size
-        if (fileSizeMB > 10) {
-            const progressText = document.querySelector('#progressIndicator p.small');
-            if (progressText) {
-                progressText.textContent = `La conversion peut prendre jusqu'à ${Math.ceil(fileSizeMB * 3)} secondes pour ce fichier de ${Math.round(fileSizeMB)} Mo.`;
+        const progressText = document.querySelector('#progressIndicator p.small');
+        if (progressText) {
+            if (fileSizeMB > 20) {
+                progressText.textContent = `Fichier complexe détecté (${Math.round(fileSizeMB)} Mo). La conversion peut prendre jusqu'à 5 minutes. Merci de patienter...`;
+            } else if (fileSizeMB > 10) {
+                progressText.textContent = `La conversion peut prendre jusqu'à ${Math.ceil(fileSizeMB * 10)} secondes pour ce fichier de ${Math.round(fileSizeMB)} Mo.`;
+            } else {
+                progressText.textContent = `Conversion en cours... Cela peut prendre jusqu'à 60 secondes.`;
             }
         }
         
         try {
             // Create AbortController for timeout handling
             const controller = new AbortController();
-            // Dynamic timeout based on file size (match server timeout + buffer)
-            const timeoutSeconds = Math.max(35, Math.min(310, fileSizeMB * 3 + 10));
+            // Dynamic timeout based on file size - match server timeout with buffer
+            // Server: 10 seconds per MB, minimum 60s, max 10 minutes (600s)
+            const timeoutSeconds = Math.max(70, Math.min(610, fileSizeMB * 10 + 10));
+            console.log(`Setting client timeout to ${timeoutSeconds} seconds for ${fileSizeMB}MB file`);
             const timeoutId = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
             
             const response = await fetch('/upload', {
@@ -452,7 +458,9 @@ class STEPViewer {
         } catch (error) {
             console.error('Upload error:', error);
             if (error.name === 'AbortError') {
-                this.showError('La conversion prend trop de temps. Essayez avec un fichier plus simple ou une tolérance plus élevée.');
+                this.showError(`La conversion dépasse le temps alloué (${Math.round(timeoutSeconds / 60)} minutes). Pour les fichiers très complexes, essayez d'augmenter la tolérance à 0.5 ou plus.`);
+            } else if (error.message && error.message.includes('500')) {
+                this.showError('Erreur serveur lors de la conversion. Essayez d\'augmenter la tolérance (ex: 0.5) pour simplifier le maillage.');
             } else {
                 this.showError(error.message || 'Une erreur réseau s\'est produite pendant le téléchargement');
             }

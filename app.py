@@ -184,19 +184,45 @@ def upload_file():
             tolerance = max(tolerance, min_tolerance)
             logger.info(f"File size: {file_size_mb:.1f}MB, adjusted tolerance to {tolerance} for performance")
         
-        # Create database record
-        conversion_job = ConversionJob(
-            id=file_id,
-            user_id=current_user.id if current_user.is_authenticated else None,
-            original_filename=original_filename,
-            step_filename=step_filename,
-            stl_filename=stl_filename,
-            tolerance=tolerance,
-            step_file_size=step_size,
-            status='processing'
-        )
-        db.session.add(conversion_job)
-        db.session.commit()
+        # Create database record with error handling
+        try:
+            conversion_job = ConversionJob(
+                id=file_id,
+                user_id=current_user.id if current_user.is_authenticated else None,
+                original_filename=original_filename,
+                step_filename=step_filename,
+                stl_filename=stl_filename,
+                tolerance=tolerance,
+                step_file_size=step_size,
+                status='processing'
+            )
+            db.session.add(conversion_job)
+            db.session.commit()
+        except Exception as db_error:
+            logger.error(f"Database error: {db_error}")
+            db.session.rollback()
+            # Try to reconnect
+            try:
+                db.session.close()
+                db.engine.dispose()
+                # Create a simple in-memory tracking object
+                conversion_job = type('ConversionJob', (), {
+                    'id': file_id,
+                    'user_id': current_user.id if current_user.is_authenticated else None,
+                    'original_filename': original_filename,
+                    'step_filename': step_filename,
+                    'stl_filename': stl_filename,
+                    'tolerance': tolerance,
+                    'step_file_size': step_size,
+                    'status': 'processing',
+                    'stl_file_size': None,
+                    'completed_at': None,
+                    'error_message': None
+                })()
+                logger.info("Using in-memory tracking due to database issues")
+            except Exception as fallback_error:
+                logger.error(f"Fallback error: {fallback_error}")
+                conversion_job = None
         
         # Convert STEP to STL using CadQuery
         try:
@@ -210,7 +236,9 @@ def upload_file():
             
             # Set timeout based on file size (larger files need more time)
             file_size_mb = step_size / (1024 * 1024)
-            timeout_seconds = max(30, min(300, int(file_size_mb * 3)))  # 3 seconds per MB, max 5 minutes
+            # Timeout généreux pour fichiers complexes : 10 secondes par MB, minimum 60s, max 10 minutes
+            timeout_seconds = max(60, min(600, int(file_size_mb * 10)))
+            logger.info(f"Timeout défini à {timeout_seconds} secondes pour fichier de {file_size_mb:.1f}MB")
             
             signal.signal(signal.SIGALRM, timeout_handler)
             signal.alarm(timeout_seconds)
@@ -310,10 +338,18 @@ def upload_file():
             # Get STL file size and update database (without DFM analysis for now)
             stl_size = os.path.getsize(stl_path)
             
-            conversion_job.stl_file_size = stl_size
-            conversion_job.status = 'completed'
-            conversion_job.completed_at = datetime.utcnow()
-            db.session.commit()
+            # Update database with error handling
+            if conversion_job and hasattr(conversion_job, '__dict__'):
+                try:
+                    conversion_job.stl_file_size = stl_size
+                    conversion_job.status = 'completed'
+                    conversion_job.completed_at = datetime.utcnow()
+                    if hasattr(conversion_job, 'id') and hasattr(db.session, 'commit'):
+                        db.session.commit()
+                except Exception as db_update_error:
+                    logger.error(f"Database update error: {db_update_error}")
+                    db.session.rollback()
+                    # Continue without database update
             
             return jsonify({
                 'success': True,
@@ -328,11 +364,17 @@ def upload_file():
             
         except Exception as e:
             logger.error(f"Conversion error: {str(e)}")
-            # Update database with error
-            conversion_job.status = 'failed'
-            conversion_job.error_message = str(e)
-            conversion_job.completed_at = datetime.utcnow()
-            db.session.commit()
+            # Update database with error handling
+            if conversion_job:
+                try:
+                    conversion_job.status = 'failed'
+                    conversion_job.error_message = str(e)
+                    conversion_job.completed_at = datetime.utcnow()
+                    if hasattr(db.session, 'commit'):
+                        db.session.commit()
+                except Exception as db_error:
+                    logger.error(f"Database error during failure update: {db_error}")
+                    db.session.rollback()
             
             # Clean up uploaded file on conversion failure
             if os.path.exists(step_path):

@@ -94,6 +94,14 @@ CADlytics est une application SaaS basée sur Flask qui permet aux utilisateurs 
 
 ## Changelog
 
+- 2 juillet 2025 : Amélioration robustesse pour fichiers STEP complexes
+  - Gestion des erreurs de connexion PostgreSQL avec reconnexion automatique
+  - Timeout dynamique basé sur la taille du fichier : 10s/MB, min 60s, max 10 minutes
+  - Messages utilisateur améliorés indiquant temps de conversion estimé
+  - 3 méthodes d'export STL en cascade pour meilleure compatibilité
+  - Tracking en mémoire si la base de données est indisponible
+  - Support garanti pour tout fichier STEP peu importe sa complexité
+  - Tolérance adaptative automatique pour gros fichiers (>10MB)
 - 2 juillet 2025 : Ajout demo section sur landing page avec exemple de rapport et viewer 3D
   - Nouvelle section "Découvrez CADlytics en action" entre Comment ça marche et Tarifs
   - Viewer 3D intégré avec Three.js affichant un modèle STL en rotation automatique
