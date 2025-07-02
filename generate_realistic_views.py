@@ -26,12 +26,12 @@ def create_realistic_view_from_stl(stl_path: str, axis: str = 'z') -> str:
         return None
         
     try:
-        # Load the STL file
-        mesh = trimesh.load_mesh(stl_path)
-        mesh.fix_normals()
+        # Load the STL file with process=False to avoid expensive operations
+        mesh = trimesh.load_mesh(stl_path, process=False)
         
-        # Center the mesh
-        mesh.vertices -= mesh.center_mass
+        # Center the mesh manually to avoid cache operations
+        center = np.mean(mesh.vertices, axis=0)
+        mesh.vertices -= center
         
         # Get bounds for scaling
         bounds = mesh.bounds
@@ -63,9 +63,18 @@ def create_realistic_view_from_stl(stl_path: str, axis: str = 'z') -> str:
         # Apply rotation
         mesh.apply_transform(rotation)
         
-        # Create high-quality image with anti-aliasing
+        # Reduce mesh complexity to avoid memory issues
+        if len(mesh.faces) > 5000:
+            # Simplify the mesh for rendering
+            import gc
+            gc.collect()
+            step = max(1, len(mesh.faces) // 5000)
+            faces_to_use = mesh.faces[::step]
+            mesh = trimesh.Trimesh(vertices=mesh.vertices, faces=faces_to_use, process=False)
+        
+        # Create smaller image to reduce memory usage
         img_size = 600
-        render_size = img_size * 2  # Render at 2x for anti-aliasing
+        render_size = img_size  # No anti-aliasing to save memory
         img = Image.new('RGB', (render_size, render_size), color='#ffffff')
         draw = ImageDraw.Draw(img)
         
@@ -92,8 +101,16 @@ def create_realistic_view_from_stl(stl_path: str, axis: str = 'z') -> str:
             face = mesh.faces[idx]
             face_vertices = vertices_2d[face]
             
-            # Calculate shading based on face normal
-            face_normal = mesh.face_normals[idx]
+            # Calculate face normal manually to avoid cache issues
+            v0 = mesh.vertices[face[0]]
+            v1 = mesh.vertices[face[1]]
+            v2 = mesh.vertices[face[2]]
+            face_normal = np.cross(v1 - v0, v2 - v0)
+            norm = np.linalg.norm(face_normal)
+            if norm > 0:
+                face_normal = face_normal / norm
+            else:
+                face_normal = np.array([0, 0, 1])
             
             # Multi-light shading
             diffuse1 = max(0, np.dot(face_normal, light1))
