@@ -482,15 +482,18 @@ class STEPViewer {
             
             // Create alert message
             const alertHtml = `
-                <div class="alert alert-warning alert-dismissible fade show" role="alert">
+                <div class="alert alert-warning alert-dismissible fade show border-2 shadow" role="alert">
                     <h5 class="alert-heading"><i class="bi bi-exclamation-triangle-fill me-2"></i>Visualisation 3D non disponible</h5>
-                    <p>⚠️ La visualisation 3D a échoué, mais l'analyse DFM a bien été effectuée.</p>
-                    ${result.viewer_error ? `<p class="mb-0"><small>Raison : ${result.viewer_error}</small></p>` : ''}
+                    <p class="fw-bold">⚠️ Le modèle 3D ne peut pas être affiché dans le visualisateur.</p>
+                    ${result.viewer_error ? `<p class="text-muted"><small><strong>Raison :</strong> ${result.viewer_error}</small></p>` : ''}
                     <hr>
-                    <p class="mb-0">Vous pouvez toujours :</p>
+                    <p class="mb-2"><strong>✅ Les fonctionnalités suivantes restent disponibles :</strong></p>
                     <ul class="mb-0">
-                        <li>Effectuer l'analyse DFM</li>
-                        <li>Télécharger le rapport PDF après l'analyse</li>
+                        <li>🔍 <strong>Analyse DFM complète</strong> (Design for Manufacturing)</li>
+                        <li>📊 <strong>Calcul des dimensions et volumes</strong></li>
+                        <li>📋 <strong>Recommandations de matériaux</strong></li>
+                        <li>📄 <strong>Génération du rapport PDF détaillé</strong></li>
+                        <li>💾 <strong>Téléchargement du package complet (ZIP)</strong></li>
                     </ul>
                     <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
                 </div>
