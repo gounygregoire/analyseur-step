@@ -1,0 +1,6 @@
+Flask
+gunicorn
+jinja2
+trimesh
+cadquery
+python-multipart
