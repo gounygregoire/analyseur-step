@@ -164,8 +164,8 @@
 
     <div class="container mt-5">
         <div class="text-center mb-5">
-            <h1 class="display-4">Choisissez votre formule</h1>
-            <p class="lead">Analysez vos fichiers STEP avec CADlytics</p>
+            <h1 class="display-4">{% if current_language == 'en' %}Choose your plan{% else %}Choisissez votre formule{% endif %}</h1>
+            <p class="lead">{% if current_language == 'en' %}Analyze your STEP files with CADlytics{% else %}Analysez vos fichiers STEP avec CADlytics{% endif %}</p>
         </div>
 
         <div class="row justify-content-center">
@@ -173,16 +173,16 @@
             <div class="col-md-4 mb-4">
                 <div class="card h-100 shadow-lg">
                     <div class="card-header text-center py-3">
-                        <h4 class="my-0 fw-normal">À l'usage</h4>
+                        <h4 class="my-0 fw-normal">{% if current_language == 'en' %}Pay as you go{% else %}À l'usage{% endif %}</h4>
                     </div>
                     <div class="card-body d-flex flex-column">
-                        <h1 class="card-title pricing-card-title text-center">5€ <small class="text-muted fw-light">/ 5 analyses</small></h1>
+                        <h1 class="card-title pricing-card-title text-center">5€ <small class="text-muted fw-light">/ 5 {% if current_language == 'en' %}analyses{% else %}analyses{% endif %}</small></h1>
                         <ul class="list-unstyled mt-3 mb-4">
-                            <li class="mb-2"><i class="bi bi-check-circle-fill text-success me-2"></i>5 analyses DFM complètes</li>
-                            <li class="mb-2"><i class="bi bi-check-circle-fill text-success me-2"></i>Rapports PDF détaillés</li>
-                            <li class="mb-2"><i class="bi bi-check-circle-fill text-success me-2"></i>Recommandations matériaux</li>
-                            <li class="mb-2"><i class="bi bi-check-circle-fill text-success me-2"></i>Visualisation 3D avancée</li>
-                            <li class="mb-2"><i class="bi bi-x-circle-fill text-muted me-2"></i>Support prioritaire</li>
+                            <li class="mb-2"><i class="bi bi-check-circle-fill text-success me-2"></i>{% if current_language == 'en' %}5 complete DFM analyses{% else %}5 analyses DFM complètes{% endif %}</li>
+                            <li class="mb-2"><i class="bi bi-check-circle-fill text-success me-2"></i>{% if current_language == 'en' %}Detailed PDF reports{% else %}Rapports PDF détaillés{% endif %}</li>
+                            <li class="mb-2"><i class="bi bi-check-circle-fill text-success me-2"></i>{% if current_language == 'en' %}Material recommendations{% else %}Recommandations matériaux{% endif %}</li>
+                            <li class="mb-2"><i class="bi bi-check-circle-fill text-success me-2"></i>{% if current_language == 'en' %}Advanced 3D visualization{% else %}Visualisation 3D avancée{% endif %}</li>
+                            <li class="mb-2"><i class="bi bi-x-circle-fill text-muted me-2"></i>{% if current_language == 'en' %}Priority support{% else %}Support prioritaire{% endif %}</li>
                         </ul>
                         <div class="mt-auto">
                             {% if current_user.is_authenticated %}

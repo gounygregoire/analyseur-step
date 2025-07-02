@@ -19,6 +19,37 @@ translations = {
         'hero_subtitle': 'Analyse DFM avancée pour l\'injection plastique',
         'hero_description': 'Optimisez vos pièces plastiques avec notre analyse DFM intelligente. Détectez les problèmes de moulabilité, recevez des recommandations de matériaux et améliorez votre conception.',
         'hero_cta': 'Essayer maintenant',
+        'hero_checklist_title': 'Tout ce dont vous avez besoin pour valider vos pièces',
+        'hero_checklist_1': 'Analyse DFM complète',
+        'hero_checklist_2': 'Rapport PDF professionnel',
+        'hero_checklist_3': 'Recommandations de matériaux',
+        'hero_checklist_4': 'Visualisation 3D avancée',
+        
+        # Landing sections
+        'section_how_title': 'Comment ça marche ?',
+        'section_how_step1_title': 'Téléchargez votre fichier',
+        'section_how_step1_desc': 'Importez votre fichier STEP directement depuis votre CAO',
+        'section_how_step2_title': 'Analyse automatique',
+        'section_how_step2_desc': 'Notre IA analyse votre pièce en quelques secondes',
+        'section_how_step3_title': 'Rapport détaillé',
+        'section_how_step3_desc': 'Recevez un rapport PDF complet avec recommandations',
+        
+        'section_why_title': 'Pourquoi CADlytics ?',
+        'section_why_reliable_title': 'Analyse fiable',
+        'section_why_reliable_desc': 'Algorithmes basés sur les meilleures pratiques de l\'industrie',
+        'section_why_fast_title': 'Résultats rapides',
+        'section_why_fast_desc': 'Obtenez votre analyse en moins de 30 secondes',
+        'section_why_expert_title': 'Recommandations expertes',
+        'section_why_expert_desc': 'Conseils personnalisés pour optimiser vos pièces',
+        
+        'section_demo_title': 'Découvrez CADlytics en action',
+        'section_demo_viewer_title': 'Visualisateur 3D interactif',
+        'section_demo_report_title': 'Rapport d\'analyse DFM',
+        'section_demo_report_score': 'Score de moulabilité',
+        'section_demo_report_materials': 'Matériaux recommandés',
+        'section_demo_report_pp': 'Polypropylène (PP)',
+        'section_demo_report_abs': 'ABS',
+        'section_demo_report_pc': 'Polycarbonate (PC)',
         
         # Application
         'upload_title': 'Télécharger un fichier STEP',
@@ -60,6 +91,49 @@ translations = {
         'footer_terms': 'CGV',
         'footer_cookies': 'Cookies',
         
+        # Viewer 3D
+        'viewer_measure': 'Mesurer',
+        'viewer_section': 'Coupe 3D',
+        'viewer_wireframe': 'Mode filaire',
+        'viewer_axes': 'Afficher axes',
+        'viewer_defects': 'Défauts',
+        'viewer_stop_section': 'Arrêter coupe',
+        'viewer_measurement': 'Distance',
+        'viewer_volume': 'Volume',
+        'viewer_dark_mode': 'Mode sombre',
+        'viewer_light_mode': 'Mode clair',
+        
+        # Upload
+        'upload_tolerance': 'Tolérance de conversion',
+        'upload_high_precision': 'Haute précision (0.01mm)',
+        'upload_standard': 'Standard (0.1mm)',
+        'upload_fast': 'Rapide (0.5mm)',
+        'upload_info': 'Plus précis = meilleure qualité mais plus lent',
+        'upload_visualize': 'Visualiser',
+        'upload_progress': 'Fichier sélectionné',
+        
+        # DFM Details
+        'dfm_wall_issues': 'Problèmes d\'épaisseur de paroi',
+        'dfm_geometry_issues': 'Problèmes de géométrie',
+        'dfm_too_thin': 'Trop fin',
+        'dfm_too_thick': 'Trop épais',
+        'dfm_no_draft': 'Pas de dépouille',
+        'dfm_sharp_edges': 'Arêtes vives',
+        'dfm_deep_holes': 'Trous profonds',
+        'dfm_height_issue': 'Hauteur excessive',
+        'dfm_ready_for_injection': 'Prêt pour injection',
+        
+        # History
+        'history_processing': 'En cours',
+        'history_completed': 'Terminé',
+        'history_failed': 'Échoué',
+        
+        # Messages
+        'msg_select_file': 'Veuillez sélectionner un fichier',
+        'msg_conversion_time': 'Temps estimé',
+        'msg_per_mb': 'par MB',
+        'msg_seconds': 'secondes',
+        
         # Pricing
         'pricing_title': 'Tarifs',
         'pricing_pack5': 'Pack 5 analyses',
@@ -96,6 +170,37 @@ translations = {
         'hero_subtitle': 'Advanced DFM Analysis for Plastic Injection',
         'hero_description': 'Optimize your plastic parts with our intelligent DFM analysis. Detect moldability issues, get material recommendations and improve your design.',
         'hero_cta': 'Try now',
+        'hero_checklist_title': 'Everything you need to validate your parts',
+        'hero_checklist_1': 'Complete DFM analysis',
+        'hero_checklist_2': 'Professional PDF report',
+        'hero_checklist_3': 'Material recommendations',
+        'hero_checklist_4': 'Advanced 3D visualization',
+        
+        # Landing sections
+        'section_how_title': 'How it works?',
+        'section_how_step1_title': 'Upload your file',
+        'section_how_step1_desc': 'Import your STEP file directly from your CAD',
+        'section_how_step2_title': 'Automatic analysis',
+        'section_how_step2_desc': 'Our AI analyzes your part in seconds',
+        'section_how_step3_title': 'Detailed report',
+        'section_how_step3_desc': 'Get a complete PDF report with recommendations',
+        
+        'section_why_title': 'Why CADlytics?',
+        'section_why_reliable_title': 'Reliable analysis',
+        'section_why_reliable_desc': 'Algorithms based on industry best practices',
+        'section_why_fast_title': 'Fast results',
+        'section_why_fast_desc': 'Get your analysis in less than 30 seconds',
+        'section_why_expert_title': 'Expert recommendations',
+        'section_why_expert_desc': 'Personalized advice to optimize your parts',
+        
+        'section_demo_title': 'Discover CADlytics in action',
+        'section_demo_viewer_title': 'Interactive 3D viewer',
+        'section_demo_report_title': 'DFM Analysis Report',
+        'section_demo_report_score': 'Moldability score',
+        'section_demo_report_materials': 'Recommended materials',
+        'section_demo_report_pp': 'Polypropylene (PP)',
+        'section_demo_report_abs': 'ABS',
+        'section_demo_report_pc': 'Polycarbonate (PC)',
         
         # Application
         'upload_title': 'Upload a STEP file',
@@ -136,6 +241,49 @@ translations = {
         'footer_privacy': 'Privacy policy',
         'footer_terms': 'Terms of service',
         'footer_cookies': 'Cookies',
+        
+        # Viewer 3D
+        'viewer_measure': 'Measure',
+        'viewer_section': '3D Section',
+        'viewer_wireframe': 'Wireframe mode',
+        'viewer_axes': 'Show axes',
+        'viewer_defects': 'Defects',
+        'viewer_stop_section': 'Stop section',
+        'viewer_measurement': 'Distance',
+        'viewer_volume': 'Volume',
+        'viewer_dark_mode': 'Dark mode',
+        'viewer_light_mode': 'Light mode',
+        
+        # Upload
+        'upload_tolerance': 'Conversion tolerance',
+        'upload_high_precision': 'High precision (0.01mm)',
+        'upload_standard': 'Standard (0.1mm)',
+        'upload_fast': 'Fast (0.5mm)',
+        'upload_info': 'More precise = better quality but slower',
+        'upload_visualize': 'Visualize',
+        'upload_progress': 'File selected',
+        
+        # DFM Details
+        'dfm_wall_issues': 'Wall thickness issues',
+        'dfm_geometry_issues': 'Geometry issues',
+        'dfm_too_thin': 'Too thin',
+        'dfm_too_thick': 'Too thick',
+        'dfm_no_draft': 'No draft angle',
+        'dfm_sharp_edges': 'Sharp edges',
+        'dfm_deep_holes': 'Deep holes',
+        'dfm_height_issue': 'Excessive height',
+        'dfm_ready_for_injection': 'Ready for injection',
+        
+        # History
+        'history_processing': 'Processing',
+        'history_completed': 'Completed',
+        'history_failed': 'Failed',
+        
+        # Messages
+        'msg_select_file': 'Please select a file',
+        'msg_conversion_time': 'Estimated time',
+        'msg_per_mb': 'per MB',
+        'msg_seconds': 'seconds',
         
         # Pricing
         'pricing_title': 'Pricing',

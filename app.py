@@ -688,12 +688,23 @@ def generate_pdf_report(conversion_id):
         # Get material recommendations from session if available
         material_recommendations = session.get('material_recommendations', [])
         
-        generated_path = generate_dfm_pdf_report(
+        # Get user language
+        user_lang = 'fr'
+        if current_user.is_authenticated:
+            user_lang = current_user.preferred_language
+        else:
+            user_lang = session.get('language', 'fr')
+        
+        # Create PDF with user language
+        from pdf_generator import DFMReportGenerator
+        generator = DFMReportGenerator(language=user_lang)
+        generated_path = generator.generate_report(
             dfm_data, 
             step_path, 
             pdf_path, 
             conversion_job.original_filename,
-            material_recommendations
+            material_recommendations,
+            lang=user_lang
         )
         
         logger.info(f"PDF report generated: {generated_path}")

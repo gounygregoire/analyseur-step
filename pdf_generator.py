@@ -583,7 +583,7 @@ class DFMReportGenerator:
         return base64.b64encode(svg_content.encode()).decode()
         
     def generate_report(self, dfm_data: Dict[str, Any], step_file_path: str, 
-                       filename: str, original_filename: str, material_recommendations: List[Dict] = None) -> str:
+                       filename: str, original_filename: str, material_recommendations: List[Dict] = None, lang: str = 'fr') -> str:
         """Generate complete DFM PDF report"""
         try:
             # Generate 3D views from STEP file
@@ -603,7 +603,7 @@ class DFMReportGenerator:
             story = []
             
             # Title page
-            story.extend(self._create_title_page(original_filename, dfm_data))
+            story.extend(self._create_title_page(original_filename, dfm_data, lang))
             story.append(PageBreak())
             
             # Executive summary
@@ -642,21 +642,26 @@ class DFMReportGenerator:
                 pass
             return filename
         
-    def _create_title_page(self, original_filename: str, dfm_data: Dict[str, Any]) -> List:
+    def _create_title_page(self, original_filename: str, dfm_data: Dict[str, Any], lang: str = 'fr') -> List:
         """Create title page"""
         content = []
         
         # Main title
-        content.append(Paragraph("Rapport d'Analyse DFM", self.styles['CustomTitle']))
+        # Traduire selon la langue
+        title = "DFM Analysis Report" if lang == 'en' else "Rapport d'Analyse DFM"
+        content.append(Paragraph(title, self.styles['CustomTitle']))
         content.append(Spacer(1, 30))
         
         # File info
-        content.append(Paragraph(f"<b>Fichier analysé:</b> {original_filename}", self.styles['Normal']))
+        file_label = "Analyzed file:" if lang == 'en' else "Fichier analysé:"
+        content.append(Paragraph(f"<b>{file_label}</b> {original_filename}", self.styles['Normal']))
         content.append(Spacer(1, 10))
         
         # Date
-        current_date = datetime.now().strftime("%d/%m/%Y à %H:%M")
-        content.append(Paragraph(f"<b>Date du rapport:</b> {current_date}", self.styles['Normal']))
+        date_format = "%m/%d/%Y at %H:%M" if lang == 'en' else "%d/%m/%Y à %H:%M"
+        current_date = datetime.now().strftime(date_format)
+        date_label = "Report date:" if lang == 'en' else "Date du rapport:"
+        content.append(Paragraph(f"<b>{date_label}</b> {current_date}", self.styles['Normal']))
         content.append(Spacer(1, 30))
         
         # Overall score box
@@ -664,9 +669,13 @@ class DFMReportGenerator:
         rating = dfm_data.get('rating', 'unknown')
         color = self._get_rating_color(rating)
         
+        # Score labels
+        score_label = "Moldability Score" if lang == 'en' else "Score de Moulabilité"
+        eval_label = "Evaluation" if lang == 'en' else "Évaluation"
+        
         score_table = Table([
-            ['Score de Moulabilité', f'{score}/10'],
-            ['Évaluation', self._get_rating_text(rating)]
+            [score_label, f'{score}/10'],
+            [eval_label, self._get_rating_text(rating, lang)]
         ], colWidths=[100*mm, 60*mm])
         
         score_table.setStyle(TableStyle([
@@ -685,12 +694,20 @@ class DFMReportGenerator:
         issues_count = dfm_data.get('issues_count', 0)
         dimensions = dfm_data.get('dimensions', {})
         
+        # Translate table headers and labels
+        param_label = "Parameter" if lang == 'en' else "Paramètre"
+        value_label = "Value" if lang == 'en' else "Valeur"
+        issues_label = "Issues detected" if lang == 'en' else "Problèmes détectés"
+        dimensions_label = "Dimensions (mm)" if lang == 'en' else "Dimensions (mm)"
+        volume_label = "Volume" if lang == 'en' else "Volume"
+        thickness_label = "Max thickness" if lang == 'en' else "Épaisseur max"
+        
         stats_data = [
-            ['Paramètre', 'Valeur'],
-            ['Problèmes détectés', str(issues_count)],
-            ['Dimensions (mm)', f"X: {dimensions.get('x', 0)} | Y: {dimensions.get('y', 0)} | Z: {dimensions.get('z', 0)}"],
-            ['Volume', f"{dimensions.get('volume', 0)} mm³"],
-            ['Épaisseur max', f"{dimensions.get('max_wall_thickness', 0)} mm"]
+            [param_label, value_label],
+            [issues_label, str(issues_count)],
+            [dimensions_label, f"X: {dimensions.get('x', 0)} | Y: {dimensions.get('y', 0)} | Z: {dimensions.get('z', 0)}"],
+            [volume_label, f"{dimensions.get('volume', 0)} mm³"],
+            [thickness_label, f"{dimensions.get('max_wall_thickness', 0)} mm"]
         ]
         
         stats_table = Table(stats_data, colWidths=[80*mm, 80*mm])
@@ -1008,23 +1025,32 @@ class DFMReportGenerator:
         }
         return colors.get(severity.lower(), '#95a5a6')
         
-    def _get_rating_text(self, rating: str) -> str:
-        """Get French text for rating"""
-        texts = {
-            'excellent': 'Excellente',
-            'good': 'Bonne',
-            'warning': 'Acceptable',
-            'critical': 'Critique'
-        }
-        return texts.get(rating, 'Inconnue')
+    def _get_rating_text(self, rating: str, lang: str = 'fr') -> str:
+        """Get text for rating based on language"""
+        if lang == 'en':
+            texts = {
+                'excellent': 'Excellent',
+                'good': 'Good',
+                'warning': 'Acceptable',
+                'critical': 'Critical'
+            }
+            return texts.get(rating, 'Unknown')
+        else:
+            texts = {
+                'excellent': 'Excellente',
+                'good': 'Bonne',
+                'warning': 'Acceptable',
+                'critical': 'Critique'
+            }
+            return texts.get(rating, 'Inconnue')
 
 # Convenience function
 def generate_dfm_pdf_report(dfm_data: Dict[str, Any], step_file_path: str, 
-                           output_path: str, original_filename: str, material_recommendations: List[Dict] = None) -> str:
+                           output_path: str, original_filename: str, material_recommendations: List[Dict] = None, lang: str = 'fr') -> str:
     """Generate DFM PDF report with 3D views from STEP file"""
     try:
-        generator = DFMReportGenerator()
-        return generator.generate_report(dfm_data, step_file_path, output_path, original_filename, material_recommendations)
+        generator = DFMReportGenerator(language=lang)
+        return generator.generate_report(dfm_data, step_file_path, output_path, original_filename, material_recommendations, lang)
     except Exception as e:
         print(f"Error generating DFM PDF report: {e}")
         # Return the output path even on error to prevent None return
