@@ -142,8 +142,32 @@ def save_user(user_claims):
 
 @oauth_authorized.connect
 def logged_in(blueprint, token):
-    user_claims = jwt.decode(token['id_token'],
-                             options={"verify_signature": False})
+    # Fetch JWKS from Replit's OIDC endpoint for signature verification
+    issuer_url = os.environ.get('ISSUER_URL', "https://replit.com/oidc")
+    jwks_url = issuer_url + "/.well-known/jwks.json"
+    
+    try:
+        # Import required modules for JWKS
+        import requests
+        from jwt import PyJWKSClient
+        
+        # Create JWKS client to fetch signing keys
+        jwks_client = PyJWKSClient(jwks_url)
+        signing_key = jwks_client.get_signing_key_from_jwt(token['id_token'])
+        
+        # Decode and verify JWT signature with proper audience validation
+        user_claims = jwt.decode(
+            token['id_token'],
+            signing_key.key,
+            algorithms=["RS256"],  # Replit uses RS256
+            audience=os.environ.get('REPL_ID'),  # Validate audience
+            issuer=issuer_url  # Validate issuer
+        )
+    except Exception as e:
+        # Log the error and redirect to error page
+        print(f"JWT verification failed: {e}")
+        return redirect(url_for('replit_auth.error'))
+    
     user = save_user(user_claims)
     login_user(user)
     blueprint.token = token
