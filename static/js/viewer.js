@@ -426,8 +426,8 @@ class STEPViewer {
             // Create AbortController for timeout handling
             const controller = new AbortController();
             // Dynamic timeout based on file size - match server timeout with buffer
-            // Server: 10 seconds per MB, minimum 60s, max 10 minutes (600s)
-            const timeoutSeconds = Math.max(70, Math.min(610, fileSizeMB * 10 + 10));
+            // Server: 15 seconds per MB, minimum 90s, max 15 minutes (900s)
+            const timeoutSeconds = Math.max(100, Math.min(920, fileSizeMB * 15 + 20));
             console.log(`Setting client timeout to ${timeoutSeconds} seconds for ${fileSizeMB}MB file`);
             const timeoutId = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
             

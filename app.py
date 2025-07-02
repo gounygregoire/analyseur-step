@@ -191,19 +191,24 @@ def upload_file():
         
         # Adaptive tolerance for large files to improve performance
         file_size_mb = step_size / (1024 * 1024)
-        if file_size_mb > 10:
-            # For large files, adjust tolerance to avoid creating too many triangles
-            if file_size_mb > 25:
-                min_tolerance = 1.0  # Très haute tolérance pour fichiers > 25MB
+        original_tolerance = tolerance
+        
+        # Adjust tolerance based on file size for better performance
+        if file_size_mb > 5:
+            if file_size_mb > 30:
+                min_tolerance = 2.0  # Très haute tolérance pour fichiers > 30MB
             elif file_size_mb > 20:
-                min_tolerance = 0.8  # Haute tolérance pour fichiers > 20MB  
+                min_tolerance = 1.5  # Haute tolérance pour fichiers > 20MB
             elif file_size_mb > 10:
-                min_tolerance = 0.5  # Tolérance moyenne pour fichiers > 10MB
+                min_tolerance = 1.0  # Tolérance élevée pour fichiers > 10MB
+            elif file_size_mb > 5:
+                min_tolerance = 0.8  # Tolérance moyenne pour fichiers > 5MB
             else:
-                min_tolerance = 0.3  # Tolérance normale pour petits fichiers
+                min_tolerance = 0.5  # Tolérance normale pour petits fichiers
             
             tolerance = max(tolerance, min_tolerance)
-            logger.info(f"File size: {file_size_mb:.1f}MB, adjusted tolerance to {tolerance} for performance")
+            if tolerance != original_tolerance:
+                logger.info(f"File size: {file_size_mb:.1f}MB, adjusted tolerance from {original_tolerance} to {tolerance} for performance")
         
         # Create database record with error handling
         try:
@@ -257,51 +262,104 @@ def upload_file():
             
             # Set timeout based on file size (larger files need more time)
             file_size_mb = step_size / (1024 * 1024)
-            # Timeout généreux pour fichiers complexes : 10 secondes par MB, minimum 60s, max 10 minutes
-            timeout_seconds = max(60, min(600, int(file_size_mb * 10)))
+            # Timeout généreux pour fichiers complexes : 15 secondes par MB, minimum 90s, max 15 minutes
+            timeout_seconds = max(90, min(900, int(file_size_mb * 15)))
             logger.info(f"Timeout défini à {timeout_seconds} secondes pour fichier de {file_size_mb:.1f}MB")
             
             signal.signal(signal.SIGALRM, timeout_handler)
             signal.alarm(timeout_seconds)
             
             try:
-                result = cq.importers.importStep(step_path)
+                # Try multiple import strategies for better robustness
+                result = None
+                import_errors = []
+                
+                # Strategy 1: Standard CadQuery import
+                try:
+                    result = cq.importers.importStep(step_path)
+                    if result is not None:
+                        logger.info("Standard CadQuery import successful")
+                except Exception as e:
+                    import_errors.append(f"CadQuery: {str(e)}")
+                    logger.warning(f"CadQuery import failed: {e}")
+                
+                # Strategy 2: Try with OCC Core directly for complex files
+                if result is None:
+                    try:
+                        from OCC.Core import STEPControl_Reader
+                        from OCC.Core import IFSelect_RetDone, TopTools_HSequenceOfShape
+                        from OCC.Core import TopExp_Explorer, TopAbs_SOLID
+                        
+                        step_reader = STEPControl_Reader()
+                        status = step_reader.ReadFile(step_path)
+                        
+                        if status == IFSelect_RetDone:
+                            step_reader.TransferRoots()
+                            shape = step_reader.OneShape()
+                            
+                            if not shape.IsNull():
+                                # Convert OCC shape to CadQuery
+                                result = cq.Workplane().newObject([shape])
+                                logger.info("OCC Core import successful")
+                            else:
+                                raise Exception("Empty shape from OCC import")
+                        else:
+                            raise Exception(f"OCC import failed with status: {status}")
+                            
+                    except Exception as e:
+                        import_errors.append(f"OCC Core: {str(e)}")
+                        logger.warning(f"OCC Core import failed: {e}")
                 
                 if result is None:
-                    raise Exception("Échec de l'importation du fichier STEP - le fichier peut être corrompu ou invalide")
+                    error_msg = f"Échec de l'importation du fichier STEP. Erreurs: {'; '.join(import_errors)}. Le fichier est peut-être trop complexe ou corrompu."
+                    raise Exception(error_msg)
                 
                 # Export to STL
                 stl_path = os.path.join(app.config['CONVERTED_FOLDER'], stl_filename)
                 
-                # Export to STL - use the most reliable method
+                # Export to STL with multiple fallback strategies
                 logger.info(f"Starting STL export to: {stl_path}")
                 
+                export_success = False
+                export_errors = []
+                
+                # Strategy 1: CadQuery exporters with high tolerance first
                 try:
-                    # Use the workplane method to export STL
-                    if hasattr(result, 'exportStl'):
-                        # Direct exportStl method
-                        result.exportStl(stl_path)
-                        logger.info("Used direct exportStl method")
+                    if hasattr(result, 'val'):
+                        shape_to_export = result.val()
                     else:
-                        # Use CadQuery's standard export method
-                        # First ensure we have the right object type
-                        if hasattr(result, 'val'):
-                            shape_to_export = result.val()
-                        else:
-                            shape_to_export = result
-                        
-                        logger.info(f"Shape type: {type(shape_to_export)}")
-                        
-                        # Use cq.exporters with string format specifier
-                        cq.exporters.export(shape_to_export, stl_path, "STL", tolerance=tolerance)
-                        logger.info("Used cq.exporters.export method")
-                        
-                except Exception as export_error:
-                    logger.error(f"Primary STL export failed: {export_error}")
+                        shape_to_export = result
                     
-                    # Try alternative method using OCC directly
+                    logger.info(f"Shape type: {type(shape_to_export)}")
+                    
+                    # Use higher tolerance for complex files to ensure export success
+                    export_tolerance = max(tolerance, 0.5) if file_size_mb > 10 else tolerance
+                    logger.info(f"Using export tolerance: {export_tolerance}")
+                    
+                    cq.exporters.export(shape_to_export, stl_path, "STL", tolerance=export_tolerance)
+                    export_success = True
+                    logger.info("Strategy 1: CadQuery exporters successful")
+                    
+                except Exception as e:
+                    export_errors.append(f"CadQuery exporters: {str(e)}")
+                    logger.warning(f"CadQuery exporters failed: {e}")
+                
+                # Strategy 2: Direct exportStl method
+                if not export_success and hasattr(result, 'exportStl'):
                     try:
-                        logger.info("Trying OCC direct method")
+                        result.exportStl(stl_path)
+                        export_success = True
+                        logger.info("Strategy 2: Direct exportStl successful")
+                    except Exception as e:
+                        export_errors.append(f"Direct exportStl: {str(e)}")
+                        logger.warning(f"Direct exportStl failed: {e}")
+                
+                if not export_success:
+                    logger.error(f"All export strategies failed: {'; '.join(export_errors)}")
+                    
+                    # Final fallback: Try OCC direct method
+                    try:
+                        logger.info("Trying OCC direct method as final fallback")
                         from OCC.Core import StlAPI_Writer
                         
                         # Get the shape
@@ -318,32 +376,11 @@ def upload_file():
                             raise Exception("OCC STL write returned False")
                             
                         logger.info("Successfully used OCC direct method")
+                        export_success = True
                         
                     except Exception as occ_error:
                         logger.error(f"OCC method also failed: {occ_error}")
-                        
-                        # Final fallback - try with mesh conversion
-                        try:
-                            logger.info("Trying mesh conversion method")
-                            
-                            # Get shape
-                            if hasattr(result, 'val'):
-                                shape = result.val()
-                            else:
-                                shape = result
-                            
-                            # Convert to mesh using CadQuery
-                            from cadquery import exporters
-                            
-                            # Try with explicit mesh parameters
-                            exporters.export(shape, stl_path, exportType=exporters.ExportTypes.STL, 
-                                           tolerance=tolerance, angularTolerance=0.1)
-                            
-                            logger.info("Successfully used mesh conversion method")
-                            
-                        except Exception as final_error:
-                            logger.error(f"All export methods failed. Final error: {final_error}")
-                            raise Exception(f"Impossible d'exporter vers STL. Toutes les méthodes ont échoué. Dernière erreur: {final_error}")
+                        raise Exception(f"Tous les exports STL ont échoué: {'; '.join(export_errors + [f'OCC: {str(occ_error)}'])}")
                 
                 logger.info(f"STL export completed, checking file existence")
             finally:
