@@ -224,16 +224,79 @@ def upload_file():
                 # Export to STL
                 stl_path = os.path.join(app.config['CONVERTED_FOLDER'], stl_filename)
                 
-                # Create workplane and export to STL using correct CadQuery API
-                if hasattr(result, 'val'):
-                    # If result is a Workplane, get the solid
-                    solid = result.val()
-                else:
-                    # If result is already a solid/shape
-                    solid = result
+                # Export to STL - use the most reliable method
+                logger.info(f"Starting STL export to: {stl_path}")
                 
-                # Export using cq.exporters
-                cq.exporters.export(solid, stl_path, tolerance=tolerance)
+                try:
+                    # Use the workplane method to export STL
+                    if hasattr(result, 'exportStl'):
+                        # Direct exportStl method
+                        result.exportStl(stl_path)
+                        logger.info("Used direct exportStl method")
+                    else:
+                        # Use CadQuery's standard export method
+                        # First ensure we have the right object type
+                        if hasattr(result, 'val'):
+                            shape_to_export = result.val()
+                        else:
+                            shape_to_export = result
+                        
+                        logger.info(f"Shape type: {type(shape_to_export)}")
+                        
+                        # Use cq.exporters with string format specifier
+                        cq.exporters.export(shape_to_export, stl_path, "STL", tolerance=tolerance)
+                        logger.info("Used cq.exporters.export method")
+                        
+                except Exception as export_error:
+                    logger.error(f"Primary STL export failed: {export_error}")
+                    
+                    # Try alternative method using OCC directly
+                    try:
+                        logger.info("Trying OCC direct method")
+                        from OCC.Core import StlAPI_Writer
+                        
+                        # Get the shape
+                        if hasattr(result, 'val'):
+                            shape = result.val()
+                        else:
+                            shape = result
+                        
+                        # Create STL writer and export
+                        stl_writer = StlAPI_Writer.StlAPI_Writer()
+                        success = stl_writer.Write(shape.wrapped, stl_path.encode('utf-8'))
+                        
+                        if not success:
+                            raise Exception("OCC STL write returned False")
+                            
+                        logger.info("Successfully used OCC direct method")
+                        
+                    except Exception as occ_error:
+                        logger.error(f"OCC method also failed: {occ_error}")
+                        
+                        # Final fallback - try with mesh conversion
+                        try:
+                            logger.info("Trying mesh conversion method")
+                            
+                            # Get shape
+                            if hasattr(result, 'val'):
+                                shape = result.val()
+                            else:
+                                shape = result
+                            
+                            # Convert to mesh using CadQuery
+                            from cadquery import exporters
+                            
+                            # Try with explicit mesh parameters
+                            exporters.export(shape, stl_path, exportType=exporters.ExportTypes.STL, 
+                                           tolerance=tolerance, angularTolerance=0.1)
+                            
+                            logger.info("Successfully used mesh conversion method")
+                            
+                        except Exception as final_error:
+                            logger.error(f"All export methods failed. Final error: {final_error}")
+                            raise Exception(f"Impossible d'exporter vers STL. Toutes les méthodes ont échoué. Dernière erreur: {final_error}")
+                
+                logger.info(f"STL export completed, checking file existence")
             finally:
                 # Cancel the alarm
                 signal.alarm(0)
