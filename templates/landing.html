@@ -587,6 +587,259 @@
         .navbar.scrolled {
             box-shadow: var(--shadow-md);
         }
+
+        /* Demo Section */
+        .demo-section {
+            padding: 100px 0;
+            background: var(--bg-gradient);
+        }
+
+        .demo-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+            gap: 3rem;
+            margin-top: 4rem;
+        }
+
+        .demo-card {
+            background: var(--card-bg);
+            border-radius: 16px;
+            padding: 2rem;
+            border: 1px solid var(--border-color);
+            transition: all 0.3s ease;
+        }
+
+        .demo-card:hover {
+            transform: translateY(-5px);
+            box-shadow: var(--shadow-lg);
+            border-color: var(--kaki-light);
+        }
+
+        .demo-title {
+            color: var(--kaki-light);
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+        }
+
+        .demo-description {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            margin-top: 1.5rem;
+            line-height: 1.6;
+        }
+
+        /* 3D Viewer Styles */
+        .viewer-container {
+            width: 100%;
+            height: 400px;
+            background: #1a1a1a;
+            border-radius: 12px;
+            overflow: hidden;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .viewer-loading {
+            text-align: center;
+            color: var(--text-muted);
+        }
+
+        .viewer-loading i {
+            font-size: 2rem;
+            margin-bottom: 1rem;
+            color: var(--kaki-light);
+        }
+
+        /* Report Example Styles */
+        .report-example {
+            background: #ffffff;
+            border-radius: 12px;
+            padding: 2rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .report-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid #f0f0f0;
+        }
+
+        .report-logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #333;
+        }
+
+        .report-logo i {
+            color: var(--kaki-light);
+            margin-right: 0.5rem;
+        }
+
+        .report-badge {
+            background: var(--kaki-light);
+            color: white;
+            padding: 0.25rem 1rem;
+            border-radius: 20px;
+            font-size: 0.875rem;
+            font-weight: 600;
+        }
+
+        .report-score {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+
+        .score-circle {
+            width: 120px;
+            height: 120px;
+            background: linear-gradient(135deg, var(--kaki-light), var(--kaki-dark));
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 1rem;
+            box-shadow: 0 4px 20px rgba(168, 160, 104, 0.3);
+        }
+
+        .score-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: white;
+        }
+
+        .score-label {
+            font-size: 1.2rem;
+            color: rgba(255,255,255,0.8);
+        }
+
+        .score-status {
+            color: #333;
+            font-weight: 600;
+            font-size: 1.1rem;
+        }
+
+        .report-metrics {
+            display: flex;
+            justify-content: space-around;
+            margin-bottom: 2rem;
+            padding: 1rem;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+
+        .metric {
+            text-align: center;
+        }
+
+        .metric i {
+            font-size: 1.5rem;
+            margin-bottom: 0.5rem;
+            display: block;
+        }
+
+        .metric i.fa-check-circle {
+            color: #28a745;
+        }
+
+        .metric i.fa-exclamation-triangle {
+            color: #ffc107;
+        }
+
+        .metric-label {
+            display: block;
+            color: #666;
+            font-size: 0.875rem;
+        }
+
+        .metric-value {
+            display: block;
+            color: #333;
+            font-weight: 600;
+            margin-top: 0.25rem;
+        }
+
+        .report-recommendations {
+            margin-bottom: 1.5rem;
+        }
+
+        .report-recommendations h4 {
+            color: #333;
+            font-size: 1.1rem;
+            margin-bottom: 1rem;
+        }
+
+        .material-list {
+            display: flex;
+            gap: 1rem;
+        }
+
+        .material-item {
+            flex: 1;
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 1rem;
+            text-align: center;
+            border: 2px solid transparent;
+            transition: all 0.3s ease;
+        }
+
+        .material-item:hover {
+            border-color: var(--kaki-light);
+            transform: translateY(-2px);
+        }
+
+        .material-name {
+            display: block;
+            font-weight: 700;
+            color: #333;
+            font-size: 1.1rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .material-fit {
+            display: block;
+            color: var(--kaki-light);
+            font-weight: 600;
+        }
+
+        .report-footer {
+            text-align: center;
+            padding-top: 1rem;
+            border-top: 1px solid #f0f0f0;
+            color: #666;
+            font-size: 0.9rem;
+        }
+
+        .report-footer i {
+            color: var(--kaki-light);
+            margin-right: 0.5rem;
+        }
+
+        @media (max-width: 768px) {
+            .demo-grid {
+                grid-template-columns: 1fr;
+                gap: 2rem;
+            }
+
+            .viewer-container {
+                height: 300px;
+            }
+
+            .report-metrics {
+                flex-direction: column;
+                gap: 1rem;
+            }
+
+            .material-list {
+                flex-direction: column;
+            }
+        }
     </style>
 </head>
 <body>
@@ -770,6 +1023,91 @@
         </div>
     </section>
 
+    <!-- Demo Section -->
+    <section class="demo-section">
+        <div class="container">
+            <h2 class="section-title">Découvrez CADlytics en action</h2>
+            <p class="section-subtitle">
+                Visualisez un exemple concret d'analyse DFM et explorez une pièce 3D
+            </p>
+            <div class="demo-grid">
+                <!-- 3D Viewer -->
+                <div class="demo-card">
+                    <h3 class="demo-title">Aperçu 3D de la pièce analysée</h3>
+                    <div class="viewer-container" id="stl-viewer">
+                        <div class="viewer-loading">
+                            <i class="fas fa-spinner fa-spin"></i>
+                            <p>Chargement du modèle 3D...</p>
+                        </div>
+                    </div>
+                    <p class="demo-description">
+                        Explorez cette pièce d'exemple en 3D. Notre outil offre des fonctionnalités avancées : mesures, coupes transversales, et marquage des défauts.
+                    </p>
+                </div>
+
+                <!-- Report Example -->
+                <div class="demo-card">
+                    <h3 class="demo-title">Exemple de rapport généré</h3>
+                    <div class="report-example">
+                        <div class="report-header">
+                            <div class="report-logo">
+                                <i class="fas fa-cube"></i> CADlytics
+                            </div>
+                            <div class="report-badge">Rapport DFM</div>
+                        </div>
+                        <div class="report-score">
+                            <div class="score-circle">
+                                <span class="score-value">8.5</span>
+                                <span class="score-label">/10</span>
+                            </div>
+                            <p class="score-status">Pièce injectable</p>
+                        </div>
+                        <div class="report-metrics">
+                            <div class="metric">
+                                <i class="fas fa-check-circle"></i>
+                                <span class="metric-label">Épaisseur</span>
+                                <span class="metric-value">2.5mm</span>
+                            </div>
+                            <div class="metric">
+                                <i class="fas fa-exclamation-triangle"></i>
+                                <span class="metric-label">Dépouille</span>
+                                <span class="metric-value">0.5°</span>
+                            </div>
+                            <div class="metric">
+                                <i class="fas fa-check-circle"></i>
+                                <span class="metric-label">Congés</span>
+                                <span class="metric-value">OK</span>
+                            </div>
+                        </div>
+                        <div class="report-recommendations">
+                            <h4>Matériaux recommandés</h4>
+                            <div class="material-list">
+                                <div class="material-item">
+                                    <span class="material-name">PP</span>
+                                    <span class="material-fit">95%</span>
+                                </div>
+                                <div class="material-item">
+                                    <span class="material-name">ABS</span>
+                                    <span class="material-fit">88%</span>
+                                </div>
+                                <div class="material-item">
+                                    <span class="material-name">PC</span>
+                                    <span class="material-fit">82%</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="report-footer">
+                            <p><i class="fas fa-clock"></i> Temps de refroidissement estimé : 45s</p>
+                        </div>
+                    </div>
+                    <p class="demo-description">
+                        Rapport complet avec score de moulabilité, analyse détaillée et recommandations personnalisées. Exportable en PDF haute qualité.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
     <!-- Pricing Section -->
     <section class="pricing-section" id="pricing">
         <div class="container">
@@ -874,6 +1212,9 @@
     </footer>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/mrdoob/three.js@r128/examples/js/loaders/STLLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/mrdoob/three.js@r128/examples/js/controls/OrbitControls.js"></script>
     <script>
         // Smooth scrolling
         document.querySelectorAll('a[href^="#"]').forEach(anchor => {
@@ -889,7 +1230,127 @@
             });
         });
 
-        // No additional JavaScript needed for this design
+        // 3D Viewer Setup
+        let scene, camera, renderer, controls, mesh;
+        const container = document.getElementById('stl-viewer');
+        
+        function init3DViewer() {
+            // Remove loading message
+            container.innerHTML = '';
+            
+            // Scene setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x1a1a1a);
+            
+            // Camera setup
+            const width = container.clientWidth;
+            const height = container.clientHeight;
+            camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
+            camera.position.set(50, 50, 50);
+            
+            // Renderer setup
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(width, height);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            container.appendChild(renderer.domElement);
+            
+            // Controls
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.enableZoom = true;
+            controls.autoRotate = true;
+            controls.autoRotateSpeed = 2;
+            
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambientLight);
+            
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(50, 50, 50);
+            directionalLight.castShadow = true;
+            directionalLight.shadow.camera.near = 0.1;
+            directionalLight.shadow.camera.far = 200;
+            directionalLight.shadow.camera.left = -50;
+            directionalLight.shadow.camera.right = 50;
+            directionalLight.shadow.camera.top = 50;
+            directionalLight.shadow.camera.bottom = -50;
+            scene.add(directionalLight);
+            
+            const pointLight = new THREE.PointLight(0xa8a068, 0.5);
+            pointLight.position.set(-50, 50, -50);
+            scene.add(pointLight);
+            
+            // Load STL
+            const loader = new THREE.STLLoader();
+            loader.load('/static/demo_cube.stl', function(geometry) {
+                // Center and scale geometry
+                geometry.center();
+                const bbox = new THREE.Box3().setFromObject(new THREE.Mesh(geometry));
+                const size = bbox.getSize(new THREE.Vector3());
+                const maxDim = Math.max(size.x, size.y, size.z);
+                const scale = 40 / maxDim;
+                
+                // Create material with khaki tones
+                const material = new THREE.MeshPhongMaterial({
+                    color: 0xa8a068,
+                    specular: 0x222222,
+                    shininess: 100,
+                    side: THREE.DoubleSide
+                });
+                
+                // Create mesh
+                mesh = new THREE.Mesh(geometry, material);
+                mesh.scale.set(scale, scale, scale);
+                mesh.castShadow = true;
+                mesh.receiveShadow = true;
+                scene.add(mesh);
+                
+                // Add grid
+                const gridHelper = new THREE.GridHelper(80, 20, 0x444444, 0x222222);
+                scene.add(gridHelper);
+                
+                // Position camera to fit object
+                camera.position.set(50, 50, 50);
+                controls.update();
+            }, 
+            function(xhr) {
+                // Progress callback
+                console.log((xhr.loaded / xhr.total * 100) + '% loaded');
+            },
+            function(error) {
+                console.error('Error loading STL:', error);
+                container.innerHTML = '<div class="viewer-loading"><i class="fas fa-exclamation-circle"></i><p>Erreur de chargement du modèle 3D</p></div>';
+            });
+            
+            // Handle resize
+            window.addEventListener('resize', onWindowResize, false);
+            
+            // Animation loop
+            animate();
+        }
+        
+        function onWindowResize() {
+            const width = container.clientWidth;
+            const height = container.clientHeight;
+            camera.aspect = width / height;
+            camera.updateProjectionMatrix();
+            renderer.setSize(width, height);
+        }
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        
+        // Initialize 3D viewer when DOM is loaded
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', init3DViewer);
+        } else {
+            init3DViewer();
+        }
     </script>
 </body>
 </html>

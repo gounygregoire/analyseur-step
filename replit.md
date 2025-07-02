@@ -94,6 +94,14 @@ CADlytics est une application SaaS basée sur Flask qui permet aux utilisateurs 
 
 ## Changelog
 
+- 2 juillet 2025 : Ajout demo section sur landing page avec exemple de rapport et viewer 3D
+  - Nouvelle section "Découvrez CADlytics en action" entre Comment ça marche et Tarifs
+  - Viewer 3D intégré avec Three.js affichant un modèle STL en rotation automatique
+  - Exemple de rapport DFM statique montrant score 8.5/10 et recommandations matériaux
+  - Design responsive avec grille adaptative pour mobile
+  - Fichier demo STL créé dans /static/demo_cube.stl
+  - Route /static ajoutée pour servir les fichiers statiques
+  - Animation 3D avec éclairage réaliste et couleurs kaki cohérentes
 - 2 juillet 2025 : Ajout footer complet avec pages légales
   - Footer restructuré en 3 colonnes : Navigation, Légal, Contact
   - Création de 4 pages légales : Mentions légales, RGPD, CGV, Cookies

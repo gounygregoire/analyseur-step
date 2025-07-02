@@ -122,6 +122,11 @@ def cookies():
     """Page de politique des cookies"""
     return render_template('cookies.html')
 
+@app.route('/static/<path:filename>')
+def serve_static(filename):
+    """Serve static files"""
+    return send_from_directory('static', filename)
+
 @app.route('/upload', methods=['POST'])
 @login_required
 def upload_file():
