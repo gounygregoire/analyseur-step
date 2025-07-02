@@ -130,4 +130,4 @@ def google_callback():
     else:
         flash(f"Bon retour {user.first_name} !", "success")
     
-    return redirect(url_for("upload_page"))
+    return redirect(url_for("index"))

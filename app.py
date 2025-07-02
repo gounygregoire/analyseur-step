@@ -1,6 +1,6 @@
 import os
 import logging
-from flask import Flask, render_template, request, jsonify, send_file, send_from_directory, session, Response, redirect, url_for, flash
+from flask import Flask, render_template, request, jsonify, send_file, send_from_directory, session, Response
 from flask_cors import CORS
 from flask_migrate import Migrate
 from werkzeug.utils import secure_filename
@@ -94,25 +94,8 @@ def landing():
 @app.route('/app')
 @login_required
 def index():
-    """Redirect to upload page for backward compatibility"""
-    return redirect(url_for('upload_page'))
-
-@app.route('/upload')
-@login_required
-def upload_page():
-    """Page for file upload"""
-    return render_template('upload.html')
-
-@app.route('/result/<conversion_id>')
-@login_required
-def result_page(conversion_id):
-    """Page showing analysis results and 3D viewer"""
-    conversion = ConversionJob.query.filter_by(id=conversion_id, user_id=current_user.id).first()
-    if not conversion:
-        flash('Conversion non trouvée', 'error')
-        return redirect(url_for('upload_page'))
-    
-    return render_template('result.html', conversion=conversion)
+    """Main page with file upload and 3D viewer"""
+    return render_template('index.html')
 
 @app.route('/pricing')
 def pricing():
@@ -246,7 +229,12 @@ def upload_file():
             
             return jsonify({
                 'success': True,
-                'id': file_id,
+                'file_id': file_id,
+                'stl_filename': stl_filename,
+                'original_filename': original_filename,
+                'tolerance': tolerance,
+                'step_size': step_size,
+                'stl_size': stl_size,
                 'message': f'Fichier converti avec succès. Tolérance: {tolerance}'
             })
             
