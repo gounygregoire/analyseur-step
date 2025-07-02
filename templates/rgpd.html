@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Politique RGPD - CADlytics</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.replit.com/agent/bootstrap-agent-dark-theme.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --kaki-light: #a8a068;
+            --kaki-dark: #8b7355;
+            --brown-dark: #4a3c28;
+            --accent-gold: #d4af37;
+            --bg-dark: #1a1a1a;
+            --bg-card: #2d2d2d;
+            --text-primary: #ffffff;
+            --text-secondary: rgba(255, 255, 255, 0.7);
+            --text-muted: rgba(255, 255, 255, 0.5);
+            --border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            padding-top: 80px;
+        }
+
+        /* Navigation */
+        .navbar {
+            background: rgba(26, 26, 26, 0.95);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1rem 0;
+        }
+
+        .navbar-brand {
+            color: var(--kaki-light) !important;
+            font-weight: 700;
+            font-size: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .nav-link {
+            color: var(--text-secondary) !important;
+            font-weight: 500;
+            margin: 0 0.5rem;
+            transition: color 0.3s ease;
+        }
+
+        .nav-link:hover {
+            color: var(--kaki-light) !important;
+        }
+
+        .legal-content {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 60px 20px;
+        }
+
+        h1 {
+            color: var(--kaki-light);
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 3rem;
+            text-align: center;
+        }
+
+        h2 {
+            color: var(--text-primary);
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-top: 2rem;
+            margin-bottom: 1rem;
+        }
+
+        h3 {
+            color: var(--text-primary);
+            font-size: 1.2rem;
+            font-weight: 600;
+            margin-top: 1.5rem;
+            margin-bottom: 0.75rem;
+        }
+
+        p, li {
+            color: var(--text-secondary);
+            line-height: 1.8;
+            margin-bottom: 1rem;
+        }
+
+        .back-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--kaki-light);
+            text-decoration: none;
+            margin-bottom: 2rem;
+            transition: transform 0.3s ease;
+        }
+
+        .back-link:hover {
+            transform: translateX(-5px);
+            color: var(--kaki-light);
+        }
+
+        .highlight {
+            background: rgba(168, 160, 104, 0.1);
+            padding: 1rem;
+            border-left: 3px solid var(--kaki-light);
+            margin: 1rem 0;
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg fixed-top">
+        <div class="container">
+            <a class="navbar-brand" href="/">
+                <i class="fas fa-cube"></i>CADlytics
+            </a>
+            <div class="navbar-nav ms-auto">
+                <a class="nav-link" href="/">Accueil</a>
+                <a class="nav-link" href="/app">Application</a>
+                {% if current_user.is_authenticated %}
+                    <a class="nav-link" href="{{ url_for('auth.profile') }}">Mon Profil</a>
+                {% else %}
+                    <a class="nav-link" href="{{ url_for('auth.login') }}">Connexion</a>
+                {% endif %}
+            </div>
+        </div>
+    </nav>
+
+    <div class="legal-content">
+        <a href="/" class="back-link">
+            <i class="fas fa-arrow-left"></i> Retour à l'accueil
+        </a>
+        
+        <h1>Politique de Protection des Données (RGPD)</h1>
+
+        <div class="highlight">
+            <p><strong>Dernière mise à jour :</strong> Juillet 2025</p>
+            <p>Chez CADlytics, nous prenons très au sérieux la protection de vos données personnelles. Cette politique explique comment nous collectons, utilisons et protégeons vos informations.</p>
+        </div>
+
+        <h2>1. Responsable du traitement</h2>
+        <p>
+            Le responsable du traitement des données est :<br>
+            <strong>Grégoire GOUNY</strong><br>
+            Email : contact@cadlytics.fr<br>
+            Téléphone : +33 1 23 45 67 89
+        </p>
+
+        <h2>2. Données collectées</h2>
+        <h3>2.1 Données d'identification</h3>
+        <ul>
+            <li>Nom et prénom</li>
+            <li>Adresse email</li>
+            <li>Numéro de téléphone (optionnel)</li>
+            <li>Identifiants de connexion</li>
+        </ul>
+
+        <h3>2.2 Données techniques</h3>
+        <ul>
+            <li>Adresse IP</li>
+            <li>Type de navigateur</li>
+            <li>Système d'exploitation</li>
+            <li>Données de navigation (pages visitées, durée)</li>
+        </ul>
+
+        <h3>2.3 Données liées à l'utilisation du service</h3>
+        <ul>
+            <li>Fichiers STEP téléchargés</li>
+            <li>Analyses DFM réalisées</li>
+            <li>Historique des conversions</li>
+            <li>Préférences utilisateur</li>
+        </ul>
+
+        <h2>3. Finalités du traitement</h2>
+        <p>Vos données sont collectées pour :</p>
+        <ul>
+            <li>Fournir et améliorer nos services d'analyse DFM</li>
+            <li>Gérer votre compte utilisateur</li>
+            <li>Traiter vos paiements</li>
+            <li>Communiquer avec vous (support, mises à jour)</li>
+            <li>Respecter nos obligations légales</li>
+            <li>Améliorer l'expérience utilisateur</li>
+        </ul>
+
+        <h2>4. Base légale du traitement</h2>
+        <p>Le traitement de vos données repose sur :</p>
+        <ul>
+            <li><strong>Votre consentement</strong> pour les cookies et communications marketing</li>
+            <li><strong>L'exécution du contrat</strong> pour fournir nos services</li>
+            <li><strong>Nos intérêts légitimes</strong> pour améliorer nos services</li>
+            <li><strong>Nos obligations légales</strong> pour la comptabilité et la facturation</li>
+        </ul>
+
+        <h2>5. Durée de conservation</h2>
+        <ul>
+            <li><strong>Données de compte :</strong> Tant que votre compte est actif + 3 ans</li>
+            <li><strong>Fichiers STEP :</strong> 30 jours après téléchargement</li>
+            <li><strong>Analyses DFM :</strong> 1 an après création</li>
+            <li><strong>Données de facturation :</strong> 10 ans (obligation légale)</li>
+            <li><strong>Logs techniques :</strong> 6 mois</li>
+        </ul>
+
+        <h2>6. Partage des données</h2>
+        <p>Vos données peuvent être partagées avec :</p>
+        <ul>
+            <li><strong>Stripe :</strong> Pour le traitement des paiements</li>
+            <li><strong>Google OAuth :</strong> Pour l'authentification (si utilisée)</li>
+            <li><strong>Replit :</strong> Notre hébergeur</li>
+            <li><strong>Autorités légales :</strong> Si requis par la loi</li>
+        </ul>
+        <p>Nous ne vendons jamais vos données personnelles à des tiers.</p>
+
+        <h2>7. Sécurité des données</h2>
+        <p>Nous mettons en œuvre des mesures techniques et organisationnelles appropriées :</p>
+        <ul>
+            <li>Chiffrement SSL/TLS pour toutes les transmissions</li>
+            <li>Stockage sécurisé des mots de passe (hashage bcrypt)</li>
+            <li>Accès restreint aux données personnelles</li>
+            <li>Sauvegardes régulières</li>
+            <li>Surveillance de sécurité continue</li>
+        </ul>
+
+        <h2>8. Vos droits</h2>
+        <p>Conformément au RGPD, vous disposez des droits suivants :</p>
+        <ul>
+            <li><strong>Droit d'accès :</strong> Obtenir une copie de vos données</li>
+            <li><strong>Droit de rectification :</strong> Corriger vos données</li>
+            <li><strong>Droit à l'effacement :</strong> Supprimer vos données</li>
+            <li><strong>Droit à la limitation :</strong> Limiter le traitement</li>
+            <li><strong>Droit à la portabilité :</strong> Recevoir vos données dans un format structuré</li>
+            <li><strong>Droit d'opposition :</strong> Vous opposer à certains traitements</li>
+            <li><strong>Droit de retirer votre consentement</strong> à tout moment</li>
+        </ul>
+
+        <div class="highlight">
+            <p><strong>Pour exercer vos droits :</strong></p>
+            <p>Contactez-nous à : contact@cadlytics.fr<br>
+            Nous répondrons dans un délai de 30 jours.</p>
+        </div>
+
+        <h2>9. Cookies</h2>
+        <p>Nous utilisons des cookies pour :</p>
+        <ul>
+            <li>Maintenir votre session de connexion</li>
+            <li>Mémoriser vos préférences</li>
+            <li>Analyser l'utilisation du site</li>
+        </ul>
+        <p>Vous pouvez gérer vos préférences cookies via votre navigateur.</p>
+
+        <h2>10. Modifications</h2>
+        <p>Cette politique peut être mise à jour. Nous vous informerons de tout changement significatif par email ou notification sur le site.</p>
+
+        <h2>11. Contact et réclamations</h2>
+        <p>Pour toute question concernant vos données :</p>
+        <ul>
+            <li>Email : contact@cadlytics.fr</li>
+            <li>Téléphone : +33 1 23 45 67 89</li>
+        </ul>
+        <p>Vous pouvez également déposer une réclamation auprès de la CNIL : www.cnil.fr</p>
+    </div>
+</body>
+</html>

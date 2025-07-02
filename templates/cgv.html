@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Conditions Générales de Vente - CADlytics</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.replit.com/agent/bootstrap-agent-dark-theme.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --kaki-light: #a8a068;
+            --kaki-dark: #8b7355;
+            --brown-dark: #4a3c28;
+            --accent-gold: #d4af37;
+            --bg-dark: #1a1a1a;
+            --bg-card: #2d2d2d;
+            --text-primary: #ffffff;
+            --text-secondary: rgba(255, 255, 255, 0.7);
+            --text-muted: rgba(255, 255, 255, 0.5);
+            --border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            padding-top: 80px;
+        }
+
+        /* Navigation */
+        .navbar {
+            background: rgba(26, 26, 26, 0.95);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1rem 0;
+        }
+
+        .navbar-brand {
+            color: var(--kaki-light) !important;
+            font-weight: 700;
+            font-size: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .nav-link {
+            color: var(--text-secondary) !important;
+            font-weight: 500;
+            margin: 0 0.5rem;
+            transition: color 0.3s ease;
+        }
+
+        .nav-link:hover {
+            color: var(--kaki-light) !important;
+        }
+
+        .legal-content {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 60px 20px;
+        }
+
+        h1 {
+            color: var(--kaki-light);
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 3rem;
+            text-align: center;
+        }
+
+        h2 {
+            color: var(--text-primary);
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-top: 2rem;
+            margin-bottom: 1rem;
+        }
+
+        h3 {
+            color: var(--text-primary);
+            font-size: 1.2rem;
+            font-weight: 600;
+            margin-top: 1.5rem;
+            margin-bottom: 0.75rem;
+        }
+
+        p, li {
+            color: var(--text-secondary);
+            line-height: 1.8;
+            margin-bottom: 1rem;
+        }
+
+        .back-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--kaki-light);
+            text-decoration: none;
+            margin-bottom: 2rem;
+            transition: transform 0.3s ease;
+        }
+
+        .back-link:hover {
+            transform: translateX(-5px);
+            color: var(--kaki-light);
+        }
+
+        .important-box {
+            background: rgba(212, 175, 55, 0.1);
+            border: 1px solid var(--accent-gold);
+            padding: 1rem;
+            border-radius: 8px;
+            margin: 1rem 0;
+        }
+
+        .article {
+            margin-bottom: 2rem;
+            padding-bottom: 2rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg fixed-top">
+        <div class="container">
+            <a class="navbar-brand" href="/">
+                <i class="fas fa-cube"></i>CADlytics
+            </a>
+            <div class="navbar-nav ms-auto">
+                <a class="nav-link" href="/">Accueil</a>
+                <a class="nav-link" href="/app">Application</a>
+                {% if current_user.is_authenticated %}
+                    <a class="nav-link" href="{{ url_for('auth.profile') }}">Mon Profil</a>
+                {% else %}
+                    <a class="nav-link" href="{{ url_for('auth.login') }}">Connexion</a>
+                {% endif %}
+            </div>
+        </div>
+    </nav>
+
+    <div class="legal-content">
+        <a href="/" class="back-link">
+            <i class="fas fa-arrow-left"></i> Retour à l'accueil
+        </a>
+        
+        <h1>Conditions Générales de Vente</h1>
+
+        <div class="important-box">
+            <p><strong>Date d'entrée en vigueur :</strong> 1er juillet 2025</p>
+            <p>Les présentes Conditions Générales de Vente (CGV) régissent l'utilisation du service CADlytics et constituent un contrat entre vous et nous.</p>
+        </div>
+
+        <div class="article">
+            <h2>Article 1 - Objet</h2>
+            <p>Les présentes CGV ont pour objet de définir les conditions dans lesquelles CADlytics fournit son service d'analyse DFM (Design for Manufacturing) pour l'injection plastique aux utilisateurs.</p>
+        </div>
+
+        <div class="article">
+            <h2>Article 2 - Services proposés</h2>
+            <p>CADlytics propose les services suivants :</p>
+            <ul>
+                <li>Conversion de fichiers STEP en format STL</li>
+                <li>Analyse DFM automatisée pour l'injection plastique</li>
+                <li>Génération de rapports PDF détaillés</li>
+                <li>Recommandations de matériaux</li>
+                <li>Visualisation 3D interactive</li>
+                <li>Historique des analyses</li>
+            </ul>
+        </div>
+
+        <div class="article">
+            <h2>Article 3 - Tarifs et modalités de paiement</h2>
+            <h3>3.1 Offres disponibles</h3>
+            <ul>
+                <li><strong>Pack 5 crédits :</strong> 5€ TTC (1€ par analyse)</li>
+                <li><strong>Abonnement Pro :</strong> 23,99€ TTC/mois (analyses illimitées)</li>
+            </ul>
+
+            <h3>3.2 Paiement</h3>
+            <p>Les paiements sont effectués via Stripe de manière sécurisée. Les moyens de paiement acceptés sont :</p>
+            <ul>
+                <li>Carte bancaire (Visa, Mastercard, American Express)</li>
+                <li>Prélèvement SEPA (pour les abonnements)</li>
+            </ul>
+
+            <h3>3.3 Facturation</h3>
+            <p>Une facture est automatiquement générée et envoyée par email après chaque paiement.</p>
+        </div>
+
+        <div class="article">
+            <h2>Article 4 - Création de compte</h2>
+            <p>Pour utiliser nos services, vous devez :</p>
+            <ul>
+                <li>Créer un compte avec une adresse email valide</li>
+                <li>Avoir au moins 18 ans ou l'autorisation parentale</li>
+                <li>Fournir des informations exactes et à jour</li>
+                <li>Maintenir la confidentialité de vos identifiants</li>
+            </ul>
+        </div>
+
+        <div class="article">
+            <h2>Article 5 - Utilisation du service</h2>
+            <h3>5.1 Utilisation autorisée</h3>
+            <p>Vous pouvez utiliser CADlytics pour :</p>
+            <ul>
+                <li>Analyser vos propres fichiers STEP</li>
+                <li>Générer des rapports pour usage professionnel</li>
+                <li>Partager les résultats avec vos équipes</li>
+            </ul>
+
+            <h3>5.2 Utilisation interdite</h3>
+            <p>Il est interdit de :</p>
+            <ul>
+                <li>Télécharger des fichiers contenant des virus ou malwares</li>
+                <li>Utiliser le service pour des activités illégales</li>
+                <li>Tenter de contourner les limitations techniques</li>
+                <li>Revendre ou redistribuer le service</li>
+                <li>Automatiser l'accès sans autorisation</li>
+            </ul>
+        </div>
+
+        <div class="article">
+            <h2>Article 6 - Propriété intellectuelle</h2>
+            <h3>6.1 Vos contenus</h3>
+            <p>Vous conservez tous les droits sur vos fichiers STEP. En les téléchargeant, vous nous accordez une licence limitée pour :</p>
+            <ul>
+                <li>Traiter et analyser vos fichiers</li>
+                <li>Générer les rapports demandés</li>
+                <li>Stocker temporairement les données (30 jours)</li>
+            </ul>
+
+            <h3>6.2 Notre propriété</h3>
+            <p>CADlytics, son logo, ses algorithmes et son interface sont notre propriété exclusive.</p>
+        </div>
+
+        <div class="article">
+            <h2>Article 7 - Garanties et responsabilités</h2>
+            <h3>7.1 Nos engagements</h3>
+            <p>Nous nous engageons à :</p>
+            <ul>
+                <li>Fournir un service disponible 99% du temps</li>
+                <li>Protéger vos données personnelles</li>
+                <li>Maintenir la qualité des analyses</li>
+            </ul>
+
+            <h3>7.2 Limitations</h3>
+            <p>CADlytics est fourni "tel quel". Nous ne garantissons pas :</p>
+            <ul>
+                <li>L'adéquation parfaite à vos besoins spécifiques</li>
+                <li>L'absence totale d'erreurs</li>
+                <li>Les résultats de production basés sur nos analyses</li>
+            </ul>
+
+            <div class="important-box">
+                <p><strong>Important :</strong> Nos analyses sont des recommandations. La validation finale reste de votre responsabilité.</p>
+            </div>
+        </div>
+
+        <div class="article">
+            <h2>Article 8 - Droit de rétractation</h2>
+            <p>Conformément à l'article L221-28 du Code de la consommation, le droit de rétractation ne s'applique pas aux services pleinement exécutés avant la fin du délai de rétractation avec votre accord express.</p>
+            <p>Pour les abonnements, vous pouvez annuler à tout moment. La résiliation prend effet à la fin de la période en cours.</p>
+        </div>
+
+        <div class="article">
+            <h2>Article 9 - Résiliation</h2>
+            <h3>9.1 Par vous</h3>
+            <p>Vous pouvez :</p>
+            <ul>
+                <li>Supprimer votre compte à tout moment</li>
+                <li>Annuler votre abonnement depuis votre profil</li>
+            </ul>
+
+            <h3>9.2 Par nous</h3>
+            <p>Nous pouvons résilier votre compte en cas de :</p>
+            <ul>
+                <li>Violation des présentes CGV</li>
+                <li>Comportement abusif</li>
+                <li>Fraude ou tentative de fraude</li>
+            </ul>
+        </div>
+
+        <div class="article">
+            <h2>Article 10 - Modification des CGV</h2>
+            <p>Nous pouvons modifier ces CGV à tout moment. Les modifications entrent en vigueur 30 jours après notification par email.</p>
+            <p>L'utilisation continue du service après cette date vaut acceptation des nouvelles conditions.</p>
+        </div>
+
+        <div class="article">
+            <h2>Article 11 - Litiges</h2>
+            <h3>11.1 Médiation</h3>
+            <p>En cas de litige, vous pouvez recourir gratuitement au médiateur de la consommation :</p>
+            <p>
+                <strong>Médiation de la consommation</strong><br>
+                Site : www.mediateur-consommation.fr
+            </p>
+
+            <h3>11.2 Juridiction</h3>
+            <p>À défaut de résolution amiable, les litiges sont soumis aux tribunaux français compétents.</p>
+        </div>
+
+        <div class="article">
+            <h2>Article 12 - Contact</h2>
+            <p>Pour toute question concernant ces CGV :</p>
+            <ul>
+                <li>Email : contact@cadlytics.fr</li>
+                <li>Téléphone : +33 1 23 45 67 89</li>
+                <li>Courrier : Grégoire GOUNY - CADlytics</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>

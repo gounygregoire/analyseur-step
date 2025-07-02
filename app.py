@@ -102,6 +102,26 @@ def pricing():
     """Page des tarifs"""
     return render_template('pricing.html')
 
+@app.route('/mentions-legales')
+def mentions_legales():
+    """Page des mentions légales"""
+    return render_template('mentions_legales.html')
+
+@app.route('/rgpd')
+def rgpd():
+    """Page de politique RGPD"""
+    return render_template('rgpd.html')
+
+@app.route('/cgv')
+def cgv():
+    """Page des conditions générales de vente"""
+    return render_template('cgv.html')
+
+@app.route('/cookies')
+def cookies():
+    """Page de politique des cookies"""
+    return render_template('cookies.html')
+
 @app.route('/upload', methods=['POST'])
 @login_required
 def upload_file():

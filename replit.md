@@ -94,6 +94,12 @@ CADlytics est une application SaaS basée sur Flask qui permet aux utilisateurs 
 
 ## Changelog
 
+- 2 juillet 2025 : Ajout footer complet avec pages légales
+  - Footer restructuré en 3 colonnes : Navigation, Légal, Contact
+  - Création de 4 pages légales : Mentions légales, RGPD, CGV, Cookies
+  - Routes ajoutées dans app.py pour toutes les pages légales
+  - Design cohérent avec la palette kaki/brun sur toutes les pages
+  - Navigation simplifiée avec retour à l'accueil sur chaque page
 - 2 juillet 2025 : Suppression de la visualisation 3D de la landing page
   - Retrait de la section de visualisation 3D interactive dans le dashboard preview
   - Suppression du style CSS .stat-chart associé
