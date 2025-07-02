@@ -88,6 +88,9 @@ class User(UserMixin, db.Model):
     # OAuth providers
     google_id = db.Column(db.String(100), nullable=True, unique=True)
     
+    # Préférence de langue
+    preferred_language = db.Column(db.String(5), default='fr', nullable=False)  # 'fr' ou 'en'
+    
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     

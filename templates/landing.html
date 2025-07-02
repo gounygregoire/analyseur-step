@@ -525,6 +525,16 @@
         .footer-bottom strong {
             color: var(--kaki-light);
         }
+        
+        .language-selector {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .active-lang {
+            color: var(--accent-gold) !important;
+            font-weight: 700;
+        }
 
         /* Responsive */
         @media (max-width: 768px) {
@@ -855,21 +865,21 @@
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav ms-auto align-items-center">
                     <li class="nav-item">
-                        <a class="nav-link" href="#why">Pourquoi CADlytics</a>
+                        <a class="nav-link" href="#why">{% if current_language == 'en' %}Why CADlytics{% else %}Pourquoi CADlytics{% endif %}</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="#how">Comment ça marche</a>
+                        <a class="nav-link" href="#how">{% if current_language == 'en' %}How it works{% else %}Comment ça marche{% endif %}</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="#pricing">Tarifs</a>
+                        <a class="nav-link" href="#pricing">{{ t.nav_pricing }}</a>
                     </li>
                     {% if current_user.is_authenticated %}
                         <li class="nav-item">
-                            <a class="nav-link" href="{{ url_for('auth.profile') }}">Mon Profil</a>
+                            <a class="nav-link" href="{{ url_for('auth.profile') }}">{{ t.nav_profile }}</a>
                         </li>
                     {% else %}
                         <li class="nav-item">
-                            <a class="nav-link" href="{{ url_for('auth.login') }}">Connexion</a>
+                            <a class="nav-link" href="{{ url_for('auth.login') }}">{{ t.nav_login }}</a>
                         </li>
                     {% endif %}
                     <li class="nav-item">
@@ -886,14 +896,23 @@
     <section class="hero-section">
         <div class="container">
             <h1 class="hero-title">
-                L'analyse DFM<br>réinventée pour l'injection plastique
+                {% if current_language == 'en' %}
+                    DFM Analysis<br>Reinvented for Plastic Injection
+                {% else %}
+                    L'analyse DFM<br>réinventée pour l'injection plastique
+                {% endif %}
             </h1>
             <p class="hero-subtitle">
-                Uploadez vos fichiers STEP et obtenez une analyse complète<br>
-                de manufacturabilité en quelques secondes
+                {% if current_language == 'en' %}
+                    Upload your STEP files and get a complete<br>
+                    manufacturability analysis in seconds
+                {% else %}
+                    Uploadez vos fichiers STEP et obtenez une analyse complète<br>
+                    de manufacturabilité en quelques secondes
+                {% endif %}
             </p>
             <a href="/app" class="cta-button">
-                <i class="fas fa-rocket"></i> Analyser maintenant
+                <i class="fas fa-rocket"></i> {{ t.hero_cta }}
             </a>
 
             <!-- Dashboard Preview -->
@@ -1175,19 +1194,19 @@
                 <div class="footer-section">
                     <h5 class="footer-title">Navigation</h5>
                     <div class="footer-links">
-                        <a href="/" class="footer-link">Accueil</a>
-                        <a href="/app" class="footer-link">Application</a>
-                        <a href="#why" class="footer-link">Pourquoi CADlytics</a>
-                        <a href="#pricing" class="footer-link">Tarifs</a>
+                        <a href="/" class="footer-link">{{ t.nav_home }}</a>
+                        <a href="/app" class="footer-link">{{ t.nav_app }}</a>
+                        <a href="#why" class="footer-link">{% if current_language == 'en' %}Why CADlytics{% else %}Pourquoi CADlytics{% endif %}</a>
+                        <a href="#pricing" class="footer-link">{{ t.nav_pricing }}</a>
                     </div>
                 </div>
                 <div class="footer-section">
-                    <h5 class="footer-title">Légal</h5>
+                    <h5 class="footer-title">{% if current_language == 'en' %}Legal{% else %}Légal{% endif %}</h5>
                     <div class="footer-links">
-                        <a href="/mentions-legales" class="footer-link">Mentions légales</a>
-                        <a href="/rgpd" class="footer-link">Politique RGPD</a>
-                        <a href="/cgv" class="footer-link">CGV</a>
-                        <a href="/cookies" class="footer-link">Cookies</a>
+                        <a href="/mentions-legales" class="footer-link">{{ t.footer_legal }}</a>
+                        <a href="/rgpd" class="footer-link">{{ t.footer_privacy }}</a>
+                        <a href="/cgv" class="footer-link">{{ t.footer_terms }}</a>
+                        <a href="/cookies" class="footer-link">{{ t.footer_cookies }}</a>
                     </div>
                 </div>
                 <div class="footer-section">
@@ -1202,6 +1221,22 @@
                         <a href="https://linkedin.com/company/cadlytics" class="footer-link" target="_blank">
                             <i class="fab fa-linkedin"></i> LinkedIn
                         </a>
+                    </div>
+                </div>
+                <div class="footer-section">
+                    <h5 class="footer-title">Support & Langue</h5>
+                    <div class="footer-links">
+                        <a href="mailto:bug@cadlytics.fr?subject=Bug report CADlytics" class="footer-link">
+                            <i class="fas fa-bug"></i> Signaler un bug
+                        </a>
+                        <div class="language-selector mt-3">
+                            <a href="/change-language/fr" class="footer-link {% if current_language == 'fr' %}active-lang{% endif %}">
+                                <i class="fas fa-flag"></i> Français
+                            </a>
+                            <a href="/change-language/en" class="footer-link {% if current_language == 'en' %}active-lang{% endif %}">
+                                <i class="fas fa-flag"></i> English
+                            </a>
+                        </div>
                     </div>
                 </div>
             </div>

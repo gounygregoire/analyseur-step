@@ -1,6 +1,6 @@
 import os
 import logging
-from flask import Flask, render_template, request, jsonify, send_file, send_from_directory, session, Response
+from flask import Flask, render_template, request, jsonify, send_file, send_from_directory, session, Response, redirect, url_for
 from flask_cors import CORS
 from flask_migrate import Migrate
 from werkzeug.utils import secure_filename
@@ -13,6 +13,7 @@ from models import db, ConversionJob, UserSession, User, OAuth
 from dfm_analyzer import analyze_dfm, DFMReport
 from material_recommender import recommend_materials_for_questionnaire
 from flask_login import LoginManager, login_required, current_user
+from translations import get_translation, get_all_translations
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -80,6 +81,25 @@ app.register_blueprint(stripe_bp, url_prefix='/stripe')
 @app.before_request
 def make_session_permanent():
     session.permanent = True
+
+@app.before_request
+def get_locale():
+    """Détermine la langue à utiliser pour l'utilisateur"""
+    # Si l'utilisateur est connecté, utiliser sa préférence
+    if current_user.is_authenticated and hasattr(current_user, 'preferred_language'):
+        session['language'] = current_user.preferred_language
+    # Sinon, utiliser la langue de session ou par défaut le français
+    elif 'language' not in session:
+        session['language'] = 'fr'
+
+@app.context_processor
+def inject_translations():
+    """Injecte les traductions dans tous les templates"""
+    lang = session.get('language', 'fr')
+    return {
+        't': get_all_translations(lang),
+        'current_language': lang
+    }
 
 def allowed_file(filename):
     """Check if file extension is allowed"""
@@ -867,6 +887,19 @@ def health_check():
         'upload_folder': os.path.exists(UPLOAD_FOLDER),
         'converted_folder': os.path.exists(CONVERTED_FOLDER)
     })
+
+@app.route('/change-language/<lang>')
+def change_language(lang):
+    """Change la langue de l'interface"""
+    if lang in ['fr', 'en']:
+        session['language'] = lang
+        # Si l'utilisateur est connecté, sauvegarder sa préférence
+        if current_user.is_authenticated:
+            current_user.preferred_language = lang
+            db.session.commit()
+    
+    # Retourner à la page précédente
+    return redirect(request.referrer or url_for('landing'))
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)

@@ -94,6 +94,17 @@ CADlytics est une application SaaS basée sur Flask qui permet aux utilisateurs 
 
 ## Changelog
 
+- 2 juillet 2025 : Système multi-langues et nouvelles fonctionnalités
+  - Système de traduction complet français/anglais pour toute l'interface
+  - Ajout colonne preferred_language dans base de données utilisateur
+  - Endpoint /change-language/<lang> pour changer la langue (fr/en)
+  - Contexte de traduction global injecté dans tous les templates
+  - Bouton "Signaler un bug" dans le footer avec email pré-formaté
+  - Sélecteur de langue dans le footer avec indicateur visuel de langue active
+  - 15 crédits gratuits pour les 20 premiers inscrits (au lieu de 5)
+  - Message de bienvenue personnalisé après inscription
+  - Traductions appliquées à : navigation, hero, footer, formulaires
+  - Support prévu pour génération PDF dans la langue choisie
 - 2 juillet 2025 : Amélioration robustesse pour fichiers STEP complexes
   - Gestion des erreurs de connexion PostgreSQL avec reconnexion automatique
   - Timeout dynamique basé sur la taille du fichier : 10s/MB, min 60s, max 10 minutes

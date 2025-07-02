@@ -26,13 +26,15 @@ from reportlab.graphics.shapes import Drawing, Rect, String
 from reportlab.graphics.charts.barcharts import VerticalBarChart
 from reportlab.graphics.charts.piecharts import Pie
 from reportlab.graphics import renderPDF
+from translations import get_translation
 
 class DFMReportGenerator:
     """Generate PDF reports for DFM analysis"""
     
-    def __init__(self):
+    def __init__(self, language='fr'):
         self.styles = getSampleStyleSheet()
         self.setup_custom_styles()
+        self.lang = language
         
     def setup_custom_styles(self):
         """Setup custom paragraph styles"""

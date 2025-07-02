@@ -89,13 +89,26 @@ def register():
                 flash(error, 'danger')
             return render_template('auth/register.html')
         
+        # Compter le nombre total d'utilisateurs
+        user_count = User.query.count()
+        
+        # Déterminer le nombre de crédits gratuits
+        if user_count < 20:
+            # Les 20 premiers utilisateurs reçoivent 15 crédits
+            initial_credits = 15
+            welcome_message = f'🎉 Félicitations {first_name} ! Vous faites partie des 20 premiers inscrits ! Profitez de 15 analyses gratuites pour découvrir CADlytics.'
+        else:
+            # Les suivants reçoivent 5 crédits
+            initial_credits = 5
+            welcome_message = f'Bienvenue {first_name} ! Votre compte a été créé avec succès. Vous disposez de 5 analyses gratuites pour commencer.'
+        
         # Créer l'utilisateur
         user = User(
             email=email,
             password_hash=generate_password_hash(password),
             first_name=first_name,
             last_name=last_name,
-            credits=5  # 5 crédits gratuits à l'inscription
+            credits=initial_credits
         )
         
         db.session.add(user)
@@ -103,7 +116,7 @@ def register():
         
         # Connecter automatiquement
         login_user(user, remember=True)
-        flash('Compte créé avec succès ! Vous avez 5 analyses gratuites.', 'success')
+        flash(welcome_message, 'success')
         return redirect(url_for('index'))
     
     return render_template('auth/register.html')
