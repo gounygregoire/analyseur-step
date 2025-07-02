@@ -262,8 +262,8 @@ def upload_file():
             
             # Set timeout based on file size (larger files need more time)
             file_size_mb = step_size / (1024 * 1024)
-            # Timeout généreux pour fichiers complexes : 15 secondes par MB, minimum 90s, max 15 minutes
-            timeout_seconds = max(90, min(900, int(file_size_mb * 15)))
+            # Timeout généreux pour fichiers complexes : 10 secondes par MB, minimum 60s, max 10 minutes
+            timeout_seconds = max(60, min(600, int(file_size_mb * 10)))
             logger.info(f"Timeout défini à {timeout_seconds} secondes pour fichier de {file_size_mb:.1f}MB")
             
             signal.signal(signal.SIGALRM, timeout_handler)
@@ -453,7 +453,10 @@ def upload_file():
             # Clean up uploaded file on conversion failure
             if os.path.exists(step_path):
                 os.remove(step_path)
-            return jsonify({'error': f'Échec de la conversion : {str(e)}'}), 500
+            error_msg = str(e)
+            if "timeout" in error_msg.lower() or isinstance(e, TimeoutError):
+                error_msg = "La conversion prend trop de temps. Essayez d'augmenter la tolérance (ex: 0.5) pour simplifier le maillage."
+            return jsonify({'error': f'Échec de la conversion : {error_msg}'}), 500
             
     except Exception as e:
         logger.error(f"Upload error: {str(e)}")
