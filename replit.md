@@ -94,6 +94,16 @@ CADlytics est une application SaaS basée sur Flask qui permet aux utilisateurs 
 
 ## Changelog
 
+- 2 juillet 2025 : Système de tracking complet et dashboard admin
+  - Implémentation de logging JSONL pour toutes les actions (upload, analyze, download, login)
+  - Création du module log.py avec fonctions thread-safe log_action() et get_stats()
+  - Ajout du logging dans auth.py et google_auth.py pour tracker les connexions
+  - Dashboard admin protégé par mot de passe sur /admin avec statistiques complètes
+  - Page de login admin sur /admin/login avec mot de passe stocké dans ADMIN_PASSWORD
+  - Tableau de bord affichant : utilisateurs totaux, actifs du jour, uploads, analyses, PDF générés
+  - Timeline des activités récentes et tableau des top utilisateurs
+  - Auto-refresh du dashboard toutes les 30 secondes
+  - Design cohérent avec thème kaki/brun de l'application
 - 2 juillet 2025 : Système multi-langues et nouvelles fonctionnalités
   - Système de traduction complet français/anglais pour toute l'interface
   - Ajout colonne preferred_language dans base de données utilisateur

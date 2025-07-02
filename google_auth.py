@@ -7,6 +7,7 @@ import requests
 from flask import Blueprint, redirect, request, url_for, flash
 from flask_login import login_user
 from models import db, User
+from log import log_action
 from oauthlib.oauth2 import WebApplicationClient
 
 # Configuration Google OAuth
@@ -123,6 +124,12 @@ def google_callback():
     
     # Connecter l'utilisateur
     login_user(user, remember=True)
+    
+    # Log l'action de connexion
+    log_action('login', user_id=user.id, extra={
+        'user_email': user.email,
+        'login_method': 'google_oauth'
+    })
     
     # Message de bienvenue
     if user.credits == 5 and not user.is_premium:

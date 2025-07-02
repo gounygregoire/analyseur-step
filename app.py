@@ -1,6 +1,6 @@
 import os
 import logging
-from flask import Flask, render_template, request, jsonify, send_file, send_from_directory, session, Response, redirect, url_for
+from flask import Flask, render_template, request, jsonify, send_file, send_from_directory, session, Response, redirect, url_for, flash
 from flask_cors import CORS
 from flask_migrate import Migrate
 from werkzeug.utils import secure_filename
@@ -14,6 +14,7 @@ from dfm_analyzer import analyze_dfm, DFMReport
 from material_recommender import recommend_materials_for_questionnaire
 from flask_login import LoginManager, login_required, current_user
 from translations import get_translation, get_all_translations
+from log import log_action
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -371,6 +372,16 @@ def upload_file():
                     db.session.rollback()
                     # Continue without database update
             
+            # Log l'action d'upload
+            user_id = current_user.id if current_user.is_authenticated else None
+            user_email = current_user.email if current_user.is_authenticated else None
+            log_action('upload', user_id=user_id, extra={
+                'filename': original_filename,
+                'file_size': step_size,
+                'user_email': user_email,
+                'conversion_id': file_id
+            })
+            
             return jsonify({
                 'success': True,
                 'file_id': file_id,
@@ -593,6 +604,18 @@ def analyze_dfm_endpoint(conversion_id):
         }
         session.permanent = True
         
+        # Log l'action d'analyse
+        user_id = current_user.id if current_user.is_authenticated else None
+        user_email = current_user.email if current_user.is_authenticated else None
+        log_action('analyze', user_id=user_id, extra={
+            'conversion_id': conversion_id,
+            'dfm_score': dfm_report.moldability_rating,
+            'overall_rating': dfm_report.overall_score,
+            'issues_count': len(dfm_report.wall_thickness_issues) + len(dfm_report.geometry_issues),
+            'user_email': user_email,
+            'filename': conversion_job.original_filename
+        })
+        
         return jsonify({
             'success': True,
             'dfm_analysis': dfm_data
@@ -726,6 +749,15 @@ def download_pdf(filename):
         pdf_path = os.path.join('reports', filename)
         if not os.path.exists(pdf_path):
             return jsonify({'error': 'Fichier PDF non trouvé'}), 404
+        
+        # Log l'action de téléchargement
+        user_id = current_user.id if current_user.is_authenticated else None
+        user_email = current_user.email if current_user.is_authenticated else None
+        log_action('download', user_id=user_id, extra={
+            'filename': filename,
+            'user_email': user_email,
+            'file_type': 'pdf_report'
+        })
         
         return send_file(pdf_path, as_attachment=True, download_name=filename)
         
@@ -898,6 +930,40 @@ def health_check():
         'upload_folder': os.path.exists(UPLOAD_FOLDER),
         'converted_folder': os.path.exists(CONVERTED_FOLDER)
     })
+
+@app.route('/admin')
+def admin():
+    """Page d'administration protégée par mot de passe"""
+    # Vérifier le mot de passe dans la session
+    if not session.get('admin_authenticated'):
+        return redirect(url_for('admin_login'))
+    
+    # Obtenir les statistiques
+    from log import get_stats
+    stats = get_stats()
+    
+    return render_template('admin.html', stats=stats)
+
+@app.route('/admin/login', methods=['GET', 'POST'])
+def admin_login():
+    """Page de connexion admin"""
+    if request.method == 'POST':
+        password = request.form.get('password', '')
+        admin_password = os.environ.get('ADMIN_PASSWORD', 'admin1234')
+        
+        if password == admin_password:
+            session['admin_authenticated'] = True
+            return redirect(url_for('admin'))
+        else:
+            flash('Mot de passe incorrect', 'danger')
+    
+    return render_template('admin_login.html')
+
+@app.route('/admin/logout')
+def admin_logout():
+    """Déconnexion admin"""
+    session.pop('admin_authenticated', None)
+    return redirect(url_for('landing'))
 
 @app.route('/change-language/<lang>')
 def change_language(lang):

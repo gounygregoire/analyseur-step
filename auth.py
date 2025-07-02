@@ -6,6 +6,7 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash,
 from flask_login import login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from models import db, User
+from log import log_action
 import re
 from urllib.parse import urlparse
 
@@ -52,6 +53,13 @@ def login():
         
         if user and user.password_hash and check_password_hash(user.password_hash, password):
             login_user(user, remember=True)
+            
+            # Log l'action de connexion
+            log_action('login', user_id=user.id, extra={
+                'user_email': user.email,
+                'login_method': 'password'
+            })
+            
             next_page = request.args.get('next')
             if next_page and is_safe_url(next_page):
                 return redirect(next_page)

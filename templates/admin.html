@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CADlytics - Admin Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <style>
+        body {
+            background-color: #0a0a0a;
+            color: #fff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        .navbar {
+            background-color: #1a1a1a !important;
+            border-bottom: 1px solid #a8a068;
+            padding: 1rem 0;
+        }
+        
+        .navbar-brand {
+            color: #a8a068 !important;
+            font-weight: bold;
+            font-size: 1.5rem;
+        }
+        
+        .stat-card {
+            background: linear-gradient(135deg, #1a1a1a 0%, #2a2a2a 100%);
+            border: 1px solid #a8a068;
+            border-radius: 15px;
+            padding: 2rem;
+            text-align: center;
+            margin-bottom: 2rem;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(168, 160, 104, 0.3);
+        }
+        
+        .stat-number {
+            font-size: 3rem;
+            font-weight: bold;
+            color: #d4af37;
+            margin: 0.5rem 0;
+        }
+        
+        .stat-label {
+            color: #a8a068;
+            font-size: 1.1rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .table-dark {
+            background-color: #1a1a1a;
+        }
+        
+        .table-dark td, .table-dark th {
+            border-color: #a8a068;
+        }
+        
+        .btn-logout {
+            background-color: #dc3545;
+            border-color: #dc3545;
+            color: white;
+        }
+        
+        .btn-logout:hover {
+            background-color: #c82333;
+            border-color: #bd2130;
+        }
+        
+        .chart-container {
+            background-color: #1a1a1a;
+            border: 1px solid #a8a068;
+            border-radius: 10px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        
+        .activity-timeline {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        
+        .activity-item {
+            padding: 1rem;
+            border-left: 3px solid #a8a068;
+            margin-bottom: 1rem;
+            background-color: rgba(168, 160, 104, 0.1);
+            position: relative;
+        }
+        
+        .activity-item::before {
+            content: '';
+            position: absolute;
+            left: -8px;
+            top: 1.5rem;
+            width: 13px;
+            height: 13px;
+            border-radius: 50%;
+            background-color: #d4af37;
+            border: 2px solid #1a1a1a;
+        }
+        
+        .timestamp {
+            color: #888;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-dark">
+        <div class="container">
+            <a class="navbar-brand" href="/">
+                <i class="bi bi-gear-fill"></i> CADlytics Admin
+            </a>
+            <div class="ms-auto">
+                <a href="/admin/logout" class="btn btn-logout btn-sm">
+                    <i class="bi bi-box-arrow-right"></i> Logout
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Dashboard Content -->
+    <div class="container my-5">
+        <h1 class="mb-5">Dashboard Administrateur</h1>
+        
+        <!-- Statistics Cards -->
+        <div class="row">
+            <div class="col-md-3">
+                <div class="stat-card">
+                    <i class="bi bi-people-fill" style="font-size: 2rem; color: #a8a068;"></i>
+                    <div class="stat-number">{{ stats.total_users }}</div>
+                    <div class="stat-label">Utilisateurs Total</div>
+                </div>
+            </div>
+            
+            <div class="col-md-3">
+                <div class="stat-card">
+                    <i class="bi bi-person-check-fill" style="font-size: 2rem; color: #a8a068;"></i>
+                    <div class="stat-number">{{ stats.active_users_today }}</div>
+                    <div class="stat-label">Actifs Aujourd'hui</div>
+                </div>
+            </div>
+            
+            <div class="col-md-3">
+                <div class="stat-card">
+                    <i class="bi bi-file-earmark-arrow-up-fill" style="font-size: 2rem; color: #a8a068;"></i>
+                    <div class="stat-number">{{ stats.total_uploads }}</div>
+                    <div class="stat-label">Fichiers Uploadés</div>
+                </div>
+            </div>
+            
+            <div class="col-md-3">
+                <div class="stat-card">
+                    <i class="bi bi-graph-up" style="font-size: 2rem; color: #a8a068;"></i>
+                    <div class="stat-number">{{ stats.total_analyses }}</div>
+                    <div class="stat-label">Analyses DFM</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Additional Stats Row -->
+        <div class="row">
+            <div class="col-md-4">
+                <div class="stat-card">
+                    <i class="bi bi-file-pdf-fill" style="font-size: 2rem; color: #a8a068;"></i>
+                    <div class="stat-number">{{ stats.total_downloads }}</div>
+                    <div class="stat-label">PDF Générés</div>
+                </div>
+            </div>
+            
+            <div class="col-md-4">
+                <div class="stat-card">
+                    <i class="bi bi-box-arrow-in-right" style="font-size: 2rem; color: #a8a068;"></i>
+                    <div class="stat-number">{{ stats.total_logins }}</div>
+                    <div class="stat-label">Connexions Total</div>
+                </div>
+            </div>
+            
+            <div class="col-md-4">
+                <div class="stat-card">
+                    <i class="bi bi-clock-history" style="font-size: 2rem; color: #a8a068;"></i>
+                    <div class="stat-number">{{ stats.avg_session_duration }}min</div>
+                    <div class="stat-label">Durée Session Moy.</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Recent Activity -->
+        <div class="row mt-5">
+            <div class="col-12">
+                <h2 class="mb-4">Activité Récente</h2>
+                <div class="chart-container">
+                    <div class="activity-timeline">
+                        {% for activity in stats.recent_activities %}
+                        <div class="activity-item">
+                            <div class="d-flex justify-content-between align-items-start">
+                                <div>
+                                    <strong>{{ activity.action|capitalize }}</strong>
+                                    {% if activity.user_email %}
+                                    - {{ activity.user_email }}
+                                    {% endif %}
+                                    {% if activity.filename %}
+                                    <br><small class="text-muted">{{ activity.filename }}</small>
+                                    {% endif %}
+                                </div>
+                                <span class="timestamp">{{ activity.timestamp }}</span>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Top Users Table -->
+        <div class="row mt-5">
+            <div class="col-12">
+                <h2 class="mb-4">Top Utilisateurs</h2>
+                <div class="table-responsive">
+                    <table class="table table-dark table-hover">
+                        <thead>
+                            <tr>
+                                <th>Email</th>
+                                <th>Analyses</th>
+                                <th>Uploads</th>
+                                <th>Downloads</th>
+                                <th>Dernière Activité</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for user in stats.top_users %}
+                            <tr>
+                                <td>{{ user.email }}</td>
+                                <td>{{ user.analyses }}</td>
+                                <td>{{ user.uploads }}</td>
+                                <td>{{ user.downloads }}</td>
+                                <td>{{ user.last_activity }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Auto-refresh every 30 seconds
+        setTimeout(() => {
+            window.location.reload();
+        }, 30000);
+    </script>
+</body>
+</html>
