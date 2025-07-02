@@ -276,39 +276,24 @@ def upload_file():
                 
                 # Strategy 1: Standard CadQuery import
                 try:
+                    logger.info(f"Attempting CadQuery import of {step_path}")
                     result = cq.importers.importStep(step_path)
                     if result is not None:
                         logger.info("Standard CadQuery import successful")
+                        # Log some info about the imported shape
+                        try:
+                            if hasattr(result, 'val'):
+                                bb = result.val().BoundingBox()
+                            else:
+                                bb = result.BoundingBox()
+                            logger.info(f"Shape imported: {bb.xmax-bb.xmin:.1f} x {bb.ymax-bb.ymin:.1f} x {bb.zmax-bb.zmin:.1f} mm")
+                        except:
+                            pass
                 except Exception as e:
                     import_errors.append(f"CadQuery: {str(e)}")
-                    logger.warning(f"CadQuery import failed: {e}")
+                    logger.error(f"CadQuery import failed: {e}", exc_info=True)
                 
-                # Strategy 2: Try with OCC Core directly for complex files
-                if result is None:
-                    try:
-                        from OCC.Core import STEPControl_Reader
-                        from OCC.Core import IFSelect_RetDone, TopTools_HSequenceOfShape
-                        from OCC.Core import TopExp_Explorer, TopAbs_SOLID
-                        
-                        step_reader = STEPControl_Reader()
-                        status = step_reader.ReadFile(step_path)
-                        
-                        if status == IFSelect_RetDone:
-                            step_reader.TransferRoots()
-                            shape = step_reader.OneShape()
-                            
-                            if not shape.IsNull():
-                                # Convert OCC shape to CadQuery
-                                result = cq.Workplane().newObject([shape])
-                                logger.info("OCC Core import successful")
-                            else:
-                                raise Exception("Empty shape from OCC import")
-                        else:
-                            raise Exception(f"OCC import failed with status: {status}")
-                            
-                    except Exception as e:
-                        import_errors.append(f"OCC Core: {str(e)}")
-                        logger.warning(f"OCC Core import failed: {e}")
+                # OCC imports are not available on this system, skip this strategy
                 
                 if result is None:
                     error_msg = f"Échec de l'importation du fichier STEP. Erreurs: {'; '.join(import_errors)}. Le fichier est peut-être trop complexe ou corrompu."
@@ -336,7 +321,9 @@ def upload_file():
                     export_tolerance = max(tolerance, 0.5) if file_size_mb > 10 else tolerance
                     logger.info(f"Using export tolerance: {export_tolerance}")
                     
-                    cq.exporters.export(shape_to_export, stl_path, "STL", tolerance=export_tolerance)
+                    cq.exporters.export(shape_to_export, stl_path, "STL", 
+                                      tolerance=export_tolerance,
+                                      angularTolerance=0.5)
                     export_success = True
                     logger.info("Strategy 1: CadQuery exporters successful")
                     
@@ -356,31 +343,7 @@ def upload_file():
                 
                 if not export_success:
                     logger.error(f"All export strategies failed: {'; '.join(export_errors)}")
-                    
-                    # Final fallback: Try OCC direct method
-                    try:
-                        logger.info("Trying OCC direct method as final fallback")
-                        from OCC.Core import StlAPI_Writer
-                        
-                        # Get the shape
-                        if hasattr(result, 'val'):
-                            shape = result.val()
-                        else:
-                            shape = result
-                        
-                        # Create STL writer and export
-                        stl_writer = StlAPI_Writer.StlAPI_Writer()
-                        success = stl_writer.Write(shape.wrapped, stl_path.encode('utf-8'))
-                        
-                        if not success:
-                            raise Exception("OCC STL write returned False")
-                            
-                        logger.info("Successfully used OCC direct method")
-                        export_success = True
-                        
-                    except Exception as occ_error:
-                        logger.error(f"OCC method also failed: {occ_error}")
-                        raise Exception(f"Tous les exports STL ont échoué: {'; '.join(export_errors + [f'OCC: {str(occ_error)}'])}")
+                    raise Exception(f"Tous les exports STL ont échoué: {'; '.join(export_errors)}. Essayez d'augmenter la tolérance ou utilisez un fichier plus simple.")
                 
                 logger.info(f"STL export completed, checking file existence")
             finally:
