@@ -94,19 +94,19 @@ CADlytics est une application SaaS basée sur Flask qui permet aux utilisateurs 
 
 ## Changelog
 
+- 2 juillet 2025 : Suppression de la visualisation 3D de la landing page
+  - Retrait de la section de visualisation 3D interactive dans le dashboard preview
+  - Suppression du style CSS .stat-chart associé
+  - Nettoyage de la structure HTML pour une présentation plus épurée
+  - Le dashboard preview affiche maintenant uniquement les statistiques clés
 - 2 juillet 2025 : Refonte visuelle complète de la landing page
-  - Nouvelle palette de couleurs professionnelle : bleu (#0066ff), gris clair (#f8f9fa), blanc
-  - Header sticky avec effet de scroll et ombre progressive
-  - Sections réorganisées avec grille responsive et espacement optimisé
-  - Icônes FontAwesome remplaçant Bootstrap Icons pour cohérence visuelle
-  - Hero section avec background SVG subtil et animations fade-in
-  - Feature cards avec hover effects et badges colorés
-  - Pricing cards modernisées avec hiérarchie visuelle claire
-  - Footer redesigné avec meilleur contraste sur fond sombre
-  - Mobile-first design avec breakpoints optimisés
-  - Navbar toggler personnalisé pour mobile
-  - Animations d'entrée avec Intersection Observer
-  - Suppression complète de l'ancienne palette kaki/brun
+  - Design moderne inspiré d'interfaces crypto avec palette kaki/brun (#a8a068, #4a3c28, #d4af37)
+  - Suppression définitive des offres "gratuite" et "entreprise", garde uniquement Pack 5 et Pro
+  - Nouvelles sections ajoutées : "Pourquoi CADlytics" et "Comment ça marche"
+  - Dashboard preview intégré dans la hero section avec statistiques DFM
+  - Header minimaliste avec navigation simplifiée
+  - Footer épuré avec liens essentiels
+  - Suppression des animations complexes pour une expérience plus fluide
 - 1er juillet 2025 : Historique personnel et correction génération PDF
   - Ajout colonne user_id dans ConversionJob pour lier l'historique au compte utilisateur
   - Filtrage des conversions par utilisateur connecté dans l'API /api/conversions
