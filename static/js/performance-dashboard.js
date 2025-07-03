@@ -1,5 +1,5 @@
 /**
- * Performance Dashboard Controller for CADlytics
+ * Performance Dashboard Controller for CADlytitcs
  * Manages the performance monitoring interface and real-time updates
  */
 

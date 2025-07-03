@@ -1,8 +1,8 @@
-# CADlytics - SaaS d'Analyse DFM et Visualisation 3D
+# CADlytitcs - SaaS d'Analyse DFM et Visualisation 3D
 
 ## Vue d'ensemble
 
-CADlytics est une application SaaS basée sur Flask qui permet aux utilisateurs de télécharger des fichiers STEP (.step, .stp), de les analyser pour la manufacturabilité (DFM) en injection plastique, et de les visualiser dans un viewer 3D avancé. L'application convertit les fichiers STEP au format STL en utilisant CadQuery pour la visualisation 3D dans le navigateur avec Three.js et génère des rapports PDF détaillés.
+CADlytitcs est une application SaaS basée sur Flask qui permet aux utilisateurs de télécharger des fichiers STEP (.step, .stp), de les analyser pour la manufacturabilité (DFM) en injection plastique, et de les visualiser dans un viewer 3D avancé. L'application convertit les fichiers STEP au format STL en utilisant CadQuery pour la visualisation 3D dans le navigateur avec Three.js et génère des rapports PDF détaillés.
 
 ## System Architecture
 
@@ -94,6 +94,10 @@ CADlytics est une application SaaS basée sur Flask qui permet aux utilisateurs 
 
 ## Changelog
 
+- 3 juillet 2025 : Changement de nom de CADlytics à CADlytitcs
+  - Renommage global de toutes les occurrences de "CADlytics" en "CADlytitcs"
+  - Mise à jour dans tous les fichiers : templates HTML, traductions, documentation
+  - Conservation du domaine cadlytics.replit.app pour Plausible Analytics
 - 2 juillet 2025 : Retour à la conversion STL standard
   - Suppression de la tolérance minimale forcée pour permettre à tous les fichiers de se charger
   - Retour à la méthode de conversion simple qui fonctionnait ce matin

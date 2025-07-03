@@ -1,5 +1,5 @@
 /**
- * Performance Monitor for CADlytics
+ * Performance Monitor for CADlytitcs
  * Tracks rendering times, file processing, and user interactions
  */
 
