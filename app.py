@@ -193,15 +193,15 @@ def upload_file():
         # Adjust tolerance based on file size for better performance
         if file_size_mb > 5:
             if file_size_mb > 30:
-                min_tolerance = 5.0  # Très haute tolérance pour fichiers > 30MB
+                min_tolerance = 2.0  # Très haute tolérance pour fichiers > 30MB
             elif file_size_mb > 20:
-                min_tolerance = 4.5  # Haute tolérance pour fichiers > 20MB
+                min_tolerance = 1.5  # Haute tolérance pour fichiers > 20MB
             elif file_size_mb > 10:
-                min_tolerance = 4.0  # Tolérance très élevée pour fichiers > 10MB (comme votre fichier de 13.1MB)
+                min_tolerance = 1.0  # Tolérance élevée pour fichiers > 10MB
             elif file_size_mb > 5:
-                min_tolerance = 3.0  # Tolérance élevée pour fichiers > 5MB
+                min_tolerance = 0.8  # Tolérance moyenne pour fichiers > 5MB
             else:
-                min_tolerance = 2.0  # Tolérance haute pour petits fichiers
+                min_tolerance = 0.5  # Tolérance normale pour petits fichiers
             
             tolerance = max(tolerance, min_tolerance)
             if tolerance != original_tolerance:
@@ -251,10 +251,6 @@ def upload_file():
         try:
             logger.info(f"Starting STEP to STL conversion with tolerance: {tolerance}")
             
-            # Force garbage collection before heavy processing
-            import gc
-            gc.collect()
-            
             # Import STEP file with timeout handling
             import signal
             
@@ -263,8 +259,8 @@ def upload_file():
             
             # Set timeout based on file size (larger files need more time)
             file_size_mb = step_size / (1024 * 1024)
-            # Timeout très généreux pour fichiers complexes : 15 secondes par MB, minimum 120s, max 20 minutes
-            timeout_seconds = max(120, min(1200, int(file_size_mb * 15)))
+            # Timeout généreux pour fichiers complexes : 10 secondes par MB, minimum 60s, max 10 minutes
+            timeout_seconds = max(60, min(600, int(file_size_mb * 10)))
             logger.info(f"Timeout défini à {timeout_seconds} secondes pour fichier de {file_size_mb:.1f}MB")
             
             signal.signal(signal.SIGALRM, timeout_handler)
@@ -344,9 +340,6 @@ def upload_file():
                     raise Exception(f"Tous les exports STL ont échoué: {'; '.join(export_errors)}. Essayez d'augmenter la tolérance ou utilisez un fichier plus simple.")
                 
                 logger.info(f"STL export completed, checking file existence")
-                
-                # Force garbage collection after heavy processing
-                gc.collect()
             finally:
                 # Cancel the alarm
                 signal.alarm(0)
