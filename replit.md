@@ -94,6 +94,13 @@ CADlytitcs est une application SaaS basée sur Flask qui permet aux utilisateurs
 
 ## Changelog
 
+- 4 juillet 2025 : Optimisation performance pour modèles très complexes
+  - Optimisation drastique du calcul de surface projetée pour éviter timeouts
+  - Modèles >500K faces: approximation bounding box uniquement (très rapide)  
+  - Modèles >50K faces: convex hull avec échantillonnage de vertices (5K max)
+  - Modèles moyens: convex hull standard
+  - Élimination des calculs coûteux de triangulation sur gros modèles
+  - Prévention des timeouts worker sur fichiers de 1M+ faces
 - 4 juillet 2025 : Correction erreur 502 causée par cookies volumineux
   - Suppression du stockage des données DFM en session pour éviter cookies >4KB
   - Suppression du stockage des recommandations de matériaux en session

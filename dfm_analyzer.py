@@ -507,12 +507,64 @@ class DFMAnalyzer:
             return 'info'
     
     def _calculate_projected_area_robust(self, mesh, axis: str) -> float:
-        """Calculate projected area using robust 2D projection with overlap handling"""
+        """Calculate projected area using fast approximation to avoid timeouts"""
         try:
-            vertices = mesh.vertices
+            import numpy as np
             faces = mesh.faces
+            num_faces = len(faces)
             
-            # Project vertices onto 2D plane
+            # For very large meshes (>500K faces), use bounding box approximation only
+            if num_faces > 500000:
+                print(f"Very large mesh ({num_faces} faces), using bounding box approximation")
+                bbox = mesh.bounding_box
+                if axis.lower() == 'x':
+                    return bbox.extents[1] * bbox.extents[2]  # Y*Z
+                elif axis.lower() == 'y':
+                    return bbox.extents[0] * bbox.extents[2]  # X*Z
+                elif axis.lower() == 'z':
+                    return bbox.extents[0] * bbox.extents[1]  # X*Y
+                else:
+                    return bbox.extents[0] * bbox.extents[1]
+            
+            # For large meshes (>50K faces), use fast convex hull with vertex sampling
+            if num_faces > 50000:
+                print(f"Large mesh ({num_faces} faces), using sampled convex hull")
+                vertices = mesh.vertices
+                
+                # Project vertices onto 2D plane
+                if axis.lower() == 'x':
+                    projected = vertices[:, [1, 2]]  # YZ plane
+                elif axis.lower() == 'y':
+                    projected = vertices[:, [0, 2]]  # XZ plane  
+                elif axis.lower() == 'z':
+                    projected = vertices[:, [0, 1]]  # XY plane
+                else:
+                    projected = vertices[:, [0, 1]]
+                
+                # Sample vertices for convex hull to speed up calculation
+                try:
+                    import numpy as np
+                    if len(projected) > 5000:
+                        sample_indices = np.random.choice(len(projected), 5000, replace=False)
+                        sampled_projected = projected[sample_indices]
+                    else:
+                        sampled_projected = projected
+                    
+                    from scipy.spatial import ConvexHull
+                    if len(sampled_projected) >= 3:
+                        hull = ConvexHull(sampled_projected)
+                        return hull.volume  # In 2D, volume = area
+                except Exception as e:
+                    print(f"Convex hull failed: {e}")
+                
+                # Fallback to bounding box for large meshes
+                import numpy as np
+                min_coords = np.min(projected, axis=0)
+                max_coords = np.max(projected, axis=0)
+                return (max_coords[0] - min_coords[0]) * (max_coords[1] - min_coords[1])
+            
+            # For medium meshes, use simple convex hull
+            vertices = mesh.vertices
             if axis.lower() == 'x':
                 projected = vertices[:, [1, 2]]  # YZ plane
             elif axis.lower() == 'y':
@@ -520,74 +572,37 @@ class DFMAnalyzer:
             elif axis.lower() == 'z':
                 projected = vertices[:, [0, 1]]  # XY plane
             else:
-                raise ValueError(f"Invalid axis: {axis}")
+                projected = vertices[:, [0, 1]]
             
-            # Method 1: Sum of projected triangle areas (optimized)
-            total_area_triangles = 0.0
-            num_faces = len(faces)
-            
-            # For large meshes, sample faces to avoid timeout
-            if num_faces > 10000:
-                # Sample 10% of faces randomly
-                import random
-                sample_size = max(1000, num_faces // 10)
-                sampled_indices = random.sample(range(num_faces), sample_size)
-                scaling_factor = num_faces / sample_size
-            else:
-                sampled_indices = range(num_faces)
-                scaling_factor = 1.0
-            
-            for i in sampled_indices:
-                face = faces[i]
-                try:
-                    if len(face) >= 3:
-                        # Safely access vertices
-                        v0 = projected[face[0]]
-                        v1 = projected[face[1]]
-                        v2 = projected[face[2]]
-                        # Triangle area using cross product
-                        area = 0.5 * abs((v1[0] - v0[0]) * (v2[1] - v0[1]) - (v2[0] - v0[0]) * (v1[1] - v0[1]))
-                        total_area_triangles += area
-                except (IndexError, TypeError) as e:
-                    continue
-            
-            # Scale up if we sampled
-            total_area_triangles *= scaling_factor
-            
-            # Method 2: Convex hull area (fallback for validation)
             try:
                 from scipy.spatial import ConvexHull
-                if len(projected) >= 3:  # Need at least 3 points for hull
+                if len(projected) >= 3:
                     hull = ConvexHull(projected)
-                    convex_hull_area = hull.volume  # In 2D, volume = area
-                else:
-                    convex_hull_area = 0.0
+                    return hull.volume  # In 2D, volume = area
             except Exception:
-                convex_hull_area = 0.0
+                pass
             
-            # Validation and selection
-            if total_area_triangles > 0 and convex_hull_area > 0:
-                ratio = total_area_triangles / convex_hull_area
-                print(f"Axis {axis.upper()}: Triangles={total_area_triangles:.2f}, Hull={convex_hull_area:.2f}, Ratio={ratio:.1f}")
-                
-                # If ratio is too high, there's significant overlap - use a hybrid approach
-                if ratio > 2.5:
-                    # Use average weighted toward the more conservative estimate
-                    result = (total_area_triangles + 2 * convex_hull_area) / 3
-                    print(f"High overlap detected, using hybrid: {result:.2f}")
-                    return result
-                else:
-                    return total_area_triangles
-            elif total_area_triangles > 0:
-                return total_area_triangles
-            elif convex_hull_area > 0:
-                return convex_hull_area
-            else:
-                return 0.0
+            # Final fallback: bounding box
+            import numpy as np
+            min_coords = np.min(projected, axis=0)
+            max_coords = np.max(projected, axis=0)
+            return (max_coords[0] - min_coords[0]) * (max_coords[1] - min_coords[1])
                 
         except Exception as e:
-            print(f"Error in robust projection for axis {axis}: {e}")
-            return 0.0
+            print(f"Error in projection calculation for axis {axis}: {e}")
+            # Ultimate fallback to bounding box
+            try:
+                bbox = mesh.bounding_box
+                if axis.lower() == 'x':
+                    return bbox.extents[1] * bbox.extents[2]  # Y*Z
+                elif axis.lower() == 'y':
+                    return bbox.extents[0] * bbox.extents[2]  # X*Z
+                elif axis.lower() == 'z':
+                    return bbox.extents[0] * bbox.extents[1]  # X*Y
+                else:
+                    return 1000.0
+            except:
+                return 1000.0
     
     def _find_sharp_edges(self, workplane) -> List[Tuple[float, float, float]]:
         """Find sharp edges that need fillets (simplified for performance)"""
