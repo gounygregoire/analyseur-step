@@ -68,34 +68,31 @@ class DFMReportGenerator:
         ))
         
     def generate_3d_views(self, step_file_path: str) -> Dict[str, str]:
-        """Generate 3D views from STEP file using CadQuery and STL - ultra-fast for large files"""
+        """Generate 3D views from STEP file using CadQuery and STL"""
         views = {}
         
         try:
+            import cadquery as cq
+            import signal
             import os
             
-            # Check file size first - be very aggressive about fallback
+            # Check file size first - if too large, use fallback immediately
             try:
                 file_size = os.path.getsize(step_file_path) / (1024 * 1024)  # Size in MB
-                if file_size > 5:  # Files > 5MB - immediate fallback to avoid timeouts
-                    print(f"Large STEP file ({file_size:.1f}MB), using immediate fallback")
+                if file_size > 50:  # Files > 50MB
+                    print(f"Large STEP file ({file_size:.1f}MB), using fallback views")
                     return self._generate_fallback_views()
             except:
-                # If we can't get file size, use fallback
-                return self._generate_fallback_views()
+                pass
             
-            # For small files only, try CadQuery with very short timeout
+            # Set timeout for CadQuery operations
+            def timeout_handler(signum, frame):
+                raise TimeoutError("CadQuery operation timed out")
+            
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(30)  # 30 second timeout
+            
             try:
-                import cadquery as cq
-                import signal
-                
-                # Set very short timeout
-                def timeout_handler(signum, frame):
-                    raise TimeoutError("CadQuery operation timed out")
-                
-                signal.signal(signal.SIGALRM, timeout_handler)
-                signal.alarm(3)  # Only 3 second timeout
-                
                 # Load the STEP file
                 workplane = cq.importers.importStep(step_file_path)
                 
@@ -106,20 +103,9 @@ class DFMReportGenerator:
                 # Cancel timeout
                 signal.alarm(0)
                 
-                # Generate simple wireframe views
-                x_dim, y_dim, z_dim = dimensions
-                return {
-                    'x': self._create_simple_wireframe_view('X', dimensions),
-                    'y': self._create_simple_wireframe_view('Y', dimensions),
-                    'z': self._create_simple_wireframe_view('Z', dimensions)
-                }
-                
             except (TimeoutError, Exception) as e:
-                print(f"Failed to load STEP file quickly: {e}")
-                try:
-                    signal.alarm(0)
-                except:
-                    pass
+                print(f"Failed to load STEP file: {e}")
+                signal.alarm(0)
                 return self._generate_fallback_views()
             
             # Try to use STL file for realistic rendering
@@ -625,21 +611,9 @@ class DFMReportGenerator:
         
     def generate_report(self, dfm_data: Dict[str, Any], step_file_path: str, 
                        filename: str, original_filename: str, material_recommendations: List[Dict] = None, lang: str = 'fr') -> str:
-        """Generate complete DFM PDF report with ultra-fast mode for large files"""
+        """Generate complete DFM PDF report"""
         try:
-            import os
-            
-            # Check file size first - for large files, skip 3D views completely
-            try:
-                file_size = os.path.getsize(step_file_path) / (1024 * 1024)  # Size in MB
-                if file_size > 5:  # Files > 5MB - skip all 3D views
-                    print(f"Large file ({file_size:.1f}MB), generating ultra-fast PDF without 3D views")
-                    return self._generate_fast_report_without_views(dfm_data, filename, original_filename, material_recommendations, lang)
-            except:
-                # If we can't get file size, use fast mode
-                return self._generate_fast_report_without_views(dfm_data, filename, original_filename, material_recommendations, lang)
-            
-            # For small files only, try to generate 3D views
+            # Generate 3D views from STEP file
             model_views = self.generate_3d_views(step_file_path)
             
             # Create PDF document
@@ -1143,96 +1117,6 @@ class DFMReportGenerator:
                 print(f"Error creating fallback view for {axis}: {e}")
                 # Return empty string if conversion fails
                 views[axis] = ""
-        
-        return views
-    
-    def _generate_fast_report_without_views(self, dfm_data: Dict[str, Any], filename: str, 
-                                          original_filename: str, material_recommendations: List[Dict] = None, lang: str = 'fr') -> str:
-        """Generate ultra-fast PDF report without any 3D views to avoid timeouts"""
-        try:
-            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Table, TableStyle
-            from reportlab.lib.units import inch
-            from reportlab.lib import colors
-            from datetime import datetime
-            
-            # Create the PDF document
-            doc = SimpleDocTemplate(filename, pagesize=A4)
-            story = []
-            
-            # Title
-            title = Paragraph("Rapport d'Analyse DFM - Mode Rapide", self.styles['Title'])
-            story.append(title)
-            story.append(Spacer(1, 12))
-            
-            # File info
-            file_info = f"<b>Fichier analysé :</b> {original_filename}<br/>"
-            file_info += f"<b>Date de génération :</b> {datetime.now().strftime('%d/%m/%Y %H:%M')}<br/>"
-            file_info += f"<b>Mode :</b> Analyse rapide pour fichiers volumineux"
-            story.append(Paragraph(file_info, self.styles['Normal']))
-            story.append(Spacer(1, 20))
-            
-            # DFM Analysis Results
-            story.append(Paragraph("Résultats de l'Analyse DFM", self.styles['Heading1']))
-            story.append(Spacer(1, 12))
-            
-            # Overall score
-            dimensions = dfm_data.get('dimensions', {})
-            score = dfm_data.get('rating', 'unknown')
-            score_text = f"<b>Score général :</b> {score.title()}"
-            story.append(Paragraph(score_text, self.styles['Normal']))
-            story.append(Spacer(1, 12))
-            
-            # Dimensions
-            if dimensions:
-                dims_text = f"<b>Dimensions :</b> {dimensions.get('x', 0):.1f} × {dimensions.get('y', 0):.1f} × {dimensions.get('z', 0):.1f} mm<br/>"
-                dims_text += f"<b>Volume :</b> {dimensions.get('volume', 0):.1f} mm³<br/>"
-                dims_text += f"<b>Épaisseur max :</b> {dimensions.get('max_wall_thickness', 0):.1f} mm"
-                story.append(Paragraph(dims_text, self.styles['Normal']))
-                story.append(Spacer(1, 12))
-            
-            # Recommendations
-            recommendations = dfm_data.get('recommendations', [])
-            if recommendations:
-                story.append(Paragraph("Recommandations", self.styles['Heading2']))
-                for i, rec in enumerate(recommendations[:5]):  # Limit to 5 recommendations
-                    story.append(Paragraph(f"• {rec}", self.styles['Normal']))
-                story.append(Spacer(1, 12))
-            
-            # Material recommendations
-            if material_recommendations:
-                story.append(Paragraph("Recommandations de Matériaux", self.styles['Heading2']))
-                for i, material in enumerate(material_recommendations[:3]):  # Limit to 3 materials
-                    mat_text = f"<b>{i+1}. {material.get('name', 'Matériau inconnu')}</b><br/>"
-                    mat_text += f"Description : {material.get('description', 'Non spécifiée')}<br/>"
-                    mat_text += f"Score : {material.get('score', 0)}/100"
-                    story.append(Paragraph(mat_text, self.styles['Normal']))
-                    story.append(Spacer(1, 8))
-            
-            # Note about fast mode
-            story.append(Spacer(1, 20))
-            fast_mode_note = """
-            <i>Note : Ce rapport a été généré en mode rapide pour optimiser les performances avec les fichiers volumineux. 
-            Les vues 3D ont été omises pour éviter les timeouts. 
-            L'analyse DFM reste complète et précise.</i>
-            """
-            story.append(Paragraph(fast_mode_note, self.styles['Normal']))
-            
-            # Build PDF
-            doc.build(story)
-            return filename
-            
-        except Exception as e:
-            print(f"Error generating fast PDF report: {e}")
-            return filename  # Return filename even on error
-    
-    def _create_simple_wireframe_views_from_dimensions(self, dimensions: tuple) -> Dict[str, str]:
-        """Create simple wireframe views for all axes from dimensions only"""
-        views = {}
-        x_dim, y_dim, z_dim = dimensions
-        
-        views['x'] = self._create_simple_wireframe_view('X', dimensions)
-        views['y'] = self._create_simple_wireframe_view('Y', dimensions)
-        views['z'] = self._create_simple_wireframe_view('Z', dimensions)
         
         return views
     
