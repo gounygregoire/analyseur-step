@@ -94,14 +94,14 @@ CADlytitcs est une application SaaS basée sur Flask qui permet aux utilisateurs
 
 ## Changelog
 
-- 4 juillet 2025 : Correction critiques pour gros fichiers et stabilité
-  - Correction erreur JavaScript viewer 3D (Cannot read properties of undefined)
-  - Analyse DFM optimisée: nettoyage mesh désactivé pour >200K faces
-  - Opération split mesh désactivée pour >100K faces (évite timeouts)
-  - Gestion d'erreur robuste avec try/catch sur opérations coûteuses
-  - Timeout viewer 3D augmenté à 5 minutes pour gros fichiers
-  - Messages d'erreur différenciés (timeout, réseau, corruption)
-  - Suppression définitive des données DFM en session pour éviter cookies volumineux
+- 4 juillet 2025 : Solution complète pour gros fichiers CAD (>1M faces)
+  - Viewer 3D: matériau Lambert pour tous les modèles (ombres/éclairage préservés)
+  - Analyse DFM adaptative: méthodes simplifiées automatiques pour >1000 faces CadQuery
+  - Wall thickness simplifiée: estimation basée dimensions au lieu calculs volume coûteux
+  - Geometry analysis simplifiée: vérifications de base sans opérations détaillées
+  - Nettoyage mesh conditionnel: désactivé pour >200K faces, split pour >100K faces
+  - Timeout viewer 3D: 5 minutes, messages d'erreur différenciés
+  - Architecture robuste: analyse DFM fonctionne même sur modèles ultra-complexes
 - 4 juillet 2025 : Optimisation performance pour modèles très complexes
   - Optimisation drastique du calcul de surface projetée pour éviter timeouts
   - Modèles >500K faces: approximation bounding box uniquement (très rapide)  

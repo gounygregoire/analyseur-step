@@ -595,17 +595,16 @@ class STEPViewer {
                 geometry.boundingBox.getCenter(center);
                 geometry.translate(-center.x, -center.y, -center.z);
                 
-                // Create material - use simpler material for large models
+                // Create material - always use Lambert for consistent lighting and shadows
                 let material;
                 if (vertexCount > 1000000) {
-                    // Basic material for extremely large models
-                    material = new THREE.MeshBasicMaterial({
+                    // Lambert material for extremely large models (still has lighting/shadows)
+                    material = new THREE.MeshLambertMaterial({
                         color: 0x888888,
-                        side: THREE.DoubleSide,
-                        wireframe: false
+                        side: THREE.DoubleSide
                     });
                 } else if (vertexCount > 500000) {
-                    // Simplified material for large models
+                    // Lambert material for large models
                     material = new THREE.MeshLambertMaterial({
                         color: 0x888888,
                         side: THREE.DoubleSide

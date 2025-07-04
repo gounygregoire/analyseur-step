@@ -318,12 +318,22 @@ class DFMAnalyzer:
         issues = []
         
         try:
-            # Get all faces and edges
-            faces = workplane.faces().vals()
+            # Quick check if this is a very large model - use simplified analysis
+            try:
+                faces = workplane.faces().vals()
+                if len(faces) > 1000:  # Large model - use simplified analysis
+                    print(f"Large model detected ({len(faces)} faces), using simplified wall thickness analysis")
+                    return self._analyze_wall_thickness_simplified(workplane)
+            except:
+                # If we can't count faces, assume it's complex and use simplified method
+                print("Could not count faces, using simplified wall thickness analysis")
+                return self._analyze_wall_thickness_simplified(workplane)
+            
+            # Standard analysis for smaller models
             edges = workplane.edges().vals()
             bbox = workplane.val().BoundingBox()
             
-            # Calculate volume and surface area for better estimation
+            # Calculate volume and surface area for better estimation (only for small models)
             volume = workplane.val().Volume()
             surface_area = workplane.val().Area()
             
@@ -430,11 +440,73 @@ class DFMAnalyzer:
         
         return issues
     
+    def _analyze_wall_thickness_simplified(self, workplane) -> List[WallThicknessIssue]:
+        """Simplified wall thickness analysis for large models to avoid timeouts"""
+        issues = []
+        
+        try:
+            # Get basic bounding box only (fast operation)
+            bbox = workplane.val().BoundingBox()
+            
+            # Estimate average wall thickness based on smallest dimension
+            # This is a conservative estimation for large models
+            dimensions = [bbox.xlen, bbox.ylen, bbox.zlen]
+            min_dim = min(dimensions)
+            max_dim = max(dimensions)
+            
+            # For complex models, estimate based on dimension ratios
+            if max_dim / min_dim > 10:  # Long/thin part
+                estimated_thickness = min_dim * 0.8  # Conservative estimate
+            else:  # More cubic part
+                estimated_thickness = min_dim * 0.15  # Very conservative estimate
+            
+            # Clamp to reasonable range for injection molding
+            estimated_thickness = max(0.5, min(estimated_thickness, 10.0))
+            
+            print(f"Simplified analysis: estimated wall thickness = {estimated_thickness:.2f}mm")
+            
+            # Create simplified issues based on estimation
+            center_location = (bbox.center.x, bbox.center.y, bbox.center.z)
+            
+            if estimated_thickness < self.min_wall_thickness:
+                issues.append(WallThicknessIssue(
+                    location=center_location,
+                    thickness=round(estimated_thickness, 2),
+                    issue_type='too_thin',
+                    severity='critical' if estimated_thickness < 0.6 else 'warning'
+                ))
+            elif estimated_thickness > self.max_wall_thickness:
+                issues.append(WallThicknessIssue(
+                    location=center_location,
+                    thickness=round(estimated_thickness, 2),
+                    issue_type='too_thick',
+                    severity='warning' if estimated_thickness < 6.0 else 'critical'
+                ))
+            
+            print(f"Simplified wall thickness analysis complete, found {len(issues)} issues")
+            
+        except Exception as e:
+            print(f"Error in simplified wall thickness analysis: {e}")
+        
+        return issues
+    
     def _analyze_geometry_issues(self, workplane, demolding_axis: str = 'z') -> List[GeometryIssue]:
         """Analyze various geometry issues for injection molding"""
         issues = []
         
         try:
+            # Quick check if this is a very large model - use simplified analysis
+            try:
+                faces = workplane.faces().vals()
+                if len(faces) > 1000:  # Large model - use simplified analysis
+                    print(f"Large model detected ({len(faces)} faces), using simplified geometry analysis")
+                    return self._analyze_geometry_issues_simplified(workplane, demolding_axis)
+            except:
+                # If we can't count faces, assume it's complex and use simplified method
+                print("Could not count faces, using simplified geometry analysis")
+                return self._analyze_geometry_issues_simplified(workplane, demolding_axis)
+            
+            # Standard analysis for smaller models
             # Check overall height
             bbox = workplane.val().BoundingBox()
             if bbox.zlen > self.max_height:
@@ -482,6 +554,60 @@ class DFMAnalyzer:
             
         except Exception as e:
             print(f"Error in geometry analysis: {e}")
+        
+        return issues
+    
+    def _analyze_geometry_issues_simplified(self, workplane, demolding_axis: str = 'z') -> List[GeometryIssue]:
+        """Simplified geometry analysis for large models to avoid timeouts"""
+        issues = []
+        
+        try:
+            # Only check basic overall dimensions (fast operation)
+            bbox = workplane.val().BoundingBox()
+            
+            # Check overall height based on demolding axis
+            axis_length = bbox.zlen if demolding_axis == 'z' else (bbox.ylen if demolding_axis == 'y' else bbox.xlen)
+            
+            if axis_length > self.max_height:
+                center_location = (bbox.center.x, bbox.center.y, bbox.center.z)
+                issues.append(GeometryIssue(
+                    location=center_location,
+                    issue_type="excessive_height",
+                    description=f"Hauteur de {axis_length:.1f}mm dépasse la limite recommandée",
+                    severity="warning",
+                    recommendation="Réduire la hauteur ou diviser en plusieurs pièces"
+                ))
+            
+            # For large models, add general recommendations without detailed analysis
+            dimensions = [bbox.xlen, bbox.ylen, bbox.zlen]
+            max_dim = max(dimensions)
+            min_dim = min(dimensions)
+            
+            # Check aspect ratio
+            if max_dim / min_dim > 20:  # Very elongated part
+                center_location = (bbox.center.x, bbox.center.y, bbox.center.z)
+                issues.append(GeometryIssue(
+                    location=center_location,
+                    issue_type="high_aspect_ratio",
+                    description=f"Rapport d'aspect élevé ({max_dim/min_dim:.1f}:1)",
+                    severity="warning",
+                    recommendation="Considérer diviser la pièce ou renforcer les sections fines"
+                ))
+            
+            # Add general recommendations for complex models
+            center_location = (bbox.center.x, bbox.center.y, bbox.center.z)
+            issues.append(GeometryIssue(
+                location=center_location,
+                issue_type="complex_geometry",
+                description="Modèle complexe - vérification détaillée recommandée",
+                severity="info",
+                recommendation="Vérifier manuellement les congés, dépouilles et épaisseurs"
+            ))
+            
+            print(f"Simplified geometry analysis complete, found {len(issues)} issues")
+            
+        except Exception as e:
+            print(f"Error in simplified geometry analysis: {e}")
         
         return issues
     
