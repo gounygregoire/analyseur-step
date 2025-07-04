@@ -469,6 +469,8 @@ class STEPViewer {
                 this.showError(`La conversion dépasse le temps alloué (${Math.round(timeoutSeconds / 60)} minutes). Pour les fichiers très complexes, essayez d'augmenter la tolérance à 0.5 ou plus.`);
             } else if (error.message && error.message.includes('500')) {
                 this.showError('Erreur serveur lors de la conversion. Essayez d\'augmenter la tolérance (ex: 0.5) pour simplifier le maillage.');
+            } else if (error.message === 'Failed to fetch') {
+                this.showError('Erreur de connexion au serveur. Veuillez vérifier que vous êtes connecté et réessayer.');
             } else {
                 this.showError(error.message || 'Une erreur réseau s\'est produite pendant le téléchargement');
             }
