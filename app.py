@@ -85,18 +85,15 @@ def make_session_permanent():
 
 @app.before_request
 def get_locale():
-    """Détermine la langue à utiliser pour l'utilisateur"""
-    # Si l'utilisateur est connecté, utiliser sa préférence
-    if current_user.is_authenticated and hasattr(current_user, 'preferred_language'):
-        session['language'] = current_user.preferred_language
-    # Sinon, utiliser la langue de session ou par défaut le français
-    elif 'language' not in session:
-        session['language'] = 'fr'
+    """Détermine la langue à utiliser pour l'utilisateur - toujours français"""
+    # Toujours français par défaut
+    session['language'] = 'fr'
 
 @app.context_processor
 def inject_translations():
     """Injecte les traductions dans tous les templates"""
-    lang = session.get('language', 'fr')
+    session['language'] = 'fr'
+    lang = 'fr'
     return {
         't': get_all_translations(lang),
         'current_language': lang
@@ -1011,18 +1008,7 @@ def admin_logout():
     session.pop('admin_authenticated', None)
     return redirect(url_for('landing'))
 
-@app.route('/change-language/<lang>')
-def change_language(lang):
-    """Change la langue de l'interface"""
-    if lang in ['fr', 'en']:
-        session['language'] = lang
-        # Si l'utilisateur est connecté, sauvegarder sa préférence
-        if current_user.is_authenticated:
-            current_user.preferred_language = lang
-            db.session.commit()
-    
-    # Retourner à la page précédente
-    return redirect(request.referrer or url_for('landing'))
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)

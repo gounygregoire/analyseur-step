@@ -94,6 +94,12 @@ CADlytitcs est une application SaaS basée sur Flask qui permet aux utilisateurs
 
 ## Changelog
 
+- 4 juillet 2025 : Suppression sélecteur de langue et français par défaut
+  - Suppression complète du sélecteur de langue du footer
+  - Suppression de la route /change-language/<lang> 
+  - Langue française définie par défaut dans toute l'application
+  - Simplification des fonctions get_locale() et inject_translations()
+  - Interface 100% française sans possibilité de changement de langue
 - 3 juillet 2025 : Changement de nom de CADlytics à CADlytitcs
   - Renommage global de toutes les occurrences de "CADlytics" en "CADlytitcs"
   - Mise à jour dans tous les fichiers : templates HTML, traductions, documentation

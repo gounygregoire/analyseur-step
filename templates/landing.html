@@ -530,15 +530,7 @@
             color: var(--kaki-light);
         }
         
-        .language-selector {
-            display: flex;
-            gap: 10px;
-        }
-        
-        .active-lang {
-            color: var(--accent-gold) !important;
-            font-weight: 700;
-        }
+
 
         /* Responsive */
         @media (max-width: 768px) {
@@ -1228,19 +1220,11 @@
                     </div>
                 </div>
                 <div class="footer-section">
-                    <h5 class="footer-title">Support & Langue</h5>
+                    <h5 class="footer-title">Support</h5>
                     <div class="footer-links">
                         <a href="mailto:gouny.gregoire@gmail.com.fr?subject=Bug report CADlytitcs" class="footer-link">
                             <i class="fas fa-bug"></i> Signaler un bug
                         </a>
-                        <div class="language-selector mt-3">
-                            <a href="/change-language/fr" class="footer-link {% if current_language == 'fr' %}active-lang{% endif %}">
-                                <i class="fas fa-flag"></i> Français
-                            </a>
-                            <a href="/change-language/en" class="footer-link {% if current_language == 'en' %}active-lang{% endif %}">
-                                <i class="fas fa-flag"></i> English
-                            </a>
-                        </div>
                     </div>
                 </div>
             </div>
