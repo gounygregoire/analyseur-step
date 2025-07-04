@@ -73,13 +73,40 @@ class DFMReportGenerator:
         
         try:
             import cadquery as cq
+            import signal
+            import os
             
-            # Load the STEP file
-            workplane = cq.importers.importStep(step_file_path)
+            # Check file size first - if too large, use fallback immediately
+            try:
+                file_size = os.path.getsize(step_file_path) / (1024 * 1024)  # Size in MB
+                if file_size > 50:  # Files > 50MB
+                    print(f"Large STEP file ({file_size:.1f}MB), using fallback views")
+                    return self._generate_fallback_views()
+            except:
+                pass
             
-            # Get bounding box
-            bbox = workplane.val().BoundingBox()
-            dimensions = (bbox.xlen, bbox.ylen, bbox.zlen)
+            # Set timeout for CadQuery operations
+            def timeout_handler(signum, frame):
+                raise TimeoutError("CadQuery operation timed out")
+            
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(30)  # 30 second timeout
+            
+            try:
+                # Load the STEP file
+                workplane = cq.importers.importStep(step_file_path)
+                
+                # Get bounding box
+                bbox = workplane.val().BoundingBox()
+                dimensions = (bbox.xlen, bbox.ylen, bbox.zlen)
+                
+                # Cancel timeout
+                signal.alarm(0)
+                
+            except (TimeoutError, Exception) as e:
+                print(f"Failed to load STEP file: {e}")
+                signal.alarm(0)
+                return self._generate_fallback_views()
             
             # Try to use STL file for realistic rendering
             try:
@@ -1044,6 +1071,108 @@ class DFMReportGenerator:
             }
             return texts.get(rating, 'Inconnue')
 
+    def _generate_fallback_views(self) -> Dict[str, str]:
+        """Generate fallback views when STEP import fails"""
+        from reportlab.graphics.shapes import Drawing, Rect, String, Circle, Line
+        import base64
+        from io import BytesIO
+        from reportlab.graphics.renderPM import drawToString
+        
+        views = {}
+        
+        for axis in ['x', 'y', 'z']:
+            # Create a simple fallback drawing
+            drawing = Drawing(200, 200)
+            
+            # Add background
+            drawing.add(Rect(10, 10, 180, 180, fillColor=HexColor('#f8f9fa'), strokeColor=HexColor('#dee2e6')))
+            
+            # Add axis title
+            axis_names = {'x': 'Vue selon X', 'y': 'Vue selon Y', 'z': 'Vue selon Z'}
+            drawing.add(String(100, 170, axis_names[axis], fontSize=14, textAnchor='middle', fillColor=black))
+            
+            # Add a simple 3D representation based on axis
+            if axis == 'x':
+                # YZ plane view - show a rectangle
+                drawing.add(Rect(70, 60, 60, 80, fillColor=None, strokeColor=HexColor('#007bff'), strokeWidth=2))
+                drawing.add(String(100, 45, 'Plan YZ', fontSize=10, textAnchor='middle', fillColor=HexColor('#666')))
+            elif axis == 'y':
+                # XZ plane view - show an elongated rectangle
+                drawing.add(Rect(50, 70, 100, 60, fillColor=None, strokeColor=HexColor('#28a745'), strokeWidth=2))
+                drawing.add(String(100, 45, 'Plan XZ', fontSize=10, textAnchor='middle', fillColor=HexColor('#666')))
+            else:  # z
+                # XY plane view - show a wide rectangle
+                drawing.add(Rect(60, 80, 80, 40, fillColor=None, strokeColor=HexColor('#dc3545'), strokeWidth=2))
+                drawing.add(String(100, 45, 'Plan XY', fontSize=10, textAnchor='middle', fillColor=HexColor('#666')))
+            
+            # Add note about fallback
+            drawing.add(String(100, 25, 'Vue simplifiée générée', fontSize=8, textAnchor='middle', fillColor=HexColor('#999')))
+            
+            # Convert to PNG and encode as base64
+            try:
+                png_data = drawToString(drawing, 'PNG')
+                b64_data = base64.b64encode(png_data).decode('utf-8')
+                views[axis] = b64_data
+            except Exception as e:
+                print(f"Error creating fallback view for {axis}: {e}")
+                # Return empty string if conversion fails
+                views[axis] = ""
+        
+        return views
+    
+    def _create_simple_wireframe_view(self, axis: str, dimensions: tuple) -> str:
+        """Create a simple wireframe view for given axis"""
+        from reportlab.graphics.shapes import Drawing, Rect, String, Line
+        import base64
+        from reportlab.graphics.renderPM import drawToString
+        
+        drawing = Drawing(200, 200)
+        
+        # Add background
+        drawing.add(Rect(10, 10, 180, 180, fillColor=HexColor('#fafafa'), strokeColor=HexColor('#ddd')))
+        
+        # Add title
+        axis_names = {'X': 'Vue selon X', 'Y': 'Vue selon Y', 'Z': 'Vue selon Z'}
+        drawing.add(String(100, 170, axis_names.get(axis, f'Vue {axis}'), fontSize=14, textAnchor='middle', fillColor=black))
+        
+        # Calculate relative dimensions for display
+        x_dim, y_dim, z_dim = dimensions
+        max_dim = max(x_dim, y_dim, z_dim)
+        
+        # Scale dimensions to fit in drawing
+        scale = 80 / max_dim if max_dim > 0 else 1
+        
+        if axis == 'X':
+            # YZ view
+            width = y_dim * scale
+            height = z_dim * scale
+        elif axis == 'Y':
+            # XZ view  
+            width = x_dim * scale
+            height = z_dim * scale
+        else:  # Z
+            # XY view
+            width = x_dim * scale
+            height = y_dim * scale
+        
+        # Center the rectangle
+        x_pos = 100 - width/2
+        y_pos = 100 - height/2
+        
+        # Add wireframe rectangle
+        drawing.add(Rect(x_pos, y_pos, width, height, fillColor=None, strokeColor=HexColor('#007bff'), strokeWidth=2))
+        
+        # Add dimension text
+        drawing.add(String(100, 35, f'{width/scale:.1f} × {height/scale:.1f} mm', fontSize=10, textAnchor='middle', fillColor=HexColor('#666')))
+        drawing.add(String(100, 20, 'Vue filaire', fontSize=8, textAnchor='middle', fillColor=HexColor('#999')))
+        
+        try:
+            png_data = drawToString(drawing, 'PNG')
+            return base64.b64encode(png_data).decode('utf-8')
+        except Exception as e:
+            print(f"Error creating wireframe view for {axis}: {e}")
+            return ""
+
 # Convenience function
 def generate_dfm_pdf_report(dfm_data: Dict[str, Any], step_file_path: str, 
                            output_path: str, original_filename: str, material_recommendations: List[Dict] = None, lang: str = 'fr') -> str:
@@ -1054,4 +1183,5 @@ def generate_dfm_pdf_report(dfm_data: Dict[str, Any], step_file_path: str,
     except Exception as e:
         print(f"Error generating DFM PDF report: {e}")
         # Return the output path even on error to prevent None return
+        return output_path
         return output_path
