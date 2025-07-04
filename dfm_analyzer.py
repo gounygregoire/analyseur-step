@@ -223,21 +223,33 @@ class DFMAnalyzer:
                 # Clean and validate mesh
                 print(f"Original mesh: {len(mesh.faces)} faces, {len(mesh.vertices)} vertices")
                 
-                # Nettoyage du mesh pour de bons calculs
-                mesh.remove_duplicate_faces()
-                mesh.remove_degenerate_faces()
-                mesh.remove_unreferenced_vertices()
-                
-                # Fix normals if needed
-                if not mesh.is_winding_consistent:
-                    mesh.fix_normals()
+                # Nettoyage du mesh pour de bons calculs (seulement pour les modèles de taille raisonnable)
+                if len(mesh.faces) < 200000:
+                    try:
+                        mesh.remove_duplicate_faces()
+                        mesh.remove_degenerate_faces()
+                        mesh.remove_unreferenced_vertices()
+                        
+                        # Fix normals if needed
+                        if not mesh.is_winding_consistent:
+                            mesh.fix_normals()
+                    except Exception as e:
+                        print(f"Warning: Could not clean mesh: {e}")
+                        # Continue with original mesh if cleaning fails
+                else:
+                    print(f"Skipping mesh cleaning for large model ({len(mesh.faces)} faces) to avoid timeout")
                 
                 # Ensure we have a single watertight component
-                if hasattr(mesh, 'split') and callable(mesh.split):
-                    components = mesh.split(only_watertight=False)
-                    if len(components) > 0:
-                        # Take largest component by volume
-                        mesh = max(components, key=lambda m: m.volume if hasattr(m, 'volume') else 0)
+                # Skip split operation for very large meshes to avoid timeouts
+                if len(mesh.faces) < 100000 and hasattr(mesh, 'split') and callable(mesh.split):
+                    try:
+                        components = mesh.split(only_watertight=False)
+                        if len(components) > 0:
+                            # Take largest component by volume
+                            mesh = max(components, key=lambda m: m.volume if hasattr(m, 'volume') else 0)
+                    except Exception as e:
+                        print(f"Warning: Could not split mesh components: {e}")
+                        # Continue with original mesh if split fails
                 
                 mesh.rezero()
                 

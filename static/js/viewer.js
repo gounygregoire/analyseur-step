@@ -669,9 +669,9 @@ class STEPViewer {
                 this.hideLoadingIndicator();
                 
                 // More specific error messages based on error type
-                if (error.name === 'AbortError' || error.message.includes('aborted')) {
+                if (error.name === 'AbortError' || (error.message && error.message.includes('aborted'))) {
                     this.showError('Chargement annulé. Le fichier est trop volumineux pour être chargé dans le navigateur.');
-                } else if (error.message.includes('NetworkError') || error.message.includes('fetch')) {
+                } else if (error.message && (error.message.includes('NetworkError') || error.message.includes('fetch'))) {
                     this.showError('Erreur réseau lors du chargement. Vérifiez votre connexion internet.');
                 } else {
                     this.showError('Échec du chargement du modèle 3D. Le fichier pourrait être trop volumineux ou corrompu.');
