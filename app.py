@@ -27,6 +27,12 @@ app.secret_key = os.environ.get("SESSION_SECRET", "dev-secret-key-change-in-prod
 # Enable CORS for API endpoints
 CORS(app)
 
+# Session configuration to prevent large cookies
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SECURE'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size
+
 # Database configuration
 database_url = os.environ.get("DATABASE_URL")
 if not database_url:
@@ -46,11 +52,9 @@ migrate = Migrate(app, db)
 UPLOAD_FOLDER = 'uploads'
 CONVERTED_FOLDER = 'converted'
 ALLOWED_EXTENSIONS = {'step', 'stp'}
-MAX_CONTENT_LENGTH = 100 * 1024 * 1024  # 100MB max file size
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['CONVERTED_FOLDER'] = CONVERTED_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
 
 # Ensure directories exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -683,12 +687,8 @@ def analyze_dfm_endpoint(conversion_id):
                 'error': f'Erreur de sérialisation des données DFM: {str(json_error)}'
             }), 500
         
-        # Store only essential DFM data in session (avoid cookie size limit)
-        session[f'dfm_analysis_{conversion_id}'] = {
-            'overall_score': dfm_data['rating'],
-            'moldability_rating': dfm_data['score'],
-            'generated_at': datetime.utcnow().isoformat()
-        }
+        # Avoid storing large data in session to prevent 502 errors
+        # DFM data is already stored in database via ConversionJob
         session.permanent = True
         
         # Log l'action d'analyse
@@ -984,8 +984,8 @@ def get_material_recommendations():
         # Get material recommendations without DFM data for now
         recommendations = recommend_materials_for_questionnaire(questionnaire_data, {})
         
-        # Store material recommendations in session for later use in PDF
-        session['material_recommendations'] = recommendations
+        # Avoid storing large data in session to prevent 502 errors
+        # Material recommendations are passed directly to frontend
         
         logger.info(f"Generated {len(recommendations)} material recommendations")
         

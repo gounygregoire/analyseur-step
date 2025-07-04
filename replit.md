@@ -94,6 +94,12 @@ CADlytitcs est une application SaaS basée sur Flask qui permet aux utilisateurs
 
 ## Changelog
 
+- 4 juillet 2025 : Correction erreur 502 causée par cookies volumineux
+  - Suppression du stockage des données DFM en session pour éviter cookies >4KB
+  - Suppression du stockage des recommandations de matériaux en session
+  - Configuration session sécurisée (HttpOnly, Secure, SameSite)
+  - Données DFM stockées uniquement en base de données et transmises directement au frontend
+  - Résolution de l'erreur "The 'session' cookie is too large" (4113 bytes vs limite 4093)
 - 4 juillet 2025 : Amélioration acceptation fichiers 3D complexes
   - Augmentation limite de taille de fichier de 50MB à 100MB
   - Tolérance accrue pour la validation des mesh avec trimesh
