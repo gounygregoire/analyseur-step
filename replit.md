@@ -94,6 +94,15 @@ CADlytitcs est une application SaaS basée sur Flask qui permet aux utilisateurs
 
 ## Changelog
 
+- 4 juillet 2025 : Amélioration acceptation fichiers 3D complexes
+  - Augmentation limite de taille de fichier de 50MB à 100MB
+  - Tolérance accrue pour la validation des mesh avec trimesh
+  - Seuil de simplification relevé de 100k à 500k faces
+  - Simplification uniquement pour fichiers extrêmement complexes (>500k faces)
+  - Optimisations viewer 3D : matériaux adaptés selon complexité (basic/lambert/physical)
+  - Réduction pixel ratio du renderer pour modèles >1M vertices
+  - Gestion d'erreur plus tolérante : viewer peut fonctionner même si trimesh échoue
+  - Streaming optimisé pour fichiers STL volumineux avec chunks adaptables
 - 4 juillet 2025 : Suppression sélecteur de langue et français par défaut
   - Suppression complète du sélecteur de langue du footer
   - Suppression de la route /change-language/<lang> 

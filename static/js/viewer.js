@@ -361,8 +361,8 @@ class STEPViewer {
         }
         
         const fileSize = file.size / (1024 * 1024); // MB
-        if (fileSize > 50) {
-            this.showError('La taille du fichier dépasse la limite de 50 Mo');
+        if (fileSize > 100) {
+            this.showError('La taille du fichier dépasse la limite de 100 Mo');
             fileInputElement.value = '';
             return false;
         }
@@ -565,10 +565,15 @@ class STEPViewer {
                 const vertexCount = geometry.attributes.position.count;
                 console.log(`Model loaded with ${vertexCount} vertices`);
                 
-                if (vertexCount > 500000) {
+                // Apply optimizations for large models
+                if (vertexCount > 1000000) {
+                    console.warn('Very large model detected, applying maximum optimizations...');
+                    // For extremely large models, compute normals only if needed
+                    if (!geometry.attributes.normal) {
+                        geometry.computeVertexNormals();
+                    }
+                } else if (vertexCount > 500000) {
                     console.warn('Large model detected, applying optimizations...');
-                    // For very large models, use simplified material
-                    geometry.computeBoundingBox();
                     geometry.computeVertexNormals();
                 }
                 
@@ -580,8 +585,15 @@ class STEPViewer {
                 
                 // Create material - use simpler material for large models
                 let material;
-                if (vertexCount > 500000) {
-                    // Simplified material for performance
+                if (vertexCount > 1000000) {
+                    // Basic material for extremely large models
+                    material = new THREE.MeshBasicMaterial({
+                        color: 0x888888,
+                        side: THREE.DoubleSide,
+                        wireframe: false
+                    });
+                } else if (vertexCount > 500000) {
+                    // Simplified material for large models
                     material = new THREE.MeshLambertMaterial({
                         color: 0x888888,
                         side: THREE.DoubleSide
@@ -606,8 +618,12 @@ class STEPViewer {
                 this.scene.add(this.currentMesh);
                 
                 // Optimize renderer for large models
-                if (vertexCount > 500000) {
+                if (vertexCount > 1000000) {
+                    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1));
+                    console.log('Renderer pixel ratio reduced to 1 for performance');
+                } else if (vertexCount > 500000) {
                     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+                    console.log('Renderer pixel ratio limited to 1.5 for performance');
                 }
                 
                 // Calculate and display volume

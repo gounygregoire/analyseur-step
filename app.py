@@ -46,7 +46,7 @@ migrate = Migrate(app, db)
 UPLOAD_FOLDER = 'uploads'
 CONVERTED_FOLDER = 'converted'
 ALLOWED_EXTENSIONS = {'step', 'stp'}
-MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB max file size
+MAX_CONTENT_LENGTH = 100 * 1024 * 1024  # 100MB max file size
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['CONVERTED_FOLDER'] = CONVERTED_FOLDER
@@ -360,40 +360,49 @@ def upload_file():
                 import trimesh
                 logger.info(f"Checking if STL can be loaded for viewer: {stl_path}")
                 
-                # Try to load the mesh with trimesh
-                mesh = trimesh.load(stl_path)
+                # Try to load the mesh with trimesh - be more tolerant
+                try:
+                    mesh = trimesh.load(stl_path, force='mesh')
+                    
+                    # Check if mesh is valid
+                    if mesh is None or not hasattr(mesh, 'vertices'):
+                        # Try alternative loading method
+                        mesh = trimesh.load_mesh(stl_path)
+                        
+                    if mesh is not None and hasattr(mesh, 'vertices') and hasattr(mesh, 'faces'):
+                        vertex_count = len(mesh.vertices) if hasattr(mesh.vertices, '__len__') else 0
+                        face_count = len(mesh.faces) if hasattr(mesh.faces, '__len__') else 0
+                        logger.info(f"Mesh loaded: {vertex_count} vertices, {face_count} faces")
+                        
+                        # Only try to simplify if EXTREMELY complex (>500k faces)
+                        if face_count > 500000:
+                            logger.warning(f"Mesh is extremely complex ({face_count} faces), attempting simplification")
+                            try:
+                                # Try to simplify to 250k faces
+                                simplified = mesh.simplify_quadric_decimation(250000)
+                                if simplified and hasattr(simplified, 'faces') and len(simplified.faces) > 0:
+                                    simplified.export(stl_path)
+                                    logger.info(f"Mesh simplified from {face_count} to {len(simplified.faces)} faces")
+                                else:
+                                    logger.info("Simplification produced invalid mesh, keeping original")
+                            except Exception as simplify_error:
+                                logger.warning(f"Could not simplify mesh: {simplify_error}, keeping original")
+                                # Don't fail - keep the original mesh
+                    else:
+                        # Even if trimesh can't load it properly, the viewer might still work
+                        logger.warning("Trimesh couldn't validate mesh structure, but viewer may still work")
+                        
+                except Exception as load_error:
+                    logger.warning(f"Trimesh loading failed: {load_error}, but STL file exists")
+                    # Don't fail completely - the browser viewer might still handle it
+                    
+            except ImportError:
+                logger.warning("Trimesh not available, skipping viewer validation")
+                # Don't fail if trimesh is not available
                 
-                # Check if mesh is valid and not too complex
-                if mesh is None:
-                    viewer_ready = False
-                    viewer_error = "Le modèle 3D ne peut pas être chargé"
-                elif hasattr(mesh, 'vertices') and hasattr(mesh, 'faces'):
-                    vertex_count = len(mesh.vertices)
-                    face_count = len(mesh.faces)
-                    logger.info(f"Mesh loaded: {vertex_count} vertices, {face_count} faces")
-                    
-                    # If mesh is too complex, try to simplify it
-                    if face_count > 100000:
-                        logger.warning(f"Mesh is very complex ({face_count} faces)")
-                        try:
-                            # Try to simplify the mesh
-                            simplified = mesh.simplify_quadric_decimation(50000)
-                            if simplified:
-                                simplified.export(stl_path)
-                                logger.info(f"Mesh simplified from {face_count} to {len(simplified.faces)} faces")
-                                mesh = simplified
-                        except Exception as simplify_error:
-                            logger.warning(f"Could not simplify mesh: {simplify_error}")
-                            viewer_ready = False
-                            viewer_error = f"Le modèle 3D est trop complexe ({face_count} faces)"
-                else:
-                    viewer_ready = False
-                    viewer_error = "Le modèle 3D n'est pas valide"
-                    
             except Exception as viewer_check_error:
-                logger.warning(f"Viewer check failed: {viewer_check_error}")
-                viewer_ready = False
-                viewer_error = f"Impossible de vérifier le modèle 3D: {str(viewer_check_error)}"
+                logger.warning(f"Viewer check error: {viewer_check_error}")
+                # Still mark as ready - let the browser decide
             
             # Update database with error handling
             if conversion_job and hasattr(conversion_job, '__dict__'):
@@ -473,9 +482,8 @@ def view_file(filename):
         
         # For large files (>10MB), use chunked streaming
         if file_size > 10 * 1024 * 1024:
-            # Check if file is too large (>100MB)
-            if file_size > 100 * 1024 * 1024:
-                logger.warning(f"File {filename} is very large ({file_size / (1024*1024):.1f}MB)")
+            # Log file size for monitoring
+            logger.info(f"Serving large file {filename} ({file_size / (1024*1024):.1f}MB)")
             
             def generate():
                 with open(file_path, 'rb') as f:
