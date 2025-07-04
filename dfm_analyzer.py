@@ -122,6 +122,8 @@ class DFMAnalyzer:
             
         except Exception as e:
             print(f"Error analyzing STEP file: {e}")
+            import traceback
+            print(f"Traceback: {traceback.format_exc()}")
             return self._create_error_report()
     
     def _analyze_dimensions(self, workplane, demolding_axis: str = 'z') -> DimensionAnalysis:

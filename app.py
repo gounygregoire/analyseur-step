@@ -588,14 +588,24 @@ def analyze_dfm_endpoint(conversion_id):
         
         logger.info(f"Starting DFM analysis for job {conversion_id} with demolding axis: {demolding_axis}")
         
-        # Perform DFM analysis
-        dfm_report = analyze_dfm(step_path, demolding_axis)
-        
-        if dfm_report is None:
-            logger.error("DFM analysis returned None")
+        # Perform DFM analysis with proper error handling
+        try:
+            dfm_report = analyze_dfm(step_path, demolding_axis)
+            
+            if dfm_report is None:
+                logger.error("DFM analysis returned None")
+                return jsonify({
+                    'success': False,
+                    'error': 'Échec de l\'analyse DFM - Aucun résultat retourné'
+                }), 500
+                
+        except Exception as dfm_error:
+            logger.error(f"DFM analysis exception: {str(dfm_error)}")
+            import traceback
+            logger.error(f"DFM analysis traceback: {traceback.format_exc()}")
             return jsonify({
                 'success': False,
-                'error': 'Échec de l\'analyse DFM'
+                'error': f'Erreur durant l\'analyse DFM: {str(dfm_error)}'
             }), 500
         
         # Deduct credit after successful analysis
@@ -611,41 +621,67 @@ def analyze_dfm_endpoint(conversion_id):
         
         logger.info(f"DFM Analysis completed - Score: {dfm_report.moldability_rating}/10, Rating: {dfm_report.overall_score}")
         
-        # Prepare DFM data
-        dfm_data = {
-            'score': dfm_report.moldability_rating,
-            'rating': dfm_report.overall_score,
-            'issues_count': len(dfm_report.wall_thickness_issues) + len(dfm_report.geometry_issues),
-            'dimensions': {
-                'x': round(dfm_report.dimensions.x_max, 2),
-                'y': round(dfm_report.dimensions.y_max, 2),
-                'z': round(dfm_report.dimensions.z_max, 2),
-                'volume': round(dfm_report.dimensions.volume, 2),
-                'max_wall_thickness': round(dfm_report.dimensions.max_wall_thickness, 2),
-                'projected_area_x': round(dfm_report.dimensions.projected_area_x, 2),
-                'projected_area_y': round(dfm_report.dimensions.projected_area_y, 2),
-                'projected_area_z': round(dfm_report.dimensions.projected_area_z, 2),
-                'cooling_time': round(dfm_report.dimensions.cooling_time, 1)
-            },
-            'recommendations': dfm_report.recommendations[:3],  # First 3 recommendations
-            'wall_thickness_issues': [
-                {
-                    'location': issue.location,
-                    'thickness': issue.thickness,
-                    'issue_type': issue.issue_type,
-                    'severity': issue.severity
-                } for issue in dfm_report.wall_thickness_issues[:5]  # Limit to 5 issues
-            ],
-            'geometry_issues': [
-                {
-                    'location': issue.location,
-                    'issue_type': issue.issue_type,
-                    'description': issue.description,
-                    'severity': issue.severity,
-                    'recommendation': issue.recommendation
-                } for issue in dfm_report.geometry_issues[:5]  # Limit to 5 issues
-            ]
-        }
+        # Prepare DFM data with safe value conversion
+        try:
+            # Safe value conversion function
+            def safe_float(value, default=0.0):
+                try:
+                    if value is None:
+                        return default
+                    if isinstance(value, (int, float)):
+                        if str(value) in ['inf', '-inf', 'nan']:
+                            return default
+                        return float(value)
+                    return default
+                except (ValueError, TypeError):
+                    return default
+            
+            dfm_data = {
+                'score': safe_float(dfm_report.moldability_rating, 1),
+                'rating': str(dfm_report.overall_score) if dfm_report.overall_score else 'critical',
+                'issues_count': len(dfm_report.wall_thickness_issues) + len(dfm_report.geometry_issues),
+                'dimensions': {
+                    'x': round(safe_float(dfm_report.dimensions.x_max, 0), 2),
+                    'y': round(safe_float(dfm_report.dimensions.y_max, 0), 2),
+                    'z': round(safe_float(dfm_report.dimensions.z_max, 0), 2),
+                    'volume': round(safe_float(dfm_report.dimensions.volume, 0), 2),
+                    'max_wall_thickness': round(safe_float(dfm_report.dimensions.max_wall_thickness, 1), 2),
+                    'projected_area_x': round(safe_float(dfm_report.dimensions.projected_area_x, 0), 2),
+                    'projected_area_y': round(safe_float(dfm_report.dimensions.projected_area_y, 0), 2),
+                    'projected_area_z': round(safe_float(dfm_report.dimensions.projected_area_z, 0), 2),
+                    'cooling_time': round(safe_float(dfm_report.dimensions.cooling_time, 10), 1)
+                },
+                'recommendations': dfm_report.recommendations[:3] if dfm_report.recommendations else [],
+                'wall_thickness_issues': [
+                    {
+                        'location': list(issue.location) if issue.location else [0, 0, 0],
+                        'thickness': safe_float(issue.thickness, 0),
+                        'issue_type': str(issue.issue_type) if issue.issue_type else 'unknown',
+                        'severity': str(issue.severity) if issue.severity else 'unknown'
+                    } for issue in dfm_report.wall_thickness_issues[:5] if issue  # Limit to 5 issues
+                ],
+                'geometry_issues': [
+                    {
+                        'location': list(issue.location) if issue.location else [0, 0, 0],
+                        'issue_type': str(issue.issue_type) if issue.issue_type else 'unknown',
+                        'description': str(issue.description) if issue.description else 'Description non disponible',
+                        'severity': str(issue.severity) if issue.severity else 'unknown',
+                        'recommendation': str(issue.recommendation) if issue.recommendation else 'Recommandation non disponible'
+                    } for issue in dfm_report.geometry_issues[:5] if issue  # Limit to 5 issues
+                ]
+            }
+            
+            # Test JSON serialization
+            import json
+            json.dumps(dfm_data)
+            logger.info(f"DFM data JSON serialization successful")
+            
+        except Exception as json_error:
+            logger.error(f"Error preparing DFM data: {str(json_error)}")
+            return jsonify({
+                'success': False,
+                'error': f'Erreur de sérialisation des données DFM: {str(json_error)}'
+            }), 500
         
         # Store only essential DFM data in session (avoid cookie size limit)
         session[f'dfm_analysis_{conversion_id}'] = {
