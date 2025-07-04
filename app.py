@@ -264,8 +264,13 @@ def upload_file():
             # Set timeout based on file size (larger files need more time)
             file_size_mb = step_size / (1024 * 1024)
             # Timeout généreux pour fichiers complexes : 10 secondes par MB, minimum 60s, max 10 minutes
-            timeout_seconds = max(60, min(600, int(file_size_mb * 10)))
-            logger.info(f"Timeout défini à {timeout_seconds} secondes pour fichier de {file_size_mb:.1f}MB")
+            # Much more generous timeout for large files - match client timeout
+            # For files > 5MB: minimum 10 minutes + 2 minutes per MB
+            if file_size_mb > 5:
+                timeout_seconds = max(600, int(file_size_mb * 120))
+            else:
+                timeout_seconds = max(120, int(file_size_mb * 30 + 60))
+            logger.info(f"Timeout défini à {timeout_seconds} secondes ({timeout_seconds/60:.1f} minutes) pour fichier de {file_size_mb:.1f}MB")
             
             signal.signal(signal.SIGALRM, timeout_handler)
             signal.alarm(timeout_seconds)
