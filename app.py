@@ -108,6 +108,16 @@ def allowed_file(filename):
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+@app.route('/clear-session')
+def clear_session():
+    """Clear session data to fix cookie size issues"""
+    # Keep only essential keys
+    language = session.get('language', 'fr')
+    session.clear()
+    session['language'] = language
+    flash('Session nettoyée avec succès', 'success')
+    return redirect('/app')
+
 @app.route('/')
 def landing():
     """Landing page"""
@@ -153,12 +163,6 @@ def serve_static(filename):
 @login_required
 def upload_file():
     """Handle STEP file upload and conversion"""
-    # Clear any potentially large data from session to prevent cookie size issues
-    keys_to_preserve = ['language', 'admin_authenticated', '_permanent', '_fresh', '_id', '_user_id']
-    for key in list(session.keys()):
-        if key not in keys_to_preserve:
-            session.pop(key, None)
-    
     # Vérifier les crédits/abonnement
     if not current_user.has_access():
         return jsonify({
