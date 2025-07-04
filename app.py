@@ -731,7 +731,7 @@ def analyze_dfm_endpoint(conversion_id):
 def generate_pdf_report(conversion_id):
     """Generate PDF report for DFM analysis"""
     try:
-        from pdf_generator import generate_dfm_pdf_report
+        from pdf_generator import DFMReportGenerator
         
         # Get conversion job from database
         conversion_job = ConversionJob.query.get(conversion_id)
@@ -810,8 +810,30 @@ def generate_pdf_report(conversion_id):
         # Create reports directory if it doesn't exist
         os.makedirs('reports', exist_ok=True)
         
-        # Get material recommendations from session if available
-        material_recommendations = session.get('material_recommendations', [])
+        # Get material recommendations - generate them if not in session
+        material_recommendations = []
+        try:
+            # Import material recommender
+            from material_recommender import recommend_materials_for_questionnaire
+            
+            # Get questionnaire data from session or use default
+            questionnaire_data = session.get('questionnaire_data', {
+                'application': 'general',
+                'mechanical_requirements': [],
+                'use_temperature': {'min': 20, 'max': 50},
+                'chemical_environment': 'neutral',
+                'aesthetic_requirements': [],
+                'regulatory_requirements': [],
+                'cost_preference': 'balanced',
+                'quantity': {'min': 100, 'max': 1000}
+            })
+            
+            # Get material recommendations
+            material_recommendations = recommend_materials_for_questionnaire(questionnaire_data, dfm_data)
+            logger.info(f"Generated {len(material_recommendations)} material recommendations for PDF")
+        except Exception as e:
+            logger.warning(f"Could not generate material recommendations: {str(e)}")
+            material_recommendations = []
         
         # Get user language
         user_lang = 'fr'
@@ -821,7 +843,6 @@ def generate_pdf_report(conversion_id):
             user_lang = session.get('language', 'fr')
         
         # Create PDF with user language
-        from pdf_generator import DFMReportGenerator
         generator = DFMReportGenerator(language=user_lang)
         generated_path = generator.generate_report(
             dfm_data, 

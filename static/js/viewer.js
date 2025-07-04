@@ -2127,11 +2127,21 @@ class STEPViewer {
                 })
             });
             
-            const result = await response.json();
-            
             if (!response.ok) {
-                throw new Error(result.error || 'Erreur lors de la génération du PDF');
+                // Try to parse JSON, but handle cases where HTML is returned
+                let errorMessage = 'Erreur lors de la génération du PDF';
+                try {
+                    const result = await response.json();
+                    errorMessage = result.error || errorMessage;
+                } catch (e) {
+                    // If JSON parsing fails, it's probably an HTML error page
+                    console.error('Failed to parse error response as JSON:', e);
+                    errorMessage = `Erreur serveur (${response.status}): Veuillez réessayer`;
+                }
+                throw new Error(errorMessage);
             }
+            
+            const result = await response.json();
             
             if (result.success && result.pdf_filename) {
                 // Automatically download the PDF
