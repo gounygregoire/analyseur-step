@@ -79,7 +79,7 @@ class DFMReportGenerator:
             # Check file size first - if too large, use fallback immediately
             try:
                 file_size = os.path.getsize(step_file_path) / (1024 * 1024)  # Size in MB
-                if file_size > 50:  # Files > 50MB
+                if file_size > 10:  # Files > 10MB - lowered threshold
                     print(f"Large STEP file ({file_size:.1f}MB), using fallback views")
                     return self._generate_fallback_views()
             except:
@@ -90,7 +90,7 @@ class DFMReportGenerator:
                 raise TimeoutError("CadQuery operation timed out")
             
             signal.signal(signal.SIGALRM, timeout_handler)
-            signal.alarm(30)  # 30 second timeout
+            signal.alarm(15)  # 15 second timeout - reduced to avoid worker timeout
             
             try:
                 # Load the STEP file
