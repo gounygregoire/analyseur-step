@@ -96,7 +96,7 @@ CADlytitcs est une application SaaS basée sur Flask qui permet aux utilisateurs
 
 - 4 juillet 2025 : Optimisation pour fichiers volumineux et gestion mémoire
   - Augmentation des timeouts : 15s/MB, min 120s, max 20min pour fichiers complexes
-  - Tolérances adaptatives renforcées : 2.0 pour >10MB, 2.5 pour >20MB, 3.0 pour >30MB
+  - Tolérances adaptatives renforcées : 4.0 pour >10MB, 4.5 pour >20MB, 5.0 pour >30MB
   - Garbage collection forcé avant et après conversion pour libérer la mémoire
   - Correction des timeouts serveur qui causaient erreurs 502 sur gros fichiers
 - 4 juillet 2025 : Amélioration rendu 3D pour modèles complexes

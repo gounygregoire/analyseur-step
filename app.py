@@ -193,15 +193,15 @@ def upload_file():
         # Adjust tolerance based on file size for better performance
         if file_size_mb > 5:
             if file_size_mb > 30:
-                min_tolerance = 3.0  # Très haute tolérance pour fichiers > 30MB
+                min_tolerance = 5.0  # Très haute tolérance pour fichiers > 30MB
             elif file_size_mb > 20:
-                min_tolerance = 2.5  # Haute tolérance pour fichiers > 20MB
+                min_tolerance = 4.5  # Haute tolérance pour fichiers > 20MB
             elif file_size_mb > 10:
-                min_tolerance = 2.0  # Tolérance élevée pour fichiers > 10MB (comme votre fichier de 13.1MB)
+                min_tolerance = 4.0  # Tolérance très élevée pour fichiers > 10MB (comme votre fichier de 13.1MB)
             elif file_size_mb > 5:
-                min_tolerance = 1.5  # Tolérance moyenne pour fichiers > 5MB
+                min_tolerance = 3.0  # Tolérance élevée pour fichiers > 5MB
             else:
-                min_tolerance = 1.0  # Tolérance normale pour petits fichiers
+                min_tolerance = 2.0  # Tolérance haute pour petits fichiers
             
             tolerance = max(tolerance, min_tolerance)
             if tolerance != original_tolerance:
