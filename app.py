@@ -378,15 +378,23 @@ def upload_file():
                         face_count = len(mesh.faces) if hasattr(mesh.faces, '__len__') else 0
                         logger.info(f"Mesh loaded: {vertex_count} vertices, {face_count} faces")
                         
-                        # Only try to simplify if EXTREMELY complex (>500k faces)
-                        if face_count > 500000:
-                            logger.warning(f"Mesh is extremely complex ({face_count} faces), attempting simplification")
+                        # Simplify mesh for viewer performance and memory management
+                        if face_count > 100000:  # Reduce threshold for simplification
+                            logger.warning(f"Mesh is complex ({face_count} faces), attempting simplification")
                             try:
-                                # Try to simplify to 250k faces
-                                simplified = mesh.simplify_quadric_decimation(250000)
+                                # More aggressive simplification for very large meshes
+                                if face_count > 1000000:
+                                    target_faces = 100000  # Reduce to 100k faces for very large meshes
+                                elif face_count > 500000:
+                                    target_faces = 150000  # Reduce to 150k faces for large meshes
+                                else:
+                                    target_faces = min(50000, face_count // 2)  # Reduce to 50k or half
+                                
+                                simplified = mesh.simplify_quadric_decimation(target_faces)
                                 if simplified and hasattr(simplified, 'faces') and len(simplified.faces) > 0:
                                     simplified.export(stl_path)
                                     logger.info(f"Mesh simplified from {face_count} to {len(simplified.faces)} faces")
+                                    mesh = simplified  # Update mesh reference
                                 else:
                                     logger.info("Simplification produced invalid mesh, keeping original")
                             except Exception as simplify_error:
@@ -484,16 +492,22 @@ def view_file(filename):
         
         file_size = os.path.getsize(file_path)
         
-        # For large files (>10MB), use chunked streaming
-        if file_size > 10 * 1024 * 1024:
+        # For large files (>5MB), use chunked streaming
+        if file_size > 5 * 1024 * 1024:
             # Log file size for monitoring
             logger.info(f"Serving large file {filename} ({file_size / (1024*1024):.1f}MB)")
             
             def generate():
                 with open(file_path, 'rb') as f:
                     while True:
-                        # Use larger chunks for very large files
-                        chunk_size = 65536 if file_size > 50 * 1024 * 1024 else 16384
+                        # Use progressively larger chunks for very large files
+                        if file_size > 50 * 1024 * 1024:
+                            chunk_size = 131072  # 128KB for very large files
+                        elif file_size > 20 * 1024 * 1024:
+                            chunk_size = 65536   # 64KB for large files
+                        else:
+                            chunk_size = 32768   # 32KB for medium files
+                        
                         data = f.read(chunk_size)
                         if not data:
                             break
@@ -502,8 +516,9 @@ def view_file(filename):
             response = Response(generate(), mimetype='application/octet-stream')
             response.headers['Content-Length'] = str(file_size)
             response.headers['Content-Disposition'] = f'inline; filename={filename}'
-            # Add cache headers to improve performance
+            # Add cache and streaming headers
             response.headers['Cache-Control'] = 'public, max-age=3600'
+            response.headers['Accept-Ranges'] = 'bytes'
             return response
         else:
             # For smaller files, use normal send_from_directory
@@ -879,27 +894,8 @@ def download_zip(conversion_id):
             pdf_filename = f"rapport_dfm_{conversion_id}.pdf"
             pdf_path = os.path.join('reports', pdf_filename)
             
-            # Générer le PDF automatiquement si les données DFM existent
-            dfm_session_key = f'dfm_analysis_{conversion_id}'
-            if dfm_session_key in session:
-                try:
-                    import pdf_generator
-                    
-                    dfm_data = session[dfm_session_key]
-                    material_recommendations = session.get('material_recommendations', [])
-                    
-                    # Générer le PDF
-                    pdf_path = f"reports/rapport_dfm_{conversion_id}.pdf"
-                    pdf_filename = pdf_generator.generate_dfm_pdf_report(
-                        dfm_data,
-                        step_path,
-                        pdf_path,
-                        conversion.original_filename,
-                        material_recommendations
-                    )
-                    logger.info(f"PDF generated for ZIP: {pdf_filename}")
-                except Exception as pdf_error:
-                    logger.error(f"PDF generation failed for ZIP: {pdf_error}")
+            # Note: PDF generation skipped for ZIP downloads to avoid session dependencies
+            # Users can generate PDF separately via the dedicated PDF endpoint
             
             # Ajouter le PDF au ZIP s'il existe maintenant
             if os.path.exists(pdf_path):
@@ -917,10 +913,8 @@ def download_zip(conversion_id):
                 'analysis': {}
             }
             
-            # Récupérer l'analyse DFM complète depuis la session
-            dfm_session_key = f'dfm_analysis_{conversion_id}'
-            if dfm_session_key in session:
-                analysis_data['analysis'] = session[dfm_session_key]
+            # Note: Detailed DFM analysis not included in ZIP to avoid session dependencies
+            # Analysis summary available through API endpoints
             
             # Ajouter les métriques de base
             analysis_data['metrics'] = {

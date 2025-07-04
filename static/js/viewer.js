@@ -554,10 +554,22 @@ class STEPViewer {
             // Show loading indicator
             this.showLoadingIndicator('Chargement du modèle 3D...');
             
-            // Load STL with progress tracking
+            // Load STL with progress tracking and timeout handling
             const loader = new THREE.STLLoader();
             
+            // Set up timeout for large file loading
+            const controller = new AbortController();
+            let timeoutId = setTimeout(() => {
+                controller.abort();
+                this.hideLoadingIndicator();
+                this.showError('Timeout de chargement du modèle 3D. Le fichier est trop volumineux pour être chargé dans le navigateur.');
+            }, 300000); // 5 minutes timeout for STL loading
+            
+            // Override the loader's XMLHttpRequest to support abort
+            const originalLoad = loader.load.bind(loader);
+            
             loader.load(url, (geometry) => {
+                clearTimeout(timeoutId);
                 // Hide loading indicator
                 this.hideLoadingIndicator();
                 
@@ -652,9 +664,18 @@ class STEPViewer {
                 }
             }, (error) => {
                 // Error callback
+                clearTimeout(timeoutId);
                 console.error('Error loading STL:', error);
                 this.hideLoadingIndicator();
-                this.showError('Échec du chargement du modèle 3D. Le fichier pourrait être trop volumineux.');
+                
+                // More specific error messages based on error type
+                if (error.name === 'AbortError' || error.message.includes('aborted')) {
+                    this.showError('Chargement annulé. Le fichier est trop volumineux pour être chargé dans le navigateur.');
+                } else if (error.message.includes('NetworkError') || error.message.includes('fetch')) {
+                    this.showError('Erreur réseau lors du chargement. Vérifiez votre connexion internet.');
+                } else {
+                    this.showError('Échec du chargement du modèle 3D. Le fichier pourrait être trop volumineux ou corrompu.');
+                }
             });
             
         } catch (error) {

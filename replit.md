@@ -94,6 +94,14 @@ CADlytitcs est une application SaaS basée sur Flask qui permet aux utilisateurs
 
 ## Changelog
 
+- 4 juillet 2025 : Amélioration chargement gros fichiers STL et viewer 3D
+  - Simplification de mesh plus agressive: seuil abaissé à 100K faces (au lieu de 500K)
+  - Modèles >1M faces: réduction à 100K faces, >500K faces: réduction à 150K faces
+  - Streaming STL optimisé: chunks adaptatifs selon taille (32KB à 128KB)
+  - Seuil streaming abaissé à 5MB (au lieu de 10MB) pour meilleure performance
+  - Timeout viewer 3D augmenté à 5 minutes pour gros fichiers
+  - Messages d'erreur différenciés (timeout, réseau, corruption)
+  - Suppression définitive des données DFM en session pour éviter cookies volumineux
 - 4 juillet 2025 : Optimisation performance pour modèles très complexes
   - Optimisation drastique du calcul de surface projetée pour éviter timeouts
   - Modèles >500K faces: approximation bounding box uniquement (très rapide)  
