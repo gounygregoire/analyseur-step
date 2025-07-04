@@ -110,25 +110,34 @@ class STEPViewer {
     }
     
     setupLighting() {
-        // Ambient light
-        const ambientLight = new THREE.AmbientLight(0x404040, 0.4);
+        // Strong ambient light for better visibility
+        const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
         this.scene.add(ambientLight);
         
-        // Main directional light (sans ombres)
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-        directionalLight.position.set(10, 10, 5);
-        directionalLight.castShadow = false; // Désactiver les ombres
+        // Main directional light from front-top
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
+        directionalLight.position.set(10, 10, 10);
+        directionalLight.castShadow = false;
         this.scene.add(directionalLight);
         
-        // Fill light
-        const fillLight = new THREE.DirectionalLight(0xffffff, 0.3);
-        fillLight.position.set(-10, -10, -5);
+        // Fill light from back-bottom
+        const fillLight = new THREE.DirectionalLight(0xffffff, 0.5);
+        fillLight.position.set(-10, -10, -10);
         this.scene.add(fillLight);
         
-        // Point light for highlights
-        const pointLight = new THREE.PointLight(0xffffff, 0.5, 100);
-        pointLight.position.set(0, 20, 0);
-        this.scene.add(pointLight);
+        // Side lights for better detail visibility
+        const sideLight1 = new THREE.DirectionalLight(0xffffff, 0.4);
+        sideLight1.position.set(10, 0, 0);
+        this.scene.add(sideLight1);
+        
+        const sideLight2 = new THREE.DirectionalLight(0xffffff, 0.4);
+        sideLight2.position.set(-10, 0, 0);
+        this.scene.add(sideLight2);
+        
+        // Top light for overall illumination
+        const topLight = new THREE.DirectionalLight(0xffffff, 0.3);
+        topLight.position.set(0, 20, 0);
+        this.scene.add(topLight);
     }
     
     setupEventListeners() {
@@ -565,16 +574,18 @@ class STEPViewer {
                 const vertexCount = geometry.attributes.position.count;
                 console.log(`Model loaded with ${vertexCount} vertices`);
                 
-                // Apply optimizations for large models
-                if (vertexCount > 1000000) {
-                    console.warn('Very large model detected, applying maximum optimizations...');
-                    // For extremely large models, compute normals only if needed
-                    if (!geometry.attributes.normal) {
+                // Always compute normals for proper lighting and shading
+                console.log('Computing vertex normals for proper shading...');
+                geometry.computeVertexNormals();
+                
+                // For very large models, check if normals are valid
+                if (vertexCount > 500000) {
+                    console.warn('Large model detected, ensuring proper normals...');
+                    // Force recompute normals if they seem invalid
+                    if (!geometry.attributes.normal || geometry.attributes.normal.count === 0) {
                         geometry.computeVertexNormals();
+                        console.log('Normals recomputed for large model');
                     }
-                } else if (vertexCount > 500000) {
-                    console.warn('Large model detected, applying optimizations...');
-                    geometry.computeVertexNormals();
                 }
                 
                 // Center geometry but keep real scale (1:1)
@@ -583,29 +594,32 @@ class STEPViewer {
                 geometry.boundingBox.getCenter(center);
                 geometry.translate(-center.x, -center.y, -center.z);
                 
-                // Create material - use simpler material for large models
+                // Create material with better lighting for complex models
                 let material;
                 if (vertexCount > 1000000) {
-                    // Basic material for extremely large models
-                    material = new THREE.MeshBasicMaterial({
-                        color: 0x888888,
+                    // For extremely large models, use Lambert with better color
+                    material = new THREE.MeshLambertMaterial({
+                        color: 0xa8a068, // Kaki color from brand
                         side: THREE.DoubleSide,
-                        wireframe: false
+                        flatShading: false
                     });
                 } else if (vertexCount > 500000) {
-                    // Simplified material for large models
-                    material = new THREE.MeshLambertMaterial({
-                        color: 0x888888,
-                        side: THREE.DoubleSide
+                    // For large models, use Phong for better shading
+                    material = new THREE.MeshPhongMaterial({
+                        color: 0xa8a068,
+                        shininess: 30,
+                        side: THREE.DoubleSide,
+                        flatShading: false
                     });
                 } else {
                     // Standard material for normal models
                     material = new THREE.MeshPhysicalMaterial({
-                        color: 0x888888,
-                        metalness: 0.3,
-                        roughness: 0.4,
-                        clearcoat: 0.3,
-                        clearcoatRoughness: 0.25,
+                        color: 0xa8a068,
+                        metalness: 0.1,
+                        roughness: 0.6,
+                        clearcoat: 0.1,
+                        clearcoatRoughness: 0.3,
+                        side: THREE.DoubleSide
                     });
                 }
                 
@@ -734,14 +748,54 @@ class STEPViewer {
     toggleWireframe() {
         if (this.currentMesh) {
             this.isWireframe = !this.isWireframe;
-            this.currentMesh.material.wireframe = this.isWireframe;
+            
+            if (this.isWireframe) {
+                // Create a better wireframe material for complex models
+                this.currentMesh.material = new THREE.MeshBasicMaterial({
+                    color: 0xa8a068,
+                    wireframe: true,
+                    wireframeLinewidth: 2
+                });
+            } else {
+                // Restore solid material based on vertex count
+                const vertexCount = this.currentMesh.geometry.attributes.position.count;
+                let solidMaterial;
+                
+                if (vertexCount > 1000000) {
+                    solidMaterial = new THREE.MeshLambertMaterial({
+                        color: 0xa8a068,
+                        side: THREE.DoubleSide,
+                        flatShading: false
+                    });
+                } else if (vertexCount > 500000) {
+                    solidMaterial = new THREE.MeshPhongMaterial({
+                        color: 0xa8a068,
+                        shininess: 30,
+                        side: THREE.DoubleSide,
+                        flatShading: false
+                    });
+                } else {
+                    solidMaterial = new THREE.MeshPhysicalMaterial({
+                        color: 0xa8a068,
+                        metalness: 0.1,
+                        roughness: 0.6,
+                        clearcoat: 0.1,
+                        clearcoatRoughness: 0.3,
+                        side: THREE.DoubleSide
+                    });
+                }
+                
+                this.currentMesh.material = solidMaterial;
+            }
             
             const btn = this.safeGetElement('toggleWireframeBtn');
             if (btn) {
                 if (this.isWireframe) {
                     btn.innerHTML = '<i class="bi bi-square me-1"></i>Solide';
+                    btn.title = 'Afficher en mode solide';
                 } else {
                     btn.innerHTML = '<i class="bi bi-grid-3x3 me-1"></i>Filaire';
+                    btn.title = 'Afficher en mode filaire (recommandé pour modèles complexes)';
                 }
             }
         }

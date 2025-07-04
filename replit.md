@@ -94,6 +94,13 @@ CADlytitcs est une application SaaS basée sur Flask qui permet aux utilisateurs
 
 ## Changelog
 
+- 4 juillet 2025 : Amélioration rendu 3D pour modèles complexes
+  - Correction problème de rendu gris uniforme sur fichiers complexes
+  - Calcul forcé des normales pour éclairage correct (computeVertexNormals)
+  - Éclairage renforcé : 6 sources lumineuses directionnelles + ambiante forte
+  - Matériaux adaptés par complexité avec couleur kaki de marque (0xa8a068)
+  - Mode filaire amélioré pour visualisation détaillée des modèles complexes
+  - Tooltips informatifs sur bouton filaire (recommandé pour modèles complexes)
 - 4 juillet 2025 : Amélioration acceptation fichiers 3D complexes
   - Augmentation limite de taille de fichier de 50MB à 100MB
   - Tolérance accrue pour la validation des mesh avec trimesh
