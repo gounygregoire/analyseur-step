@@ -441,9 +441,17 @@ class STEPViewer {
             
             if (!response.ok) {
                 if (response.status === 413) {
-                    throw new Error('Le fichier est trop volumineux (max 50 Mo)');
+                    throw new Error('Le fichier est trop volumineux (max 100 Mo)');
                 } else if (response.status === 504) {
                     throw new Error('La conversion prend trop de temps. Essayez avec un fichier plus simple.');
+                } else if (response.status === 403) {
+                    // Try to get the error message from the response
+                    const errorData = await response.json().catch(() => null);
+                    if (errorData && errorData.error) {
+                        throw new Error(errorData.error);
+                    } else {
+                        throw new Error('Vous n\'avez plus de crédits. Achetez des crédits ou souscrivez à un abonnement pour continuer.');
+                    }
                 }
                 throw new Error(`Erreur serveur: ${response.status}`);
             }
@@ -2000,6 +2008,10 @@ class STEPViewer {
             const result = await response.json();
             
             if (!response.ok) {
+                if (response.status === 403) {
+                    // Credit error - show clear message
+                    throw new Error(result.error || 'Crédits insuffisants. Veuillez acheter des crédits ou vous abonner.');
+                }
                 throw new Error(result.error || 'Erreur lors de l\'analyse DFM');
             }
             
