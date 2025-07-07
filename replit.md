@@ -94,6 +94,12 @@ CADlytitcs est une application SaaS basée sur Flask qui permet aux utilisateurs
 
 ## Changelog
 
+- 7 juillet 2025 : Modification du prix de l'abonnement Pro
+  - Prix réduit de 23.99€ à 14.99€ dans toute l'interface
+  - Templates modifiés : pricing.html, landing.html, auth/profile.html
+  - Commentaire mis à jour dans stripe_payment.py
+  - Important : nécessite création d'un nouveau prix dans Stripe Dashboard
+  - Variable d'environnement STRIPE_PRICE_SUBSCRIPTION doit être mise à jour
 - 4 juillet 2025 : Solution complète pour gros fichiers CAD (>1M faces)
   - Viewer 3D: matériau Lambert pour tous les modèles (ombres/éclairage préservés)
   - Analyse DFM adaptative: méthodes simplifiées automatiques pour >1000 faces CadQuery

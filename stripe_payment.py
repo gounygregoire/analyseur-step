@@ -64,7 +64,7 @@ def buy_credits():
 @stripe_bp.route('/subscribe')
 @login_required
 def subscribe():
-    """S'abonner pour 23,99€/mois"""
+    """S'abonner pour 14,99€/mois"""
     try:
         # Créer ou récupérer le client Stripe
         if not current_user.stripe_customer_id:
