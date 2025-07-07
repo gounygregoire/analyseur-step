@@ -94,6 +94,11 @@ CADlytitcs est une application SaaS basée sur Flask qui permet aux utilisateurs
 
 ## Changelog
 
+- 7 juillet 2025 : Ajout du badge Fazier dans les footers
+  - Badge Fazier ajouté dans templates/landing.html
+  - Badge Fazier ajouté dans templates/index.html
+  - Style avec effet hover (opacité 0.8 → 1.0)
+  - Lien vers https://fazier.com avec width=120
 - 7 juillet 2025 : Modification du prix de l'abonnement Pro
   - Prix réduit de 23.99€ à 14.99€ dans toute l'interface
   - Templates modifiés : pricing.html, landing.html, auth/profile.html
