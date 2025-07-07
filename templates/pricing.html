@@ -150,13 +150,27 @@
                 <i class="bi bi-gear-fill text-primary me-2"></i>CADlytics
             </a>
             <div class="navbar-nav ms-auto">
+                <!-- Language selector -->
+                <div class="dropdown me-2">
+                    <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" id="languageDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="bi bi-globe"></i> {{ current_language|upper }}
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="languageDropdown">
+                        <li><a class="dropdown-item {% if current_language == 'fr' %}active{% endif %}" href="{{ url_for('change_language', lang='fr') }}">
+                            <img src="https://flagcdn.com/16x12/fr.png" alt="FR" class="me-2"> Français
+                        </a></li>
+                        <li><a class="dropdown-item {% if current_language == 'en' %}active{% endif %}" href="{{ url_for('change_language', lang='en') }}">
+                            <img src="https://flagcdn.com/16x12/gb.png" alt="EN" class="me-2"> English
+                        </a></li>
+                    </ul>
+                </div>
                 {% if current_user.is_authenticated %}
-                    <a class="nav-link" href="{{ url_for('index') }}">Application</a>
-                    <a class="nav-link" href="{{ url_for('auth.profile') }}">Mon Profil</a>
-                    <a class="nav-link" href="{{ url_for('auth.logout') }}">Déconnexion</a>
+                    <a class="nav-link" href="{{ url_for('index') }}">{{ t.nav_app }}</a>
+                    <a class="nav-link" href="{{ url_for('auth.profile') }}">{{ t.nav_profile }}</a>
+                    <a class="nav-link" href="{{ url_for('auth.logout') }}">{{ t.nav_logout }}</a>
                 {% else %}
-                    <a class="nav-link" href="{{ url_for('auth.login') }}">Connexion</a>
-                    <a class="btn btn-primary ms-2" href="{{ url_for('auth.register') }}">S'inscrire</a>
+                    <a class="nav-link" href="{{ url_for('auth.login') }}">{{ t.nav_login }}</a>
+                    <a class="btn btn-primary ms-2" href="{{ url_for('auth.register') }}">{{ t.nav_register }}</a>
                 {% endif %}
             </div>
         </div>
@@ -188,16 +202,16 @@
                             {% if current_user.is_authenticated %}
                                 {% if not current_user.is_premium %}
                                     <a href="{{ url_for('stripe.buy_credits') }}" class="w-100 btn btn-lg btn-primary">
-                                        <i class="bi bi-coin me-2"></i>Acheter des crédits
+                                        <i class="bi bi-coin me-2"></i>{{ t.pricing_buy }}
                                     </a>
                                 {% else %}
                                     <button class="w-100 btn btn-lg btn-secondary" disabled>
-                                        Vous êtes Premium
+                                        {% if current_language == 'en' %}You are Premium{% else %}Vous êtes Premium{% endif %}
                                     </button>
                                 {% endif %}
                             {% else %}
                                 <a href="{{ url_for('auth.register') }}" class="w-100 btn btn-lg btn-primary">
-                                    Commencer gratuitement
+                                    {% if current_language == 'en' %}Start for free{% else %}Commencer gratuitement{% endif %}
                                 </a>
                             {% endif %}
                         </div>

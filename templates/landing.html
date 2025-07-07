@@ -869,6 +869,20 @@
                     <li class="nav-item">
                         <a class="nav-link" href="#pricing">{{ t.nav_pricing }}</a>
                     </li>
+                    <!-- Language selector -->
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" id="languageDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            <i class="bi bi-globe"></i> {{ current_language|upper }}
+                        </a>
+                        <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="languageDropdown">
+                            <li><a class="dropdown-item {% if current_language == 'fr' %}active{% endif %}" href="{{ url_for('change_language', lang='fr') }}">
+                                <img src="https://flagcdn.com/16x12/fr.png" alt="FR" class="me-2"> Français
+                            </a></li>
+                            <li><a class="dropdown-item {% if current_language == 'en' %}active{% endif %}" href="{{ url_for('change_language', lang='en') }}">
+                                <img src="https://flagcdn.com/16x12/gb.png" alt="EN" class="me-2"> English
+                            </a></li>
+                        </ul>
+                    </li>
                     {% if current_user.is_authenticated %}
                         <li class="nav-item">
                             <a class="nav-link" href="{{ url_for('auth.profile') }}">{{ t.nav_profile }}</a>
@@ -880,7 +894,7 @@
                     {% endif %}
                     <li class="nav-item">
                         <a class="cta-button" href="/app">
-                            <i class="fas fa-rocket"></i> Lancer l'app
+                            <i class="fas fa-rocket"></i> {% if current_language == 'en' %}Launch app{% else %}Lancer l'app{% endif %}
                         </a>
                     </li>
                 </ul>

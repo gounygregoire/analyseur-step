@@ -89,15 +89,19 @@ def make_session_permanent():
 
 @app.before_request
 def get_locale():
-    """Détermine la langue à utiliser pour l'utilisateur - toujours français"""
-    # Toujours français par défaut
-    session['language'] = 'fr'
+    """Détermine la langue à utiliser pour l'utilisateur"""
+    # Si l'utilisateur est connecté, utiliser sa préférence
+    if current_user.is_authenticated and hasattr(current_user, 'preferred_language'):
+        session['language'] = current_user.preferred_language
+    # Sinon, utiliser la langue de la session
+    elif 'language' not in session:
+        # Français par défaut
+        session['language'] = 'fr'
 
 @app.context_processor
 def inject_translations():
     """Injecte les traductions dans tous les templates"""
-    session['language'] = 'fr'
-    lang = 'fr'
+    lang = session.get('language', 'fr')
     return {
         't': get_all_translations(lang),
         'current_language': lang
@@ -143,6 +147,20 @@ def cgv():
 def cookies():
     """Page de politique des cookies"""
     return render_template('cookies.html')
+
+@app.route('/change-language/<lang>')
+def change_language(lang):
+    """Change la langue de l'interface"""
+    if lang in ['fr', 'en']:
+        session['language'] = lang
+        # Si l'utilisateur est connecté, sauvegarder sa préférence
+        if current_user.is_authenticated:
+            current_user.preferred_language = lang
+            db.session.commit()
+            log_action('change_language', current_user.id, {'language': lang})
+    
+    # Rediriger vers la page précédente ou l'accueil
+    return redirect(request.referrer or url_for('landing'))
 
 @app.route('/static/<path:filename>')
 def serve_static(filename):

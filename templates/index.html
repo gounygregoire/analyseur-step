@@ -39,6 +39,20 @@
                             <span class="badge bg-secondary"><i class="bi bi-coin"></i> {{ current_user.credits }} {% if current_language == 'en' %}credits{% else %}crédits{% endif %}</span>
                         {% endif %}
                     </span>
+                    <!-- Language selector -->
+                    <div class="dropdown me-2">
+                        <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" id="languageDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                            <i class="bi bi-globe"></i> {{ current_language|upper }}
+                        </button>
+                        <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="languageDropdown">
+                            <li><a class="dropdown-item {% if current_language == 'fr' %}active{% endif %}" href="{{ url_for('change_language', lang='fr') }}">
+                                <img src="https://flagcdn.com/16x12/fr.png" alt="FR" class="me-2"> Français
+                            </a></li>
+                            <li><a class="dropdown-item {% if current_language == 'en' %}active{% endif %}" href="{{ url_for('change_language', lang='en') }}">
+                                <img src="https://flagcdn.com/16x12/gb.png" alt="EN" class="me-2"> English
+                            </a></li>
+                        </ul>
+                    </div>
                     <a class="nav-link" href="{{ url_for('pricing') }}">{{ t.nav_pricing }}</a>
                     <a class="nav-link" href="{{ url_for('auth.profile') }}">{{ t.nav_profile }}</a>
                     <a class="nav-link" href="{{ url_for('auth.logout') }}">{{ t.nav_logout }}</a>

@@ -161,6 +161,15 @@ translations = {
         'auth_have_account': 'Déjà un compte ?',
         'auth_min_chars': 'Minimum 8 caractères',
         'auth_free_credits': '<strong>🎉 Offre de lancement !</strong> Les 20 premiers inscrits reçoivent <strong>15 analyses gratuites</strong> au lieu de 5.',
+        
+        # Additional translations
+        'history_title': 'Historique des conversions',
+        'upload_or_drop': 'ou glissez-déposez un fichier ici',
+        'credits_remaining': 'crédits restants',
+        'unlimited_analyses': 'Analyses illimitées',
+        'month': 'mois',
+        'per_analysis': 'par analyse',
+        'launch_app': 'Lancer l\'app',
     },
     'en': {
         # Navigation
@@ -319,6 +328,15 @@ translations = {
         'auth_have_account': 'Already have an account?',
         'auth_min_chars': 'Minimum 8 characters',
         'auth_free_credits': '<strong>🎉 Launch offer!</strong> The first 20 users get <strong>15 free analyses</strong> instead of 5.',
+        
+        # Additional translations
+        'history_title': 'Conversion history',
+        'upload_or_drop': 'or drag and drop a file here',
+        'credits_remaining': 'credits remaining',
+        'unlimited_analyses': 'Unlimited analyses',
+        'month': 'month',
+        'per_analysis': 'per analysis',
+        'launch_app': 'Launch app',
     }
 }
 

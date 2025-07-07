@@ -94,6 +94,14 @@ CADlytitcs est une application SaaS basée sur Flask qui permet aux utilisateurs
 
 ## Changelog
 
+- 7 juillet 2025 : Réactivation du système bilingue français/anglais
+  - Réactivation des fonctions get_locale() et inject_translations()
+  - Ajout de la route /change-language/<lang> pour changer de langue
+  - Sélecteur de langue ajouté dans navigation (dropdown avec drapeaux)
+  - Sélecteur présent dans : index.html, landing.html, pricing.html
+  - Français reste la langue par défaut
+  - Sauvegarde de la préférence de langue pour les utilisateurs connectés
+  - Traductions complètes dans translations.py pour FR et EN
 - 7 juillet 2025 : Ajout du badge Fazier dans les footers
   - Badge Fazier ajouté dans templates/landing.html
   - Badge Fazier ajouté dans templates/index.html
