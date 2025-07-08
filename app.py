@@ -20,11 +20,15 @@ from flask_dance.contrib.google import make_google_blueprint, google
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "dev")  # ou une clé plus sécurisée
 
+app.config["SESSION_COOKIE_SECURE"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
 # OAuth Blueprint - CONFIGURATION CORRIGÉE
 google_bp = make_google_blueprint(
     client_id=os.getenv("GOOGLE_OAUTH_CLIENT_ID"),
     client_secret=os.getenv("GOOGLE_OAUTH_CLIENT_SECRET"),
     scope=["profile", "email"]
+    redirect_url="/auth/google/authorized"
 )
 app.register_blueprint(google_bp, url_prefix="/auth")
 
