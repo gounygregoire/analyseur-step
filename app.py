@@ -25,7 +25,7 @@ google_bp = make_google_blueprint(
     client_id=os.getenv("GOOGLE_OAUTH_CLIENT_ID"),
     client_secret=os.getenv("GOOGLE_OAUTH_CLIENT_SECRET"),
     scope=["profile", "email"],
-    redirect_url="https://www.cadlytitcs.com/google_login/callback"
+    redirect_url="https://cadlytitcs.com/google_login"
 )
 app.register_blueprint(google_bp, url_prefix="/google_login")
 
