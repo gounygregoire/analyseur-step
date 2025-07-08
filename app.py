@@ -15,6 +15,19 @@ from material_recommender import recommend_materials_for_questionnaire
 from flask_login import LoginManager, login_required, current_user
 from translations import get_translation, get_all_translations
 from log import log_action
+from flask_dance.contrib.google import make_google_blueprint, google
+
+app = Flask(__name__)
+app.secret_key = os.getenv("SECRET_KEY", "dev")  # ou une clé plus sécurisée
+
+# OAuth Blueprint
+google_bp = make_google_blueprint(
+    client_id=os.getenv("GOOGLE_OAUTH_CLIENT_ID"),
+    client_secret=os.getenv("GOOGLE_OAUTH_CLIENT_SECRET"),
+    scope=["profile", "email"],
+    redirect_url="https://www.cadlytitcs.com/google_login/callback"
+)
+app.register_blueprint(google_bp, url_prefix="/google_login")
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
