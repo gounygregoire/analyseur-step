@@ -26,7 +26,7 @@ google_bp = make_google_blueprint(
     client_secret=os.getenv("GOOGLE_OAUTH_CLIENT_SECRET"),
     scope=["profile", "email"]
 )
-app.register_blueprint(bp, url_prefix="/auth")
+app.register_blueprint(google_bp, url_prefix="/auth")
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
