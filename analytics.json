@@ -29,3 +29,7 @@
 {"timestamp": "2025-07-07T11:51:46.438821", "action": "change_language", "user_id": "5a1ee82d-b079-43ab-b269-f8e629ab9a1a", "language": "en"}
 {"timestamp": "2025-07-07T12:35:41.740703", "action": "change_language", "user_id": "5a1ee82d-b079-43ab-b269-f8e629ab9a1a", "language": "fr"}
 {"timestamp": "2025-07-07T12:35:47.268590", "action": "change_language", "user_id": "5a1ee82d-b079-43ab-b269-f8e629ab9a1a", "language": "en"}
+{"timestamp": "2025-07-08T07:02:16.697962", "action": "change_language", "user_id": "5a1ee82d-b079-43ab-b269-f8e629ab9a1a", "language": "fr"}
+{"timestamp": "2025-07-08T07:02:20.816517", "action": "change_language", "user_id": "5a1ee82d-b079-43ab-b269-f8e629ab9a1a", "language": "en"}
+{"timestamp": "2025-07-08T07:13:43.698475", "action": "change_language", "user_id": "5a1ee82d-b079-43ab-b269-f8e629ab9a1a", "language": "fr"}
+{"timestamp": "2025-07-08T07:59:16.336760", "action": "upload", "user_id": "5a1ee82d-b079-43ab-b269-f8e629ab9a1a", "filename": "2025_07_02_example_radome_Scorpion_180x180x21.stp", "file_size": 1650091, "user_email": "gregoire.gouny.1@gmail.com", "conversion_id": "c2bc3cc7-fb24-4921-845c-9f80917ff20b"}

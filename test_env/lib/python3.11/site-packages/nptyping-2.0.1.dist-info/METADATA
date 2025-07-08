@@ -1,0 +1,138 @@
+Metadata-Version: 2.1
+Name: nptyping
+Version: 2.0.1
+Summary: Type hints for NumPy.
+Home-page: https://github.com/ramonhagenaars/nptyping
+Author: Ramon Hagenaars
+Author-email: ramon.hagenaars@gmail.com
+License: MIT
+Platform: UNKNOWN
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Natural Language :: English
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.7
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Requires-Python: >=3.7
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: numpy (>=1.20.0)
+Requires-Dist: typing-extensions ; python_version < "3.10"
+Provides-Extra: build
+Requires-Dist: invoke (>=1.6.0) ; extra == 'build'
+Requires-Dist: pip-tools (>=6.5.0) ; extra == 'build'
+Requires-Dist: codecov (>=2.1.0) ; extra == 'build'
+Provides-Extra: complete
+Provides-Extra: dev
+Requires-Dist: invoke (>=1.6.0) ; extra == 'dev'
+Requires-Dist: pip-tools (>=6.5.0) ; extra == 'dev'
+Requires-Dist: codecov (>=2.1.0) ; extra == 'dev'
+Requires-Dist: autoflake ; extra == 'dev'
+Requires-Dist: black ; extra == 'dev'
+Requires-Dist: coverage ; extra == 'dev'
+Requires-Dist: isort ; extra == 'dev'
+Requires-Dist: mypy ; extra == 'dev'
+Requires-Dist: pylint ; extra == 'dev'
+Requires-Dist: setuptools ; extra == 'dev'
+Requires-Dist: wheel ; extra == 'dev'
+Requires-Dist: typeguard ; extra == 'dev'
+Requires-Dist: beartype (<0.10.0) ; (python_version < "3.10") and extra == 'dev'
+Requires-Dist: beartype (>=0.10.0) ; (python_version >= "3.10") and extra == 'dev'
+Provides-Extra: qa
+Requires-Dist: autoflake ; extra == 'qa'
+Requires-Dist: black ; extra == 'qa'
+Requires-Dist: coverage ; extra == 'qa'
+Requires-Dist: isort ; extra == 'qa'
+Requires-Dist: mypy ; extra == 'qa'
+Requires-Dist: pylint ; extra == 'qa'
+Requires-Dist: setuptools ; extra == 'qa'
+Requires-Dist: wheel ; extra == 'qa'
+Requires-Dist: typeguard ; extra == 'qa'
+Requires-Dist: beartype (<0.10.0) ; (python_version < "3.10") and extra == 'qa'
+Requires-Dist: beartype (>=0.10.0) ; (python_version >= "3.10") and extra == 'qa'
+
+[![PyPI version](https://img.shields.io/pypi/pyversions/nptyping.svg)](https://img.shields.io/pypi/pyversions/nptyping.svg)
+[![Downloads](https://pepy.tech/badge/nptyping/month)](https://pepy.tech/project/nptyping)
+[![PyPI version](https://badge.fury.io/py/nptyping.svg)](https://badge.fury.io/py/nptyping)
+[![codecov](https://codecov.io/gh/ramonhagenaars/nptyping/branch/master/graph/badge.svg)](https://codecov.io/gh/ramonhagenaars/nptyping)
+[![Code style](https://img.shields.io/badge/code%20style-black-black)](https://img.shields.io/badge/code%20style-black-black)
+
+
+<p align='center'>
+  <a href='https://https://pypi.org/project/nptyping/'>
+    <img src='https://github.com/ramonhagenaars/nptyping/raw/master/resources/logo.png' />
+  </a> 
+</p>
+
+💡 *Type hints for `NumPy`* <br/>
+💡 *Extends `numpy.typing`* <br/>
+💡 *Extensive dynamic type checks for dtypes and shapes of arrays* <br/>
+
+Example of a hinted function with `nptyping`:
+
+```python
+>>> from nptyping import NDArray, Int, Shape
+
+>>> def func(arr: NDArray[Shape["2, 2"], Int]) -> None:
+...     pass
+
+
+```
+
+Example of instance checking:
+```python
+>>> from numpy import array
+
+>>> isinstance(array([[1, 2], [3, 4]]), NDArray[Shape["2, 2"], Int])
+True
+
+>>> isinstance(array([[1., 2.], [3., 4.]]), NDArray[Shape["2, 2"], Int])
+False
+
+>>> isinstance(array([1, 2, 3, 4]), NDArray[Shape["2, 2"], Int])
+False
+
+```
+
+`nptyping` also provides `assert_isinstance`. In contrast to `assert isinstance(...)`, this won't cause IDEs or MyPy
+complaints. Here is an example: 
+```python
+>>> from nptyping import assert_isinstance
+>>> assert_isinstance(array([1]), NDArray[Shape["1"], Int])
+True
+
+```
+
+Here is an example of how detailed expressions can become with `nptyping`:
+```python
+def plan_route(locations: NDArray[Shape["[from, to], [x, y]"], Float]) -> NDArray[Shape["* stops, [x, y]"], Float]:
+    ...
+```
+
+More examples can be found in the [documentation](https://github.com/ramonhagenaars/nptyping/blob/master/USERDOCS.md#Examples).
+
+## Installation
+
+```
+pip install nptyping
+```
+
+## Documentation
+
+* [User documentation](https://github.com/ramonhagenaars/nptyping/blob/master/USERDOCS.md) <br/>
+The place to go if you are using this library. <br/><br/>
+  
+* [Release notes](https://github.com/ramonhagenaars/nptyping/blob/master/HISTORY.md) <br/>
+To see what's new, check out the release notes. <br/><br/>
+
+* [Contributing](https://github.com/ramonhagenaars/nptyping/blob/master/CONTRIBUTING.md) <br/>
+If you're interested in developing along, find the guidelines here. <br/><br/>
+
+* [Licence](https://github.com/ramonhagenaars/nptyping/blob/master/LICENSE) <br/>
+If you want to check out how open source this library is.
+
+
