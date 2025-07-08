@@ -38,7 +38,7 @@ app.register_blueprint(google_bp, url_prefix="/auth")
 
 # Routes pour tester Google OAuth
 @app.route("/")
-def index():
+def google_profile():
     if not google.authorized:
         return redirect(url_for("login"))
 
