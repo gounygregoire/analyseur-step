@@ -2,7 +2,7 @@ modules = ["postgresql-16", "python-3.11"]
 
 [nix]
 channel = "stable-24_05"
-packages = ["cacert", "cairo", "cargo", "cgal_5", "chromedriver", "expat", "ffmpeg-full", "freefont_ttf", "freetype", "ghostscript", "gl2ps", "glibcLocales", "gobject-introspection", "gtk3", "hdf5", "imagemagick_light", "lcms2", "libGL", "libGLU", "libcxx", "libiconv", "libimagequant", "libjpeg", "libtiff", "libwebp", "libxcrypt", "lsof", "opencascade-occt", "openjpeg", "openssl", "pkg-config", "postgresql", "qhull", "rustc", "swig", "tcl", "tk", "vtk", "xsimd", "zlib"]
+packages = ["cacert", "cairo", "cargo", "cgal_5", "chromedriver", "expat", "ffmpeg-full", "freefont_ttf", "freetype", "ghostscript", "gl2ps", "glibcLocales", "gobject-introspection", "gtk3", "hdf5", "imagemagick_light", "lcms2", "libGL", "libGLU", "libcxx", "libiconv", "libimagequant", "libjpeg", "libtiff", "libwebp", "libxcrypt", "lsof", "opencascade-occt", "openjpeg", "openssl", "pkg-config", "postgresql", "qhull", "rustc", "swig", "tcl", "tk", "vtk", "xsimd", "zlib", "mailutils"]
 
 [deployment]
 deploymentTarget = "autoscale"
@@ -10,7 +10,6 @@ run = ["gunicorn", "--bind", "0.0.0.0:5000", "main:app"]
 build = ["sh", "-c", "pip install -r requirements.txt"]
 
 [workflows]
-runButton = "Project"
 
 [[workflows.workflow]]
 name = "Project"

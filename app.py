@@ -17,28 +17,69 @@ from translations import get_translation, get_all_translations
 from log import log_action
 from flask_dance.contrib.google import make_google_blueprint, google
 
-app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "dev")  # ou une clé plus sécurisée
-
-# OAuth Blueprint
-google_bp = make_google_blueprint(
-    client_id=os.getenv("GOOGLE_OAUTH_CLIENT_ID"),
-    client_secret=os.getenv("GOOGLE_OAUTH_CLIENT_SECRET"),
-    scope=["profile", "email"],
-    redirect_url="https://cadlytitcs.com/google_login"
-)
-app.register_blueprint(google_bp, url_prefix="/google_login")
-
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # Create Flask app
 app = Flask(__name__)
-app.secret_key = os.environ.get("SESSION_SECRET", "dev-secret-key-change-in-production")
+app.secret_key = os.environ.get("SESSION_SECRET", os.getenv("SECRET_KEY", "dev-secret-key-change-in-production"))
 
 # Enable CORS for API endpoints
 CORS(app)
+
+# OAuth Blueprint - CONFIGURATION CORRIGÉE
+google_bp = make_google_blueprint(
+    client_id=os.getenv("GOOGLE_OAUTH_CLIENT_ID"),
+    client_secret=os.getenv("GOOGLE_OAUTH_CLIENT_SECRET"),
+    scope=["profile", "email"]
+)
+app.register_blueprint(google_bp, url_prefix="/auth")
+
+# Routes pour tester Google OAuth
+@app.route("/")
+def index():
+    if not google.authorized:
+        return redirect(url_for("login"))
+
+    resp = google.get("/oauth2/v2/userinfo")
+    if not resp.ok:
+        return "Erreur lors de la récupération des infos utilisateur"
+
+    user_info = resp.json()
+    return f"Bonjour {user_info['name']} ({user_info['email']})"
+
+@app.route("/login")
+def login():
+    return '<a href="/auth/google">Se connecter avec Google</a>'
+
+@app.route("/logout")
+def logout():
+    token = google.token
+    if token:
+        del google.token
+    return redirect(url_for("index"))
+
+# Route de test simple
+@app.route("/test-google")
+def test_google():
+    if not google.authorized:
+        return '''
+        <h1>Test Google OAuth</h1>
+        <a href="/auth/google">Se connecter avec Google</a>
+        '''
+
+    resp = google.get("/oauth2/v2/userinfo")
+    if resp.ok:
+        user_info = resp.json()
+        return f'''
+        <h1>Connexion réussie !</h1>
+        <p>Bonjour {user_info['name']}</p>
+        <p>Email: {user_info['email']}</p>
+        <a href="/logout">Se déconnecter</a>
+        '''
+    else:
+        return "Erreur lors de la récupération des infos utilisateur"
 
 # Session configuration to prevent large cookies
 app.config['SESSION_COOKIE_HTTPONLY'] = True
