@@ -27,7 +27,7 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 google_bp = make_google_blueprint(
     client_id=os.getenv("GOOGLE_OAUTH_CLIENT_ID"),
     client_secret=os.getenv("GOOGLE_OAUTH_CLIENT_SECRET"),
-    scope=["profile", "email"]
+    scope=["profile", "email"],
     redirect_url="/auth/google/authorized"
 )
 app.register_blueprint(google_bp, url_prefix="/auth")
