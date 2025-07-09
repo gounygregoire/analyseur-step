@@ -19,7 +19,6 @@ from flask_dance.contrib.google import make_google_blueprint, google
 from dotenv import load_dotenv
 load_dotenv()
 
-
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "dev")  # ou une clé plus sécurisée
 
@@ -31,9 +30,8 @@ google_bp = make_google_blueprint(
     client_id=os.getenv("GOOGLE_OAUTH_CLIENT_ID"),
     client_secret=os.getenv("GOOGLE_OAUTH_CLIENT_SECRET"),
     scope=["profile", "email"],
-    redirect_url="/google_login"  # ✅ doit être identique à ce que Google attend
+    redirect_url="https://cadlytitcs.com/google_login/authorized"  # 👈 explicit
 )
-print("REDIRECT_URI:", google_bp.redirect_url) #DEBUG
 
 app.register_blueprint(google_bp, url_prefix="/auth")
 
