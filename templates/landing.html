@@ -997,7 +997,7 @@
                     </div>
                     <div class="feature-content">
                         <h3>{% if current_language == 'en' %}
-                            instant analysis
+                            Instant analysis
                         {% else %}
                             Analyse instantanée
                         {% endif %}</h3>
@@ -1013,8 +1013,16 @@
                         <i class="fas fa-file-pdf"></i>
                     </div>
                     <div class="feature-content">
-                        <h3>Rapports professionnels</h3>
-                        <p>Générez des PDF détaillés avec vues 3D et recommandations techniques</p>
+                        <h3>{% if current_language == 'en' %}
+                                Professional reports
+                            {% else %}
+                                Rapports professionnels
+                            {% endif %</h3>
+                        <p>{% if current_language == 'en' %}
+                                Generate detailed PDFs with 3D views and technical recommendations
+                            {% else %}
+                                Générez des PDF détaillés avec vues 3D et recommandations techniques
+                            {% endif %</p>
                     </div>
                 </div>
                 <div class="feature-item">
@@ -1022,8 +1030,16 @@
                         <i class="fas fa-cube"></i>
                     </div>
                     <div class="feature-content">
-                        <h3>Visualisation 3D avancée</h3>
-                        <p>Explorez vos modèles avec des outils de mesure, coupe transversale</p>
+                        <h3>{% if current_language == 'en' %}
+                                Advanced 3D Visualization
+                            {% else %}
+                                Visualisation 3D avancée
+                            {% endif %</h3>
+                        <p>{% if current_language == 'en' %}
+                                Explore your models with measuring tools, cross-section
+                            {% else %}
+                                Explorez vos modèles avec des outils de mesure, coupe transversale
+                            {% endif %</p>
                     </div>
                 </div>
                 <div class="feature-item">
@@ -1031,8 +1047,16 @@
                         <i class="fas fa-gem"></i>
                     </div>
                     <div class="feature-content">
-                        <h3>Recommandation matières</h3>
-                        <p>Recevez 3 suggestions de matériaux optimaux basées sur votre analyse et vos contraintes</p>
+                        <h3>{% if current_language == 'en' %}
+                                Plastic material recommendation
+                            {% else %}
+                                Recommandation matières
+                            {% endif %</h3>
+                        <p>{% if current_language == 'en' %}
+                                Receive 3 optimal material suggestions based on your analysis and constraints
+                            {% else %}
+                                Recevez 3 suggestions de matériaux optimaux basées sur votre analyse et vos contraintes
+                            {% endif %</p>
                     </div>
                 </div>
                 <div class="feature-item">
@@ -1040,8 +1064,16 @@
                         <i class="fas fa-chart-line"></i>
                     </div>
                     <div class="feature-content">
-                        <h3>Temps de refroidissement</h3>
-                        <p>Estimez les temps de cycle pour optimiser votre production</p>
+                        <h3>{% if current_language == 'en' %}
+                                Cooling time
+                            {% else %}
+                                Temps de refroidissement
+                            {% endif %</h3>
+                        <p>{% if current_language == 'en' %}
+                                Estimate the cycle times to optimize your production
+                            {% else %}
+                                Estimez les temps de cycle pour optimiser votre production
+                            {% endif %</p>
                     </div>
                 </div>
                 <div class="feature-item">
@@ -1049,8 +1081,16 @@
                         <i class="fas fa-download"></i>
                     </div>
                     <div class="feature-content">
-                        <h3>Export complet</h3>
-                        <p>Téléchargez toutes vos données d'analyse dans un fichier ZIP structuré</p>
+                        <h3>{% if current_language == 'en' %}
+                                Full export
+                            {% else %}
+                                Export complet
+                            {% endif %</h3>
+                        <p>{% if current_language == 'en' %}
+                                Download all your analysis data in a structured ZIP file
+                            {% else %}
+                                Téléchargez toutes vos données d'analyse dans un fichier ZIP structuré
+                            {% endif %</p>
                     </div>
                 </div>
             </div>
@@ -1062,28 +1102,56 @@
         <div class="container">
             <h2 class="section-title">{{ t.section_how_title }}</h2>
             <p class="section-subtitle">
-                3 étapes simples pour valider la manufacturabilité de vos pièces
+                {% if current_language == 'en' %}
+                    3 simple steps to validate the manufacturability of your parts
+                {% else %}
+                    3 étapes simples pour valider la manufacturabilité de vos pièces
+                {% endif %
             </p>
             <div class="steps-grid">
                 <div class="step-card">
                     <div class="step-number">1</div>
-                    <h3 class="step-title">Uploadez votre fichier</h3>
+                    <h3 class="step-title">{% if current_language == 'en' %}
+                            Upload your file
+                        {% else %}
+                            Uploadez votre fichier
+                        {% endif %</h3>
                     <p class="step-description">
-                        Glissez-déposez votre fichier STEP.
+                        {% if current_language == 'en' %}
+                            Drag and drop your STEP file.
+                        {% else %}
+                            Glissez-déposez votre fichier STEP.
+                        {% endif %
                     </p>
                 </div>
                 <div class="step-card">
                     <div class="step-number">2</div>
-                    <h3 class="step-title">Analyse automatique</h3>
+                    <h3 class="step-title">{% if current_language == 'en' %}
+                            Automatic analysis
+                        {% else %}
+                            Analyse automatique
+                        {% endif %</h3>
                     <p class="step-description">
-                        Notre algorithm analyse plus de 10 critères DFM : épaisseur, dépouille, congés, rapport de forme, etc.
+                        {% if current_language == 'en' %}
+                            Our algorithm analyzes more than 10 DFM criteria: thickness, draft, fillet, shape report, etc.
+                        {% else %}
+                            Notre algorithm analyse plus de 10 critères DFM : épaisseur, dépouille, congés, rapport de forme, etc.
+                        {% endif %
                     </p>
                 </div>
                 <div class="step-card">
                     <div class="step-number">3</div>
-                    <h3 class="step-title">Rapport instantané</h3>
+                    <h3 class="step-title">{% if current_language == 'en' %}
+                            Instant report
+                        {% else %}
+                            Rapport instantané
+                        {% endif %</h3>
                     <p class="step-description">
-                        Recevez votre score de moulabilité, des recommandations et un rapport PDF professionnel.
+                        {% if current_language == 'en' %}
+                            Receive your moldability score, recommendations and a professional PDF report.
+                        {% else %}
+                            Recevez votre score de moulabilité, des recommandations et un rapport PDF professionnel.
+                        {% endif %
                     </p>
                 </div>
             </div>
@@ -1095,59 +1163,103 @@
         <div class="container">
             <h2 class="section-title">{{ t.section_demo_title }}</h2>
             <p class="section-subtitle">
-                Visualisez un exemple concret d'analyse DFM et explorez une pièce 3D
+                {% if current_language == 'en' %}
+                    Visualize a concrete example of DFM analysis and explore a 3D part
+                {% else %}
+                    Visualisez un exemple concret d'analyse DFM et explorez une pièce 3D
+                {% endif %
             </p>
             <div class="demo-grid">
                 <!-- 3D Viewer -->
                 <div class="demo-card">
-                    <h3 class="demo-title">Aperçu 3D de la pièce analysée</h3>
+                    <h3 class="demo-title">{% if current_language == 'en' %}
+                            3D preview of the analyzed part
+                        {% else %}
+                            Aperçu 3D de la pièce analysée
+                        {% endif %</h3>
                     <div class="viewer-container" id="stl-viewer">
                         <div class="viewer-loading">
                             <i class="fas fa-spinner fa-spin"></i>
-                            <p>Chargement du modèle 3D...</p>
+                            <p>{% if current_language == 'en' %}
+                                    Loading the 3D model...
+                                {% else %}
+                                    Chargement du modèle 3D...
+                                {% endif %</p>
                         </div>
                     </div>
                     <p class="demo-description">
-                        Explorez cette pièce d'exemple en 3D. Notre outil offre des fonctionnalités avancées : mesures, coupes transversales.
+                        {% if current_language == 'en' %}
+                            Explore this example piece in 3D. Our tool offers advanced features: measurements, cross-sections.
+                        {% else %}
+                            Explorez cette pièce d'exemple en 3D. Notre outil offre des fonctionnalités avancées : mesures, coupes transversales.
+                        {% endif %
                     </p>
                 </div>
 
                 <!-- Report Example -->
                 <div class="demo-card">
-                    <h3 class="demo-title">Exemple de rapport généré</h3>
+                    <h3 class="demo-title">{% if current_language == 'en' %}
+                            Example of report generated
+                        {% else %}
+                            Exemple de rapport généré
+                        {% endif %</h3>
                     <div class="report-example">
                         <div class="report-header">
                             <div class="report-logo">
-                                <i class="fas fa-cube"></i> CADlytics
+                                <i class="fas fa-cube"></i> CADlytitcs
                             </div>
-                            <div class="report-badge">Rapport DFM</div>
+                            <div class="report-badge">{% if current_language == 'en' %}
+                                    DFM Report
+                                {% else %}
+                                    Rapport DFM
+                                {% endif %</div>
                         </div>
                         <div class="report-score">
                             <div class="score-circle">
                                 <span class="score-value">8.5</span>
                                 <span class="score-label">/10</span>
                             </div>
-                            <p class="score-status">Pièce injectable</p>
+                            <p class="score-status">{% if current_language == 'en' %}
+                                    Injectable part
+                                {% else %}
+                                    Pièce injectable
+                                {% endif %</p>
                         </div>
                         <div class="report-metrics">
                             <div class="metric">
                                 <i class="fas fa-check-circle"></i>
-                                <span class="metric-label">Épaisseur</span>
+                                <span class="metric-label">{% if current_language == 'en' %}
+                                        Thickness
+                                    {% else %}
+                                        Épaisseur
+                                    {% endif %</span>
                                 <span class="metric-value">2.5mm</span>
                             </div>
                             <div class="metric">
                                 <i class="fas fa-exclamation-triangle"></i>
-                                <span class="metric-label">Dépouille</span>
+                                <span class="metric-label">{% if current_language == 'en' %}
+                                        Draft
+                                    {% else %}
+                                        Dépouille
+                                    {% endif %</span>
                                 <span class="metric-value">0.5°</span>
                             </div>
                             <div class="metric">
                                 <i class="fas fa-check-circle"></i>
-                                <span class="metric-label">Congés</span>
+                                <span class="metric-label">{% if current_language == 'en' %}
+                                        Radius
+                                    {% else %}
+                                        Congés
+                                    {% endif %</span>
                                 <span class="metric-value">OK</span>
                             </div>
                         </div>
                         <div class="report-recommendations">
-                            <h4>Matériaux recommandés</h4>
+                            <h4>{% if current_language == 'en' %}
+                                    Recommended materials
+                                {% else %}
+                                    Matériaux recommandés
+                                {% endif %</h4>
                             <div class="material-list">
                                 <div class="material-item">
                                     <span class="material-name">PP</span>
@@ -1164,11 +1276,19 @@
                             </div>
                         </div>
                         <div class="report-footer">
-                            <p><i class="fas fa-clock"></i> Temps de refroidissement estimé : 45s</p>
+                            <p><i class="fas fa-clock"></i>{% if current_language == 'en' %}
+                                    Estimated cooling time: 45s
+                                {% else %}
+                                    Temps de refroidissement estimé : 45s
+                                {% endif %</p>
                         </div>
                     </div>
                     <p class="demo-description">
-                        Rapport complet avec score de moulabilité, analyse détaillée et recommandations personnalisées. Exportable en PDF haute qualité.
+                        {% if current_language == 'en' %}
+                            Complete report with moldability score, detailed analysis and personalized recommendations. Exportable in high quality PDF.
+                        {% else %}
+                            Rapport complet avec score de moulabilité, analyse détaillée et recommandations personnalisées. Exportable en PDF haute qualité.
+                        {% endif %
                     </p>
                 </div>
             </div>
@@ -1178,47 +1298,131 @@
     <!-- Pricing Section -->
     <section class="pricing-section" id="pricing">
         <div class="container">
-            <h2 class="section-title">Tarifs simples et transparents</h2>
+            <h2 class="section-title">{% if current_language == 'en' %}
+                    Simple and transparent pricing
+                {% else %}
+                    Tarifs simples et transparents
+                {% endif %</h2>
             <p class="section-subtitle">
-                Choisissez l'option qui correspond à vos besoins
+                {% if current_language == 'en' %}
+                    Choose the option that suits your needs
+                {% else %}
+                    Choisissez l'option qui correspond à vos besoins
+                {% endif %
             </p>
             <div class="pricing-grid">
                 <div class="pricing-card">
                     <div class="pricing-header">
-                        <h3 class="pricing-title">Pack 5 crédits</h3>
+                        <h3 class="pricing-title">{% if current_language == 'en' %}
+                                5 credit pack
+                            {% else %}
+                                Pack 5 crédits
+                            {% endif %</h3>
                         <div class="pricing-price">
                             <span class="price-number">5€</span>
-                            <span class="price-period">pack unique</span>
+                            <span class="price-period">{% if current_language == 'en' %}
+                                    Unique package
+                                {% else %}
+                                    Pack unique
+                                {% endif %</span>
                         </div>
-                        <p class="pricing-desc">1€ par analyse</p>
+                        <p class="pricing-desc">{% if current_language == 'en' %}
+                                1€ per analysis
+                            {% else %}
+                                1€ par analyse
+                            {% endif %</p>
                     </div>
                     <ul class="pricing-features">
-                        <li><i class="fas fa-check"></i> 5 analyses DFM complètes</li>
-                        <li><i class="fas fa-check"></i> Rapports PDF professionnels</li>
-                        <li><i class="fas fa-check"></i> Recommandation matières</li>
-                        <li><i class="fas fa-check"></i> Historique 30 jours</li>
-                        <li><i class="fas fa-check"></i> Support email</li>
+                        <li><i class="fas fa-check"></i> {% if current_language == 'en' %}
+                                5 complete DFM analyses
+                            {% else %}
+                                5 analyses DFM complètes
+                            {% endif %</li>
+                        <li><i class="fas fa-check"></i> {% if current_language == 'en' %}
+                                Professional PDF reports
+                            {% else %}
+                                Rapports PDF professionnels
+                            {% endif %</li>
+                        <li><i class="fas fa-check"></i> {% if current_language == 'en' %}
+                                Subject recommendation
+                            {% else %}
+                                Recommandation matières
+                            {% endif %</li>
+                        <li><i class="fas fa-check"></i> {% if current_language == 'en' %}
+                                History 30 days
+                            {% else %}
+                                Historique 30 jours
+                            {% endif %</li>
+                        <li><i class="fas fa-check"></i> {% if current_language == 'en' %}
+                                Email support
+                            {% else %}
+                                Support email
+                            {% endif %</li>
                     </ul>
-                    <a href="{{ url_for('auth.register') }}" class="pricing-cta">Acheter le pack</a>
+                    <a href="{{ url_for('auth.register') }}" class="pricing-cta">{% if current_language == 'en' %}
+                            Buy the pack
+                        {% else %}
+                            Acheter le pack
+                        {% endif %</a>
                 </div>
                 <div class="pricing-card pricing-featured">
-                    <div class="pricing-badge">Plus populaire</div>
+                    <div class="pricing-badge">{% if current_language == 'en' %}
+                            Most popular
+                        {% else %}
+                            Plus populaire
+                        {% endif %</div>
                     <div class="pricing-header">
-                        <h3 class="pricing-title">Abonnement Pro</h3>
+                        <h3 class="pricing-title">{% if current_language == 'en' %}
+                                Pro subscription
+                            {% else %}
+                                Abonnement Pro
+                            {% endif %</h3>
                         <div class="pricing-price">
                             <span class="price-number">14,99€</span>
-                            <span class="price-period">/mois</span>
+                            <span class="price-period">{% if current_language == 'en' %}
+                                    /month
+                                {% else %}
+                                    /mois
+                                {% endif %</span>
                         </div>
-                        <p class="pricing-desc">Analyses illimitées</p>
+                        <p class="pricing-desc">{% if current_language == 'en' %}
+                                Unlimited analyses
+                            {% else %}
+                                Analyses illimitées
+                            {% endif %</p>
                     </div>
                     <ul class="pricing-features">
-                        <li><i class="fas fa-check"></i> <strong>Analyses illimitées</strong></li>
-                        <li><i class="fas fa-check"></i> Rapports PDF premium</li>
-                        <li><i class="fas fa-check"></i> Recommandation matières avancée</li>
-                        <li><i class="fas fa-check"></i> Historique illimité</li>
-                        <li><i class="fas fa-check"></i> Support prioritaire 24/7</li>
+                        <li><i class="fas fa-check"></i> <strong>{% if current_language == 'en' %}
+                            Unlimited analyses
+                        {% else %}
+                            Analyses illimitées
+                        {% endif %</strong></li>
+                        <li><i class="fas fa-check"></i> {% if current_language == 'en' %}
+                                Premium PDF reports
+                            {% else %}
+                                Rapports PDF premium
+                            {% endif %</li>
+                        <li><i class="fas fa-check"></i> {% if current_language == 'en' %}
+                                Advanced material recommendation
+                            {% else %}
+                                Recommandation matières avancée
+                            {% endif %</li>
+                        <li><i class="fas fa-check"></i> {% if current_language == 'en' %}
+                                Unlimited history
+                            {% else %}
+                                Historique illimité
+                            {% endif %</li>
+                        <li><i class="fas fa-check"></i> {% if current_language == 'en' %}
+                                Priority support 24/7
+                            {% else %}
+                                Support prioritaire 24/7
+                            {% endif %</li>
                     </ul>
-                    <a href="{{ url_for('pricing') }}" class="pricing-cta">Démarrer l'abonnement</a>
+                    <a href="{{ url_for('pricing') }}" class="pricing-cta">{% if current_language == 'en' %}
+                            Start the subscription
+                        {% else %}
+                            Démarrer l'abonnement
+                        {% endif %</a>
                 </div>
             </div>
         </div>
@@ -1227,10 +1431,22 @@
     <!-- CTA Section -->
     <section class="cta-section">
         <div class="container">
-            <h2 class="cta-title">Prêt à optimiser vos conceptions ?</h2>
-            <p class="cta-subtitle">Rejoignez des centaines d'ingénieurs qui font confiance à CADlytitcs</p>
+            <h2 class="cta-title">{% if current_language == 'en' %}
+                    Ready to optimize your designs?
+                {% else %}
+                    Prêt à optimiser vos conceptions ?
+                {% endif %</h2>
+            <p class="cta-subtitle">{% if current_language == 'en' %}
+                    Join hundreds of engineers who trust CADlytitcs
+                {% else %}
+                    Rejoignez des centaines d'ingénieurs qui font confiance à CADlytitcs
+                {% endif %</p>
             <a href="/app" class="cta-button">
-                <i class="fas fa-rocket"></i> Démarrer maintenant
+                <i class="fas fa-rocket"></i> {% if current_language == 'en' %}
+                    Start now
+                {% else %}
+                    Démarrer maintenant
+                {% endif %
             </a>
         </div>
     </section>
