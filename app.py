@@ -25,6 +25,7 @@ app.secret_key = os.getenv("SECRET_KEY", "dev")  # ou une clé plus sécurisée
 
 app.config["SESSION_COOKIE_SECURE"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+print("CLIENT_ID:", os.getenv("GOOGLE_OAUTH_CLIENT_ID"))
 
 # OAuth Blueprint - CONFIGURATION CORRIGÉE
 google_bp = make_google_blueprint(
