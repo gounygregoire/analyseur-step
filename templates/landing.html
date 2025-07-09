@@ -996,8 +996,16 @@
                         <i class="fas fa-bolt"></i>
                     </div>
                     <div class="feature-content">
-                        <h3>Analyse instantanée</h3>
-                        <p>Obtenez une première analyse DFM en moins de 30 secondes avec un score de moulabilité détaillé</p>
+                        <h3>{% if current_language == 'en' %}
+                            instant analysis
+                        {% else %}
+                            Analyse instantanée
+                        {% endif %}</h3>
+                        <p>{% if current_language == 'en' %}
+                            Get a first DFM analysis in less than 30 seconds with a detailed moldability score
+                        {% else %}
+                            Obtenez une première analyse DFM en moins de 30 secondes avec un score de moulabilité détaillé
+                        {% endif %}</p>
                     </div>
                 </div>
                 <div class="feature-item">
