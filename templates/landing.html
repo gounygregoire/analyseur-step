@@ -984,7 +984,11 @@
         <div class="container">
             <h2 class="section-title">{{ t.section_why_title }}</h2>
             <p class="section-subtitle">
-                Une plateforme complète pour optimiser vos conceptions avant la production
+                {% if current_language == 'en' %}
+                    A complete platform to optimize your designs before production
+                {% else %}
+                    Une plateforme complète pour optimiser vos conceptions avant la production
+                {% endif %}
             </p>
             <div class="features-grid">
                 <div class="feature-item">
