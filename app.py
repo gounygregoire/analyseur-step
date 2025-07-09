@@ -16,6 +16,9 @@ from flask_login import LoginManager, login_required, current_user
 from translations import get_translation, get_all_translations
 from log import log_action
 from flask_dance.contrib.google import make_google_blueprint, google
+from dotenv import load_dotenv
+load_dotenv()
+
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "dev")  # ou une clé plus sécurisée
