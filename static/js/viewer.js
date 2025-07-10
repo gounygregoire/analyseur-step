@@ -1,3 +1,4 @@
+console.log("✅ viewer.js bien chargé !");
 // 3D Viewer Application
 class STEPViewer {
     constructor() {
