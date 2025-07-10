@@ -3374,6 +3374,7 @@ class STEPViewer {
         }, 100);
     }
 }
+}
 function setupDragAndDrop() {
   const dropZone = document.getElementById("uploadArea");
   const fileInput = document.getElementById("fileInput");
@@ -3401,8 +3402,8 @@ function setupDragAndDrop() {
     const file = event.dataTransfer.files[0];
     if (!file) return;
 
-    console.log("Fichier reçu :", file.name);
-    // ➕ Optionnel : Envoi backend ici si tu veux
+    console.log("Fichier glissé :", file.name);
+    fileInput.files = event.dataTransfer.files;
   });
 
   fileInput.addEventListener("change", () => {
@@ -3410,8 +3411,7 @@ function setupDragAndDrop() {
     if (!file) return;
 
     console.log("Fichier sélectionné :", file.name);
-    // ➕ Optionnel : Envoi backend ici aussi
   });
-    window.addEventListener("DOMContentLoaded", setupDragAndDrop);
-
 }
+
+window.addEventListener("DOMContentLoaded", setupDragAndDrop);
