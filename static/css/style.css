@@ -1336,13 +1336,20 @@ body {
     }
     .drop-zone {
       border: 2px dashed #ccc;
+      border-radius: 10px;
       padding: 40px;
       text-align: center;
-      transition: background 0.3s;
+      transition: all 0.3s ease;
+      background-color: #f9f9f9;
+      color: #666;
     }
 
     .drop-zone.drag-over {
-      background: #e0f7fa;
+      background-color: #e0f7fa;
       border-color: #00bcd4;
+      color: #00bcd4;
+      box-shadow: 0 0 10px #00bcd4;
+      cursor: copy;
     }
+
 }
