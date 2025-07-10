@@ -30,7 +30,7 @@ google_bp = make_google_blueprint(
     client_id=os.getenv("GOOGLE_OAUTH_CLIENT_ID"),
     client_secret=os.getenv("GOOGLE_OAUTH_CLIENT_SECRET"),
     scope=["profile", "email"],
-    redirect_url="https://cadlytitcs.com/google_login/authorized"  # 👈 explicit
+    redirect_url="https://cadlytics.app/google_login/authorized"  # 👈 explicit
 )
 
 app.register_blueprint(google_bp, url_prefix="/auth")
