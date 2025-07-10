@@ -1345,10 +1345,10 @@ body {
     }
 
     #uploadArea.drag-over {
-      background-color: #e6f7f1;
-      border-color: #28a745; /* vert Bootstrap par défaut */
-      box-shadow: 0 0 10px rgba(40, 167, 69, 0.5);
-      color: #28a745;
+      background-color: yellow !important;
+      border: 4px dashed red !important;
+      color: black !important;
+      box-shadow: 0 0 20px red !important;
     }
 
 
