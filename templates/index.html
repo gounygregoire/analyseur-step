@@ -83,7 +83,7 @@
                         {% if current_language == 'en' %}Upload a file{% else %}Télécharger un fichier{% endif %}
                     </h4>
                     <form id="uploadForm" enctype="multipart/form-data">
-                        <div class="upload-area" id="uploadArea">
+                            <div id="uploadArea" class="drop-zone">
                             <i class="bi bi-file-earmark-arrow-up" style="font-size: 3rem; color: var(--kaki-medium); margin-bottom: 1rem;"></i>
                             <p class="mb-3" style="color: var(--brown-medium); font-weight: 500;">
                                 {% if current_language == 'en' %}Drag your STEP file here<br>or click to select{% else %}Glissez votre fichier STEP ici<br>ou cliquez pour sélectionner{% endif %}
@@ -628,5 +628,6 @@
             </div>
         </div>
     </footer>
+<script src="viewer.js"></script>
 </body>
 </html>
