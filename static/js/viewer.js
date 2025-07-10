@@ -3374,3 +3374,44 @@ class STEPViewer {
         }, 100);
     }
 }
+function setupDragAndDrop() {
+  const dropZone = document.getElementById("uploadArea");
+  const fileInput = document.getElementById("fileInput");
+
+  if (!dropZone || !fileInput) {
+    console.warn("Zone de drop ou input fichier non trouvés.");
+    return;
+  }
+
+  dropZone.addEventListener("click", () => fileInput.click());
+
+  dropZone.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    dropZone.classList.add("drag-over");
+  });
+
+  dropZone.addEventListener("dragleave", () => {
+    dropZone.classList.remove("drag-over");
+  });
+
+  dropZone.addEventListener("drop", (event) => {
+    event.preventDefault();
+    dropZone.classList.remove("drag-over");
+
+    const file = event.dataTransfer.files[0];
+    if (!file) return;
+
+    console.log("Fichier reçu :", file.name);
+    // ➕ Optionnel : Envoi backend ici si tu veux
+  });
+
+  fileInput.addEventListener("change", () => {
+    const file = fileInput.files[0];
+    if (!file) return;
+
+    console.log("Fichier sélectionné :", file.name);
+    // ➕ Optionnel : Envoi backend ici aussi
+  });
+    window.addEventListener("DOMContentLoaded", setupDragAndDrop);
+
+}
