@@ -3374,7 +3374,7 @@ class STEPViewer {
         }, 100);
     }
 }
-}
+console.log("setupDragAndDrop appelé !");
 function setupDragAndDrop() {
   const dropZone = document.getElementById("uploadArea");
   const fileInput = document.getElementById("fileInput");
