@@ -3379,9 +3379,10 @@ console.log("setupDragAndDrop appelé !");
 function setupDragAndDrop() {
   const dropZone = document.getElementById("uploadArea");
   const fileInput = document.getElementById("fileInput");
+  const fileNameDisplay = document.getElementById("fileNameDisplay");
 
-  if (!dropZone || !fileInput) {
-    console.warn("Zone de drop ou input fichier non trouvés.");
+  if (!dropZone || !fileInput || !fileNameDisplay) {
+    console.warn("Éléments manquants pour le drag & drop.");
     return;
   }
 
@@ -3403,16 +3404,20 @@ function setupDragAndDrop() {
     const file = event.dataTransfer.files[0];
     if (!file) return;
 
-    console.log("Fichier glissé :", file.name);
     fileInput.files = event.dataTransfer.files;
+    showFileName(file.name);
   });
 
   fileInput.addEventListener("change", () => {
     const file = fileInput.files[0];
     if (!file) return;
 
-    console.log("Fichier sélectionné :", file.name);
+    showFileName(file.name);
   });
+
+  function showFileName(name) {
+    fileNameDisplay.textContent = `✅ Fichier chargé : ${name}`;
+  }
 }
 
 window.addEventListener("DOMContentLoaded", setupDragAndDrop);
