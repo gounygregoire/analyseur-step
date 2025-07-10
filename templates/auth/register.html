@@ -146,6 +146,20 @@
         <div class="container">
             <a class="navbar-brand fw-bold" href="{{ url_for('landing') }}">
                 <i class="bi bi-gear-fill text-primary me-2"></i>CADlytics
+                <!-- Language selector -->
+                <li class="nav-item dropdown">
+                    <a class="nav-link dropdown-toggle" href="#" id="languageDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="bi bi-globe"></i> {{ current_language|upper }}
+                    </a>
+                    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="languageDropdown">
+                        <li><a class="dropdown-item {% if current_language == 'fr' %}active{% endif %}" href="{{ url_for('change_language', lang='fr') }}">
+                            <img src="https://flagcdn.com/16x12/fr.png" alt="FR" class="me-2"> Français
+                        </a></li>
+                        <li><a class="dropdown-item {% if current_language == 'en' %}active{% endif %}" href="{{ url_for('change_language', lang='en') }}">
+                            <img src="https://flagcdn.com/16x12/gb.png" alt="EN" class="me-2"> English
+                        </a></li>
+                    </ul>
+                </li>
             </a>
         </div>
     </nav>
@@ -201,23 +215,43 @@
                             </div>
                             
                             <button type="submit" class="btn btn-primary w-100 mb-3">
-                                <i class="bi bi-person-plus me-2"></i>S'inscrire
+                                <i class="bi bi-person-plus me-2"></i>{% if current_language == 'en' %}
+                                    Register
+                                {% else %}
+                                    S'inscrire
+                                {% endif %}
                             </button>
                         </form>
 
                         <div class="text-center mb-3">
-                            <span class="text-muted">ou</span>
+                            <span class="text-muted">{% if current_language == 'en' %}
+                                    or
+                                {% else %}
+                                    ou
+                                {% endif %}</span>
                         </div>
 
                         <a href="{{ url_for('google_auth.google_login') }}" class="btn btn-outline-secondary w-100 mb-3">
-                            <i class="bi bi-google me-2"></i>S'inscrire avec Google
+                            <i class="bi bi-google me-2"></i>{% if current_language == 'en' %}
+                                Sign up with Google
+                            {% else %}
+                                S'inscrire avec Google
+                            {% endif %}
                         </a>
 
                         <hr>
 
                         <p class="text-center mb-0">
-                            Déjà un compte ? 
-                            <a href="{{ url_for('auth.login') }}">Se connecter</a>
+                            {% if current_language == 'en' %}
+                                Already have an account?
+                            {% else %}
+                                Déjà un compte ? 
+                            {% endif %}
+                            <a href="{{ url_for('auth.login') }}">{% if current_language == 'en' %}
+                                    Sign
+                                {% else %}
+                                    Se connecter
+                                {% endif %}</a>
                         </p>
                     </div>
                 </div>
