@@ -1334,4 +1334,15 @@ body {
     .material-description {
         font-size: 0.9rem;
     }
+    .drop-zone {
+      border: 2px dashed #ccc;
+      padding: 40px;
+      text-align: center;
+      transition: background 0.3s;
+    }
+
+    .drop-zone.drag-over {
+      background: #e0f7fa;
+      border-color: #00bcd4;
+    }
 }
