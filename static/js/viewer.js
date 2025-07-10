@@ -3376,6 +3376,10 @@ class STEPViewer {
     }
 }
 console.log("setupDragAndDrop appelé !");
+document.getElementById("uploadForm").addEventListener("submit", function(e) {
+  e.preventDefault(); // ⚠️ empêche le navigateur de bloquer les effets
+});
+
 function setupDragAndDrop() {
   const dropZone = document.getElementById("uploadArea");
   const fileInput = document.getElementById("fileInput");
