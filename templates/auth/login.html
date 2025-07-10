@@ -131,7 +131,21 @@
     <nav class="navbar navbar-expand-lg navbar-dark">
         <div class="container">
             <a class="navbar-brand fw-bold" href="{{ url_for('landing') }}">
-                <i class="bi bi-gear-fill text-primary me-2"></i>CADlytics
+                <i class="bi bi-gear-fill text-primary me-2"></i>CADlytitcs
+                <!-- Language selector -->
+                <li class="nav-item dropdown">
+                    <a class="nav-link dropdown-toggle" href="#" id="languageDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="bi bi-globe"></i> {{ current_language|upper }}
+                    </a>
+                    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="languageDropdown">
+                        <li><a class="dropdown-item {% if current_language == 'fr' %}active{% endif %}" href="{{ url_for('change_language', lang='fr') }}">
+                            <img src="https://flagcdn.com/16x12/fr.png" alt="FR" class="me-2"> Français
+                        </a></li>
+                        <li><a class="dropdown-item {% if current_language == 'en' %}active{% endif %}" href="{{ url_for('change_language', lang='en') }}">
+                            <img src="https://flagcdn.com/16x12/gb.png" alt="EN" class="me-2"> English
+                        </a></li>
+                    </ul>
+                </li>
             </a>
         </div>
     </nav>

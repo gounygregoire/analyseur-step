@@ -1589,7 +1589,7 @@
             
             // Load STL
             const loader = new THREE.STLLoader();
-            loader.load('/static/GehäusePur_ohne_3_3.stl', function(geometry) {
+            loader.load('/static/demo_cube.stl', function(geometry) {
                 // Center and scale geometry
                 geometry.center();
                 const bbox = new THREE.Box3().setFromObject(new THREE.Mesh(geometry));
