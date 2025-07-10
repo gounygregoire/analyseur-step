@@ -1334,24 +1334,23 @@ body {
     .material-description {
         font-size: 0.9rem;
     }
-    .drop-zone {
-      border: 2px dashed #aaa;
-      border-radius: 8px;
-      padding: 40px;
+    #uploadArea {
+      border: 3px dashed var(--kaki-dark, #aaa); /* fallback si kaki-dark est inconnu */
+      border-radius: 12px;
+      padding: 3rem;
       text-align: center;
+      background: rgba(255, 255, 255, 0.8);
       transition: all 0.3s ease;
-      background-color: #f9f9f9;
-      color: #555;
-      font-size: 16px;
       cursor: pointer;
     }
 
-    .drop-zone.drag-over {
-      background-color: #e0f7fa;
-      border-color: #00bcd4;
-      color: #00bcd4;
-      box-shadow: 0 0 10px rgba(0, 188, 212, 0.5);
+    #uploadArea.drag-over {
+      background-color: #e6f7f1;
+      border-color: #28a745; /* vert Bootstrap par défaut */
+      box-shadow: 0 0 10px rgba(40, 167, 69, 0.5);
+      color: #28a745;
     }
+
 
     #fileNameDisplay {
       margin-top: 10px;
