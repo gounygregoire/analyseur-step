@@ -2016,7 +2016,8 @@ class STEPViewer {
                     throw new Error(result.error || 'Crédits insuffisants. Veuillez acheter des crédits ou vous abonner.');
                 }
                 throw new Error(result.error || 'Erreur lors de l\'analyse DFM');
-                } catch (err) {
+                } 
+            catch (err) {
                     // ✅ Cible l’endroit où tu veux afficher le message
                     const errorDisplay = document.getElementById("dfmErrorMessage");
                     if (errorDisplay) {
