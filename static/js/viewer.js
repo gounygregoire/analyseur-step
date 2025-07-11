@@ -2033,7 +2033,6 @@ class STEPViewer {
             alert(err.message);
           }
         }
-            }
             
             if (result.success && result.dfm_analysis) {
                 displayDFMAnalysis(result.dfm_analysis);
