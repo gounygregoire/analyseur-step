@@ -3422,8 +3422,7 @@ function setupDragAndDrop() {
       fileInput.files = files;
 
       // ✅ Crée un faux event avec target.files pour que handleFileSelect fonctionne
-      const fakeEvent = { target: { files: files } };
-      this.handleFileSelect(fakeEvent);
+        this.handleFileSelect({ target: { files } }); // ✅ simulate l'event classique
     });
 
   fileInput.addEventListener("change", () => {
