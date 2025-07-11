@@ -43,7 +43,8 @@ class STEPViewer {
         this.currentCrossSectionAxis = 'z';
         this.showCrossSectionPlane = true;
         this.selectedDemoldingAxis = 'z'; // Initialize demolding axis
-        
+        this.setupDragAndDrop();
+
 
         
         // Initialize everything after DOM is ready
@@ -54,7 +55,8 @@ class STEPViewer {
             this.loadConversionHistory();
         }
         this.handleFileSelect = this.handleFileSelect.bind(this);
-        this.handleUpload = this.handleUpload.bind(this); // si elle est aussi utilisée hors contexte
+        this.handleUpload = this.handleUpload.bind(this);
+        this.setupDragAndDrop = this.setupDragAndDrop.bind(this);
     }
     
     initializeViewer() {
@@ -227,6 +229,47 @@ class STEPViewer {
         }
     }
     
+    setupDragAndDrop() {
+        console.log("setupDragAndDrop appelé !");
+        const dropZone = this.safeGetElement("uploadArea");
+        const fileInput = this.safeGetElement("fileInput");
+        const fileNameDisplay = this.safeGetElement("fileNameDisplay");
+
+        if (!dropZone || !fileInput || !fileNameDisplay) {
+            console.warn("Éléments manquants pour le drag & drop.");
+            return;
+        }
+
+        dropZone.addEventListener("dragover", (event) => {
+            event.preventDefault();
+            dropZone.classList.add("drag-over");
+        });
+
+        dropZone.addEventListener("dragleave", () => {
+            dropZone.classList.remove("drag-over");
+        });
+
+        dropZone.addEventListener("drop", (event) => {
+            event.preventDefault();
+            dropZone.classList.remove("drag-over");
+
+            const files = event.dataTransfer.files;
+            if (!files || files.length === 0) return;
+
+            fileInput.files = files;
+
+            // 🔥 Appelle la méthode de la classe pour gérer l'affichage
+            this.handleFileSelect({ target: { files } });
+        });
+
+        fileInput.addEventListener("change", (e) => {
+            const file = fileInput.files[0];
+            if (!file) return;
+
+            this.handleFileSelect(e);
+        });
+    }
+
     setupViewerToolsEvents() {
         // This function ensures viewer tool events are attached after the panel becomes visible
         console.log('Setting up viewer tools events...');
@@ -3391,50 +3434,8 @@ document.getElementById("uploadForm").addEventListener("submit", function(e) {
   e.preventDefault(); // ⚠️ empêche le navigateur de bloquer les effets
 });
 
+
 function setupDragAndDrop() {
-  const dropZone = document.getElementById("uploadArea");
-  const fileInput = document.getElementById("fileInput");
-  const fileNameDisplay = document.getElementById("fileNameDisplay");
-
-  if (!dropZone || !fileInput || !fileNameDisplay) {
-    console.warn("Éléments manquants pour le drag & drop.");
-    return;
-  }
-
-  // dropZone.addEventListener("click", () => fileInput.click());
-
-  dropZone.addEventListener("dragover", (event) => {
-    event.preventDefault();
-    dropZone.classList.add("drag-over");
-  });
-
-  dropZone.addEventListener("dragleave", () => {
-    dropZone.classList.remove("drag-over");
-  });
-
-    dropZone.addEventListener("drop", (event) => {
-      event.preventDefault();
-      dropZone.classList.remove("drag-over");
-
-      const files = event.dataTransfer.files;
-      if (!files || files.length === 0) return;
-
-      fileInput.files = files;
-
-      // ✅ Crée un faux event avec target.files pour que handleFileSelect fonctionne
-        this.handleFileSelect({ target: { files } }); // ✅ simulate l'event classique
-    });
-
-  fileInput.addEventListener("change", () => {
-    const file = fileInput.files[0];
-    if (!file) return;
-
-    showFileName(file.name);
-  });
-
-  function showFileName(name) {
-    fileNameDisplay.textContent = `✅ Fichier chargé : ${name}`;
-  }
 }
 
 window.addEventListener("DOMContentLoaded", setupDragAndDrop);
