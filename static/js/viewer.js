@@ -338,8 +338,8 @@ class STEPViewer {
                 changeFileBtn.addEventListener('click', () => fileInput.click());
                 
             // 🔥 Ajout clé : auto-submit après sélection
-            this.handleUpload();
             }
+            this.handleUpload();
         }
     }
 
