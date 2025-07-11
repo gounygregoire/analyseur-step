@@ -1335,22 +1335,27 @@ body {
         font-size: 0.9rem;
     }
     #uploadArea {
-      border: 3px dashed var(--kaki-dark, #aaa); /* fallback si kaki-dark est inconnu */
+      border: 3px dashed var(--kaki-dark, #aaa);
       border-radius: 12px;
       padding: 3rem;
       text-align: center;
       background: rgba(255, 255, 255, 0.8);
       transition: all 0.3s ease;
       cursor: pointer;
+      position: relative;
+      z-index: 1;
     }
 
     #uploadArea.drag-over {
-      background-color: yellow !important;
-      border: 4px dashed red !important;
-      color: black !important;
-      box-shadow: 0 0 20px red !important;
+      background-color: #f0fff0 !important;
+      border: 3px dashed #28a745 !important;
+      box-shadow: 0 0 12px rgba(40, 167, 69, 0.5) !important;
+      color: #28a745 !important;
     }
 
+    .upload-content {
+      pointer-events: none; /* Permet au dragover de traverser */
+    }
 
     #fileNameDisplay {
       margin-top: 10px;
