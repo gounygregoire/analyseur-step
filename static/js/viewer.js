@@ -1,4 +1,5 @@
 console.log("✅ viewer.js bien chargé !");
+console.log("handleUpload appelé !");
 // 3D Viewer Application
 class STEPViewer {
     constructor() {
@@ -383,8 +384,9 @@ class STEPViewer {
     }
     
     async handleUpload(event) {
+        if (event && event.preventDefault) {
         event.preventDefault();
-        
+        }
         if (!this.validateFile()) {
             return;
         }
