@@ -3418,7 +3418,7 @@ function setupDragAndDrop() {
     if (!file) return;
 
     fileInput.files = event.dataTransfer.files;
-    this.handleFileSelect({ target: { files: event.dataTransfer.files } });
+      this.handleFileSelect({ target: { files: event.dataTransfer.files } });
   });
 
   fileInput.addEventListener("change", () => {
