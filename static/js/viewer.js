@@ -2016,6 +2016,16 @@ class STEPViewer {
                     throw new Error(result.error || 'Crédits insuffisants. Veuillez acheter des crédits ou vous abonner.');
                 }
                 throw new Error(result.error || 'Erreur lors de l\'analyse DFM');
+                } catch (err) {
+                    // ✅ Cible l’endroit où tu veux afficher le message
+                    const errorDisplay = document.getElementById("dfmErrorMessage");
+                    if (errorDisplay) {
+                        errorDisplay.textContent = err.message;
+                        errorDisplay.classList.remove("d-none");
+                    } else {
+                        alert(err.message); // fallback si tu n’as pas encore de zone dédiée
+                    }
+                }
             }
             
             if (result.success && result.dfm_analysis) {

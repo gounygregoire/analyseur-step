@@ -658,11 +658,21 @@ def analyze_dfm_endpoint(conversion_id):
         except Exception as dfm_error:
             logger.error(f"DFM analysis exception: {str(dfm_error)}")
             import traceback
-            logger.error(f"DFM analysis traceback: {traceback.format_exc()}")
+            logger.error(traceback.format_exc())
+
+            # Message utilisateur personnalisé pour l'axe
+            if "axis" in str(dfm_error).lower() or "démoulage" in str(dfm_error).lower():
+                return jsonify({
+                    'success': False,
+                    'error': '❌ Erreur dans le choix de l’axe de démoulage. Veuillez réessayer avec un autre axe.'
+                }), 400
+
+            # Fallback générique
             return jsonify({
                 'success': False,
-                'error': f'Erreur durant l\'analyse DFM: {str(dfm_error)}'
+                'error': 'Une erreur est survenue pendant l’analyse DFM. Merci de réessayer.'
             }), 500
+
         
         # Deduct credit after successful analysis
         if current_user.is_authenticated:
