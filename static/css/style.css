@@ -1311,6 +1311,41 @@ body {
     border-left: 4px solid var(--kaki-medium);
 }
 
+.disabled-option {
+    opacity: 0.5;
+    pointer-events: none;
+    background-color: #f8f9fa;
+}
+
+.disabled-option label {
+    color: #6c757d;
+    text-decoration: line-through;
+}
+
+.warning-message {
+    background-color: #fff3cd;
+    border: 1px solid #ffeaa7;
+    color: #856404;
+    padding: 0.5rem;
+    border-radius: 0.375rem;
+    margin-top: 0.5rem;
+    font-size: 0.875rem;
+}
+
+.compatibility-info {
+    background-color: #d1ecf1;
+    border: 1px solid #bee5eb;
+    color: #0c5460;
+    padding: 0.5rem;
+    border-radius: 0.375rem;
+    margin-top: 1rem;
+    font-size: 0.875rem;
+}
+
+.form-check-input:disabled {
+    opacity: 0.5;
+}
+
 .material-processing-notes small {
     font-size: 0.8rem;
     line-height: 1.4;
