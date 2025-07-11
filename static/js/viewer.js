@@ -2019,9 +2019,9 @@ class STEPViewer {
               }
 
               if (result.success && result.dfm_analysis) {
-                displayDFMAnalysis(result.dfm_analysis);
-                showChangeDemoldingAxisButton();
-                enablePDFGeneration();
+                this.displayDFMAnalysis(result.dfm_analysis);
+                this.showChangeDemoldingAxisButton();
+                this.enablePDFGeneration();
               }
 
             } catch (err) {
@@ -2033,19 +2033,6 @@ class STEPViewer {
                 alert(err.message);
               }
             }
-
-            
-            if (result.success && result.dfm_analysis) {
-                displayDFMAnalysis(result.dfm_analysis);
-                // Show change demolding axis button after analysis
-                showChangeDemoldingAxisButton();
-                // Enable PDF generation
-                enablePDFGeneration();
-            }
-            
-        } catch (error) {
-            console.error('DFM Analysis error:', error);
-            alert(`Erreur lors de l'analyse DFM: ${error.message}`);
         } finally {
             // Restore button state
             dfmBtn.innerHTML = originalText;
@@ -3407,7 +3394,7 @@ function setupDragAndDrop() {
     return;
   }
 
-  dropZone.addEventListener("click", () => fileInput.click());
+  // dropZone.addEventListener("click", () => fileInput.click());
 
   dropZone.addEventListener("dragover", (event) => {
     event.preventDefault();
