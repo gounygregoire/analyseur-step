@@ -53,6 +53,8 @@ class STEPViewer {
             this.initializeTooltips();
             this.loadConversionHistory();
         }
+        this.handleFileSelect = this.handleFileSelect.bind(this);
+        this.handleUpload = this.handleUpload.bind(this); // si elle est aussi utilisée hors contexte
     }
     
     initializeViewer() {
@@ -3410,16 +3412,19 @@ function setupDragAndDrop() {
     dropZone.classList.remove("drag-over");
   });
 
-  dropZone.addEventListener("drop", (event) => {
-    event.preventDefault();
-    dropZone.classList.remove("drag-over");
+    dropZone.addEventListener("drop", (event) => {
+      event.preventDefault();
+      dropZone.classList.remove("drag-over");
 
-    const file = event.dataTransfer.files[0];
-    if (!file) return;
+      const files = event.dataTransfer.files;
+      if (!files || files.length === 0) return;
 
-    fileInput.files = event.dataTransfer.files;
-      this.handleFileSelect({ target: { files: event.dataTransfer.files } });
-  });
+      fileInput.files = files;
+
+      // ✅ Crée un faux event avec target.files pour que handleFileSelect fonctionne
+      const fakeEvent = { target: { files: files } };
+      this.handleFileSelect(fakeEvent);
+    });
 
   fileInput.addEventListener("change", () => {
     const file = fileInput.files[0];
