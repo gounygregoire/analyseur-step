@@ -1997,36 +1997,41 @@ class STEPViewer {
             dfmBtn.innerHTML = '<i class="bi bi-gear-fill me-2"></i>Analyse en cours...';
             dfmBtn.disabled = true;
             
-            const response = await fetch(`/api/analyze-dfm/${this.currentConversionId}`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    demolding_axis: demoldingAxis,
-                    material_type: this.currentMaterialType || 'GENERIC'
-                })
-            });
-            
-            const result = await response.json();
-            
-            if (!response.ok) {
-                if (response.status === 403) {
-                    // Credit error - show clear message
-                    throw new Error(result.error || 'Crédits insuffisants. Veuillez acheter des crédits ou vous abonner.');
-                }
-                throw new Error(result.error || 'Erreur lors de l\'analyse DFM');
-                } 
-            catch (err) {
-                    // ✅ Cible l’endroit où tu veux afficher le message
-                    const errorDisplay = document.getElementById("dfmErrorMessage");
-                    if (errorDisplay) {
-                        errorDisplay.textContent = err.message;
-                        errorDisplay.classList.remove("d-none");
-                    } else {
-                        alert(err.message); // fallback si tu n’as pas encore de zone dédiée
-                    }
-                }
+        const response = await fetch(`/api/analyze-dfm/${this.currentConversionId}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                demolding_axis: demoldingAxis,
+                material_type: this.currentMaterialType || 'GENERIC'
+            })
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            if (response.status === 403) {
+                throw new Error(result.error || 'Crédits insuffisants. Veuillez acheter des crédits ou vous abonner.');
+            }
+            throw new Error(result.error || 'Erreur lors de l\'analyse DFM');
+        }
+
+        if (result.success && result.dfm_analysis) {
+            this.displayDFMAnalysis(result.dfm_analysis);
+            this.showChangeDemoldingAxisButton();
+            this.enablePDFGeneration();
+        }
+
+        } catch (err) {
+        const errorDisplay = document.getElementById("dfmErrorMessage");
+        if (errorDisplay) {
+            errorDisplay.textContent = err.message;
+            errorDisplay.classList.remove("d-none");
+        } else {
+            alert(err.message);
+        }
+        }
             }
             
             if (result.success && result.dfm_analysis) {
