@@ -1997,42 +1997,43 @@ class STEPViewer {
             dfmBtn.innerHTML = '<i class="bi bi-gear-fill me-2"></i>Analyse en cours...';
             dfmBtn.disabled = true;
             
-        try {
-          const response = await fetch(`/api/analyze-dfm/${currentConversionId}`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              demolding_axis: demoldingAxis,
-              material_type: currentMaterialType || 'GENERIC'
-            })
-          });
+            try {
+              const response = await fetch(`/api/analyze-dfm/${this.currentConversionId}`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  demolding_axis: demoldingAxis,
+                  material_type: this.currentMaterialType || 'GENERIC'
+                })
+              });
 
-          const result = await response.json();
+              const result = await response.json();
 
-          if (!response.ok) {
-            if (response.status === 403) {
-              throw new Error(result.error || 'Crédits insuffisants. Veuillez acheter des crédits ou vous abonner.');
+              if (!response.ok) {
+                if (response.status === 403) {
+                  throw new Error(result.error || 'Crédits insuffisants. Veuillez acheter des crédits ou vous abonner.');
+                }
+                throw new Error(result.error || 'Erreur lors de l\'analyse DFM');
+              }
+
+              if (result.success && result.dfm_analysis) {
+                displayDFMAnalysis(result.dfm_analysis);
+                showChangeDemoldingAxisButton();
+                enablePDFGeneration();
+              }
+
+            } catch (err) {
+              const errorDisplay = document.getElementById("dfmErrorMessage");
+              if (errorDisplay) {
+                errorDisplay.textContent = err.message;
+                errorDisplay.classList.remove("d-none");
+              } else {
+                alert(err.message);
+              }
             }
-            throw new Error(result.error || 'Erreur lors de l\'analyse DFM');
-          }
 
-          if (result.success && result.dfm_analysis) {
-            displayDFMAnalysis(result.dfm_analysis); // ✅ sans "this"
-            showChangeDemoldingAxisButton();
-            enablePDFGeneration();
-          }
-
-        } catch (err) {
-          const errorDisplay = document.getElementById("dfmErrorMessage");
-          if (errorDisplay) {
-            errorDisplay.textContent = err.message;
-            errorDisplay.classList.remove("d-none");
-          } else {
-            alert(err.message);
-          }
-        }
             
             if (result.success && result.dfm_analysis) {
                 displayDFMAnalysis(result.dfm_analysis);
