@@ -3740,3 +3740,5 @@ function setupDragAndDrop() {
 function submitForm() {
     // Votre logique d'analyse existante ici
     alert('Analyse en cours...');
+}
+window.addEventListener("DOMContentLoaded", setupDragAndDrop);
