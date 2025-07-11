@@ -3494,243 +3494,223 @@ const compatibilityRules = {
 };
 
 // Variables pour stocker l'état
-    let currentSelections = {
-        mechanical: [],
-        aesthetic: [],
-        regulatory: [],
-        temperature: 'ambient',
-        application: ''
-    };
+let currentSelections = {
+    mechanical: [],
+    aesthetic: [],
+    regulatory: [],
+    temperature: 'ambient',
+    application: ''
+};
 
-    // Fonction pour mettre à jour l'état avec vérification
+// Fonction pour mettre à jour l'état
+function updateSelections() {
+    currentSelections.mechanical = Array.from(document.querySelectorAll('input[name="mechanical[]"]:checked')).map(el => el.value);
+    currentSelections.aesthetic = Array.from(document.querySelectorAll('input[name="aesthetic[]"]:checked')).map(el => el.value);
+    currentSelections.regulatory = Array.from(document.querySelectorAll('input[name="regulatory[]"]:checked')).map(el => el.value);
     function updateSelections() {
-        // Vérifier les checkboxes mécaniques
-        const mechanicalInputs = document.querySelectorAll('input[name="mechanical[]"]:checked');
-        currentSelections.mechanical = mechanicalInputs ? Array.from(mechanicalInputs).map(el => el.value) : [];
+        const temperatureElement = document.getElementById('temperature');
+        const applicationElement = document.querySelector('select[name="application"]');
 
-        // Vérifier les checkboxes esthétiques
-        const aestheticInputs = document.querySelectorAll('input[name="aesthetic[]"]:checked');
-        currentSelections.aesthetic = aestheticInputs ? Array.from(aestheticInputs).map(el => el.value) : [];
+        currentSelections.temperature = temperatureElement ? temperatureElement.value : null;
+        currentSelections.application = applicationElement ? applicationElement.value : null;
 
-        // Vérifier les checkboxes réglementaires
-        const regulatoryInputs = document.querySelectorAll('input[name="regulatory[]"]:checked');
-        currentSelections.regulatory = regulatoryInputs ? Array.from(regulatoryInputs).map(el => el.value) : [];
-
-        // Vérifier la température
-        const tempElement = document.getElementById('temperature') || document.querySelector('select[name="temperature"]');
-        currentSelections.temperature = tempElement ? tempElement.value : 'ambient';
-
-        // Vérifier l'application
-        const appElement = document.querySelector('select[name="application"]');
-        currentSelections.application = appElement ? appElement.value : '';
-    }
-
-    // Fonction pour désactiver/activer les options avec vérification
-    function toggleOption(elementId, disable, reason = '') {
-        const element = document.getElementById(elementId);
-        if (!element) return; // Si l'élément n'existe pas, on sort
-
-        const parent = element.closest('.form-check');
-        if (!parent) return; // Si pas de parent form-check, on sort
-
-        if (disable) {
-            element.disabled = true;
-            element.checked = false;
-            parent.classList.add('disabled-option');
-            if (reason) {
-                parent.setAttribute('title', reason);
-            }
-        } else {
-            element.disabled = false;
-            parent.classList.remove('disabled-option');
-            parent.removeAttribute('title');
+        if (!temperatureElement || !applicationElement) {
+            console.warn('Certains champs du questionnaire ne sont pas encore disponibles dans le DOM.');
         }
     }
 
-    // Fonction pour afficher les messages d'avertissement avec vérification
-    function showWarning(containerId, message) {
-        const container = document.getElementById(containerId);
-        const textElement = document.getElementById(containerId.replace('Warning', 'WarningText'));
+}
 
-        if (!container || !textElement) return; // Si les éléments n'existent pas, on sort
+// Fonction pour désactiver/activer les options
+function toggleOption(elementId, disable, reason = '') {
+    const element = document.getElementById(elementId);
+    const parent = element.closest('.form-check');
 
-        if (message) {
-            textElement.textContent = message;
-            container.style.display = 'block';
-        } else {
-            container.style.display = 'none';
+    if (disable) {
+        element.disabled = true;
+        element.checked = false;
+        parent.classList.add('disabled-option');
+        if (reason) {
+            parent.setAttribute('title', reason);
         }
+    } else {
+        element.disabled = false;
+        parent.classList.remove('disabled-option');
+        parent.removeAttribute('title');
+    }
+}
+
+// Fonction pour afficher les messages d'avertissement
+function showWarning(containerId, message) {
+    const container = document.getElementById(containerId);
+    const textElement = document.getElementById(containerId.replace('Warning', 'WarningText'));
+
+    if (!container || !textElement) {
+        console.warn(`⚠️ Élément manquant dans le DOM : ${containerId} ou ${containerId.replace('Warning', 'WarningText')}`);
+        return; // Ne fait rien si l'élément n'existe pas
     }
 
-    // Fonction pour vérifier la compatibilité
-    function checkCompatibility() {
-        updateSelections();
-
-        let warnings = [];
-        let compatibilityMessages = [];
-
-        // Réinitialiser toutes les options
-        document.querySelectorAll('.form-check-input').forEach(input => {
-            if (input.type === 'checkbox') {
-                toggleOption(input.id, false);
-            }
-        });
-
-        // Vérifier les règles mécaniques
-        currentSelections.mechanical.forEach(selected => {
-            if (compatibilityRules.mechanical && compatibilityRules.mechanical[selected]) {
-                const rule = compatibilityRules.mechanical[selected];
-
-                if (rule.conflicts) {
-                    rule.conflicts.forEach(conflict => {
-                        toggleOption(conflict, true, rule.message);
-                    });
-                    warnings.push(rule.message);
-                }
-            }
-        });
-
-        // Vérifier les règles de température
-        if (compatibilityRules.temperature && compatibilityRules.temperature[currentSelections.temperature]) {
-            const rule = compatibilityRules.temperature[currentSelections.temperature];
-
-            if (rule.conflicts) {
-                rule.conflicts.forEach(conflict => {
-                    toggleOption(conflict, true, rule.message);
-                });
-                warnings.push(rule.message);
-            }
-
-            if (rule.warnings) {
-                rule.warnings.forEach(warning => {
-                    if (currentSelections.mechanical.includes(warning)) {
-                        warnings.push(rule.message);
-                    }
-                });
-            }
-        }
-
-        // Vérifier les règles esthétiques
-        currentSelections.aesthetic.forEach(selected => {
-            if (compatibilityRules.aesthetic && compatibilityRules.aesthetic[selected]) {
-                const rule = compatibilityRules.aesthetic[selected];
-
-                if (rule.conflicts) {
-                    rule.conflicts.forEach(conflict => {
-                        toggleOption(conflict, true, rule.message);
-                    });
-                    warnings.push(rule.message);
-                }
-            }
-        });
-
-        // Vérifier les règles réglementaires
-        currentSelections.regulatory.forEach(selected => {
-            if (compatibilityRules.regulatory && compatibilityRules.regulatory[selected]) {
-                const rule = compatibilityRules.regulatory[selected];
-
-                if (rule.conflicts) {
-                    rule.conflicts.forEach(conflict => {
-                        toggleOption(conflict, true, rule.message);
-                    });
-                    warnings.push(rule.message);
-                }
-            }
-        });
-
-        // Vérifier les règles d'application
-        if (currentSelections.application && compatibilityRules.application && compatibilityRules.application[currentSelections.application]) {
-            const rule = compatibilityRules.application[currentSelections.application];
-
-            if (rule.requires) {
-                rule.requires.forEach(required => {
-                    if (!currentSelections.regulatory.includes(required)) {
-                        compatibilityMessages.push(`${rule.message} - ${required} recommandé`);
-                    }
-                });
-            }
-
-            if (rule.suggests) {
-                compatibilityMessages.push(`${rule.message}`);
-            }
-
-            if (rule.conflicts) {
-                rule.conflicts.forEach(conflict => {
-                    toggleOption(conflict, true, rule.message);
-                });
-                warnings.push(rule.message);
-            }
-        }
-
-        // Afficher les avertissements
-        if (warnings.length > 0) {
-            showWarning('mechanicalWarning', warnings.join('. '));
-        } else {
-            showWarning('mechanicalWarning', '');
-        }
-
-        // Afficher les informations de compatibilité
-        const compatibilityInfo = document.getElementById('compatibilityInfo');
-        const compatibilityText = document.getElementById('compatibilityText');
-
-        if (compatibilityInfo && compatibilityText) {
-            if (compatibilityMessages.length > 0) {
-                compatibilityText.innerHTML = compatibilityMessages.map(msg => `• ${msg}`).join('<br>');
-                compatibilityInfo.style.display = 'block';
-            } else {
-                compatibilityInfo.style.display = 'none';
-            }
-        }
+    if (message) {
+        textElement.textContent = message;
+        container.style.display = 'block';
+    } else {
+        container.style.display = 'none';
     }
+}
 
-    // Fonction pour réinitialiser le formulaire
-    function resetForm() {
-        const form = document.getElementById('materialQuestionnaireForm');
-        if (form) {
-            form.reset();
-        }
 
-        document.querySelectorAll('.form-check-input').forEach(input => {
+// Fonction pour vérifier la compatibilité
+function checkCompatibility() {
+    updateSelections();
+
+    let warnings = [];
+    let compatibilityMessages = [];
+
+    // Réinitialiser toutes les options
+    document.querySelectorAll('.form-check-input').forEach(input => {
+        if (input.type === 'checkbox') {
             toggleOption(input.id, false);
-        });
+        }
+    });
 
-        document.querySelectorAll('.warning-message').forEach(warning => {
-            warning.style.display = 'none';
-        });
+    // Vérifier les règles mécaniques
+    currentSelections.mechanical.forEach(selected => {
+        if (compatibilityRules.mechanical[selected]) {
+            const rule = compatibilityRules.mechanical[selected];
 
-        const compatibilityInfo = document.getElementById('compatibilityInfo');
-        if (compatibilityInfo) {
-            compatibilityInfo.style.display = 'none';
+            if (rule.conflicts) {
+                rule.conflicts.forEach(conflict => {
+                    toggleOption(conflict, true, rule.message);
+                });
+                warnings.push(rule.message);
+            }
+            // Afficher les avertissements
+            if (warnings.length > 0) {
+                showWarning('mechanicalWarning', warnings.join('. '));
+            } else {
+                showWarning('mechanicalWarning', '');
+            }
+        }
+    });
+
+    // Vérifier les règles de température
+    if (compatibilityRules.temperature[currentSelections.temperature]) {
+        const rule = compatibilityRules.temperature[currentSelections.temperature];
+
+        if (rule.conflicts) {
+            rule.conflicts.forEach(conflict => {
+                toggleOption(conflict, true, rule.message);
+            });
+            warnings.push(rule.message);
+        }
+
+        if (rule.warnings) {
+            rule.warnings.forEach(warning => {
+                if (currentSelections.mechanical.includes(warning)) {
+                    warnings.push(rule.message);
+                }
+            });
         }
     }
 
-    // Événements avec vérification d'existence
-    document.addEventListener('DOMContentLoaded', function() {
-        // Événements pour les cases à cocher mécaniques
-        document.querySelectorAll('input[name="mechanical[]"]').forEach(checkbox => {
-            checkbox.addEventListener('change', checkCompatibility);
-        });
+    // Vérifier les règles esthétiques
+    currentSelections.aesthetic.forEach(selected => {
+        if (compatibilityRules.aesthetic[selected]) {
+            const rule = compatibilityRules.aesthetic[selected];
 
-        // Événements pour les cases à cocher esthétiques
-        document.querySelectorAll('input[name="aesthetic[]"]').forEach(checkbox => {
-            checkbox.addEventListener('change', checkCompatibility);
-        });
+            if (rule.conflicts) {
+                rule.conflicts.forEach(conflict => {
+                    toggleOption(conflict, true, rule.message);
+                });
+                warnings.push(rule.message);
+            }
+        }
+    });
 
-        // Événements pour les cases à cocher réglementaires
-        document.querySelectorAll('input[name="regulatory[]"]').forEach(checkbox => {
-            checkbox.addEventListener('change', checkCompatibility);
-        });
+    // Vérifier les règles réglementaires
+    currentSelections.regulatory.forEach(selected => {
+        if (compatibilityRules.regulatory[selected]) {
+            const rule = compatibilityRules.regulatory[selected];
 
-        // Événements pour les sélects avec vérification
-        const tempSelect = document.getElementById('temperature') || document.querySelector('select[name="temperature"]');
-        if (tempSelect) {
-            tempSelect.addEventListener('change', checkCompatibility);
+            if (rule.conflicts) {
+                rule.conflicts.forEach(conflict => {
+                    toggleOption(conflict, true, rule.message);
+                });
+                warnings.push(rule.message);
+            }
+        }
+    });
+
+    // Vérifier les règles d'application
+    if (currentSelections.application && compatibilityRules.application[currentSelections.application]) {
+        const rule = compatibilityRules.application[currentSelections.application];
+
+        if (rule.requires) {
+            rule.requires.forEach(required => {
+                if (!currentSelections.regulatory.includes(required)) {
+                    compatibilityMessages.push(`${rule.message} - ${required} recommandé`);
+                }
+            });
         }
 
-        const appSelect = document.querySelector('select[name="application"]');
-        if (appSelect) {
-            appSelect.addEventListener('change', checkCompatibility);
+        if (rule.suggests) {
+            compatibilityMessages.push(`${rule.message}`);
         }
+
+        if (rule.conflicts) {
+            rule.conflicts.forEach(conflict => {
+                toggleOption(conflict, true, rule.message);
+            });
+            warnings.push(rule.message);
+        }
+    }
+
+    
+
+    // Afficher les informations de compatibilité
+    if (compatibilityMessages.length > 0) {
+        document.getElementById('compatibilityText').innerHTML = compatibilityMessages.map(msg => `• ${msg}`).join('<br>');
+        document.getElementById('compatibilityInfo').style.display = 'block';
+    } else {
+        document.getElementById('compatibilityInfo').style.display = 'none';
+    }
+}
+
+// Fonction pour réinitialiser le formulaire
+function resetForm() {
+    document.getElementById('materialQuestionnaireForm').reset();
+    document.querySelectorAll('.form-check-input').forEach(input => {
+        toggleOption(input.id, false);
+    });
+    document.querySelectorAll('.warning-message').forEach(warning => {
+        warning.style.display = 'none';
+    });
+    document.getElementById('compatibilityInfo').style.display = 'none';
+}
+
+// Événements
+document.addEventListener('DOMContentLoaded', function() {
+    // Événements pour les cases à cocher mécaniques
+    document.querySelectorAll('input[name="mechanical[]"]').forEach(checkbox => {
+        checkbox.addEventListener('change', checkCompatibility);
+    });
+
+    // Événements pour les cases à cocher esthétiques
+    document.querySelectorAll('input[name="aesthetic[]"]').forEach(checkbox => {
+        checkbox.addEventListener('change', checkCompatibility);
+    });
+
+    // Événements pour les cases à cocher réglementaires
+    document.querySelectorAll('input[name="regulatory[]"]').forEach(checkbox => {
+        checkbox.addEventListener('change', checkCompatibility);
+    });
+
+
+
+    // Événement pour la soumission du formulaire
+    document.getElementById('materialQuestionnaireForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        alert('Analyse en cours... (Cette fonctionnalité nécessiterait une intégration backend)');
     });
 });
 
