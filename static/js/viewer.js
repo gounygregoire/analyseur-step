@@ -3584,12 +3584,7 @@ function checkCompatibility() {
                 });
                 warnings.push(rule.message);
             }
-            // Afficher les avertissements
-            if (warnings.length > 0) {
-                showWarning('mechanicalWarning', warnings.join('. '));
-            } else {
-                showWarning('mechanicalWarning', '');
-            }
+            
         }
     });
 
@@ -3637,6 +3632,12 @@ function checkCompatibility() {
                     toggleOption(conflict, true, rule.message);
                 });
                 warnings.push(rule.message);
+                // Afficher les avertissements
+                if (warnings.length > 0) {
+                    showWarning('mechanicalWarning', warnings.join('. '));
+                } else {
+                    showWarning('mechanicalWarning', '');
+                }
             }
         }
     });
