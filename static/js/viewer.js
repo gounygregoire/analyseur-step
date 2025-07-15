@@ -19,12 +19,8 @@ class STEPViewer {
                 element.style[property] = value;
             }
         };
-        // Selection limits for DFM analysis
-        const selectionLimits = {
-            mechanical: 3,
-            aesthetic: 3,
-            regulatory: 2
-        };
+        
+        
 
         
         // Utility function for safe display setting
@@ -3556,6 +3552,13 @@ function showWarning(containerId, message) {
     }
 }
 
+// Selection limits for DFM analysis
+const selectionLimits = {
+    mechanical: 3,
+    aesthetic: 3,
+    regulatory: 2
+};
+
     // ✅ Vérifie les conflits et recommandations
 function checkCompatibility() {
     updateSelections();
@@ -3639,7 +3642,7 @@ function checkCompatibility() {
     Object.entries(selectionLimits).forEach(([group, max]) => {
         const selected = currentSelections[group];
         if (selected.length > max) {
-            warnings[group].push(`Trop de critères sélectionnés dans "${group}" (max ${max})`);
+            warnings[group].push(`Trop de critères sélectionnés dans "${group}" (max ${max}) cela peut entraîner des résultats incohérents`);
         }
         });
 
