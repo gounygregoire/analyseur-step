@@ -3648,7 +3648,6 @@ const selectionLimits = {
             infoContainer.style.display = 'none';
         }
     }
-});
 
 
 // Fonction pour réinitialiser le formulaire
