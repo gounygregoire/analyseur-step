@@ -3435,71 +3435,63 @@ document.getElementById("uploadForm").addEventListener("submit", function(e) {
 });
 // Règles de compatibilité
 const compatibilityRules = {
-    // Règles mécaniques contradictoires
     mechanical: {
-        'stiffness': {
+        stiffness: {
             conflicts: ['flexibility'],
             message: 'Rigidité élevée et flexibilité sont contradictoires'
         },
-        'flexibility': {
+        flexibility: {
             conflicts: ['stiffness'],
             message: 'Flexibilité et rigidité élevée sont contradictoires'
         }
     },
-
-    // Règles thermiques
     temperature: {
-        'extreme': {
+        extreme: {
             conflicts: ['flexibility'],
             message: 'Les hautes températures limitent la flexibilité'
         },
-        'high': {
+        high: {
             warnings: ['flexibility'],
             message: 'Les températures élevées peuvent affecter la flexibilité'
         }
     },
-
-    // Règles esthétiques
     aesthetic: {
-        'transparent': {
+        transparent: {
             conflicts: ['colored'],
             message: 'Transparence et colorabilité peuvent être incompatibles'
-        }
-        'colored': {
+        },
+        colored: {
             conflicts: ['transparent'],
             message: 'Transparence et colorabilité peuvent être incompatibles'
         }
     },
-
-    // Règles réglementaires
     regulatory: {
-        'flame_retardant': {
+        flame_retardant: {
             conflicts: ['food_contact'],
             message: 'Les retardateurs de flamme ne sont généralement pas compatibles avec le contact alimentaire'
-        }
-        'food_contact': {
-            conflicts: ['flame-retardant'],
-            message: 'Le contact alimentaire est généralement pas compatibles avec les retardateurs de flamme'
+        },
+        food_contact: {
+            conflicts: ['flame_retardant'],
+            message: 'Le contact alimentaire est généralement pas compatible avec les retardateurs de flamme'
         }
     },
-
-    // Règles domaine d'application
     application: {
-        'medical': {
+        medical: {
             requires: ['medical_grade'],
             message: 'Le domaine médical nécessite généralement une qualité médicale'
         },
-        'aerospace': {
+        aerospace: {
             suggests: ['flame_retardant', 'stiffness'],
             message: 'L\'aéronautique privilégie souvent la rigidité et la résistance au feu'
         },
-        'toys': {
+        toys: {
             requires: ['food_contact'],
             conflicts: ['flame_retardant'],
             message: 'Les jouets nécessitent la sécurité alimentaire et évitent les retardateurs de flamme'
         }
     }
 };
+
 
 // Variables pour stocker l'état
 let currentSelections = {
@@ -3511,11 +3503,11 @@ let currentSelections = {
 };
 
 // Fonction pour mettre à jour l'état
-function updateSelections() {
-    currentSelections.mechanical = Array.from(document.querySelectorAll('input[name="mechanical[]"]:checked')).map(el => el.value);
-    currentSelections.aesthetic = Array.from(document.querySelectorAll('input[name="aesthetic[]"]:checked')).map(el => el.value);
-    currentSelections.regulatory = Array.from(document.querySelectorAll('input[name="regulatory[]"]:checked')).map(el => el.value);
     function updateSelections() {
+        currentSelections.mechanical = Array.from(document.querySelectorAll('input[name="mechanical[]"]:checked')).map(el => el.value);
+        currentSelections.aesthetic = Array.from(document.querySelectorAll('input[name="aesthetic[]"]:checked')).map(el => el.value);
+        currentSelections.regulatory = Array.from(document.querySelectorAll('input[name="regulatory[]"]:checked')).map(el => el.value);
+
         const temperatureElement = document.getElementById('temperature');
         const applicationElement = document.querySelector('select[name="application"]');
 
@@ -3526,7 +3518,6 @@ function updateSelections() {
             console.warn('Certains champs du questionnaire ne sont pas encore disponibles dans le DOM.');
         }
     }
-
 }
 
 // Fonction pour désactiver/activer les options
@@ -3570,63 +3561,50 @@ function showWarning(containerId, message) {
 function checkCompatibility() {
     updateSelections();
 
-    let warnings = [];
+    let warnings = {
+        mechanical: [],
+        temperature: [],
+        aesthetic: [],
+        regulatory: [],
+        application: []
+    };
     let compatibilityMessages = [];
 
-    // Réinitialiser toutes les options
     document.querySelectorAll('.form-check-input').forEach(input => {
         if (input.type === 'checkbox') {
             toggleOption(input.id, false);
         }
     });
 
-    // Vérifier les règles mécaniques
-    currentSelections.mechanical.forEach(selected => {
-        const rule = compatibilityRules.mechanical[selected];
-        if (rule && rule.conflicts) {
-            rule.conflicts.forEach(conflict => toggleOption(conflict, true, rule.message));
-            warnings.push(rule.message);
-        }
-    });
+    for (let type of ['mechanical', 'aesthetic', 'regulatory']) {
+        currentSelections[type].forEach(selected => {
+            const rule = compatibilityRules[type][selected];
+            if (rule?.conflicts) {
+                rule.conflicts.forEach(conflict => toggleOption(conflict, true, rule.message));
+                warnings[type].push(rule.message);
+            }
+        });
+    }
 
-    // Vérifier les règles de température
+    // Température
     const tempRule = compatibilityRules.temperature[currentSelections.temperature];
     if (tempRule) {
         if (tempRule.conflicts) {
             tempRule.conflicts.forEach(conflict => toggleOption(conflict, true, tempRule.message));
-            warnings.push(tempRule.message);
+            warnings.temperature.push(tempRule.message);
         }
-
         if (tempRule.warnings) {
             tempRule.warnings.forEach(warning => {
                 if (currentSelections.mechanical.includes(warning)) {
-                    warnings.push(tempRule.message);
+                    warnings.temperature.push(tempRule.message);
                 }
             });
         }
     }
 
-    // Vérifier les règles esthétiques
-    currentSelections.aesthetic.forEach(selected => {
-        const rule = compatibilityRules.aesthetic[selected];
-        if (rule && rule.conflicts) {
-            rule.conflicts.forEach(conflict => toggleOption(conflict, true, rule.message));
-            warnings.push(rule.message);
-        }
-    });
-
-    // Vérifier les règles réglementaires
-    currentSelections.regulatory.forEach(selected => {
-        const rule = compatibilityRules.regulatory[selected];
-        if (rule && rule.conflicts) {
-            rule.conflicts.forEach(conflict => toggleOption(conflict, true, rule.message));
-            warnings.push(rule.message);
-        }
-    });
-
-    // Vérifier les règles d'application
+    // Application
     const appRule = compatibilityRules.application[currentSelections.application];
-    if (currentSelections.application && appRule) {
+    if (appRule) {
         if (appRule.requires) {
             appRule.requires.forEach(required => {
                 if (!currentSelections.regulatory.includes(required)) {
@@ -3634,25 +3612,21 @@ function checkCompatibility() {
                 }
             });
         }
-
         if (appRule.suggests) {
             compatibilityMessages.push(`${appRule.message}`);
         }
-
         if (appRule.conflicts) {
             appRule.conflicts.forEach(conflict => toggleOption(conflict, true, appRule.message));
-            warnings.push(appRule.message);
+            warnings.application.push(appRule.message);
         }
     }
 
-    // ✅ Afficher les avertissements à la toute fin
-    if (warnings.length > 0) {
-        showWarning('mechanicalWarning', warnings.join('. '));
-    } else {
-        showWarning('mechanicalWarning', '');
+    // Affichage des messages de chaque type
+    for (let type in warnings) {
+        const msg = warnings[type].join('. ');
+        showWarning(`${type}Warning`, msg || '');
     }
 
-    // ✅ Afficher les infos de compatibilité
     if (compatibilityMessages.length > 0) {
         document.getElementById('compatibilityText').innerHTML =
             compatibilityMessages.map(msg => `• ${msg}`).join('<br>');
