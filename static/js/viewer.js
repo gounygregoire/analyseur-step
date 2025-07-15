@@ -3641,7 +3641,6 @@ function checkCompatibility() {
         if (selected.length > max) {
             warnings[group].push(`Trop de critères sélectionnés dans "${group}" (max ${max})`);
         }
-}
 
 
 
