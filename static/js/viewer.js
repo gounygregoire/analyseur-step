@@ -3503,34 +3503,31 @@ let currentSelections = {
 };
 
 // Fonction pour mettre à jour l'état
-    function updateSelections() {
-        currentSelections.mechanical = Array.from(document.querySelectorAll('input[name="mechanical[]"]:checked')).map(el => el.value);
-        currentSelections.aesthetic = Array.from(document.querySelectorAll('input[name="aesthetic[]"]:checked')).map(el => el.value);
-        currentSelections.regulatory = Array.from(document.querySelectorAll('input[name="regulatory[]"]:checked')).map(el => el.value);
+        function updateSelections() {
+            currentSelections.mechanical = Array.from(document.querySelectorAll('input[name="mechanical[]"]:checked')).map(el => el.value);
+            currentSelections.aesthetic = Array.from(document.querySelectorAll('input[name="aesthetic[]"]:checked')).map(el => el.value);
+            currentSelections.regulatory = Array.from(document.querySelectorAll('input[name="regulatory[]"]:checked')).map(el => el.value);
 
-        const temperatureElement = document.getElementById('temperature');
-        const applicationElement = document.querySelector('select[name="application"]');
+            const temperatureElement = document.getElementById('temperature');
+            const applicationElement = document.querySelector('select[name="application"]');
 
-        currentSelections.temperature = temperatureElement ? temperatureElement.value : null;
-        currentSelections.application = applicationElement ? applicationElement.value : null;
-
-        if (!temperatureElement || !applicationElement) {
-            console.warn('Certains champs du questionnaire ne sont pas encore disponibles dans le DOM.');
+            currentSelections.temperature = temperatureElement ? temperatureElement.value : null;
+            currentSelections.application = applicationElement ? applicationElement.value : null;
         }
     }
 
-// Fonction pour désactiver/activer les options
+// ✅ Active/désactive les options
 function toggleOption(elementId, disable, reason = '') {
     const element = document.getElementById(elementId);
+    if (!element) return;
     const parent = element.closest('.form-check');
+    if (!parent) return;
 
     if (disable) {
         element.disabled = true;
         element.checked = false;
         parent.classList.add('disabled-option');
-        if (reason) {
-            parent.setAttribute('title', reason);
-        }
+        if (reason) parent.setAttribute('title', reason);
     } else {
         element.disabled = false;
         parent.classList.remove('disabled-option');
@@ -3538,15 +3535,11 @@ function toggleOption(elementId, disable, reason = '') {
     }
 }
 
-// Fonction pour afficher les messages d'avertissement
+// ✅ Affiche les avertissements par catégorie
 function showWarning(containerId, message) {
     const container = document.getElementById(containerId);
     const textElement = document.getElementById(containerId.replace('Warning', 'WarningText'));
-
-    if (!container || !textElement) {
-        console.warn(`⚠️ Élément manquant dans le DOM : ${containerId} ou ${containerId.replace('Warning', 'WarningText')}`);
-        return; // Ne fait rien si l'élément n'existe pas
-    }
+    if (!container || !textElement) return;
 
     if (message) {
         textElement.textContent = message;
@@ -3556,75 +3549,72 @@ function showWarning(containerId, message) {
     }
 }
 
-// Fonction pour vérifier la compatibilité
-function checkCompatibility() {
-    updateSelections();
+    // ✅ Vérifie les conflits et recommandations
+    function checkCompatibility() {
+        updateSelections();
 
-    let warnings = {
-        mechanical: [],
-        temperature: [],
-        aesthetic: [],
-        regulatory: [],
-        application: []
-    };
-    let compatibilityMessages = [];
+        let warnings = {
+            mechanical: [],
+            temperature: [],
+            aesthetic: [],
+            regulatory: [],
+            application: []
+        };
+        let compatibilityMessages = [];
 
-    document.querySelectorAll('.form-check-input').forEach(input => {
-        if (input.type === 'checkbox') {
-            toggleOption(input.id, false);
-        }
-    });
-
-    for (let type of ['mechanical', 'aesthetic', 'regulatory']) {
-        currentSelections[type].forEach(selected => {
-            const rule = compatibilityRules[type][selected];
-            if (rule?.conflicts) {
-                rule.conflicts.forEach(conflict => toggleOption(conflict, true, rule.message));
-                warnings[type].push(rule.message);
-            }
+        document.querySelectorAll('.form-check-input').forEach(input => {
+            if (input.type === 'checkbox') toggleOption(input.id, false);
         });
-    }
 
-    // Température
-    const tempRule = compatibilityRules.temperature[currentSelections.temperature];
-    if (tempRule) {
-        if (tempRule.conflicts) {
-            tempRule.conflicts.forEach(conflict => toggleOption(conflict, true, tempRule.message));
-            warnings.temperature.push(tempRule.message);
-        }
-        if (tempRule.warnings) {
-            tempRule.warnings.forEach(warning => {
-                if (currentSelections.mechanical.includes(warning)) {
-                    warnings.temperature.push(tempRule.message);
+        ['mechanical', 'aesthetic', 'regulatory'].forEach(type => {
+            currentSelections[type].forEach(selected => {
+                const rule = compatibilityRules[type][selected];
+                if (rule?.conflicts) {
+                    rule.conflicts.forEach(conflict => toggleOption(conflict, true, rule.message));
+                    warnings[type].push(rule.message);
                 }
             });
-        }
-    }
+        });
 
-    // Application
-    const appRule = compatibilityRules.application[currentSelections.application];
-    if (appRule) {
-        if (appRule.requires) {
-            appRule.requires.forEach(required => {
-                if (!currentSelections.regulatory.includes(required)) {
-                    compatibilityMessages.push(`${appRule.message} - ${required} recommandé`);
-                }
-            });
+        // Température
+        const tempRule = compatibilityRules.temperature[currentSelections.temperature];
+        if (tempRule) {
+            if (tempRule.conflicts) {
+                tempRule.conflicts.forEach(conflict => toggleOption(conflict, true, tempRule.message));
+                warnings.temperature.push(tempRule.message);
+            }
+            if (tempRule.warnings) {
+                tempRule.warnings.forEach(warning => {
+                    if (currentSelections.mechanical.includes(warning)) {
+                        warnings.temperature.push(tempRule.message);
+                    }
+                });
+            }
         }
-        if (appRule.suggests) {
-            compatibilityMessages.push(`${appRule.message}`);
-        }
-        if (appRule.conflicts) {
-            appRule.conflicts.forEach(conflict => toggleOption(conflict, true, appRule.message));
-            warnings.application.push(appRule.message);
-        }
-    }
 
-    // Affichage des messages de chaque type
-    for (let type in warnings) {
-        const msg = warnings[type].join('. ');
-        showWarning(`${type}Warning`, msg || '');
-    }
+        // Domaine d'application
+        const appRule = compatibilityRules.application[currentSelections.application];
+        if (appRule) {
+            if (appRule.requires) {
+                appRule.requires.forEach(required => {
+                    if (!currentSelections.regulatory.includes(required)) {
+                        compatibilityMessages.push(`${appRule.message} - ${required} recommandé`);
+                    }
+                });
+            }
+            if (appRule.suggests) {
+                compatibilityMessages.push(`${appRule.message}`);
+            }
+            if (appRule.conflicts) {
+                appRule.conflicts.forEach(conflict => toggleOption(conflict, true, appRule.message));
+                warnings.application.push(appRule.message);
+            }
+        }
+
+// Affichage des avertissements par type
+    Object.entries(warnings).forEach(([type, list]) => {
+        showWarning(`${type}Warning`, list.join('. ') || '');
+    });
 
     if (compatibilityMessages.length > 0) {
         document.getElementById('compatibilityText').innerHTML =
@@ -3639,38 +3629,25 @@ function checkCompatibility() {
 // Fonction pour réinitialiser le formulaire
 function resetForm() {
     document.getElementById('materialQuestionnaireForm').reset();
-    document.querySelectorAll('.form-check-input').forEach(input => {
-        toggleOption(input.id, false);
-    });
-    document.querySelectorAll('.warning-message').forEach(warning => {
-        warning.style.display = 'none';
-    });
+    document.querySelectorAll('.form-check-input').forEach(input => toggleOption(input.id, false));
+    document.querySelectorAll('.warning-message').forEach(w => w.style.display = 'none');
     document.getElementById('compatibilityInfo').style.display = 'none';
 }
 
-// Événements
-document.addEventListener('DOMContentLoaded', function() {
-    // Événements pour les cases à cocher mécaniques
-    document.querySelectorAll('input[name="mechanical[]"]').forEach(checkbox => {
-        checkbox.addEventListener('change', checkCompatibility);
+// ✅ Événements DOM
+document.addEventListener('DOMContentLoaded', function () {
+    ['mechanical', 'aesthetic', 'regulatory'].forEach(type => {
+        document.querySelectorAll(`input[name="${type}[]"]`).forEach(cb => {
+            cb.addEventListener('change', checkCompatibility);
+        });
     });
 
-    // Événements pour les cases à cocher esthétiques
-    document.querySelectorAll('input[name="aesthetic[]"]').forEach(checkbox => {
-        checkbox.addEventListener('change', checkCompatibility);
-    });
+    document.getElementById('temperature')?.addEventListener('change', checkCompatibility);
+    document.querySelector('select[name="application"]')?.addEventListener('change', checkCompatibility);
 
-    // Événements pour les cases à cocher réglementaires
-    document.querySelectorAll('input[name="regulatory[]"]').forEach(checkbox => {
-        checkbox.addEventListener('change', checkCompatibility);
-    });
-
-
-
-    // Événement pour la soumission du formulaire
-    document.getElementById('materialQuestionnaireForm').addEventListener('submit', function(e) {
+    document.getElementById('materialQuestionnaireForm')?.addEventListener('submit', function (e) {
         e.preventDefault();
-        alert('Analyse en cours... (Cette fonctionnalité nécessiterait une intégration backend)');
+        alert('Analyse en cours...');
     });
 });
 
