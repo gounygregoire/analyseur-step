@@ -3641,7 +3641,7 @@ function checkCompatibility() {
         if (selected.length > max) {
             warnings[group].push(`Trop de critères sélectionnés dans "${group}" (max ${max})`);
         }
-
+        });
 
 
 // Fonction pour réinitialiser le formulaire
@@ -3673,3 +3673,4 @@ function submitForm() {
     alert('Analyse en cours...');
 }
 window.addEventListener("DOMContentLoaded", setupDragAndDrop);
+    }
