@@ -3518,7 +3518,6 @@ let currentSelections = {
             console.warn('Certains champs du questionnaire ne sont pas encore disponibles dans le DOM.');
         }
     }
-}
 
 // Fonction pour désactiver/activer les options
 function toggleOption(elementId, disable, reason = '') {
