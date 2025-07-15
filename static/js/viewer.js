@@ -3652,7 +3652,6 @@ function resetForm() {
         document.getElementById('temperature')?.addEventListener('change', checkCompatibility);
         document.querySelector('select[name="application"]')?.addEventListener('change', checkCompatibility);
     });
-});
 
 function setupDragAndDrop() {
 }
