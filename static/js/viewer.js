@@ -3560,91 +3560,95 @@ const selectionLimits = {
 };
 
     // ✅ Vérifie les conflits et recommandations
-function checkCompatibility() {
-    updateSelections();
+    function checkCompatibility() {
+        updateSelections();
 
-    const warnings = {
-        mechanical: [],
-        temperature: [],
-        aesthetic: [],
-        regulatory: [],
-        application: []
-    };
-    const compatibilityMessages = [];
+        const warnings = {
+            mechanical: [],
+            temperature: [],
+            aesthetic: [],
+            regulatory: [],
+            application: []
+        };
 
-    // Réinitialiser toutes les options cochées
-    document.querySelectorAll('.form-check-input').forEach(input => {
-        if (input.type === 'checkbox') {
-            toggleOption(input.id, false);
-        }
-    });
+        const compatibilityMessages = [];
 
-    // Vérification des types standard
-    ['mechanical', 'aesthetic', 'regulatory'].forEach(type => {
-        currentSelections[type].forEach(selected => {
-            const rule = compatibilityRules[type]?.[selected];
-            if (rule?.conflicts) {
-                rule.conflicts.forEach(conflict => toggleOption(conflict, true, rule.message));
-                warnings[type].push(rule.message);
+        // 1. Réinitialiser toutes les cases
+        document.querySelectorAll('.form-check-input').forEach(input => {
+            if (input.type === 'checkbox') {
+                toggleOption(input.id, false);
             }
         });
-    });
 
-    // Vérification température
-    const tempRule = compatibilityRules.temperature?.[currentSelections.temperature];
-    if (tempRule) {
-        if (tempRule.conflicts) {
-            tempRule.conflicts.forEach(conflict => toggleOption(conflict, true, tempRule.message));
-            warnings.temperature.push(tempRule.message);
-        }
-        if (tempRule.warnings) {
-            tempRule.warnings.forEach(warning => {
-                if (currentSelections.mechanical.includes(warning)) {
-                    warnings.temperature.push(tempRule.message);
+        // 2. Vérification des règles standard
+        ['mechanical', 'aesthetic', 'regulatory'].forEach(group => {
+            currentSelections[group].forEach(selected => {
+                const rule = compatibilityRules[group]?.[selected];
+                if (rule?.conflicts) {
+                    rule.conflicts.forEach(conflict => toggleOption(conflict, true, rule.message));
+                    warnings[group].push(rule.message);
                 }
             });
-        }
-    }
 
-    // Vérification application
-    const appRule = compatibilityRules.application?.[currentSelections.application];
-    if (appRule) {
-        if (appRule.requires) {
-            appRule.requires.forEach(required => {
-                if (!currentSelections.regulatory.includes(required)) {
-                    compatibilityMessages.push(`${appRule.message} - ${required} recommandé`);
-                }
-            });
-        }
-        if (appRule.suggests) {
-            compatibilityMessages.push(`${appRule.message}`);
-        }
-        if (appRule.conflicts) {
-            appRule.conflicts.forEach(conflict => toggleOption(conflict, true, appRule.message));
-            warnings.application.push(appRule.message);
-        }
-    }
-
-    // Affichage des warnings
-    Object.entries(warnings).forEach(([type, messages]) => {
-        const warningText = messages.join('. ');
-        showWarning(`${type}Warning`, warningText);
-    });
-
-    if (compatibilityMessages.length > 0) {
-        document.getElementById('compatibilityText').innerHTML =
-            compatibilityMessages.map(msg => `• ${msg}`).join('<br>');
-        document.getElementById('compatibilityInfo').style.display = 'block';
-    } else {
-        document.getElementById('compatibilityInfo').style.display = 'none';
-    }
-    // Vérifier si l'utilisateur a coché trop de cases
-    Object.entries(selectionLimits).forEach(([group, max]) => {
-        const selected = currentSelections[group];
-        if (selected.length > max) {
-            warnings[group].push(`Trop de critères sélectionnés dans "${group}" (max ${max}) cela peut entraîner des résultats incohérents`);
-        }
+            // ✅ Vérifier le nombre maximum autorisé (par défaut 4 si pas défini)
+            const max = selectionLimits[group] || 4;
+            if (currentSelections[group].length > max) {
+                warnings[group].push(`Trop de critères sélectionnés dans "${group}" (max ${max})`);
+            }
         });
+
+        // 3. Température
+        const tempRule = compatibilityRules.temperature?.[currentSelections.temperature];
+        if (tempRule) {
+            if (tempRule.conflicts) {
+                tempRule.conflicts.forEach(conflict => toggleOption(conflict, true, tempRule.message));
+                warnings.temperature.push(tempRule.message);
+            }
+            if (tempRule.warnings) {
+                tempRule.warnings.forEach(w => {
+                    if (currentSelections.mechanical.includes(w)) {
+                        warnings.temperature.push(tempRule.message);
+                    }
+                });
+            }
+        }
+
+        // 4. Application
+        const appRule = compatibilityRules.application?.[currentSelections.application];
+        if (appRule) {
+            if (appRule.requires) {
+                appRule.requires.forEach(req => {
+                    if (!currentSelections.regulatory.includes(req)) {
+                        compatibilityMessages.push(`${appRule.message} - ${req} recommandé`);
+                    }
+                });
+            }
+            if (appRule.suggests) {
+                compatibilityMessages.push(`${appRule.message}`);
+            }
+            if (appRule.conflicts) {
+                appRule.conflicts.forEach(conflict => toggleOption(conflict, true, appRule.message));
+                warnings.application.push(appRule.message);
+            }
+        }
+
+        // 5. Affichage des avertissements
+        Object.entries(warnings).forEach(([group, msgs]) => {
+            const containerId = `${group}Warning`;
+            showWarning(containerId, msgs.join('. '));
+        });
+
+        // 6. Affichage des suggestions (compatibilityInfo)
+        const infoContainer = document.getElementById('compatibilityInfo');
+        const infoText = document.getElementById('compatibilityText');
+        if (compatibilityMessages.length > 0) {
+            infoText.innerHTML = compatibilityMessages.map(msg => `• ${msg}`).join('<br>');
+            infoContainer.style.display = 'block';
+        } else {
+            infoContainer.style.display = 'none';
+        }
+    }
+});
 
 
 // Fonction pour réinitialiser le formulaire
