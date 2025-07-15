@@ -3679,4 +3679,4 @@ function submitForm() {
     alert('Analyse en cours...');
 }
 window.addEventListener("DOMContentLoaded", setupDragAndDrop);
-    }
+    
