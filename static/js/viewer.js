@@ -3465,6 +3465,10 @@ const compatibilityRules = {
             conflicts: ['colored'],
             message: 'Transparence et colorabilité peuvent être incompatibles'
         }
+        'colored': {
+            conflicts: ['transparent'],
+            message: 'Transparence et colorabilité peuvent être incompatibles'
+        }
     },
 
     // Règles réglementaires
@@ -3472,6 +3476,10 @@ const compatibilityRules = {
         'flame_retardant': {
             conflicts: ['food_contact'],
             message: 'Les retardateurs de flamme ne sont généralement pas compatibles avec le contact alimentaire'
+        }
+        'food_contact': {
+            conflicts: ['flame-retardant'],
+            message: 'Le contact alimentaire est généralement pas compatibles avec les retardateurs de flamme'
         }
     },
 
@@ -3558,7 +3566,6 @@ function showWarning(containerId, message) {
     }
 }
 
-
 // Fonction pour vérifier la compatibilité
 function checkCompatibility() {
     updateSelections();
@@ -3575,34 +3582,25 @@ function checkCompatibility() {
 
     // Vérifier les règles mécaniques
     currentSelections.mechanical.forEach(selected => {
-        if (compatibilityRules.mechanical[selected]) {
-            const rule = compatibilityRules.mechanical[selected];
-
-            if (rule.conflicts) {
-                rule.conflicts.forEach(conflict => {
-                    toggleOption(conflict, true, rule.message);
-                });
-                warnings.push(rule.message);
-            }
-            
+        const rule = compatibilityRules.mechanical[selected];
+        if (rule && rule.conflicts) {
+            rule.conflicts.forEach(conflict => toggleOption(conflict, true, rule.message));
+            warnings.push(rule.message);
         }
     });
 
     // Vérifier les règles de température
-    if (compatibilityRules.temperature[currentSelections.temperature]) {
-        const rule = compatibilityRules.temperature[currentSelections.temperature];
-
-        if (rule.conflicts) {
-            rule.conflicts.forEach(conflict => {
-                toggleOption(conflict, true, rule.message);
-            });
-            warnings.push(rule.message);
+    const tempRule = compatibilityRules.temperature[currentSelections.temperature];
+    if (tempRule) {
+        if (tempRule.conflicts) {
+            tempRule.conflicts.forEach(conflict => toggleOption(conflict, true, tempRule.message));
+            warnings.push(tempRule.message);
         }
 
-        if (rule.warnings) {
-            rule.warnings.forEach(warning => {
+        if (tempRule.warnings) {
+            tempRule.warnings.forEach(warning => {
                 if (currentSelections.mechanical.includes(warning)) {
-                    warnings.push(rule.message);
+                    warnings.push(tempRule.message);
                 }
             });
         }
@@ -3610,72 +3608,60 @@ function checkCompatibility() {
 
     // Vérifier les règles esthétiques
     currentSelections.aesthetic.forEach(selected => {
-        if (compatibilityRules.aesthetic[selected]) {
-            const rule = compatibilityRules.aesthetic[selected];
-
-            if (rule.conflicts) {
-                rule.conflicts.forEach(conflict => {
-                    toggleOption(conflict, true, rule.message);
-                });
-                warnings.push(rule.message);
-            }
+        const rule = compatibilityRules.aesthetic[selected];
+        if (rule && rule.conflicts) {
+            rule.conflicts.forEach(conflict => toggleOption(conflict, true, rule.message));
+            warnings.push(rule.message);
         }
     });
 
     // Vérifier les règles réglementaires
     currentSelections.regulatory.forEach(selected => {
-        if (compatibilityRules.regulatory[selected]) {
-            const rule = compatibilityRules.regulatory[selected];
-
-            if (rule.conflicts) {
-                rule.conflicts.forEach(conflict => {
-                    toggleOption(conflict, true, rule.message);
-                });
-                warnings.push(rule.message);
-                // Afficher les avertissements
-                if (warnings.length > 0) {
-                    showWarning('mechanicalWarning', warnings.join('. '));
-                } else {
-                    showWarning('mechanicalWarning', '');
-                }
-            }
+        const rule = compatibilityRules.regulatory[selected];
+        if (rule && rule.conflicts) {
+            rule.conflicts.forEach(conflict => toggleOption(conflict, true, rule.message));
+            warnings.push(rule.message);
         }
     });
 
     // Vérifier les règles d'application
-    if (currentSelections.application && compatibilityRules.application[currentSelections.application]) {
-        const rule = compatibilityRules.application[currentSelections.application];
-
-        if (rule.requires) {
-            rule.requires.forEach(required => {
+    const appRule = compatibilityRules.application[currentSelections.application];
+    if (currentSelections.application && appRule) {
+        if (appRule.requires) {
+            appRule.requires.forEach(required => {
                 if (!currentSelections.regulatory.includes(required)) {
-                    compatibilityMessages.push(`${rule.message} - ${required} recommandé`);
+                    compatibilityMessages.push(`${appRule.message} - ${required} recommandé`);
                 }
             });
         }
 
-        if (rule.suggests) {
-            compatibilityMessages.push(`${rule.message}`);
+        if (appRule.suggests) {
+            compatibilityMessages.push(`${appRule.message}`);
         }
 
-        if (rule.conflicts) {
-            rule.conflicts.forEach(conflict => {
-                toggleOption(conflict, true, rule.message);
-            });
-            warnings.push(rule.message);
+        if (appRule.conflicts) {
+            appRule.conflicts.forEach(conflict => toggleOption(conflict, true, appRule.message));
+            warnings.push(appRule.message);
         }
     }
 
-    
+    // ✅ Afficher les avertissements à la toute fin
+    if (warnings.length > 0) {
+        showWarning('mechanicalWarning', warnings.join('. '));
+    } else {
+        showWarning('mechanicalWarning', '');
+    }
 
-    // Afficher les informations de compatibilité
+    // ✅ Afficher les infos de compatibilité
     if (compatibilityMessages.length > 0) {
-        document.getElementById('compatibilityText').innerHTML = compatibilityMessages.map(msg => `• ${msg}`).join('<br>');
+        document.getElementById('compatibilityText').innerHTML =
+            compatibilityMessages.map(msg => `• ${msg}`).join('<br>');
         document.getElementById('compatibilityInfo').style.display = 'block';
     } else {
         document.getElementById('compatibilityInfo').style.display = 'none';
     }
 }
+
 
 // Fonction pour réinitialiser le formulaire
 function resetForm() {
