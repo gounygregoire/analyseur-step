@@ -398,17 +398,25 @@
                                         <input class="form-check-input" type="checkbox" name="mechanical[]" value="impact" id="impact">
                                         <label class="form-check-label" for="impact">Résistance aux chocs</label>
                                     </div>
+                                    <i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Supporte les impacts et contraintes soudaines."></i>
+                                      </div>
                                     <div class="form-check">
                                         <input class="form-check-input" type="checkbox" name="mechanical[]" value="flexural" id="flexural">
                                         <label class="form-check-label" for="flexural">Résistance à la flexion</label>
                                     </div>
+                                <i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Capacité à plier sans casser."></i>
+                                  </div>
                                     <div class="form-check">
                                         <input class="form-check-input" type="checkbox" name="mechanical[]" value="tensile" id="tensile">
                                         <label class="form-check-label" for="tensile">Résistance à la traction</label>
                                     </div>
+                            <i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Capacité à résister à un allongement."></i>
+                              </div>
                                     <div class="form-check">
                                         <input class="form-check-input" type="checkbox" name="mechanical[]" value="fatigue" id="fatigue">
                                         <label class="form-check-label" for="fatigue">Résistance à la fatigue</label>
+                                        </div>
+                                        <i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Capacité à endurer des charges répétées."></i>
                                     </div>
                                 </div>
                                 <div class="col-md-6">
@@ -416,17 +424,24 @@
                                         <input class="form-check-input" type="checkbox" name="mechanical[]" value="stiffness" id="stiffness">
                                         <label class="form-check-label" for="stiffness">Rigidité élevée</label>
                                     </div>
+                                    <i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Matériau peu flexible, déformable difficilement."></i>
+                                      </div>
                                     <div class="form-check">
                                         <input class="form-check-input" type="checkbox" name="mechanical[]" value="flexibility" id="flexibility">
                                         <label class="form-check-label" for="flexibility">Flexibilité</label>
                                     </div>
+            <i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Capacité à se plier sans se casser."></i>
+              </div>
                                     <div class="form-check">
                                         <input class="form-check-input" type="checkbox" name="mechanical[]" value="wear" id="wear">
                                         <label class="form-check-label" for="wear">Résistance à l'usure</label>
                                     </div>
+        <i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Durabilité face aux frottements et abrasions."></i>
+          </div>
                                     <div class="form-check">
                                         <input class="form-check-input" type="checkbox" name="mechanical[]" value="creep" id="creep">
                                         <label class="form-check-label" for="creep">Résistance au fluage</label>
+                                        <i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Résiste à la déformation lente sous charge prolongée."></i>
                                     </div>
                                 </div>
                             </div>
@@ -670,6 +685,12 @@
                   Dropzone de test (pas liée à ton form)
                 </div>
 
+    <script>
+      document.addEventListener('DOMContentLoaded', function () {
+        const tooltips = Array.from(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+        tooltips.forEach(el => new bootstrap.Tooltip(el));
+      });
+    </script>
                 <script>
                   const testDrop = document.getElementById("testDrop");
                   testDrop.addEventListener("dragover", e => {
