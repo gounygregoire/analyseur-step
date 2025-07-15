@@ -3514,7 +3514,7 @@ function updateSelections() {
     currentSelections.temperature = tempEl ? tempEl.value : 'ambient';
     currentSelections.application = appEl ? appEl.value : '';
 }
-    }
+    
 
 // ✅ Active/désactive les options
 function toggleOption(elementId, disable, reason = '') {
