@@ -387,10 +387,6 @@
                                 <option value="toys">Jouets/Loisirs</option>
                             </select>
                         </div>
-                        <div id="applicationWarning" class="warning-message" style="display: none;">
-                            <i class="bi bi-diagram-3 me-2"></i>
-                            <span id="applicationWarningText"></span>
-                        </div>
                         <!-- Contraintes mécaniques -->
                         <div class="mb-4">
                             <label class="form-label fw-bold">
@@ -439,6 +435,26 @@
                             <i class="bi bi-exclamation-triangle me-2"></i>
                             <span id="mechanicalWarningText"></span>
                         </div>
+                        <div id="applicationWarning" class="warning-message" style="display: none;">
+                            <i class="bi bi-diagram-3 me-2"></i>
+                            <span id="applicationWarningText"></span>
+                        </div>
+                        <div id="temperatureWarning" class="warning-message" style="display: none;">
+                            <i class="bi bi-thermometer-half me-2"></i>
+                            <span id="temperatureWarningText"></span>
+                        </div>
+
+                        <div id="applicationWarning" class="warning-message" style="display: none;">
+                            <i class="bi bi-gear-fill me-2"></i>
+                            <span id="applicationWarningText"></span>
+                        </div>
+
+                        <!-- Zone globale d'infos -->
+                        <div id="compatibilityInfo" class="compatibility-info" style="display: none;">
+                            <h6><i class="bi bi-info-circle me-2"></i>Informations de compatibilité</h6>
+                            <div id="compatibilityText"></div>
+                        </div>
+
 
                         <!-- Environnement d'usage -->
                         <div class="mb-4">
@@ -666,6 +682,7 @@
                 </script>
             <!-- Tes scripts JS d'abord -->
             <script src="{{ url_for('static', filename='js/viewer.js') }}"></script>
+            <script src="{{ url_for('static', filename='js/material-check.js') }}"></script>
             <script src="{{ url_for('static', filename='js/design-insights.js') }}"></script>
 
             <!-- Ensuite ton init -->
