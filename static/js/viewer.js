@@ -3,6 +3,7 @@ console.log("handleUpload appelé !");
 // 3D Viewer Application
 class STEPViewer {
     constructor() {
+        console.log('🧠 Viewer instancié');
         // Utility function for safe DOM access
         this.safeGetElement = (id) => {
             const element = document.getElementById(id);
