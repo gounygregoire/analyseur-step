@@ -3682,23 +3682,27 @@ function resetForm() {
 
 // ✅ Événements DOM
 document.addEventListener('DOMContentLoaded', function () {
+    // Évite double instanciation du viewer
     if (!window.viewer) {
-        console.log('🧠 Viewer instancié');
+        console.log('🧠 Viewer instancié depuis DOMContentLoaded');
         window.viewer = new STEPViewer();
     }
 
-    // Ajout des listeners de compatibilité
+    // Écouteurs pour chaque groupe de checkboxes
     ['mechanical', 'aesthetic', 'regulatory'].forEach(group => {
         document.querySelectorAll(`input[name="${group}[]"]`).forEach(cb => {
             cb.addEventListener('change', checkCompatibility);
         });
     });
 
+    // Écouteurs pour les sélecteurs simples
     document.getElementById('temperature')?.addEventListener('change', checkCompatibility);
     document.querySelector('select[name="application"]')?.addEventListener('change', checkCompatibility);
 
-    setupDragAndDrop(); // Appelle aussi ici le drag & drop une seule fois
+    // Drag & drop une seule fois
+    setupDragAndDrop();
 });
+
 
 function setupDragAndDrop() {
 }
@@ -3707,5 +3711,4 @@ function submitForm() {
     // Votre logique d'analyse existante ici
     alert('Analyse en cours...');
 }
-window.addEventListener("DOMContentLoaded", setupDragAndDrop);
     
