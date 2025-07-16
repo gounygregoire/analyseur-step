@@ -20,7 +20,64 @@ class STEPViewer {
             }
         };
         
-        
+        async analyzeDFM(demoldingAxis = null) {
+            if (!demoldingAxis) {
+                const axisSelect = document.getElementById('demoldingAxisSelect');
+                demoldingAxis = axisSelect?.value || 'z';
+            }
+
+            if (!this.currentConversionId) {
+                alert('Aucun fichier converti disponible pour l\'analyse DFM');
+                return;
+            }
+
+            this.currentDemoldingAxis = demoldingAxis;
+            this.currentMaterialType = 'GENERIC';
+
+            const dfmBtn = document.getElementById('dfmAnalyzeBtn');
+            const originalText = dfmBtn.innerHTML;
+
+            try {
+                dfmBtn.innerHTML = '<i class="bi bi-gear-fill me-2"></i>Analyse en cours...';
+                dfmBtn.disabled = true;
+
+                const response = await fetch(`/api/analyze-dfm/${this.currentConversionId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        demolding_axis: demoldingAxis,
+                        material_type: this.currentMaterialType
+                    })
+                });
+
+                const result = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(result.error || 'Erreur lors de l\'analyse DFM');
+                }
+
+                if (result.success && result.dfm_analysis) {
+                    this.displayDFMAnalysis(result.dfm_analysis);
+                    this.showChangeDemoldingAxisButton();
+                    this.enablePDFGeneration();
+                }
+
+            } catch (err) {
+                const errorDisplay = document.getElementById("dfmErrorMessage");
+                if (errorDisplay) {
+                    errorDisplay.textContent = err.message;
+                    errorDisplay.classList.remove("d-none");
+                } else {
+                    alert(err.message);
+                }
+            } finally {
+                dfmBtn.innerHTML = originalText;
+                dfmBtn.disabled = false;
+            }
+        }
+
 
         
         // Utility function for safe display setting
@@ -431,62 +488,7 @@ class STEPViewer {
         return true;
     }
     
-    async analyzeDFM(demoldingAxis = null) {
-        if (!demoldingAxis) {
-            const axisSelect = document.getElementById('demoldingAxisSelect');
-            demoldingAxis = axisSelect?.value || 'z';
-        }
-
-        if (!this.currentConversionId) {
-            alert("Aucun fichier converti disponible pour l'analyse DFM");
-            return;
-        }
-
-        this.currentDemoldingAxis = demoldingAxis;
-        this.currentMaterialType = 'GENERIC';
-
-        const dfmBtn = document.getElementById('dfmAnalyzeBtn');
-        const originalText = dfmBtn.innerHTML;
-
-        try {
-            dfmBtn.innerHTML = '<i class="bi bi-gear-fill me-2"></i>Analyse en cours...';
-            dfmBtn.disabled = true;
-
-            const response = await fetch(`/api/analyze-dfm/${this.currentConversionId}`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    demolding_axis: demoldingAxis,
-                    material_type: this.currentMaterialType
-                })
-            });
-
-            const result = await response.json();
-
-            if (!response.ok) {
-                throw new Error(result.error || 'Erreur lors de l\'analyse DFM');
-            }
-
-            if (result.success && result.dfm_analysis) {
-                this.displayDFMAnalysis(result.dfm_analysis);
-                this.showChangeDemoldingAxisButton();
-                this.enablePDFGeneration();
-            }
-        } catch (err) {
-            const errorDisplay = document.getElementById("dfmErrorMessage");
-            if (errorDisplay) {
-                errorDisplay.textContent = err.message;
-                errorDisplay.classList.remove("d-none");
-            } else {
-                alert(err.message);
-            }
-        } finally {
-            dfmBtn.innerHTML = originalText;
-            dfmBtn.disabled = false;
-        }
-    }
+    
 
 
     async handleUpload(event) {
@@ -1915,7 +1917,7 @@ class STEPViewer {
             axisButtons.forEach(btn => {
                 btn.onclick = (e) => {
                     const axis = e.currentTarget.getAttribute('data-axis');
-                    this.analyzeDFM(axis);
+                    viewer.analyzeDFM(axis);
                     modal.hide();
                 };
             });
@@ -1923,7 +1925,7 @@ class STEPViewer {
             console.error('Error showing modal:', error);
             // Fallback: direct analysis with default axis
             if (confirm('Erreur d\'interface. Utiliser l\'axe Z par défaut pour l\'analyse DFM?')) {
-                this.analyzeDFM('z');
+                viewer.analyzeDFM('z');
             }
         }
     }
@@ -2038,7 +2040,7 @@ class STEPViewer {
             console.error('Error showing demolding axis modal:', error);
             // Fallback: direct analysis with default axis
             if (confirm('Erreur d\'interface. Utiliser l\'axe Z par défaut pour l\'analyse DFM?')) {
-                this.analyzeDFM('z');
+                viewer.analyzeDFM('z');
             }
         }
     }
@@ -2084,7 +2086,7 @@ class STEPViewer {
                     }
                     
                     // Start DFM analysis without creating cross-section
-                    this.analyzeDFM(axis);
+                    viewer.analyzeDFM(axis);
                 });
             });
         });
@@ -3665,6 +3667,12 @@ function showDemoldingAxisIfQuestionnaireFilled() {
         showDemoldingAxisIfQuestionnaireFilled();
     }
 }
+
+// Crée une instance de la classe
+const viewer = new STEPViewer();
+
+// Expose-la globalement si tu l’utilises ailleurs (optionnel mais utile)
+window.viewer = viewer;
 
 // Fonction pour réinitialiser le formulaire
 function resetForm() {
