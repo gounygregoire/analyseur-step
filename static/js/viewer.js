@@ -2030,7 +2030,7 @@ class STEPViewer {
                         }
                         
                         // Now run DFM analysis
-                        await analyzeDFM(axis);
+                        await viewer.analyzeDFM(axis);
                         
                     } catch (error) {
                         console.error('Material analysis error:', error);
