@@ -3700,6 +3700,7 @@ document.addEventListener('DOMContentLoaded', function () {
     document.querySelector('select[name="application"]')?.addEventListener('change', checkCompatibility);
 
     // Drag & drop une seule fois
+    checkCompatibility();
     setupDragAndDrop();
 });
 

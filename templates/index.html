@@ -727,17 +727,7 @@
             <script src="{{ url_for('static', filename='js/viewer.js') }}"></script>
             <script src="{{ url_for('static', filename='js/design-insights.js') }}"></script>
 
-            <!-- Ensuite ton init -->
-            <script>
-              window.addEventListener("DOMContentLoaded", () => {
-                if (typeof STEPViewer !== "undefined") {
-                  const viewer = new STEPViewer();
-                } else {
-                  console.error("STEPViewer non défini");
-                }
-                  checkCompatibility();
-              });
-            </script>
+            
                                 <script>
                                   document.addEventListener('DOMContentLoaded', function () {
                                     const tooltips = Array.from(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
