@@ -3668,7 +3668,7 @@ function showDemoldingAxisIfQuestionnaireFilled() {
         }
         showDemoldingAxisIfQuestionnaireFilled();
     }
-}
+
 
 // Crée une instance de la classe
 const viewer = new STEPViewer();
