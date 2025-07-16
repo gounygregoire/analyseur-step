@@ -2032,7 +2032,14 @@ class STEPViewer {
         });
     }
     
-    async analyzeDFM(demoldingAxis = 'z') {
+        async analyzeDFM(demoldingAxis = null) {
+        if (!demoldingAxis) {
+            const axisSelect = document.getElementById('demoldingAxisSelect');
+            if (axisSelect) {
+                demoldingAxis = axisSelect.value || 'z';
+            } else {
+                demoldingAxis = 'z';
+            }
         if (!this.currentConversionId) {
             alert('Aucun fichier converti disponible pour l\'analyse DFM');
             return;
@@ -3559,6 +3566,22 @@ const selectionLimits = {
     regulatory: 2
 };
 
+function showDemoldingAxisIfQuestionnaireFilled() {
+    const mech = currentSelections.mechanical.length;
+    const aesth = currentSelections.aesthetic.length;
+    const reg = currentSelections.regulatory.length;
+    const temp = currentSelections.temperature;
+
+    const select = document.getElementById('demoldingAxisSelect');
+    if (!select) return;
+
+    if (mech > 0 && aesth > 0 && reg > 0 && temp) {
+        select.classList.remove('d-none');
+    } else {
+        select.classList.add('d-none');
+    }
+}
+
     // ✅ Vérifie les conflits et recommandations
     function checkCompatibility() {
         updateSelections();
@@ -3647,6 +3670,7 @@ const selectionLimits = {
         } else {
             infoContainer.style.display = 'none';
         }
+        showDemoldingAxisIfQuestionnaireFilled();
     }
 
 

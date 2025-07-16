@@ -219,15 +219,25 @@
                                             </button>
                                         </div>
                                     </div>
-                                    <div class="col-md-6">
-                                        <h6 class="mb-3" style="color: var(--brown-dark);">
-                                            <i class="bi bi-gear me-2"></i>Analyse DFM
-                                        </h6>
-                                        <div class="d-flex gap-2">
-                                            <button type="button" class="btn btn-primary" id="dfmAnalyzeBtn">
-                                                <i class="bi bi-search me-2"></i>Analyser
-                                            </button>
-                                            <div id="dfmErrorMessage" class="text-danger mt-2 d-none" style="font-weight: 500;">
+                                                <div class="col-md-6">
+                                                  <h6 class="mb-3" style="color: var(--brown-dark);">
+                                                    <i class="bi bi-gear me-2"></i>Analyse DFM
+                                                  </h6>
+                                                  <div class="d-flex flex-wrap gap-2 align-items-center">
+                                                    <button type="button" class="btn btn-primary" id="dfmAnalyzeBtn">
+                                                      <i class="bi bi-search me-2"></i>Analyser
+                                                    </button>
+
+                                                    <!-- Sélecteur d'axe, masqué par défaut -->
+                                                    <select class="form-select d-none" id="demoldingAxisSelect" style="width: auto;">
+                                                      <option value="x">Axe X</option>
+                                                      <option value="y">Axe Y</option>
+                                                      <option value="z" selected>Axe Z</option>
+                                                    </select>
+
+                                                    <div id="dfmErrorMessage" class="text-danger mt-2 d-none" style="font-weight: 500;"></div>
+                                                  </div>
+                                                </div>
                                               <!-- Message d’erreur apparaîtra ici -->
                                             </div>
                                         </div>
