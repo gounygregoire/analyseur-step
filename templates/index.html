@@ -395,10 +395,6 @@
                             <div class="row">
                         <div class="mb-4">
                           <label class="form-label fw-bold">
-                            <i class="bi bi-tools me-2"></i>Contraintes mécaniques principales
-                          </label>
-                          <div class="row">
-                            <div class="col-md-6">
                               <div class="form-check d-flex align-items-center justify-content-between">
                                 <div>
                                   <input class="form-check-input" type="checkbox" name="mechanical[]" value="impact" id="impact">
@@ -487,36 +483,42 @@
 
                         <!-- Environnement d'usage -->
                         <div class="mb-4">
-                            <label class="form-label fw-bold">
-                                <i class="bi bi-thermometer-half me-2"></i>Environnement d'usage
-                            </label>
-                            <div class="row">
-                                <div class="col-md-6">
-                                    <label class="form-label">Température de service</label>
-                                    <select class="form-select" name="temperature" id="temperature">
-                                        <option value="low">Basse (-40°C à 0°C)</option>
-                                        <option value="ambient" selected>Ambiante (0°C à 40°C)</option>
-                                        <option value="elevated">Élevée (40°C à 80°C)</option>
-                                        <option value="high">Haute (80°C à 150°C)</option>
-                                        <option value="extreme">Extrême (>150°C)</option>
-                                    </select>
-                                </div>
-                                <div class="col-md-6">
-                                    <label class="form-label">Exposition</label>
-                                    <div class="form-check">
-                                        <input class="form-check-input" type="checkbox" name="exposure[]" value="uv" id="uv">
-                                        <label class="form-check-label" for="uv">UV/Soleil</label>
-                                    </div>
-                                    <div class="form-check">
-                                        <input class="form-check-input" type="checkbox" name="exposure[]" value="humidity" id="humidity">
-                                        <label class="form-check-label" for="humidity">Humidité élevée</label>
-                                    </div>
-                                    <div class="form-check">
-                                        <input class="form-check-input" type="checkbox" name="exposure[]" value="chemicals" id="chemicals">
-                                        <label class="form-check-label" for="chemicals">Produits chimiques</label>
-                                    </div>
-                                </div>
+                          <label class="form-label fw-bold">
+                            <i class="bi bi-thermometer-half me-2"></i>Environnement d'usage
+                          </label>
+                          <div class="row">
+                            <div class="col-md-6">
+                              <label class="form-label">
+                                Température de service
+                                <i class="bi bi-info-circle text-muted ms-1" data-bs-toggle="tooltip" title="Température normale d'utilisation du produit."></i>
+                              </label>
+                              <select class="form-select" name="temperature" id="temperature">
+                                <option value="low">Basse (-40°C à 0°C)</option>
+                                <option value="ambient" selected>Ambiante (0°C à 40°C)</option>
+                                <option value="elevated">Élevée (40°C à 80°C)</option>
+                                <option value="high">Haute (80°C à 150°C)</option>
+                                <option value="extreme">Extrême (>150°C)</option>
+                              </select>
                             </div>
+                            <div class="col-md-6">
+                              <label class="form-label">
+                                Exposition
+                                <i class="bi bi-info-circle text-muted ms-1" data-bs-toggle="tooltip" title="Conditions environnementales auxquelles le matériau sera soumis."></i>
+                              </label>
+                              <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="exposure[]" value="uv" id="uv">
+                                <label class="form-check-label" for="uv">UV/Soleil</label>
+                              </div>
+                              <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="exposure[]" value="humidity" id="humidity">
+                                <label class="form-check-label" for="humidity">Humidité élevée</label>
+                              </div>
+                              <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="exposure[]" value="chemicals" id="chemicals">
+                                <label class="form-check-label" for="chemicals">Produits chimiques</label>
+                              </div>
+                            </div>
+                          </div>
                         </div>
 
                         <!-- Exigences esthétiques -->
@@ -528,29 +530,28 @@
                                 <div class="col-md-6">
                                     <div class="form-check">
                                         <input class="form-check-input" type="checkbox" name="aesthetic[]" value="transparent" id="transparent">
-                                        <label class="form-check-label" for="transparent">Transparence</label>
-                                    </div>
-                                    <div class="form-check">
-                                        <input class="form-check-input" type="checkbox" name="aesthetic[]" value="colored" id="colored">
-                                        <label class="form-check-label" for="colored">Colorabilité</label>
+                                        <label class="form-check-label" for="transparent">Transparence<i class="bi bi-info-circle text-muted ms-1" data-bs-toggle="tooltip" title="Matériau laissant passer la lumière (ex : PMMA)."></i></label>
                                     </div>
                                     <div class="form-check">
                                         <input class="form-check-input" type="checkbox" name="aesthetic[]" value="gloss" id="gloss">
-                                        <label class="form-check-label" for="gloss">Finition brillante</label>
+                                        <label class="form-check-label" for="gloss">Finition brillante<i class="bi bi-info-circle text-muted ms-1" data-bs-toggle="tooltip" title="Aspect visuel lisse et brillant, souvent recherché pour des produits haut de gamme."></i></label>
                                     </div>
                                 </div>
                                 <div class="col-md-6">
                                     <div class="form-check">
                                         <input class="form-check-input" type="checkbox" name="aesthetic[]" value="surface" id="surface">
-                                        <label class="form-check-label" for="surface">Qualité de surface</label>
+                                        <label class="form-check-label" for="surface">Qualité de surface<i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Niveau de finition perçu au toucher et à l’œil (absence de défauts, uniformité, douceur)."></i>
+</label>
                                     </div>
                                     <div class="form-check">
                                         <input class="form-check-input" type="checkbox" name="aesthetic[]" value="texture" id="texture">
-                                        <label class="form-check-label" for="texture">Texturation possible</label>
+                                        <label class="form-check-label" for="texture">Texturation possible<i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Le matériau accepte bien les textures (grain, motif) appliquées dans le moule ou en post-traitement."></i>
+</label>
                                     </div>
                                     <div class="form-check">
                                         <input class="form-check-input" type="checkbox" name="aesthetic[]" value="printing" id="printing">
-                                        <label class="form-check-label" for="printing">Aptitude marquage/impression</label>
+                                        <label class="form-check-label" for="printing">Aptitude marquage/impression<i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Le matériau peut recevoir facilement un marquage (laser, tampo, impression, etc.)."></i>
+</label>
                                     </div>
                                 </div>
                             </div>
@@ -567,19 +568,23 @@
                             </label>
                             <div class="form-check">
                                 <input class="form-check-input" type="checkbox" name="regulatory[]" value="food_contact" id="food_contact">
-                                <label class="form-check-label" for="food_contact">Contact alimentaire</label>
+                                <label class="form-check-label" for="food_contact">Contact alimentaire<i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Compatible avec un usage en contact direct avec les aliments (certifications FDA, UE, etc.)."></i>
+</label>
                             </div>
                             <div class="form-check">
                                 <input class="form-check-input" type="checkbox" name="regulatory[]" value="medical_grade" id="medical_grade">
-                                <label class="form-check-label" for="medical_grade">Qualité médicale (USP VI)</label>
+                                <label class="form-check-label" for="medical_grade">Qualité médicale (USP VI)<i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Matériau conforme à des standards médicaux stricts (ex. USP Class VI)."></i>
+</label>
                             </div>
                             <div class="form-check">
                                 <input class="form-check-input" type="checkbox" name="regulatory[]" value="flame_retardant" id="flame_retardant">
-                                <label class="form-check-label" for="flame_retardant">Retardateur de flamme</label>
+                                <label class="form-check-label" for="flame_retardant">Retardateur de flamme<i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Comporte des additifs limitant la propagation du feu."></i>
+</label>
                             </div>
                             <div class="form-check">
                                 <input class="form-check-input" type="checkbox" name="regulatory[]" value="electrical" id="electrical">
-                                <label class="form-check-label" for="electrical">Propriétés électriques</label>
+                                <label class="form-check-label" for="electrical">Propriétés électriques<i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Offre une isolation électrique ou des performances diélectriques spécifiques."></i>
+</label>
                             </div>
                         </div>
                         <div id="regulatoryWarning" class="warning-message" style="display: none;">
