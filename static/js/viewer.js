@@ -1857,7 +1857,7 @@ class STEPViewer {
             axisButtons.forEach(btn => {
                 btn.onclick = (e) => {
                     const axis = e.currentTarget.getAttribute('data-axis');
-                    this.analyzeDFM(axis);
+                    analyzeDFM(axis);
                     modal.hide();
                 };
             });
@@ -1865,7 +1865,7 @@ class STEPViewer {
             console.error('Error showing modal:', error);
             // Fallback: direct analysis with default axis
             if (confirm('Erreur d\'interface. Utiliser l\'axe Z par défaut pour l\'analyse DFM?')) {
-                this.analyzeDFM('z');
+                analyzeDFM('z');
             }
         }
     }
@@ -1967,7 +1967,7 @@ class STEPViewer {
                         }
                         
                         // Now run DFM analysis
-                        await this.analyzeDFM(axis);
+                        await analyzeDFM(axis);
                         
                     } catch (error) {
                         console.error('Material analysis error:', error);
@@ -1980,7 +1980,7 @@ class STEPViewer {
             console.error('Error showing demolding axis modal:', error);
             // Fallback: direct analysis with default axis
             if (confirm('Erreur d\'interface. Utiliser l\'axe Z par défaut pour l\'analyse DFM?')) {
-                this.analyzeDFM('z');
+                analyzeDFM('z');
             }
         }
     }
@@ -2026,24 +2026,29 @@ class STEPViewer {
                     }
                     
                     // Start DFM analysis without creating cross-section
-                    this.analyzeDFM(axis);
+                    analyzeDFM(axis);
                 });
             });
         });
     }
     
-        async analyzeDFM(demoldingAxis = null) {
-        if (!demoldingAxis) {
-            const axisSelect = document.getElementById('demoldingAxisSelect');
-            if (axisSelect) {
-                demoldingAxis = axisSelect.value || 'z';
-            } else {
-                demoldingAxis = 'z';
-            }
-        if (!this.currentConversionId) {
-            alert('Aucun fichier converti disponible pour l\'analyse DFM');
-            return;
-        }
+            async function analyzeDFM(demoldingAxis = null) {
+                if (!demoldingAxis) {
+                    const axisSelect = document.getElementById('demoldingAxisSelect');
+                    if (axisSelect) {
+                        demoldingAxis = axisSelect.value || 'z';
+                    } else {
+                        demoldingAxis = 'z';
+                    }
+                }
+
+                if (!window.currentConversionId) {
+                    alert('Aucun fichier converti disponible pour l\'analyse DFM');
+                    return;
+                }
+
+                // Ensuite tout le reste de la fonction...
+
         
         // Save the selected demolding axis
         this.currentDemoldingAxis = demoldingAxis;
@@ -3672,7 +3677,7 @@ function showDemoldingAxisIfQuestionnaireFilled() {
         }
         showDemoldingAxisIfQuestionnaireFilled();
     }
-
+}
 
 // Fonction pour réinitialiser le formulaire
 function resetForm() {
