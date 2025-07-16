@@ -2032,78 +2032,62 @@ class STEPViewer {
         });
     }
     
-            async function analyzeDFM(demoldingAxis = null) {
-                if (!demoldingAxis) {
-                    const axisSelect = document.getElementById('demoldingAxisSelect');
-                    if (axisSelect) {
-                        demoldingAxis = axisSelect.value || 'z';
-                    } else {
-                        demoldingAxis = 'z';
-                    }
-                }
+    async function analyzeDFM(demoldingAxis = null) {
+        if (!demoldingAxis) {
+            const axisSelect = document.getElementById('demoldingAxisSelect');
+            demoldingAxis = axisSelect ? axisSelect.value || 'z' : 'z';
+        }
 
-                if (!window.currentConversionId) {
-                    alert('Aucun fichier converti disponible pour l\'analyse DFM');
-                    return;
-                }
+        if (!window.currentConversionId) {
+            alert('Aucun fichier converti disponible pour l\'analyse DFM');
+            return;
+        }
 
-                // Ensuite tout le reste de la fonction...
+        window.currentDemoldingAxis = demoldingAxis;
+        window.currentMaterialType = 'GENERIC'; // Default
 
-        
-        // Save the selected demolding axis
-        this.currentDemoldingAxis = demoldingAxis;
-        this.currentMaterialType = 'GENERIC'; // Default material type
-        
         const dfmBtn = document.getElementById('dfmAnalyzeBtn');
         const originalText = dfmBtn.innerHTML;
-        
+
         try {
-            // Show loading state
             dfmBtn.innerHTML = '<i class="bi bi-gear-fill me-2"></i>Analyse en cours...';
             dfmBtn.disabled = true;
-            
-            try {
-              const response = await fetch(`/api/analyze-dfm/${this.currentConversionId}`, {
+
+            const response = await fetch(`/api/analyze-dfm/${window.currentConversionId}`, {
                 method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  demolding_axis: demoldingAxis,
-                  material_type: this.currentMaterialType || 'GENERIC'
+                    demolding_axis: demoldingAxis,
+                    material_type: window.currentMaterialType
                 })
-              });
+            });
 
-              const result = await response.json();
+            const result = await response.json();
 
-              if (!response.ok) {
-                if (response.status === 403) {
-                  throw new Error(result.error || 'Crédits insuffisants. Veuillez acheter des crédits ou vous abonner.');
-                }
-                throw new Error(result.error || 'Erreur lors de l\'analyse DFM');
-              }
+            if (!response.ok) {
+                throw new Error(result.error || 'Erreur DFM');
+            }
 
-              if (result.success && result.dfm_analysis) {
-                this.displayDFMAnalysis(result.dfm_analysis);
-                this.showChangeDemoldingAxisButton();
-                this.enablePDFGeneration();
-              }
+            if (result.success && result.dfm_analysis) {
+                displayDFMAnalysis(result.dfm_analysis);
+                showChangeDemoldingAxisButton();
+                enablePDFGeneration();
+            }
 
-            } catch (err) {
-              const errorDisplay = document.getElementById("dfmErrorMessage");
-              if (errorDisplay) {
+        } catch (err) {
+            const errorDisplay = document.getElementById("dfmErrorMessage");
+            if (errorDisplay) {
                 errorDisplay.textContent = err.message;
                 errorDisplay.classList.remove("d-none");
-              } else {
+            } else {
                 alert(err.message);
-              }
             }
         } finally {
-            // Restore button state
             dfmBtn.innerHTML = originalText;
             dfmBtn.disabled = false;
         }
     }
+
     
     showChangeDemoldingAxisButton() {
         const btn = document.getElementById('changeDemoldingAxisBtn');
