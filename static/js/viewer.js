@@ -20,63 +20,7 @@ class STEPViewer {
             }
         };
         
-        async analyzeDFM(demoldingAxis = null) {
-            if (!demoldingAxis) {
-                const axisSelect = document.getElementById('demoldingAxisSelect');
-                demoldingAxis = axisSelect?.value || 'z';
-            }
-
-            if (!this.currentConversionId) {
-                alert('Aucun fichier converti disponible pour l\'analyse DFM');
-                return;
-            }
-
-            this.currentDemoldingAxis = demoldingAxis;
-            this.currentMaterialType = 'GENERIC';
-
-            const dfmBtn = document.getElementById('dfmAnalyzeBtn');
-            const originalText = dfmBtn.innerHTML;
-
-            try {
-                dfmBtn.innerHTML = '<i class="bi bi-gear-fill me-2"></i>Analyse en cours...';
-                dfmBtn.disabled = true;
-
-                const response = await fetch(`/api/analyze-dfm/${this.currentConversionId}`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        demolding_axis: demoldingAxis,
-                        material_type: this.currentMaterialType
-                    })
-                });
-
-                const result = await response.json();
-
-                if (!response.ok) {
-                    throw new Error(result.error || 'Erreur lors de l\'analyse DFM');
-                }
-
-                if (result.success && result.dfm_analysis) {
-                    this.displayDFMAnalysis(result.dfm_analysis);
-                    this.showChangeDemoldingAxisButton();
-                    this.enablePDFGeneration();
-                }
-
-            } catch (err) {
-                const errorDisplay = document.getElementById("dfmErrorMessage");
-                if (errorDisplay) {
-                    errorDisplay.textContent = err.message;
-                    errorDisplay.classList.remove("d-none");
-                } else {
-                    alert(err.message);
-                }
-            } finally {
-                dfmBtn.innerHTML = originalText;
-                dfmBtn.disabled = false;
-            }
-        }
+        
 
 
         
@@ -117,6 +61,64 @@ class STEPViewer {
         this.handleFileSelect = this.handleFileSelect.bind(this);
         this.handleUpload = this.handleUpload.bind(this);
         this.setupDragAndDrop = this.setupDragAndDrop.bind(this);
+    }
+
+    async analyzeDFM(demoldingAxis = null) {
+        if (!demoldingAxis) {
+            const axisSelect = document.getElementById('demoldingAxisSelect');
+            demoldingAxis = axisSelect?.value || 'z';
+        }
+
+        if (!this.currentConversionId) {
+            alert('Aucun fichier converti disponible pour l\'analyse DFM');
+            return;
+        }
+
+        this.currentDemoldingAxis = demoldingAxis;
+        this.currentMaterialType = 'GENERIC';
+
+        const dfmBtn = document.getElementById('dfmAnalyzeBtn');
+        const originalText = dfmBtn.innerHTML;
+
+        try {
+            dfmBtn.innerHTML = '<i class="bi bi-gear-fill me-2"></i>Analyse en cours...';
+            dfmBtn.disabled = true;
+
+            const response = await fetch(`/api/analyze-dfm/${this.currentConversionId}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    demolding_axis: demoldingAxis,
+                    material_type: this.currentMaterialType
+                })
+            });
+
+            const result = await response.json();
+
+            if (!response.ok) {
+                throw new Error(result.error || 'Erreur lors de l\'analyse DFM');
+            }
+
+            if (result.success && result.dfm_analysis) {
+                this.displayDFMAnalysis(result.dfm_analysis);
+                this.showChangeDemoldingAxisButton();
+                this.enablePDFGeneration();
+            }
+
+        } catch (err) {
+            const errorDisplay = document.getElementById("dfmErrorMessage");
+            if (errorDisplay) {
+                errorDisplay.textContent = err.message;
+                errorDisplay.classList.remove("d-none");
+            } else {
+                alert(err.message);
+            }
+        } finally {
+            dfmBtn.innerHTML = originalText;
+            dfmBtn.disabled = false;
+        }
     }
     
     initializeViewer() {
