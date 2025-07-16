@@ -3671,11 +3671,6 @@ function showDemoldingAxisIfQuestionnaireFilled() {
     }
 
 
-// Crée une instance de la classe
-const viewer = new STEPViewer();
-
-// Expose-la globalement si tu l’utilises ailleurs (optionnel mais utile)
-window.viewer = viewer;
 
 // Fonction pour réinitialiser le formulaire
 function resetForm() {
@@ -3686,17 +3681,24 @@ function resetForm() {
 }
 
 // ✅ Événements DOM
-    document.addEventListener('DOMContentLoaded', function () {
-        // Ajout listener sur chaque checkbox
-        ['mechanical', 'aesthetic', 'regulatory'].forEach(group => {
-            document.querySelectorAll(`input[name="${group}[]"]`).forEach(cb => {
-                cb.addEventListener('change', checkCompatibility);
-            });
-        });
+document.addEventListener('DOMContentLoaded', function () {
+    if (!window.viewer) {
+        console.log('🧠 Viewer instancié');
+        window.viewer = new STEPViewer();
+    }
 
-        document.getElementById('temperature')?.addEventListener('change', checkCompatibility);
-        document.querySelector('select[name="application"]')?.addEventListener('change', checkCompatibility);
+    // Ajout des listeners de compatibilité
+    ['mechanical', 'aesthetic', 'regulatory'].forEach(group => {
+        document.querySelectorAll(`input[name="${group}[]"]`).forEach(cb => {
+            cb.addEventListener('change', checkCompatibility);
+        });
     });
+
+    document.getElementById('temperature')?.addEventListener('change', checkCompatibility);
+    document.querySelector('select[name="application"]')?.addEventListener('change', checkCompatibility);
+
+    setupDragAndDrop(); // Appelle aussi ici le drag & drop une seule fois
+});
 
 function setupDragAndDrop() {
 }
