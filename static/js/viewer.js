@@ -3733,24 +3733,95 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
-  // ✅ Lancement de l'analyse après sélection d'axe
-  const launchBtn = document.getElementById('startDFMAnalysis');
-  const axisSelect = document.getElementById('demoldingAxisSelect');
+    // ✅ Lancement de l'analyse après sélection d'axe
+    const launchBtn = document.getElementById('startDFMAnalysis');
+    const axisSelect = document.getElementById('demoldingAxisSelect');
 
-  if (launchBtn && axisSelect) {
-    launchBtn.addEventListener('click', () => {
-      const axis = axisSelect.value || 'z';
-      if (window.viewer && typeof window.viewer.analyzeDFM === 'function') {
-        window.viewer.analyzeDFM(axis);
-      } else {
-        console.error("❌ viewer.analyzeDFM non défini");
-      }
-    });
-  }
+    if (launchBtn && axisSelect) {
+      launchBtn.addEventListener('click', () => {
+        const axis = axisSelect.value || 'z';
+
+        // ✅ NOUVEAU : Fermer la modale avant l'analyse
+        const questionnaireModal = document.getElementById('materialQuestionnaireModal');
+        if (questionnaireModal) {
+          const modal = bootstrap.Modal.getInstance(questionnaireModal);
+          if (modal) {
+            modal.hide();
+          }
+        }
+
+        // ✅ Nettoyer le backdrop au cas où
+        cleanupModal();
+
+        // ✅ Lancer l'analyse
+        if (window.viewer && typeof window.viewer.analyzeDFM === 'function') {
+          window.viewer.analyzeDFM(axis);
+        } else {
+          console.error("❌ viewer.analyzeDFM non défini");
+        }
+      });
+    }
 
   // ✅ Drag & drop au chargement de la page
   setupDragAndDrop();
 });
+// ✅ NOUVELLES FONCTIONS À AJOUTER
+
+// Nettoyage des modales
+function cleanupModal() {
+  document.querySelectorAll('.modal-backdrop').forEach(backdrop => {
+    backdrop.remove();
+  });
+
+  document.body.classList.remove('modal-open');
+  document.body.style.overflow = '';
+  document.body.style.paddingRight = '';
+
+  console.log('🧹 Nettoyage modal terminé');
+}
+
+// Gestionnaires d'événements
+function handleModalShown() {
+  console.log('🎯 Modale questionnaire ouverte');
+  initializeMaterialListeners();
+}
+
+function handleModalHidden() {
+  console.log('🎯 Modale questionnaire fermée');
+  setTimeout(() => {
+    cleanupModal();
+  }, 100);
+}
+
+// Fonction d'initialisation des écouteurs matériaux
+function initializeMaterialListeners() {
+  console.log('🎯 Activation des écouteurs matériaux');
+
+  ['mechanical', 'aesthetic', 'regulatory'].forEach(group => {
+    const checkboxes = document.querySelectorAll(`input[name="${group}[]"]`);
+    console.log(`🔍 Trouvé ${checkboxes.length} checkboxes pour ${group}`);
+
+    checkboxes.forEach(cb => {
+      cb.addEventListener('change', checkCompatibility);
+    });
+  });
+
+  const tempSelect = document.getElementById('temperature');
+  const appSelect = document.querySelector('select[name="application"]');
+
+  if (tempSelect) {
+    tempSelect.addEventListener('change', checkCompatibility);
+  }
+
+  if (appSelect) {
+    appSelect.addEventListener('change', checkCompatibility);
+  }
+
+  if (typeof checkCompatibility === 'function') {
+    checkCompatibility();
+  }
+}
+
 
 // ✅ NOUVELLE FONCTION : Gestion des écouteurs de la modale
 function initializeMaterialListeners() {
