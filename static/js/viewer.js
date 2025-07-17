@@ -3854,8 +3854,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         console.log('✅ Bouton transformé en "Analyse DFM"');
       }
-    });
-
+    
   // ✅ Drag & drop au chargement de la page
   setupDragAndDrop();
 });
