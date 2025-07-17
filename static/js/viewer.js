@@ -1914,6 +1914,9 @@ class STEPViewer {
                         // 🔽 2. Forcer l'affichage de l'axe si tout est rempli
                         showDemoldingAxisIfQuestionnaireFilled(); // doit déjà être définie globalement
 
+                    document.getElementById('demoldingAxisSelect')?.classList.remove('d-none');
+                    document.getElementById('startDFMAnalysis')?.classList.remove('d-none');
+
                         // 🔽 3. (optionnel) Scroll vers le viewer
                         document.getElementById('dfmViewerSection')?.scrollIntoView({ behavior: 'smooth' });
                     }
@@ -3703,26 +3706,44 @@ function resetForm() {
 }
 
 // ✅ Événements DOM
-document.addEventListener('DOMContentLoaded', function () {
-    // Évite double instanciation du viewer
-    if (!window.viewer) {
+    document.addEventListener('DOMContentLoaded', function () {
+      // Évite double instanciation du viewer
+      if (!window.viewer) {
         console.log('🧠 Viewer instancié depuis DOMContentLoaded');
         window.viewer = new STEPViewer();
-    }
-    // ✅ Setup bouton "Lancer analyse DFM"
-    const launchBtn = document.getElementById('startDFMAnalysis');
-    const axisSelect = document.getElementById('demoldingAxisSelect');
+      }
 
-    if (launchBtn && axisSelect) {
-        launchBtn.addEventListener('click', () => {
-            const axis = axisSelect.value || 'z';
-            if (window.viewer && typeof window.viewer.analyzeDFM === 'function') {
-                window.viewer.analyzeDFM(axis);
-            } else {
-                console.error("❌ viewer.analyzeDFM non défini");
-            }
+      // ✅ Écouteur sur bouton "Analyser" initial
+      const analyzeBtn = document.getElementById('dfmAnalyzeBtn');
+      if (analyzeBtn) {
+        analyzeBtn.addEventListener('click', () => {
+          // Ici, affiche la modale du questionnaire ou change la vue si tu veux
+          const questionnaireModal = document.getElementById('materialQuestionnaireModal');
+          if (questionnaireModal) {
+            const modal = new bootstrap.Modal(questionnaireModal);
+            modal.show();
+          } else {
+            console.error("❌ Pas de modale questionnaire trouvée.");
+          }
         });
-    }
+      }
+
+      // ✅ Lancement de l’analyse après sélection d’axe
+      const launchBtn = document.getElementById('startDFMAnalysis');
+      const axisSelect = document.getElementById('demoldingAxisSelect');
+
+      if (launchBtn && axisSelect) {
+        launchBtn.addEventListener('click', () => {
+          const axis = axisSelect.value || 'z';
+          if (window.viewer && typeof window.viewer.analyzeDFM === 'function') {
+            window.viewer.analyzeDFM(axis);
+          } else {
+            console.error("❌ viewer.analyzeDFM non défini");
+          }
+        });
+      }
+    });
+
 
 
     // Écouteurs pour chaque groupe de checkboxes
