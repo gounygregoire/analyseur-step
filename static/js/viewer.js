@@ -107,7 +107,6 @@ class STEPViewer {
                 this.showChangeDemoldingAxisButton();
                 this.enablePDFGeneration();
             }
-
         } catch (err) {
             const errorDisplay = document.getElementById("dfmErrorMessage");
             if (errorDisplay) {
@@ -3761,7 +3760,7 @@ function resetForm() {
     checkCompatibility();
     setupDragAndDrop();
 }
-
+}
 
 function setupDragAndDrop() {
 }
