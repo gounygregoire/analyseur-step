@@ -3761,6 +3761,7 @@ function resetForm() {
     checkCompatibility();
     setupDragAndDrop();
 });
+}
 
 
 function setupDragAndDrop() {
