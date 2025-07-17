@@ -3713,127 +3713,148 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
 // ✅ Écouteur sur bouton "Analyser" initial
-  const analyzeBtn = document.getElementById('dfmAnalyzeBtn');
-  if (analyzeBtn) {
-    analyzeBtn.addEventListener('click', () => {
-      const questionnaireModal = document.getElementById('materialQuestionnaireModal');
-      if (questionnaireModal) {
+    // ✅ Écouteur sur bouton "Analyser" initial
+      const analyzeBtn = document.getElementById('dfmAnalyzeBtn');
+      if (analyzeBtn) {
+        analyzeBtn.addEventListener('click', () => {
+          const questionnaireModal = document.getElementById('materialQuestionnaireModal');
+          if (questionnaireModal) {
 
-        cleanupModal();
+            cleanupModal();
 
-        const modal = new bootstrap.Modal(questionnaireModal, {
-          backdrop: 'static',
-          keyboard: false
-        });
-
-        modal.show();
-
-        questionnaireModal.addEventListener('shown.bs.modal', handleModalShown, { once: true });
-        questionnaireModal.addEventListener('hidden.bs.modal', handleModalHidden, { once: true });
-
-        // ✅ NOUVEAU CODE : Gestion du workflow complet
-        setTimeout(() => {
-          const submitBtn = document.getElementById('submitQuestionnaire');
-
-          if (submitBtn) {
-            console.log('✅ Bouton submitQuestionnaire trouvé');
-
-            // ✅ Écouteur sur "Analyser et recommander"
-            submitBtn.addEventListener('click', function() {
-              console.log('🎯 Clic sur Analyser et recommander');
-
-              // ✅ Étape 1 : Valider le questionnaire (ajoutez votre logique si nécessaire)
-              if (!validateQuestionnaire()) {
-                console.log('❌ Questionnaire invalide');
-                return;
-              }
-
-              // ✅ Étape 2 : Afficher le menu déroulant
-              showAxisSelection();
-
-              // ✅ Étape 3 : Changer le bouton
-              transformButtonToDFMAnalysis();
-
-              console.log('✅ Menu axes affiché, bouton transformé');
+            const modal = new bootstrap.Modal(questionnaireModal, {
+              backdrop: 'static',
+              keyboard: false
             });
 
-          } else {
-            console.error('❌ submitQuestionnaire introuvable');
+            modal.show();
+
+            questionnaireModal.addEventListener('shown.bs.modal', handleModalShown, { once: true });
+            questionnaireModal.addEventListener('hidden.bs.modal', handleModalHidden, { once: true });
+
+            // ✅ NOUVEAU CODE : Gestion du workflow corrigé
+            setTimeout(() => {
+              const submitBtn = document.getElementById('submitQuestionnaire');
+
+              if (submitBtn) {
+                console.log('✅ Bouton submitQuestionnaire trouvé');
+
+                // ✅ Écouteur sur "Analyser et recommander"
+                submitBtn.addEventListener('click', function() {
+                  console.log('🎯 Clic sur Analyser et recommander');
+
+                  // ✅ Étape 1 : Valider le questionnaire
+                  if (!validateQuestionnaire()) {
+                    console.log('❌ Questionnaire invalide');
+                    return;
+                  }
+
+                  // ✅ Étape 2 : FERMER la modale
+                  const modal = bootstrap.Modal.getInstance(questionnaireModal);
+                  if (modal) {
+                    modal.hide();
+                  }
+
+                  // ✅ Étape 3 : Après fermeture, afficher axes dans la PAGE
+                  setTimeout(() => {
+                    cleanupModal();
+                    showAxisSelectionInPage();
+                    transformAnalyzeButtonToDFM();
+                  }, 300);
+                });
+
+              } else {
+                console.error('❌ submitQuestionnaire introuvable');
+              }
+            }, 500);
           }
-        }, 500);
+        });
+      }
+
+      // ✅ FONCTIONS HELPER
+      function validateQuestionnaire() {
+        // TODO: Ajoutez votre logique de validation
+        return true;
+      }
+
+      function showAxisSelectionInPage() {
+        // ✅ Trouver le conteneur du bouton "Analyser" dans la page
+        const analyzeBtn = document.getElementById('dfmAnalyzeBtn');
+        if (!analyzeBtn) return;
+
+        const container = analyzeBtn.parentElement;
+
+        // ✅ Supprimer l'ancien menu s'il existe
+        const existingAxisSection = document.getElementById('axisSelectionSection');
+        if (existingAxisSection) {
+          existingAxisSection.remove();
+        }
+
+        // ✅ Créer le HTML du menu déroulant DANS LA PAGE
+        const axisSelectionHTML = `
+          <div id="axisSelectionSection" class="mt-3 p-3 border rounded bg-light">
+            <h6><i class="bi bi-arrow-through-heart me-2"></i>Sélectionner l'axe de démoulage</h6>
+            <div class="row align-items-center">
+              <div class="col-md-6">
+                <select class="form-select" id="demoldingAxisSelect">
+                  <option value="x">Axe X</option>
+                  <option value="y">Axe Y</option>
+                  <option value="z" selected>Axe Z</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        `;
+
+        // ✅ Ajouter APRÈS le bouton dans la page
+        analyzeBtn.insertAdjacentHTML('afterend', axisSelectionHTML);
+
+        console.log('✅ Menu axes ajouté dans la page');
+      }
+
+      function transformAnalyzeButtonToDFM() {
+        const analyzeBtn = document.getElementById('dfmAnalyzeBtn');
+        if (!analyzeBtn) return;
+
+        // ✅ Changer le texte et l'icône du bouton PRINCIPAL
+        analyzeBtn.innerHTML = '<i class="bi bi-gear me-2"></i>Analyse DFM';
+        analyzeBtn.className = 'btn btn-success'; // Changer la couleur
+
+        // ✅ Supprimer tous les anciens écouteurs
+        const newBtn = analyzeBtn.cloneNode(true);
+        analyzeBtn.parentNode.replaceChild(newBtn, analyzeBtn);
+
+        // ✅ Nouvel écouteur pour l'analyse finale
+        newBtn.addEventListener('click', function() {
+          console.log('🎯 Clic sur Analyse DFM');
+
+          const axisSelect = document.getElementById('demoldingAxisSelect');
+          const selectedAxis = axisSelect ? axisSelect.value : 'z';
+
+          console.log('🎯 Axe sélectionné :', selectedAxis);
+
+          // ✅ Masquer la section des axes
+          const axisSection = document.getElementById('axisSelectionSection');
+          if (axisSection) {
+            axisSection.style.display = 'none';
+          }
+
+          // ✅ Lancer l'analyse DFM
+          if (window.viewer && typeof window.viewer.analyzeDFM === 'function') {
+            console.log('🚀 Lancement analyse DFM...');
+            window.viewer.analyzeDFM(selectedAxis);
+          } else {
+            console.error('❌ Fonction analyzeDFM introuvable');
+            console.log('🔍 window.viewer disponible ?', !!window.viewer);
+            if (window.viewer) {
+              console.log('🔍 Méthodes disponibles :', Object.keys(window.viewer));
+            }
+          }
+        });
+
+        console.log('✅ Bouton transformé en "Analyse DFM"');
       }
     });
-  }
-
-  // ✅ FONCTIONS HELPER
-  function validateQuestionnaire() {
-    // TODO: Ajoutez votre logique de validation
-    // Par exemple, vérifier que les champs obligatoires sont remplis
-    return true; // Pour l'instant, on valide tout
-  }
-
-  function showAxisSelection() {
-    // ✅ Trouver ou créer la section des axes
-    const modalBody = document.querySelector('#materialQuestionnaireModal .modal-body');
-
-    // ✅ Créer le HTML du menu déroulant
-    const axisSelectionHTML = `
-      <div id="axisSelectionSection" class="mt-4 p-3 border rounded">
-        <h5>Sélectionner l'axe de démoulage</h5>
-        <div class="mb-3">
-          <label for="demoldingAxisSelect" class="form-label">Axe de démoulage :</label>
-          <select class="form-select" id="demoldingAxisSelect">
-            <option value="x">Axe X</option>
-            <option value="y">Axe Y</option>
-            <option value="z" selected>Axe Z</option>
-          </select>
-        </div>
-      </div>
-    `;
-
-    // ✅ Ajouter à la modale
-    modalBody.insertAdjacentHTML('beforeend', axisSelectionHTML);
-  }
-
-  function transformButtonToDFMAnalysis() {
-    const submitBtn = document.getElementById('submitQuestionnaire');
-    if (submitBtn) {
-      // ✅ Changer le texte et l'icône
-      submitBtn.innerHTML = '<i class="bi bi-gear me-2"></i>Analyse DFM';
-
-      // ✅ Supprimer l'ancien écouteur et ajouter le nouveau
-      submitBtn.removeEventListener('click', arguments.callee);
-
-      // ✅ Nouvel écouteur pour l'analyse finale
-      submitBtn.addEventListener('click', function() {
-        console.log('🎯 Clic sur Analyse DFM');
-
-        const axisSelect = document.getElementById('demoldingAxisSelect');
-        const selectedAxis = axisSelect ? axisSelect.value : 'z';
-
-        console.log('🎯 Axe sélectionné :', selectedAxis);
-
-        // ✅ Fermer la modale
-        const modal = bootstrap.Modal.getInstance(document.getElementById('materialQuestionnaireModal'));
-        if (modal) {
-          modal.hide();
-        }
-
-        // ✅ Nettoyage
-        setTimeout(() => {
-          cleanupModal();
-        }, 300);
-
-        // ✅ Lancer l'analyse DFM
-        if (window.viewer && typeof window.viewer.analyzeDFM === 'function') {
-          console.log('🚀 Lancement analyse DFM...');
-          window.viewer.analyzeDFM(selectedAxis);
-        } else {
-          console.error('❌ Fonction analyzeDFM introuvable');
-        }
-      });
-    }
-  }
 
   // ✅ Drag & drop au chargement de la page
   setupDragAndDrop();
