@@ -3760,7 +3760,6 @@ function resetForm() {
     // Drag & drop une seule fois
     checkCompatibility();
     setupDragAndDrop();
-});
 }
 
 
