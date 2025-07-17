@@ -224,7 +224,23 @@
                                                     <i class="bi bi-gear me-2"></i>Analyse DFM
                                                   </h6>
                                                   <div class="d-flex flex-wrap gap-2 align-items-center">
-                                                    <button type="button" class="btn btn-primary" id="dfmAnalyzeBtn">
+                                                      <div id="demoldingAxisSelectContainer" class="d-none d-flex align-items-center gap-2">
+                                                        <label for="demoldingAxisSelect" class="mb-0 fw-semibold">Axe de démoulage :</label>
+                                                        <select id="demoldingAxisSelect" class="form-select form-select-sm" style="width: auto;">
+                                                          <option value="x">Axe X (horizontal)</option>
+                                                          <option value="y">Axe Y (vertical avant/arrière)</option>
+                                                          <option value="z" selected>Axe Z (vertical haut/bas)</option>
+                                                        </select>
+                                                      </div>
+                                                      <div id="demoldingAxisSelectContainer" class="d-none d-flex align-items-center gap-2">
+                                                        <label for="demoldingAxisSelect" class="mb-0 fw-semibold">Axe de démoulage :</label>
+                                                        <select id="demoldingAxisSelect" class="form-select form-select-sm" style="width: auto;">
+                                                          <option value="x">Axe X (horizontal)</option>
+                                                          <option value="y">Axe Y (vertical avant/arrière)</option>
+                                                          <option value="z" selected>Axe Z (vertical haut/bas)</option>
+                                                        </select>
+                                                      </div>
+                                                      <button type="button" class="btn btn-primary" id="dfmAnalyzeBtn">
                                                       <i class="bi bi-search me-2"></i>Analyser
                                                     </button>
 

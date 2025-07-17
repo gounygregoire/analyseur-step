@@ -216,8 +216,13 @@ class STEPViewer {
         // DFM Analysis button
         const dfmAnalyzeBtn = this.safeGetElement('dfmAnalyzeBtn');
         if (dfmAnalyzeBtn) {
-            dfmAnalyzeBtn.addEventListener('click', () => this.showDemoldingAxisModal());
+            dfmAnalyzeBtn.addEventListener('click', () => {
+                const axisSelect = document.getElementById('demoldingAxisSelect');
+                const selectedAxis = axisSelect?.value || 'z';
+                this.analyzeDFM(selectedAxis);
+            });
         }
+
         
         // Change demolding axis button
         const changeDemoldingAxisBtn = this.safeGetElement('changeDemoldingAxisBtn');
@@ -1894,6 +1899,21 @@ class STEPViewer {
             if (submitBtn) {
                 submitBtn.onclick = () => {
                     this.submitMaterialQuestionnaire();
+                    checkCompatibility(); // ou équivalent si déjà appelé
+
+                        // 🔽 1. Fermer le modal manuellement
+                        const modalElement = document.getElementById('materialQuestionnaireModal'); // ⬅️ vérifie bien cet ID
+                        if (modalElement) {
+                            const modal = bootstrap.Modal.getInstance(modalElement);
+                            if (modal) modal.hide();
+                        }
+
+                        // 🔽 2. Forcer l'affichage de l'axe si tout est rempli
+                        showDemoldingAxisIfQuestionnaireFilled(); // doit déjà être définie globalement
+
+                        // 🔽 3. (optionnel) Scroll vers le viewer
+                        document.getElementById('dfmViewerSection')?.scrollIntoView({ behavior: 'smooth' });
+                    }
                 };
             }
         } catch (error) {
@@ -3564,18 +3584,18 @@ const selectionLimits = {
 };
 
 function showDemoldingAxisIfQuestionnaireFilled() {
-    const mech = currentSelections.mechanical.length;
-    const aesth = currentSelections.aesthetic.length;
-    const reg = currentSelections.regulatory.length;
-    const temp = currentSelections.temperature;
+    const { mechanical, aesthetic, regulatory, temperature } = currentSelections;
+    const selectContainer = document.getElementById('demoldingAxisSelectContainer');
 
-    const select = document.getElementById('demoldingAxisSelect');
-    if (!select) return;
+    const isFilled = (
+        mechanical.length > 0 &&
+        aesthetic.length > 0 &&
+        regulatory.length > 0 &&
+        temperature
+    );
 
-    if (mech > 0 && aesth > 0 && reg > 0 && temp) {
-        select.classList.remove('d-none');
-    } else {
-        select.classList.add('d-none');
+    if (selectContainer) {
+        selectContainer.classList.toggle('d-none', !isFilled);
     }
 }
 
