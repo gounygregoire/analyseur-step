@@ -3760,7 +3760,7 @@ function resetForm() {
     checkCompatibility();
     setupDragAndDrop();
 }
-}
+
 
 function setupDragAndDrop() {
 }
@@ -3769,4 +3769,4 @@ function submitForm() {
     // Votre logique d'analyse existante ici
     alert('Analyse en cours...');
 }
-    
+} 
