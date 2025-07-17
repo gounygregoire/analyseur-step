@@ -1914,7 +1914,7 @@ class STEPViewer {
                         showDemoldingAxisIfQuestionnaireFilled(); // doit déjà être définie globalement
 
                     document.getElementById('demoldingAxisSelect')?.classList.remove('d-none');
-                    document.getElementById('startDFMAnalysis')?.classList.remove('d-none');
+                    document.getElementById('submitQuestionnaire')?.classList.remove('d-none');
 
                         // 🔽 3. (optionnel) Scroll vers le viewer
                         document.getElementById('dfmViewerSection')?.scrollIntoView({ behavior: 'smooth' });
@@ -3734,7 +3734,7 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
     // ✅ Lancement de l'analyse après sélection d'axe
-    const launchBtn = document.getElementById('startDFMAnalysis');
+    const launchBtn = document.getElementById('submitQuestionnaire');
     const axisSelect = document.getElementById('demoldingAxisSelect');
 
     if (launchBtn && axisSelect) {
