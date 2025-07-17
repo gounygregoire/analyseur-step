@@ -3705,67 +3705,79 @@ function resetForm() {
 }
 
 // ✅ Événements DOM
-    document.addEventListener('DOMContentLoaded', function () {
-      // Évite double instanciation du viewer
-      if (!window.viewer) {
-        console.log('🧠 Viewer instancié depuis DOMContentLoaded');
-        window.viewer = new STEPViewer();
-      }
+document.addEventListener('DOMContentLoaded', function () {
+  // Évite double instanciation du viewer
+  if (!window.viewer) {
+    console.log('🧠 Viewer instancié depuis DOMContentLoaded');
+    window.viewer = new STEPViewer();
+  }
 
-      // ✅ Écouteur sur bouton "Analyser" initial
-      const analyzeBtn = document.getElementById('dfmAnalyzeBtn');
-      if (analyzeBtn) {
-        analyzeBtn.addEventListener('click', () => {
-          // Ici, affiche la modale du questionnaire ou change la vue si tu veux
-          const questionnaireModal = document.getElementById('materialQuestionnaireModal');
-          if (questionnaireModal) {
-            const modal = new bootstrap.Modal(questionnaireModal);
-            modal.show();
-          } else {
-            console.error("❌ Pas de modale questionnaire trouvée.");
-          }
-        });
-      }
+  // ✅ Écouteur sur bouton "Analyser" initial
+  const analyzeBtn = document.getElementById('dfmAnalyzeBtn');
+  if (analyzeBtn) {
+    analyzeBtn.addEventListener('click', () => {
+      const questionnaireModal = document.getElementById('materialQuestionnaireModal');
+      if (questionnaireModal) {
+        const modal = new bootstrap.Modal(questionnaireModal);
+        modal.show();
 
-      // ✅ Lancement de l’analyse après sélection d’axe
-      const launchBtn = document.getElementById('startDFMAnalysis');
-      const axisSelect = document.getElementById('demoldingAxisSelect');
+        // ✅ NOUVEAU : Activer les écouteurs quand la modale s'ouvre
+        questionnaireModal.addEventListener('shown.bs.modal', function() {
+          console.log('🎯 Modale ouverte, activation des écouteurs');
+          initializeMaterialListeners();
+        }, { once: true }); // once: true pour éviter les doublons
 
-      if (launchBtn && axisSelect) {
-        launchBtn.addEventListener('click', () => {
-          const axis = axisSelect.value || 'z';
-          if (window.viewer && typeof window.viewer.analyzeDFM === 'function') {
-            window.viewer.analyzeDFM(axis);
-          } else {
-            console.error("❌ viewer.analyzeDFM non défini");
-          }
-        });
+      } else {
+        console.error("❌ Pas de modale questionnaire trouvée.");
       }
     });
+  }
 
+  // ✅ Lancement de l'analyse après sélection d'axe
+  const launchBtn = document.getElementById('startDFMAnalysis');
+  const axisSelect = document.getElementById('demoldingAxisSelect');
 
-/*
-    // Écouteurs pour chaque groupe de checkboxes
-    ['mechanical', 'aesthetic', 'regulatory'].forEach(group => {
-        document.querySelectorAll(`input[name="${group}[]"]`).forEach(cb => {
-            cb.addEventListener('change', checkCompatibility);
-        });
+  if (launchBtn && axisSelect) {
+    launchBtn.addEventListener('click', () => {
+      const axis = axisSelect.value || 'z';
+      if (window.viewer && typeof window.viewer.analyzeDFM === 'function') {
+        window.viewer.analyzeDFM(axis);
+      } else {
+        console.error("❌ viewer.analyzeDFM non défini");
+      }
     });
+  }
 
-    // Écouteurs pour les sélecteurs simples
-    document.getElementById('temperature')?.addEventListener('change', checkCompatibility);
-    document.querySelector('select[name="application"]')?.addEventListener('change', checkCompatibility);
+  // ✅ Drag & drop au chargement de la page
+  setupDragAndDrop();
+});
 
-    // Drag & drop une seule fois
+// ✅ NOUVELLE FONCTION : Gestion des écouteurs de la modale
+function initializeMaterialListeners() {
+  console.log('🎯 Initialisation des écouteurs matériaux');
+
+  // Écouteurs pour chaque groupe de checkboxes
+  ['mechanical', 'aesthetic', 'regulatory'].forEach(group => {
+    document.querySelectorAll(`input[name="${group}[]"]`).forEach(cb => {
+      cb.addEventListener('change', checkCompatibility);
+    });
+  });
+
+  // Écouteurs pour les sélecteurs simples
+  document.getElementById('temperature')?.addEventListener('change', checkCompatibility);
+  document.querySelector('select[name="application"]')?.addEventListener('change', checkCompatibility);
+
+  // Vérification initiale de compatibilité
+  if (typeof checkCompatibility === 'function') {
     checkCompatibility();
-    setupDragAndDrop();
+  }
 }
-*/
 
 function setupDragAndDrop() {
+  // Votre logique de drag & drop ici
 }
 
 function submitForm() {
-    // Votre logique d'analyse existante ici
-    alert('Analyse en cours...');
+  // Votre logique d'analyse existante ici
+  alert('Analyse en cours...');
 }
