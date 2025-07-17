@@ -239,10 +239,24 @@
                                                           <option value="y">Axe Y (vertical avant/arrière)</option>
                                                           <option value="z" selected>Axe Z (vertical haut/bas)</option>
                                                         </select>
+                                                      <div class="d-flex gap-2 align-items-center flex-wrap">
+                                                        <button type="button" class="btn btn-primary" id="dfmAnalyzeBtn">
+                                                          <i class="bi bi-search me-2"></i>Analyser
+                                                        </button>
+
+                                                        <select id="demoldingAxisSelect" class="form-select d-none" style="max-width: 200px;">
+                                                          <option value="x">Axe X (horizontal)</option>
+                                                          <option value="y">Axe Y (avant/arrière)</option>
+                                                          <option value="z" selected>Axe Z (haut/bas)</option>
+                                                        </select>
+
+                                                        <button id="startDFMAnalysis" class="btn btn-success d-none">
+                                                          <i class="bi bi-rocket-takeoff me-2"></i>Lancer analyse DFM
+                                                        </button>
                                                       </div>
-                                                      <button type="button" class="btn btn-primary" id="dfmAnalyzeBtn">
-                                                      <i class="bi bi-search me-2"></i>Analyser
-                                                    </button>
+
+
+
 
                                                     <!-- Sélecteur d'axe, masqué par défaut -->
                                                     <select class="form-select d-none" id="demoldingAxisSelect" style="width: auto;">

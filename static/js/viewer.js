@@ -217,11 +217,14 @@ class STEPViewer {
         const dfmAnalyzeBtn = this.safeGetElement('dfmAnalyzeBtn');
         if (dfmAnalyzeBtn) {
             dfmAnalyzeBtn.addEventListener('click', () => {
-                const axisSelect = document.getElementById('demoldingAxisSelect');
-                const selectedAxis = axisSelect?.value || 'z';
-                this.analyzeDFM(selectedAxis);
+                const modalElement = document.getElementById('materialQuestionnaireModal');
+                if (modalElement) {
+                    const modal = new bootstrap.Modal(modalElement);
+                    modal.show();
+                }
             });
         }
+
 
         
         // Change demolding axis button
@@ -1902,11 +1905,11 @@ class STEPViewer {
                     checkCompatibility(); // ou équivalent si déjà appelé
 
                         // 🔽 1. Fermer le modal manuellement
-                        const modalElement = document.getElementById('materialQuestionnaireModal'); // ⬅️ vérifie bien cet ID
-                        if (modalElement) {
-                            const modal = bootstrap.Modal.getInstance(modalElement);
-                            if (modal) modal.hide();
-                        }
+                    const modalElement = document.getElementById('materialQuestionnaireModal');
+                    if (modalElement) {
+                        const modal = bootstrap.Modal.getInstance(modalElement);
+                        if (modal) modal.hide();
+                    }
 
                         // 🔽 2. Forcer l'affichage de l'axe si tout est rempli
                         showDemoldingAxisIfQuestionnaireFilled(); // doit déjà être définie globalement
@@ -3706,6 +3709,21 @@ document.addEventListener('DOMContentLoaded', function () {
         console.log('🧠 Viewer instancié depuis DOMContentLoaded');
         window.viewer = new STEPViewer();
     }
+    // ✅ Setup bouton "Lancer analyse DFM"
+    const launchBtn = document.getElementById('startDFMAnalysis');
+    const axisSelect = document.getElementById('demoldingAxisSelect');
+
+    if (launchBtn && axisSelect) {
+        launchBtn.addEventListener('click', () => {
+            const axis = axisSelect.value || 'z';
+            if (window.viewer && typeof window.viewer.analyzeDFM === 'function') {
+                window.viewer.analyzeDFM(axis);
+            } else {
+                console.error("❌ viewer.analyzeDFM non défini");
+            }
+        });
+    }
+
 
     // Écouteurs pour chaque groupe de checkboxes
     ['mechanical', 'aesthetic', 'regulatory'].forEach(group => {
