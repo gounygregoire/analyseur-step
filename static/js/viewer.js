@@ -3744,7 +3744,7 @@ function resetForm() {
     });
 
 
-
+/*
     // Écouteurs pour chaque groupe de checkboxes
     ['mechanical', 'aesthetic', 'regulatory'].forEach(group => {
         document.querySelectorAll(`input[name="${group}[]"]`).forEach(cb => {
@@ -3760,7 +3760,7 @@ function resetForm() {
     checkCompatibility();
     setupDragAndDrop();
 }
-
+*/
 
 function setupDragAndDrop() {
 }
