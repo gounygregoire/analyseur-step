@@ -1915,7 +1915,6 @@ class STEPViewer {
                         document.getElementById('dfmViewerSection')?.scrollIntoView({ behavior: 'smooth' });
                     }
                 };
-            }
         } catch (error) {
             console.error('Error showing material questionnaire:', error);
             // Fallback to demolding axis selection
