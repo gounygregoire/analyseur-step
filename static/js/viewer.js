@@ -3769,4 +3769,3 @@ function submitForm() {
     // Votre logique d'analyse existante ici
     alert('Analyse en cours...');
 }
-} 
