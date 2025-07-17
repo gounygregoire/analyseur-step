@@ -3834,7 +3834,6 @@ document.addEventListener('DOMContentLoaded', function () {
       });
     }
   }
-});
 
   // ✅ Drag & drop au chargement de la page
   setupDragAndDrop();
