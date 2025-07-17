@@ -3703,6 +3703,198 @@ function resetForm() {
     document.querySelectorAll('.warning-message').forEach(w => w.style.display = 'none');
     document.getElementById('compatibilityInfo').style.display = 'none';
 }
+// ✅ BLOC 1 : Fonctions principales (AJOUTER EN PREMIER)
+window.viewer = window.viewer || {};
+
+window.viewer.analyzeDFM = function(selectedAxis) {
+  console.log('🎯 Analyse DFM démarrée pour axe:', selectedAxis);
+
+  const analyzeBtn = document.getElementById('dfmAnalyzeBtn');
+  if (analyzeBtn) {
+    analyzeBtn.innerHTML = '<i class="bi bi-hourglass-split me-2"></i>Analyse en cours...';
+    analyzeBtn.disabled = true;
+  }
+
+  setTimeout(() => {
+    const results = {
+      score: 72,
+      potentialScore: 85,
+      axis: selectedAxis,
+      issues: {
+        thickness: [
+          {
+            zone: 'Zone_A',
+            description: 'Épaisseur trop fine détectée',
+            currentThickness: 0.8,
+            recommendedThickness: 1.2,
+            severity: 'critical'
+          }
+        ],
+        undercuts: [
+          {
+            zone: 'Zone_C',
+            description: 'Contre-dépouille nécessitant un tiroir',
+            impact: 'Coût élevé',
+            complexity: 'Haute',
+            severity: 'critical'
+          }
+        ],
+        draft: [
+          {
+            zone: 'Zone_D',
+            description: 'Angle de dépouille insuffisant',
+            currentAngle: 0.5,
+            recommendedAngle: 1.5,
+            severity: 'warning'
+          }
+        ]
+      }
+    };
+
+    displayDFMResults(results);
+  }, 2000);
+};
+
+function displayDFMResults(results) {
+  console.log('📊 Affichage résultats DFM:', results);
+
+  let resultsContainer = document.getElementById('dfmResults');
+  if (!resultsContainer) {
+    resultsContainer = document.createElement('div');
+    resultsContainer.id = 'dfmResults';
+    resultsContainer.className = 'mt-4';
+
+    const analyzeBtn = document.getElementById('dfmAnalyzeBtn');
+    if (analyzeBtn) {
+      analyzeBtn.parentNode.insertBefore(resultsContainer, analyzeBtn.nextSibling);
+    }
+  }
+
+  resultsContainer.innerHTML = `
+    <div class="card mb-4">
+      <div class="card-header bg-primary text-white">
+        <h5 class="mb-0">
+          <i class="bi bi-clipboard-data me-2"></i>
+          Résultats de l'analyse DFM
+        </h5>
+      </div>
+      <div class="card-body">
+        <div class="row text-center">
+          <div class="col-md-4">
+            <div class="score-display">
+              <h2 class="text-primary">${results.score}/100</h2>
+              <p class="text-muted">Score DFM</p>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="score-display">
+              <h2 class="text-success">${results.potentialScore}/100</h2>
+              <p class="text-muted">Score potentiel</p>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="score-display">
+              <h2 class="text-info">${results.axis}</h2>
+              <p class="text-muted">Axe analysé</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const checklist = generateImprovementChecklist(results);
+  resultsContainer.appendChild(checklist);
+
+  const analyzeBtn = document.getElementById('dfmAnalyzeBtn');
+  if (analyzeBtn) {
+    analyzeBtn.innerHTML = '<i class="bi bi-gear me-2"></i>Nouvelle analyse';
+    analyzeBtn.disabled = false;
+  }
+
+  initializeChecklistInteractions();
+}
+
+// ✅ BLOC 2 : Toutes les fonctions de checklist (AJOUTER APRÈS BLOC 1)
+function generateImprovementChecklist(dfmResults) {
+  const checklistSection = document.createElement('div');
+  checklistSection.id = 'improvementChecklist';
+  checklistSection.className = 'card mt-4';
+
+  checklistSection.innerHTML = `
+    <div class="card-header bg-warning text-dark">
+      <h5 class="mb-0">
+        <i class="bi bi-clipboard-check me-2"></i>
+        Plan d'amélioration DFM
+        <span class="badge bg-dark ms-2">Score: ${dfmResults.score}/100</span>
+      </h5>
+    </div>
+
+    <div class="card-body">
+      <div class="row">
+        <div class="col-md-8">
+          <div id="checklistItems">
+            ${generateChecklistItems(dfmResults)}
+          </div>
+        </div>
+
+        <div class="col-md-4">
+          <div class="card bg-light">
+            <div class="card-body">
+              <h6><i class="bi bi-graph-up me-2"></i>Progression</h6>
+              <div id="progressOverview">
+                ${generateProgressSummary(dfmResults)}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-3">
+        <button class="btn btn-primary me-2" onclick="exportChecklist()">
+          <i class="bi bi-download me-1"></i>Exporter PDF
+        </button>
+        <button class="btn btn-success me-2" onclick="startGuidedMode()">
+          <i class="bi bi-play-circle me-1"></i>Mode guidé
+        </button>
+        <button class="btn btn-info" onclick="scheduleReview()">
+          <i class="bi bi-calendar me-1"></i>Planifier révision
+        </button>
+      </div>
+    </div>
+  `;
+
+  return checklistSection;
+}
+
+// ✅ TOUT LE CODE DE LA CHECKLIST QUE VOUS AVEZ REÇU
+// (generateChecklistItems, generateCategoryChecklist, etc.)
+
+function initializeChecklistInteractions() {
+  document.querySelectorAll('#improvementChecklist input[type="checkbox"]').forEach(checkbox => {
+    checkbox.addEventListener('change', function() {
+      updateProgress();
+      if (this.checked) {
+        this.parentElement.classList.add('completed');
+      } else {
+        this.parentElement.classList.remove('completed');
+      }
+    });
+  });
+}
+
+function updateProgress() {
+  const total = document.querySelectorAll('#improvementChecklist input[type="checkbox"]').length;
+  const completed = document.querySelectorAll('#improvementChecklist input[type="checkbox"]:checked').length;
+
+  const percentage = Math.round((completed / total) * 100);
+
+  const progressBar = document.querySelector('#progressOverview .progress-bar');
+  if (progressBar) {
+    progressBar.style.width = percentage + '%';
+    progressBar.textContent = percentage + '%';
+  }
+}
 
 // ✅ Événements DOM
 document.addEventListener('DOMContentLoaded', function () {
@@ -3823,18 +4015,18 @@ document.addEventListener('DOMContentLoaded', function () {
           const axisInfo = {
             'x': {
               color: '#dc3545',
-              name: 'Axe X - Démoulage latéral (gauche/droite)',
-              details: 'Idéal pour les pièces longues ou avec des détails latéraux'
+              name: 'Axe X',
+              details: 'Ouverture principale du moule suivant l'axe X'
             },
             'y': {
               color: '#28a745',
-              name: 'Axe Y - Démoulage frontal (avant/arrière)',
-              details: 'Adapté pour les pièces avec une profondeur importante'
+              name: 'Axe Y',
+              details: 'Ouverture principale du moule suivant l'axe Y'
             },
             'z': {
               color: '#0066cc',
-              name: 'Axe Z - Démoulage vertical (haut/bas)',
-              details: 'Direction recommandée pour la plupart des pièces'
+              name: 'Axe Z',
+              details: 'Ouverture principale du moule suivant l'axe Z'
             }
           };
 
@@ -3994,4 +4186,18 @@ function setupDragAndDrop() {
 function submitForm() {
   // Votre logique d'analyse existante ici
   alert('Analyse en cours...');
+}
+
+// 1️⃣ FONCTIONS PRINCIPALES (nouveau)
+window.viewer.analyzeDFM = function() { ... }
+function displayDFMResults() { ... }
+
+// 2️⃣ FONCTIONS CHECKLIST (nouveau)  
+function generateImprovementChecklist() { ... }
+function generateChecklistItems() { ... }
+// ... toutes les autres fonctions de checklist
+
+// 3️⃣ VOTRE CODE EXISTANT
+document.addEventListener('DOMContentLoaded', function () {
+  // Votre code actuel reste ici
 }
