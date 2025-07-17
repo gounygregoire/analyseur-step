@@ -3732,95 +3732,141 @@ document.addEventListener('DOMContentLoaded', function () {
             questionnaireModal.addEventListener('shown.bs.modal', handleModalShown, { once: true });
             questionnaireModal.addEventListener('hidden.bs.modal', handleModalHidden, { once: true });
 
-            // ✅ NOUVEAU CODE : Gestion du workflow corrigé
             setTimeout(() => {
               const submitBtn = document.getElementById('submitQuestionnaire');
 
               if (submitBtn) {
                 console.log('✅ Bouton submitQuestionnaire trouvé');
 
-                // ✅ Écouteur sur "Analyser et recommander"
                 submitBtn.addEventListener('click', function() {
                   console.log('🎯 Clic sur Analyser et recommander');
 
-                  // ✅ Étape 1 : Valider le questionnaire
-                  if (!validateQuestionnaire()) {
-                    console.log('❌ Questionnaire invalide');
-                    return;
-                  }
+                  // ✅ Fermer la modale
+                  modal.hide();
 
-                  // ✅ Étape 2 : FERMER la modale
-                  const modal = bootstrap.Modal.getInstance(questionnaireModal);
-                  if (modal) {
-                    modal.hide();
-                  }
-
-                  // ✅ Étape 3 : Après fermeture, afficher axes dans la PAGE
                   setTimeout(() => {
-                    cleanupModal();
-                    showAxisSelectionInPage();
-                    transformAnalyzeButtonToDFM();
-                  }, 300);
-                });
+                    showAxisSelection();
+                  }, 500); // Délai pour l'animation de fermeture
 
-              } else {
-                console.error('❌ submitQuestionnaire introuvable');
+                });
               }
-            }, 500);
+            }, 1000);
           }
         });
       }
 
-      // ✅ FONCTIONS HELPER
-      function validateQuestionnaire() {
-        // TODO: Ajoutez votre logique de validation
-        return true;
-      }
-
-      function showAxisSelectionInPage() {
-        // ✅ Trouver le conteneur du bouton "Analyser" dans la page
+      // ✅ NOUVELLE FONCTION : Afficher sélection d'axe avec prévisualisation
+      function showAxisSelection() {
         const analyzeBtn = document.getElementById('dfmAnalyzeBtn');
         if (!analyzeBtn) return;
 
-        const container = analyzeBtn.parentElement;
+        // ✅ Créer la section de sélection d'axe avec prévisualisation
+        const axisSection = document.createElement('div');
+        axisSection.id = 'axisSelectionSection';
+        axisSection.className = 'card mt-3';
+        axisSection.innerHTML = `
+          <div class="card-body">
+            <h5 class="card-title">
+              <i class="bi bi-arrow-up-right-circle me-2"></i>
+              Sélection de l'axe de démoulage
+            </h5>
 
-        // ✅ Supprimer l'ancien menu s'il existe
-        const existingAxisSection = document.getElementById('axisSelectionSection');
-        if (existingAxisSection) {
-          existingAxisSection.remove();
-        }
-
-        // ✅ Créer le HTML du menu déroulant DANS LA PAGE
-        const axisSelectionHTML = `
-          <div id="axisSelectionSection" class="mt-3 p-3 border rounded bg-light">
-            <h6><i class="bi bi-arrow-through-heart me-2"></i>Sélectionner l'axe de démoulage</h6>
-            <div class="row align-items-center">
+            <div class="row">
               <div class="col-md-6">
+                <label for="demoldingAxisSelect" class="form-label">
+                  <i class="bi bi-compass me-1"></i>
+                  Choisir l'axe de démoulage :
+                </label>
                 <select class="form-select" id="demoldingAxisSelect">
-                  <option value="x">Axe X</option>
-                  <option value="y">Axe Y</option>
-                  <option value="z" selected>Axe Z</option>
+                  <option value="x">Axe X (Rouge)</option>
+                  <option value="y">Axe Y (Vert)</option>
+                  <option value="z" selected>Axe Z (Bleu)</option>
                 </select>
+              </div>
+
+              <div class="col-md-6">
+                <div class="d-flex align-items-center h-100">
+                  <div id="axisPreview" class="border rounded p-3 bg-light w-100">
+                    <div class="d-flex align-items-center">
+                      <div id="axisColor" class="rounded-circle me-2" style="width: 20px; height: 20px; background-color: #0066cc;"></div>
+                      <span id="axisDescription">Axe Z - Démoulage vertical (haut/bas)</span>
+                    </div>
+                    <small class="text-muted mt-1 d-block" id="axisDetails">
+                      Direction recommandée pour la plupart des pièces
+                    </small>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="mt-3">
+              <div class="alert alert-info" role="alert">
+                <i class="bi bi-info-circle me-2"></i>
+                <strong>Prévisualisation active :</strong> L'axe sélectionné est visualisé sur la pièce en temps réel.
+                <br><small>Changez d'axe pour voir les différentes orientations de démoulage.</small>
               </div>
             </div>
           </div>
         `;
 
-        // ✅ Ajouter APRÈS le bouton dans la page
-        analyzeBtn.insertAdjacentHTML('afterend', axisSelectionHTML);
+        // ✅ Insérer après le bouton
+        analyzeBtn.parentNode.insertBefore(axisSection, analyzeBtn.nextSibling);
 
-        console.log('✅ Menu axes ajouté dans la page');
-      }
+        // ✅ Ajouter les écouteurs pour prévisualisation
+        const axisSelect = document.getElementById('demoldingAxisSelect');
+        const axisColor = document.getElementById('axisColor');
+        const axisDescription = document.getElementById('axisDescription');
+        const axisDetails = document.getElementById('axisDetails');
 
-      function transformAnalyzeButtonToDFM() {
-        const analyzeBtn = document.getElementById('dfmAnalyzeBtn');
-        if (!analyzeBtn) return;
+        // ✅ Fonction de mise à jour de la prévisualisation
+        function updateAxisPreview(selectedAxis) {
+          const axisInfo = {
+            'x': {
+              color: '#dc3545',
+              name: 'Axe X - Démoulage latéral (gauche/droite)',
+              details: 'Idéal pour les pièces longues ou avec des détails latéraux'
+            },
+            'y': {
+              color: '#28a745',
+              name: 'Axe Y - Démoulage frontal (avant/arrière)',
+              details: 'Adapté pour les pièces avec une profondeur importante'
+            },
+            'z': {
+              color: '#0066cc',
+              name: 'Axe Z - Démoulage vertical (haut/bas)',
+              details: 'Direction recommandée pour la plupart des pièces'
+            }
+          };
 
-        // ✅ Changer le texte et l'icône du bouton PRINCIPAL
+          const info = axisInfo[selectedAxis];
+          axisColor.style.backgroundColor = info.color;
+          axisDescription.textContent = info.name;
+          axisDetails.textContent = info.details;
+
+          // ✅ Communiquer avec le viewer pour la prévisualisation
+          if (window.viewer && typeof window.viewer.previewDemoldingAxis === 'function') {
+            console.log('🎯 Prévisualisation axe :', selectedAxis);
+            window.viewer.previewDemoldingAxis(selectedAxis);
+          } else {
+            console.log('⚠️ Fonction previewDemoldingAxis non disponible');
+          }
+        }
+
+        // ✅ Écouteur sur changement d'axe
+        axisSelect.addEventListener('change', function() {
+          const selectedAxis = this.value;
+          console.log('🔄 Changement d\'axe vers :', selectedAxis);
+          updateAxisPreview(selectedAxis);
+        });
+
+        // ✅ Prévisualisation initiale (axe Z par défaut)
+        updateAxisPreview('z');
+
+        // ✅ Modification du bouton principal
         analyzeBtn.innerHTML = '<i class="bi bi-gear me-2"></i>Analyse DFM';
-        analyzeBtn.className = 'btn btn-success'; // Changer la couleur
+        analyzeBtn.className = 'btn btn-success btn-lg mt-3';
 
-        // ✅ Supprimer tous les anciens écouteurs
+        // ✅ Supprimer les anciens écouteurs
         const newBtn = analyzeBtn.cloneNode(true);
         analyzeBtn.parentNode.replaceChild(newBtn, analyzeBtn);
 
@@ -3828,16 +3874,20 @@ document.addEventListener('DOMContentLoaded', function () {
         newBtn.addEventListener('click', function() {
           console.log('🎯 Clic sur Analyse DFM');
 
-          const axisSelect = document.getElementById('demoldingAxisSelect');
-          const selectedAxis = axisSelect ? axisSelect.value : 'z';
+          const selectedAxis = axisSelect.value;
+          console.log('🎯 Axe sélectionné pour analyse :', selectedAxis);
 
-          console.log('🎯 Axe sélectionné :', selectedAxis);
+          // ✅ Désactiver la prévisualisation
+          if (window.viewer && typeof window.viewer.clearAxisPreview === 'function') {
+            window.viewer.clearAxisPreview();
+          }
 
           // ✅ Masquer la section des axes
-          const axisSection = document.getElementById('axisSelectionSection');
-          if (axisSection) {
-            axisSection.style.display = 'none';
-          }
+          axisSection.style.display = 'none';
+
+          // ✅ Afficher un indicateur de chargement
+          newBtn.innerHTML = '<i class="bi bi-hourglass-split me-2"></i>Analyse en cours...';
+          newBtn.disabled = true;
 
           // ✅ Lancer l'analyse DFM
           if (window.viewer && typeof window.viewer.analyzeDFM === 'function') {
@@ -3845,14 +3895,14 @@ document.addEventListener('DOMContentLoaded', function () {
             window.viewer.analyzeDFM(selectedAxis);
           } else {
             console.error('❌ Fonction analyzeDFM introuvable');
-            console.log('🔍 window.viewer disponible ?', !!window.viewer);
-            if (window.viewer) {
-              console.log('🔍 Méthodes disponibles :', Object.keys(window.viewer));
-            }
+
+            // ✅ Restaurer le bouton en cas d'erreur
+            newBtn.innerHTML = '<i class="bi bi-gear me-2"></i>Analyse DFM';
+            newBtn.disabled = false;
           }
         });
 
-        console.log('✅ Bouton transformé en "Analyse DFM"');
+        console.log('✅ Section sélection d\'axe créée avec prévisualisation');
       }
     
   // ✅ Drag & drop au chargement de la page
