@@ -4160,17 +4160,3 @@ function submitForm() {
   // Votre logique d'analyse existante ici
   alert('Analyse en cours...');
 }
-
-// 1️⃣ FONCTIONS PRINCIPALES (nouveau)
-window.viewer.analyzeDFM = function() { ... }
-function displayDFMResults() { ... }
-
-// 2️⃣ FONCTIONS CHECKLIST (nouveau)  
-function generateImprovementChecklist() { ... }
-function generateChecklistItems() { ... }
-// ... toutes les autres fonctions de checklist
-
-// 3️⃣ VOTRE CODE EXISTANT
-document.addEventListener('DOMContentLoaded', function () {
-  // Votre code actuel reste ici
-}
