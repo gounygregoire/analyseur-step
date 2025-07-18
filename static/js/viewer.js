@@ -107,7 +107,7 @@ class STEPViewer {
                 this.showChangeDemoldingAxisButton();
                 this.enablePDFGeneration();
             }
-        } catch (err) {
+        } catch (error) {
             const errorDisplay = document.getElementById("dfmErrorMessage");
             if (errorDisplay) {
                 errorDisplay.textContent = err.message;
@@ -795,7 +795,7 @@ class STEPViewer {
                     const percentComplete = (progress.loaded / progress.total) * 100;
                     this.updateLoadingProgress(percentComplete);
                 }
-            }, (error) => {
+            } catch (error) {
                 // Error callback
                 clearTimeout(timeoutId);
                 console.error('Error loading STL:', error);
@@ -2219,7 +2219,7 @@ class STEPViewer {
                 try {
                     const result = await response.json();
                     errorMessage = result.error || errorMessage;
-                } catch (e) {
+                } catch (error) {
                     // If JSON parsing fails, it's probably an HTML error page
                     console.error('Failed to parse error response as JSON:', e);
                     errorMessage = `Erreur serveur (${response.status}): Veuillez réessayer`;
@@ -4016,17 +4016,17 @@ document.addEventListener('DOMContentLoaded', function () {
             'x': {
               color: '#dc3545',
               name: 'Axe X',
-              details: 'Ouverture principale du moule suivant l'axe X'
+              details: `Ouverture principale du moule suivant l'axe X`
             },
             'y': {
               color: '#28a745',
               name: 'Axe Y',
-              details: 'Ouverture principale du moule suivant l'axe Y'
+              details: `Ouverture principale du moule suivant l'axe Y`
             },
             'z': {
               color: '#0066cc',
               name: 'Axe Z',
-              details: 'Ouverture principale du moule suivant l'axe Z'
+              details: `Ouverture principale du moule suivant l'axe Z`
             }
           };
 
