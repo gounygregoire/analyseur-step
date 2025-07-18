@@ -678,73 +678,58 @@ class STEPViewer {
         }
     }
 
-    async loadSTLModel(url) {
-        try {
-            // Remove existing mesh
-            if (this.currentMesh) {
-                this.scene.remove(this.currentMesh);
-            }
+async loadSTLModel(url) {
+    try {
+        // Remove existing mesh
+        if (this.currentMesh) {
+            this.scene.remove(this.currentMesh);
+        }
 
-            // Show loading indicator
-            this.showLoadingIndicator('Chargement du modèle 3D...');
+        // Show loading indicator
+        this.showLoadingIndicator('Chargement du modèle 3D...');
 
-            // Load STL with progress tracking and timeout handling
-            const loader = new THREE.STLLoader();
+        // Load STL with progress tracking and timeout handling
+        const loader = new THREE.STLLoader();
 
-            // Set up timeout for large file loading
-            const controller = new AbortController();
-            let timeoutId = setTimeout(() => {
-                controller.abort();
-                this.hideLoadingIndicator();
-                this.showError('Timeout de chargement du modèle 3D. Le fichier est trop volumineux pour être chargé dans le navigateur.');
-            }, 300000); // 5 minutes timeout for STL loading
+        // Set up timeout for large file loading
+        const controller = new AbortController();
+        let timeoutId = setTimeout(() => {
+            controller.abort();
+            this.hideLoadingIndicator();
+            this.showError('Timeout de chargement du modèle 3D. Le fichier est trop volumineux pour être chargé dans le navigateur.');
+        }, 300000); // 5 minutes timeout
 
-            // Override the loader's XMLHttpRequest to support abort
-            const originalLoad = loader.load.bind(loader);
-
-            loader.load(url, (geometry) => {
+        loader.load(
+            url,
+            (geometry) => { // onLoad
                 clearTimeout(timeoutId);
-                // Hide loading indicator
                 this.hideLoadingIndicator();
+
+                // ... (reste de ton code existant pour le traitement de geometry)
 
                 // Check if geometry is too complex
                 const vertexCount = geometry.attributes.position.count;
                 console.log(`Model loaded with ${vertexCount} vertices`);
 
-                // Apply optimizations for large models
                 if (vertexCount > 1000000) {
-                    console.warn('Very large model detected, applying maximum optimizations...');
-                    // For extremely large models, compute normals only if needed
                     if (!geometry.attributes.normal) {
                         geometry.computeVertexNormals();
                     }
                 } else if (vertexCount > 500000) {
-                    console.warn('Large model detected, applying optimizations...');
                     geometry.computeVertexNormals();
                 }
 
-                // Center geometry but keep real scale (1:1)
                 geometry.computeBoundingBox();
                 const center = new THREE.Vector3();
                 geometry.boundingBox.getCenter(center);
                 geometry.translate(-center.x, -center.y, -center.z);
 
-                // Create material - always use Lambert for consistent lighting and shadows
                 let material;
                 if (vertexCount > 1000000) {
-                    // Lambert material for extremely large models (still has lighting/shadows)
-                    material = new THREE.MeshLambertMaterial({
-                        color: 0x888888,
-                        side: THREE.DoubleSide
-                    });
+                    material = new THREE.MeshLambertMaterial({ color: 0x888888, side: THREE.DoubleSide });
                 } else if (vertexCount > 500000) {
-                    // Lambert material for large models
-                    material = new THREE.MeshLambertMaterial({
-                        color: 0x888888,
-                        side: THREE.DoubleSide
-                    });
+                    material = new THREE.MeshLambertMaterial({ color: 0x888888, side: THREE.DoubleSide });
                 } else {
-                    // Standard material for normal models
                     material = new THREE.MeshPhysicalMaterial({
                         color: 0x888888,
                         metalness: 0.3,
@@ -754,54 +739,42 @@ class STEPViewer {
                     });
                 }
 
-                // Create mesh
                 this.currentMesh = new THREE.Mesh(geometry, material);
                 this.currentMesh.castShadow = true;
                 this.currentMesh.receiveShadow = true;
-
-                // Add to scene
                 this.scene.add(this.currentMesh);
 
-                // Optimize renderer for large models
                 if (vertexCount > 1000000) {
                     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1));
-                    console.log('Renderer pixel ratio reduced to 1 for performance');
                 } else if (vertexCount > 500000) {
                     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
-                    console.log('Renderer pixel ratio limited to 1.5 for performance');
                 }
 
-                // Calculate and display volume
                 this.calculateAndDisplayVolume(geometry);
 
-                // Update model info
                 if (this.updateModelInfo) {
                     this.updateModelInfo(url);
                 }
 
-                // Manage axes visibility
                 if (this.manageAxesVisibility) {
                     this.manageAxesVisibility();
                 }
 
-                // Reset camera view
                 this.resetView();
-
                 console.log('STL model loaded successfully');
-
-            }, (progress) => {
-                // Progress callback
+            },
+            (progress) => {
                 if (progress.lengthComputable) {
                     const percentComplete = (progress.loaded / progress.total) * 100;
                     this.updateLoadingProgress(percentComplete);
                 }
-            } catch (error) {
-                // Error callback
+            },
+            (error) => {
+                // ERREUR → ici FONCTION anonyme, pas de bloc "catch"
                 clearTimeout(timeoutId);
                 console.error('Error loading STL:', error);
                 this.hideLoadingIndicator();
 
-                // More specific error messages based on error type
                 if (error.name === 'AbortError' || (error.message && error.message.includes('aborted'))) {
                     this.showError('Chargement annulé. Le fichier est trop volumineux pour être chargé dans le navigateur.');
                 } else if (error.message && (error.message.includes('NetworkError') || error.message.includes('fetch'))) {
@@ -809,14 +782,14 @@ class STEPViewer {
                 } else {
                     this.showError('Échec du chargement du modèle 3D. Le fichier pourrait être trop volumineux ou corrompu.');
                 }
-            });
-
-        } catch (error) {
-            console.error('Load STL error:', error);
-            this.hideLoadingIndicator();
-            this.showError('Erreur lors du chargement du modèle 3D');
-        }
+            }
+        );
+    } catch (error) {
+        console.error('Load STL error:', error);
+        this.hideLoadingIndicator();
+        this.showError('Erreur lors du chargement du modèle 3D');
     }
+}
 
     showLoadingIndicator(message = 'Chargement...') {
         // Create or update loading indicator
