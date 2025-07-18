@@ -3824,17 +3824,17 @@ document.addEventListener('DOMContentLoaded', function () {
             'x': {
               color: '#dc3545',
               name: 'Axe X',
-              details: 'Ouverture principale du moule suivant l'axe X'
+              details: `Ouverture principale du moule suivant l'axe X`
             },
             'y': {
               color: '#28a745',
               name: 'Axe Y',
-              details: 'Ouverture principale du moule suivant l'axe Y'
+              details: `Ouverture principale du moule suivant l'axe Y`
             },
             'z': {
               color: '#0066cc',
               name: 'Axe Z',
-              details: 'Ouverture principale du moule suivant l'axe Z'
+              details: `Ouverture principale du moule suivant l'axe Z`
             }
           };
 
