@@ -4065,8 +4065,23 @@ document.addEventListener('DOMContentLoaded', function () {
       }
 
   // ✅ Drag & drop au chargement de la page
-  setupDragAndDrop();
-});
+setupDragAndDrop() {
+    const dropZone = this.safeGetElement('viewer3d');
+    if (!dropZone) return;
+
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        // dropZone.style...
+    });
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const file = e.dataTransfer.files[0];
+        if (file) {
+            this.handleFileSelect(file);
+        }
+    });
+}
+
 // ✅ NOUVELLES FONCTIONS À AJOUTER
 
 // Nettoyage des modales
