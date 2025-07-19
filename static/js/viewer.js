@@ -647,34 +647,36 @@ class STEPViewer {
                 viewerSection.insertAdjacentHTML('afterbegin', alertHtml);
             }
 
-            // Still show DFM controls and model info
-            this.safeSetDisplay('viewerToolsPanel', 'block');
-            this.safeSetDisplay('modelInfo', 'block');
-            this.safeSetDisplay('volumeDisplay', 'none'); // Hide volume since we can't calculate it
+// Still show DFM controls and model info
+this.safeSetDisplay('viewerToolsPanel', 'block');
+this.safeSetDisplay('modelInfo', 'block');
+this.safeSetDisplay('volumeDisplay', 'none'); // Hide volume since we can't calculate it
 
-            // Hide 3D viewer specific tools
-            const viewerTools = ['toggleWireframeBtn', 'toggleAxesBtn', 'toggleThemeBtn', 'resetViewBtn', 
-                                'toggleMeasurementBtn', 'toggleCrossSectionBtn'];
-            viewerTools.forEach(toolId => {
-                const tool = this.safeGetElement(toolId);
-                if (tool) tool.style.display = 'none';
-            
+// Hide 3D viewer specific tools
+const viewerTools = ['toggleWireframeBtn', 'toggleAxesBtn', 'toggleThemeBtn', 'resetViewBtn', 
+                     'toggleMeasurementBtn', 'toggleCrossSectionBtn'];
+viewerTools.forEach(toolId => {
+    const tool = this.safeGetElement(toolId);
+    if (tool) {
+        tool.style.display = 'none';
+    }
+}); // ✅ FIN du forEach correctement fermé
 
-        } else {
-            // Normal flow: show viewer and load model
-            this.safeSetDisplay('viewer3d', 'block');
-            this.safeSetDisplay('viewerToolsPanel', 'block');
+} else {
+    // Normal flow: show viewer and load model
+    this.safeSetDisplay('viewer3d', 'block');
+    this.safeSetDisplay('viewerToolsPanel', 'block');
 
-            // Re-attach event listeners for viewer tools since they were just made visible
-            this.setupViewerToolsEvents();
+    // Re-attach event listeners for viewer tools since they were just made visible
+    this.setupViewerToolsEvents();
 
-            // Load and display the STL model directly
-            this.loadSTLModel(`/view/${result.stl_filename}`);
+    // Load and display the STL model directly
+    this.loadSTLModel(`/view/${result.stl_filename}`);
 
-            // Show model info
-            this.safeSetDisplay('modelInfo', 'block');
-            this.safeSetDisplay('volumeDisplay', 'block');
-        }
+    // Show model info
+    this.safeSetDisplay('modelInfo', 'block');
+    this.safeSetDisplay('volumeDisplay', 'block');
+}
 
         // Refresh history to show the new conversion
         this.loadConversionHistory();
