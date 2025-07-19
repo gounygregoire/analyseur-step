@@ -582,6 +582,11 @@ class STEPViewer {
 
             const result = await response.json();
 
+            // Ajout de cette vérification explicite
+            if (result.code === 403 || result.message?.includes('permission')) {
+                throw new Error('Vous n\'avez plus de crédits. Achetez des crédits ou souscrivez à un abonnement pour continuer.');
+            }
+
             if (result.success) {
                 this.handleUploadSuccess(result);
             } else {
@@ -632,7 +637,10 @@ class STEPViewer {
                     <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
                 </div>
             `;
-
+            } else {
+                this.safeSetDisplay('viewer3d', 'block'); // 👈 AFFICHER le viewer
+                this.loadModel(result.file_id);           // 👈 Et charger le modèle 3D
+            }
             // Insert alert before the viewer tools panel
             const viewerSection = document.querySelector('.viewer-section');
             if (viewerSection) {
