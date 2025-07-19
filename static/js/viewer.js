@@ -658,7 +658,7 @@ class STEPViewer {
             viewerTools.forEach(toolId => {
                 const tool = this.safeGetElement(toolId);
                 if (tool) tool.style.display = 'none';
-            });
+            
 
         } else {
             // Normal flow: show viewer and load model
