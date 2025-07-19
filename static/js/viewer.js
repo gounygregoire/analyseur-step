@@ -1,8 +1,13 @@
 console.log("✅ viewer.js bien chargé !");
 console.log("handleUpload appelé !");
+console.log("setupDragAndDrop appelé !");
 // 3D Viewer Application
 class STEPViewer {
     constructor() {
+        console.log("STEPViewer constructor début");
+        this.setupDragAndDrop();
+        console.log("STEPViewer après setupDragAndDrop");
+
         console.log('🧠 Viewer instancié');
         // Utility function for safe DOM access
         this.safeGetElement = (id) => {
@@ -175,6 +180,13 @@ class STEPViewer {
 
         // Handle window resize
         window.addEventListener('resize', () => this.onWindowResize());
+        
+        // Test visible : ajoute un cube de base
+        const geometry = new THREE.BoxGeometry(1, 1, 1);
+        const material = new THREE.MeshLambertMaterial({ color: 0xff0000 });
+        const mesh = new THREE.Mesh(geometry, material);
+        this.scene.add(mesh);
+
     }
 
     setupLighting() {
