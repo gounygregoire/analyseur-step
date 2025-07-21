@@ -3498,9 +3498,7 @@ class STEPViewer {
 
 
 console.log("setupDragAndDrop appelé !");
-document.getElementById("uploadForm").addEventListener("submit", function(e) {
-  e.preventDefault(); // ⚠️ empêche le navigateur de bloquer les effets
-});
+
 // Règles de compatibilité
 const compatibilityRules = {
     mechanical: {
@@ -3741,26 +3739,39 @@ function resetForm() {
     document.getElementById('compatibilityInfo').style.display = 'none';
 }
 }
-//Fin de Class STEPViewer
+// ————— F I N   D E   L A   C L A S S —————
 window.viewer = new STEPViewer();
-// ✅ Événements DOM
+
+// UN SEUL ÉVÉNEMENT "DOMContentLoaded" pour tout initialiser
 document.addEventListener('DOMContentLoaded', function() {
-    // Sélecteurs possibles pour AXE (à adapter si tes noms/id changent)
+
+    // ———— Gestions du formulaire Upload ————
+    const uploadForm = document.getElementById("uploadForm");
+    if (uploadForm) {
+        uploadForm.addEventListener("submit", function(e) {
+            e.preventDefault(); // Évite le rechargement classique
+            if (window.viewer && typeof window.viewer.handleUpload === "function") {
+                window.viewer.handleUpload(e);
+            }
+        });
+    }
+
+    // ———— Gestion du sélecteur/radio d’axes pour DFM ————
     const allAxisInputs = [
-        ...document.querySelectorAll('#demoldingAxisSelect'),  // select (NodeList est déjà itérable)
+        ...document.querySelectorAll('#demoldingAxisSelect'),  // select
         ...document.querySelectorAll('input[name=demoldingAxis]'), // radio
-        ...document.querySelectorAll('.custom-demolding-axis-selector') // par exemple boutons custom
+        ...document.querySelectorAll('.custom-demolding-axis-selector') // ex.: boutons custom
     ];
 
     function getAxisValue(input) {
-        if(input.tagName === "SELECT") return input.value;
-        if(input.type === "radio" && input.checked) return input.value;
-        if(input.dataset.axis) return input.dataset.axis;
+        if (input.tagName === "SELECT") return input.value;
+        if (input.type === "radio" && input.checked) return input.value;
+        if (input.dataset.axis) return input.dataset.axis;
         return null;
     }
 
     function highlightLatestSelected() {
-        for(const input of allAxisInputs) {
+        for (const input of allAxisInputs) {
             const axis = getAxisValue(input);
             if(axis) {
                 window.viewer && window.viewer.highlightDemoldingAxis(axis);
@@ -3769,256 +3780,89 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // Sur chaque select/radio/bouton : triggere au changement/clique
     allAxisInputs.forEach(input => {
         input.addEventListener('change', highlightLatestSelected);
         input.addEventListener('click', highlightLatestSelected);
     });
 
-    // Optionnel : clignote déjà l’axe actif au chargement
+    // Premier clignotement à l’ouverture
     setTimeout(highlightLatestSelected, 400);
-});
-document.addEventListener('DOMContentLoaded', function () {
-  // Évite double instanciation du viewer
-  if (!window.viewer) {
-    console.log('🧠 Viewer instancié depuis DOMContentLoaded');
 
-  }
-    // Quand l'utilisateur change l'axe dans la liste déroulante, on fait clignoter l'axe choisi
-    document.addEventListener('DOMContentLoaded', function() {
-        const axisSelect = document.getElementById('demoldingAxisSelect');
-        if(axisSelect && window.viewer && typeof window.viewer.highlightDemoldingAxis === 'function') {
-            // Au chargement, clignote l'axe courant
-            window.viewer.highlightDemoldingAxis(axisSelect.value);
-            // À chaque changement, clignote
-            axisSelect.addEventListener('change', function() {
-                window.viewer.highlightDemoldingAxis(this.value);
-            });
-        }
-    });
-
-
-  // ✅ Écouteur sur bouton "Analyser" initial
-  const analyzeBtn = document.getElementById('dfmAnalyzeBtn');
-  if (analyzeBtn) {
-    analyzeBtn.addEventListener('click', () => {
-      const questionnaireModal = document.getElementById('materialQuestionnaireModal');
-      if (questionnaireModal) {
-        cleanupModal();
-
-        const modal = new bootstrap.Modal(questionnaireModal, {
-          backdrop: 'static',
-          keyboard: false
-        });
-
-        modal.show();
-        questionnaireModal.addEventListener('shown.bs.modal', handleModalShown, { once: true });
-        questionnaireModal.addEventListener('hidden.bs.modal', handleModalHidden, { once: true });
-
-        // ✅ Écouteur sur le bouton "Analyser et recommander" dans la modale
-        setTimeout(() => {
-          const submitBtn = document.getElementById('submitQuestionnaire');
-          if (submitBtn) {
-            // Pour éviter doublon si plusieurs ouvertures
-            submitBtn.replaceWith(submitBtn.cloneNode(true));
-            const newSubmitBtn = document.getElementById('submitQuestionnaire');
-            newSubmitBtn.addEventListener('click', function() {
-              console.log('🎯 Clic sur Analyser et recommander');
-              // Fermer la modale Bootstrap
-              modal.hide();
-              // Après la fermeture de la modale : afficher le choix d'axe
-              setTimeout(() => {
-                showAxisSelection();
-              }, 600);
-            });
-          }
-        }, 500);
-      }
-    });
-  }
-
-  // ✅ Drag & drop au chargement de la page
-  setupDragAndDrop();
-});
-
-// ========== Sélection de l'axe de démoulage =============
-// Requiert une <div id="axisSelectionContainer"></div> dans le HTML principal !
-
-function showAxisSelection() {
-  // On affiche sous le container dédié (à placer dans le HTML principal)
-  const container = document.getElementById('axisSelectionContainer');
-  if (!container) {
-    alert("⚠️ Ajoutez dans votre HTML : <div id=\"axisSelectionContainer\"></div>");
-    return;
-  }
-
-  // Nettoie avant d'ajouter à nouveau
-  container.innerHTML = '';
-
-  const axisSection = document.createElement('div');
-  axisSection.id = 'axisSelectionSection';
-  axisSection.className = 'card mt-3';
-  axisSection.innerHTML = `
-    <div class="card-body">
-      <h5 class="card-title">
-        <i class="bi bi-arrow-up-right-circle me-2"></i>
-        Sélection de l'axe de démoulage
-      </h5>
-      <div class="row">
-        <div class="col-md-6">
-          <label for="demoldingAxisSelect" class="form-label">
-            <i class="bi bi-compass me-1"></i>
-            Choisir l'axe de démoulage :
-          </label>
-          <select class="form-select" id="demoldingAxisSelect">
-            <option value="x">Axe X (Rouge)</option>
-            <option value="y">Axe Y (Vert)</option>
-            <option value="z" selected>Axe Z (Bleu)</option>
-          </select>
-        </div>
-
-        <div class="col-md-6">
-          <div class="d-flex align-items-center h-100">
-            <div id="axisPreview" class="border rounded p-3 bg-light w-100">
-              <div class="d-flex align-items-center">
-                <div id="axisColor" class="rounded-circle me-2" style="width: 20px; height: 20px; background-color: #0066cc;"></div>
-                <span id="axisDescription">Axe Z - Démoulage vertical (haut/bas)</span>
-              </div>
-              <small class="text-muted mt-1 d-block" id="axisDetails">
-                Direction recommandée pour la plupart des pièces
-              </small>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="mt-3">
-        <div class="alert alert-info" role="alert">
-          <i class="bi bi-info-circle me-2"></i>
-          <strong>Prévisualisation active :</strong> L'axe sélectionné est visualisé sur la pièce en temps réel.
-          <br><small>Changez d'axe pour voir les différentes orientations de démoulage.</small>
-        </div>
-      </div>
-      <button id="launchDFM" class="btn btn-primary mt-3">
-        <i class="bi bi-gear me-2"></i>Analyse DFM
-      </button>
-    </div>
-  `;
-  container.appendChild(axisSection);
-
-  // LISTENERS d’axe
-  const axisSelect = document.getElementById('demoldingAxisSelect');
+    // Si un select pour axes est présent, gestion séparée (pour prévisualisation par exemple)
+    const axisSelect = document.getElementById('demoldingAxisSelect');
     if (axisSelect && window.viewer && typeof window.viewer.highlightDemoldingAxis === 'function') {
-          // Blink initial à l’affichage du composant (affiche l’axe sélectionné dès l’apparition)
-          window.viewer.highlightDemoldingAxis(axisSelect.value);
-
-          // Blink à chaque changement d’axe par l’utilisateur
-          axisSelect.addEventListener('change', function() {
-              window.viewer.highlightDemoldingAxis(this.value);
-          });
-      }
-  const axisColor = document.getElementById('axisColor');
-  const axisDescription = document.getElementById('axisDescription');
-  const axisDetails = document.getElementById('axisDetails');
-  const axisInfo = {
-    'x': {
-      color: '#dc3545',
-      name: 'Axe X',
-      details: `Ouverture principale du moule suivant l'axe X`
-    },
-    'y': {
-      color: '#28a745',
-      name: 'Axe Y',
-      details: `Ouverture principale du moule suivant l'axe Y`
-    },
-    'z': {
-      color: '#0066cc',
-      name: 'Axe Z',
-      details: `Ouverture principale du moule suivant l'axe Z`
-    }
-  };
-
-  function updateAxisPreview(selectedAxis) {
-    const info = axisInfo[selectedAxis];
-    axisColor.style.backgroundColor = info.color;
-    axisDescription.innerHTML = `<i class="bi bi-check2-circle text-success me-1"></i> ${info.name}`;
-    axisDescription.classList.remove('selected');
-    setTimeout(() => axisDescription.classList.add('selected'), 10);
-    axisDetails.textContent = info.details;
-
-    // Prévisualiser DFM sur le viewer
-    if (window.viewer && typeof window.viewer.previewDemoldingAxis === 'function') {
-      window.viewer.previewDemoldingAxis(selectedAxis);
-    }
-  }
-
-  axisSelect.addEventListener('change', function() {
-    updateAxisPreview(this.value);
-  });
-
-  updateAxisPreview('z'); // Initial preview
-
-  // Lancer le DFM final
-  document.getElementById('launchDFM').addEventListener('click', function(){
-    const selectedAxis = axisSelect.value;
-
-    // Désactiver la prévisualisation
-    if (window.viewer && typeof window.viewer.clearAxisPreview === 'function') {
-      window.viewer.clearAxisPreview();
+        // Blink initial à l’affichage
+        window.viewer.highlightDemoldingAxis(axisSelect.value);
+        // Blink à chaque changement
+        axisSelect.addEventListener('change', function () {
+            window.viewer.highlightDemoldingAxis(this.value);
+        });
     }
 
-    // Masquer la section des axes
-    axisSection.style.display = 'none';
+    // ———— Gestion du bouton "Analyser DFM" ————
+    const analyzeBtn = document.getElementById('dfmAnalyzeBtn');
+    if (analyzeBtn) {
+        analyzeBtn.addEventListener('click', () => {
+            const questionnaireModal = document.getElementById('materialQuestionnaireModal');
+            if (questionnaireModal) {
+                cleanupModal();
 
-    // Afficher un indicateur de chargement (sur le bouton)
-    this.innerHTML = '<i class="bi bi-hourglass-split me-2"></i>Analyse en cours...';
-    this.disabled = true;
+                const modal = new bootstrap.Modal(questionnaireModal, {
+                    backdrop: 'static',
+                    keyboard: false
+                });
 
-    // Lancer l'analyse DFM
-    if (window.viewer && typeof window.viewer.analyzeDFM === 'function') {
-      window.viewer.analyzeDFM(selectedAxis);
-    } else {
-      // Erreur fallback
-      setTimeout(() => {
-        this.innerHTML = '<i class="bi bi-gear me-2"></i>Analyse DFM';
-        this.disabled = false;
-      }, 1500);
+                modal.show();
+                questionnaireModal.addEventListener('shown.bs.modal', handleModalShown, { once: true });
+                questionnaireModal.addEventListener('hidden.bs.modal', handleModalHidden, { once: true });
+
+                setTimeout(() => {
+                    const submitBtn = document.getElementById('submitQuestionnaire');
+                    if (submitBtn) {
+                        submitBtn.replaceWith(submitBtn.cloneNode(true)); // Nettoie tout
+                        const newSubmitBtn = document.getElementById('submitQuestionnaire');
+                        newSubmitBtn.addEventListener('click', function() {
+                            console.log('🎯 Clic sur Analyser et recommander');
+                            modal.hide();
+                            // (Ici tu peux déclencher une suite : afficher un composant, lancer DFM, etc.)
+                        });
+                    }
+                }, 500);
+            }
+        });
     }
-  });
-}
 
-// ===================== Autres fonctions ===================== (identiques à avant)
+    // ———— Gestion Drag & Drop si besoin ————
+    if (typeof setupDragAndDrop === "function")
+        setupDragAndDrop();
+
+    // (Ajoute ici toute autre initialisation dont tu as besoin à la création du DOM)
+
+});
+
+// —————————— FONCTIONS UTILITAIRES GLOBALES ———————————
 
 function cleanupModal() {
-  document.querySelectorAll('.modal-backdrop').forEach(backdrop => {
-    backdrop.remove();
-  });
-
-  document.body.classList.remove('modal-open');
-  document.body.style.overflow = '';
-  document.body.style.paddingRight = '';
-
-  console.log('🧹 Nettoyage modal terminé');
+    document.querySelectorAll('.modal-backdrop').forEach(b => b.remove());
+    document.body.classList.remove('modal-open');
+    document.body.style.overflow = '';
+    document.body.style.paddingRight = '';
+    console.log('🧹 Nettoyage modal terminé');
 }
 
 function handleModalShown() {
-  console.log('🎯 Modale questionnaire ouverte');
-  initializeMaterialListeners();
+    console.log('🎯 Modale questionnaire ouverte');
+    if (typeof initializeMaterialListeners === "function") {
+        initializeMaterialListeners();
+    }
 }
 
 function handleModalHidden() {
-  console.log('🎯 Modale questionnaire fermée');
-  setTimeout(() => {
-    cleanupModal();
-  }, 100);
+    console.log('🎯 Modale questionnaire fermée');
+    setTimeout(cleanupModal, 100);
 }
 
-// ...et les autres fonctions utilitaires déjà fournies : 
-function initializeMaterialListeners() {
-  // ...inchangée
-}
-function setupDragAndDrop() {
-  // ...inchangé
-}
-function submitForm() {
-  alert('Analyse en cours...');
-}
+// Rajoute ici tes autres fonctions utilitaires si besoin :
+function initializeMaterialListeners() { /* ... */ }
+function setupDragAndDrop() { /* ... */ }
+function submitForm() { alert('Analyse en cours...'); }
