@@ -3493,40 +3493,7 @@ class STEPViewer {
 }
 
 
-    document.addEventListener('DOMContentLoaded', function() {
-        // Sélecteurs possibles pour AXE (à adapter si tes noms/id changent)
-        const allAxisInputs = [
-            ...document.querySelectorAll('#demoldingAxisSelect'),  // select (NodeList est déjà itérable)
-            ...document.querySelectorAll('input[name=demoldingAxis]'), // radio
-            ...document.querySelectorAll('.custom-demolding-axis-selector') // par exemple boutons custom
-        ];
-
-        function getAxisValue(input) {
-            if(input.tagName === "SELECT") return input.value;
-            if(input.type === "radio" && input.checked) return input.value;
-            if(input.dataset.axis) return input.dataset.axis;
-            return null;
-        }
-
-        function highlightLatestSelected() {
-            for(const input of allAxisInputs) {
-                const axis = getAxisValue(input);
-                if(axis) {
-                    window.viewer && window.viewer.highlightDemoldingAxis(axis);
-                    break;
-                }
-            }
-        }
-
-        // Sur chaque select/radio/bouton : triggere au changement/clique
-        allAxisInputs.forEach(input => {
-            input.addEventListener('change', highlightLatestSelected);
-            input.addEventListener('click', highlightLatestSelected);
-        });
-
-        // Optionnel : clignote déjà l’axe actif au chargement
-        setTimeout(highlightLatestSelected, 400);
-    });
+    
 
 
 
@@ -3777,6 +3744,40 @@ function resetForm() {
 //Fin de Class STEPViewer
 window.viewer = new STEPViewer();
 // ✅ Événements DOM
+document.addEventListener('DOMContentLoaded', function() {
+    // Sélecteurs possibles pour AXE (à adapter si tes noms/id changent)
+    const allAxisInputs = [
+        ...document.querySelectorAll('#demoldingAxisSelect'),  // select (NodeList est déjà itérable)
+        ...document.querySelectorAll('input[name=demoldingAxis]'), // radio
+        ...document.querySelectorAll('.custom-demolding-axis-selector') // par exemple boutons custom
+    ];
+
+    function getAxisValue(input) {
+        if(input.tagName === "SELECT") return input.value;
+        if(input.type === "radio" && input.checked) return input.value;
+        if(input.dataset.axis) return input.dataset.axis;
+        return null;
+    }
+
+    function highlightLatestSelected() {
+        for(const input of allAxisInputs) {
+            const axis = getAxisValue(input);
+            if(axis) {
+                window.viewer && window.viewer.highlightDemoldingAxis(axis);
+                break;
+            }
+        }
+    }
+
+    // Sur chaque select/radio/bouton : triggere au changement/clique
+    allAxisInputs.forEach(input => {
+        input.addEventListener('change', highlightLatestSelected);
+        input.addEventListener('click', highlightLatestSelected);
+    });
+
+    // Optionnel : clignote déjà l’axe actif au chargement
+    setTimeout(highlightLatestSelected, 400);
+});
 document.addEventListener('DOMContentLoaded', function () {
   // Évite double instanciation du viewer
   if (!window.viewer) {
