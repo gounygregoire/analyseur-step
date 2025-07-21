@@ -3905,6 +3905,15 @@ function showAxisSelection() {
 
   // LISTENERS d’axe
   const axisSelect = document.getElementById('demoldingAxisSelect');
+    if (axisSelect && window.viewer && typeof window.viewer.highlightDemoldingAxis === 'function') {
+          // Blink initial à l’affichage du composant (affiche l’axe sélectionné dès l’apparition)
+          window.viewer.highlightDemoldingAxis(axisSelect.value);
+
+          // Blink à chaque changement d’axe par l’utilisateur
+          axisSelect.addEventListener('change', function() {
+              window.viewer.highlightDemoldingAxis(this.value);
+          });
+      }
   const axisColor = document.getElementById('axisColor');
   const axisDescription = document.getElementById('axisDescription');
   const axisDetails = document.getElementById('axisDetails');
