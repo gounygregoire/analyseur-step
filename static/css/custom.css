@@ -208,11 +208,12 @@
 
 #axisDescription.selected {
   font-weight: bold;
-  color: #0066cc;
-  animation: axisFlash 1s linear 0s 3; /* Change 3 par "infinite" si tu veux que ça pulse en boucle */
+  color: #0b5ed7;
+  animation: blingbling 0.6s;
 }
-@keyframes axisFlash {
-  0%, 100% { background-color: transparent; }
-  30% { background-color: #e6f0fa; } /* léger fond bleu clair */
-  70% { background-color: #cce3f6; }
+@keyframes blingbling {
+  0%, 100% { background: transparent; }
+  25% { background: #dee2e64a;}
+  50% { background: #b6e2ff8f; }
+  75% { background: #dee2e64a;}
 }
