@@ -1,13 +1,8 @@
 console.log("✅ viewer.js bien chargé !");
 console.log("handleUpload appelé !");
-console.log("setupDragAndDrop appelé !");
 // 3D Viewer Application
 class STEPViewer {
     constructor() {
-        console.log("STEPViewer constructor début");
-        this.setupDragAndDrop();
-        console.log("STEPViewer après setupDragAndDrop");
-
         console.log('🧠 Viewer instancié');
         // Utility function for safe DOM access
         this.safeGetElement = (id) => {
@@ -17,7 +12,7 @@ class STEPViewer {
             }
             return element;
         };
-
+        
         // Utility function for safe style setting
         this.safeSetStyle = (elementId, property, value) => {
             const element = this.safeGetElement(elementId);
@@ -25,11 +20,11 @@ class STEPViewer {
                 element.style[property] = value;
             }
         };
+        
+        
 
 
-
-
-
+        
         // Utility function for safe display setting
         this.safeSetDisplay = (elementId, display) => {
             this.safeSetStyle(elementId, 'display', display);
@@ -56,7 +51,7 @@ class STEPViewer {
         this.setupDragAndDrop();
 
 
-
+        
         // Initialize everything after DOM is ready
         this.initializeViewer();
         if (this.renderer) {
@@ -69,6 +64,7 @@ class STEPViewer {
         this.setupDragAndDrop = this.setupDragAndDrop.bind(this);
     }
 
+    
     async analyzeDFM(demoldingAxis = null) {
         if (!demoldingAxis) {
             const axisSelect = document.getElementById('demoldingAxisSelect');
@@ -112,7 +108,7 @@ class STEPViewer {
                 this.showChangeDemoldingAxisButton();
                 this.enablePDFGeneration();
             }
-        } catch (error) {
+        } catch (err) {
             const errorDisplay = document.getElementById("dfmErrorMessage");
             if (errorDisplay) {
                 errorDisplay.textContent = err.message;
@@ -125,19 +121,19 @@ class STEPViewer {
             dfmBtn.disabled = false;
         }
     }
-
+    
     initializeViewer() {
         const container = this.safeGetElement('viewer3d');
-
+        
         if (!container) {
             console.error('Viewer container not found');
             return;
         }
-
+        
         // Scene setup
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(0x2a2a2a); // Dark background with kaki theme
-
+        
         // Camera setup
         this.camera = new THREE.PerspectiveCamera(
             75, 
@@ -146,7 +142,7 @@ class STEPViewer {
             1000
         );
         this.camera.position.set(10, 10, 10);
-
+        
         // Renderer setup
         this.renderer = new THREE.WebGLRenderer({ 
             antialias: true,
@@ -155,75 +151,68 @@ class STEPViewer {
         this.renderer.setSize(container.clientWidth, container.clientHeight);
         this.renderer.setClearColor(0x2a2a2a, 1); // Consistent with kaki theme
         this.renderer.shadowMap.enabled = false; // Désactiver les ombres pour améliorer les performances
-
+        
         // Add the renderer to the container
         container.appendChild(this.renderer.domElement);
-
+        
         // Add axes helper
         this.axesHelper = new THREE.AxesHelper(50);
         this.scene.add(this.axesHelper);
-
+        
         // Add axes labels
         this.createAxesLabels();
         this.setupDemoldingAxisModal();
-
+        
         // Controls setup
         this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
         this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.1;
-
+        
         // Lighting setup
         this.setupLighting();
-
+        
         // Start render loop
         this.animate();
-
+        
         // Handle window resize
         window.addEventListener('resize', () => this.onWindowResize());
-        
-        // Test visible : ajoute un cube de base
-        const geometry = new THREE.BoxGeometry(1, 1, 1);
-        const material = new THREE.MeshLambertMaterial({ color: 0xff0000 });
-        const mesh = new THREE.Mesh(geometry, material);
-        this.scene.add(mesh);
-
     }
-
+    
     setupLighting() {
         // Ambient light
         const ambientLight = new THREE.AmbientLight(0x404040, 0.4);
         this.scene.add(ambientLight);
-
+        
         // Main directional light (sans ombres)
         const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
         directionalLight.position.set(10, 10, 5);
         directionalLight.castShadow = false; // Désactiver les ombres
         this.scene.add(directionalLight);
-
+        
         // Fill light
         const fillLight = new THREE.DirectionalLight(0xffffff, 0.3);
         fillLight.position.set(-10, -10, -5);
         this.scene.add(fillLight);
-
+        
         // Point light for highlights
         const pointLight = new THREE.PointLight(0xffffff, 0.5, 100);
         pointLight.position.set(0, 20, 0);
         this.scene.add(pointLight);
     }
-
+    
     setupEventListeners() {
         // Upload form
         const uploadForm = this.safeGetElement('uploadForm');
         if (uploadForm) {
             uploadForm.addEventListener('submit', (e) => this.handleUpload(e));
         }
-
+        
         // File input change
         const fileInput = this.safeGetElement('fileInput');
         if (fileInput) {
             fileInput.addEventListener('change', (e) => this.handleFileSelect(e));
         }
-
+        
         // DFM Analysis button
         const dfmAnalyzeBtn = this.safeGetElement('dfmAnalyzeBtn');
         if (dfmAnalyzeBtn) {
@@ -237,53 +226,53 @@ class STEPViewer {
         }
 
 
-
+        
         // Change demolding axis button
         const changeDemoldingAxisBtn = this.safeGetElement('changeDemoldingAxisBtn');
         if (changeDemoldingAxisBtn) {
             changeDemoldingAxisBtn.addEventListener('click', () => this.showDemoldingAxisModal());
         }
-
+        
         // PDF Generation button
         const generatePdfBtn = this.safeGetElement('generatePdfBtn');
         if (generatePdfBtn) {
             generatePdfBtn.addEventListener('click', () => this.generatePDFReport());
         }
-
+        
         // Viewer controls
         const resetViewBtn = this.safeGetElement('resetViewBtn');
         if (resetViewBtn) {
             resetViewBtn.addEventListener('click', () => this.resetView());
         }
-
+        
         const toggleWireframeBtn = this.safeGetElement('toggleWireframeBtn');
         if (toggleWireframeBtn) {
             toggleWireframeBtn.addEventListener('click', () => this.toggleWireframe());
         }
-
+        
         const toggleAxesBtn = this.safeGetElement('toggleAxesBtn');
         if (toggleAxesBtn) {
             toggleAxesBtn.addEventListener('click', () => this.toggleAxes());
         }
-
+        
         // Theme toggle
         const themeToggleBtn = this.safeGetElement('themeToggleBtn');
         if (themeToggleBtn) {
             themeToggleBtn.addEventListener('click', () => this.toggleTheme());
         }
-
+        
         // Measurement tools
         const measureBtn = this.safeGetElement('measureBtn');
         if (measureBtn) {
             measureBtn.addEventListener('click', () => this.toggleMeasurementMode());
         }
-
+        
         // Cross-section button (toggle mode)
         const crossSectionBtn = this.safeGetElement('crossSectionBtn');
         if (crossSectionBtn) {
             crossSectionBtn.addEventListener('click', () => this.toggleCrossSectionMode());
         }
-
+        
         // Cross-section dropdown items
         const crossSectionDropdown = document.querySelectorAll('[data-axis]');
         crossSectionDropdown.forEach(item => {
@@ -293,24 +282,24 @@ class STEPViewer {
                 this.activateCrossSectionMode(axis);
             });
         });
-
+        
         const clearMeasurementsBtn = this.safeGetElement('clearMeasurementsBtn');
         if (clearMeasurementsBtn) {
             clearMeasurementsBtn.addEventListener('click', () => this.clearMeasurements());
         }
-
+        
         // Mouse events for measurements
         if (this.renderer && this.renderer.domElement) {
             this.renderer.domElement.addEventListener('click', (event) => this.onMouseClick(event));
         }
-
+        
         // History refresh button
         const refreshHistoryBtn = document.getElementById('refreshHistoryBtn');
         if (refreshHistoryBtn) {
             refreshHistoryBtn.addEventListener('click', () => this.loadConversionHistory());
         }
     }
-
+    
     setupDragAndDrop() {
         console.log("setupDragAndDrop appelé !");
         const dropZone = this.safeGetElement("uploadArea");
@@ -355,7 +344,7 @@ class STEPViewer {
     setupViewerToolsEvents() {
         // This function ensures viewer tool events are attached after the panel becomes visible
         console.log('Setting up viewer tools events...');
-
+        
         // First remove any existing event listeners to prevent duplicates
         const oldResetBtn = this.safeGetElement('resetViewBtn');
         if (oldResetBtn) {
@@ -363,35 +352,35 @@ class STEPViewer {
             oldResetBtn.parentNode.replaceChild(newResetBtn, oldResetBtn);
             newResetBtn.addEventListener('click', () => this.resetView());
         }
-
+        
         const oldWireframeBtn = this.safeGetElement('toggleWireframeBtn');
         if (oldWireframeBtn) {
             const newWireframeBtn = oldWireframeBtn.cloneNode(true);
             oldWireframeBtn.parentNode.replaceChild(newWireframeBtn, oldWireframeBtn);
             newWireframeBtn.addEventListener('click', () => this.toggleWireframe());
         }
-
+        
         const oldAxesBtn = this.safeGetElement('toggleAxesBtn');
         if (oldAxesBtn) {
             const newAxesBtn = oldAxesBtn.cloneNode(true);
             oldAxesBtn.parentNode.replaceChild(newAxesBtn, oldAxesBtn);
             newAxesBtn.addEventListener('click', () => this.toggleAxes());
         }
-
+        
         const oldThemeBtn = this.safeGetElement('themeToggleBtn');
         if (oldThemeBtn) {
             const newThemeBtn = oldThemeBtn.cloneNode(true);
             oldThemeBtn.parentNode.replaceChild(newThemeBtn, oldThemeBtn);
             newThemeBtn.addEventListener('click', () => this.toggleTheme());
         }
-
+        
         const oldMeasureBtn = this.safeGetElement('measureBtn');
         if (oldMeasureBtn) {
             const newMeasureBtn = oldMeasureBtn.cloneNode(true);
             oldMeasureBtn.parentNode.replaceChild(newMeasureBtn, oldMeasureBtn);
             newMeasureBtn.addEventListener('click', () => this.toggleMeasurementMode());
         }
-
+        
         const oldCrossSectionBtn = this.safeGetElement('crossSectionBtn');
         if (oldCrossSectionBtn) {
             const newCrossSectionBtn = oldCrossSectionBtn.cloneNode(true);
@@ -402,14 +391,14 @@ class STEPViewer {
             });
             console.log('Cross-section button event attached');
         }
-
+        
         const oldClearBtn = this.safeGetElement('clearMeasurementsBtn');
         if (oldClearBtn) {
             const newClearBtn = oldClearBtn.cloneNode(true);
             oldClearBtn.parentNode.replaceChild(newClearBtn, oldClearBtn);
             newClearBtn.addEventListener('click', () => this.clearMeasurements());
         }
-
+        
         // Menu déroulant pour l'axe de coupe
         const axisSelect = document.getElementById('crossSectionAxisSelect');
         if (axisSelect) {
@@ -421,10 +410,10 @@ class STEPViewer {
                 }
             });
         }
-
+        
         console.log('Viewer tools events setup complete');
     }
-
+    
     initializeTooltips() {
         // Initialize Bootstrap tooltips
         const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
@@ -432,7 +421,7 @@ class STEPViewer {
             return new bootstrap.Tooltip(tooltipTriggerEl);
         });
     }
-
+    
     handleFileSelect(event) {
         const file = event.target.files[0];
         if (file) {
@@ -441,7 +430,7 @@ class STEPViewer {
             const fileInput = document.getElementById('fileInput');
             const tempContainer = document.createElement('div');
             tempContainer.appendChild(fileInput);
-
+            
             uploadArea.innerHTML = `
                 <i class="bi bi-folder-check" style="font-size: 3rem; color: var(--kaki-dark); margin-bottom: 1rem;"></i>
                 <p class="mb-2" style="color: var(--brown-dark); font-weight: 600;">
@@ -455,15 +444,15 @@ class STEPViewer {
                     <i class="bi bi-arrow-repeat me-2"></i>Changer de fichier
                 </button>
             `;
-
+            
             // Réinsérer l'input file caché
             uploadArea.appendChild(fileInput);
-
+            
             // Ajouter l'événement au nouveau bouton
             const changeFileBtn = document.getElementById('changeFileBtn');
             if (changeFileBtn) {
                 changeFileBtn.addEventListener('click', () => fileInput.click());
-
+                
             // 🔥 Ajout clé : auto-submit après sélection
             }
             this.handleUpload();
@@ -479,26 +468,26 @@ class STEPViewer {
 
     validateFile() {
         const fileInputElement = this.safeGetElement('fileInput');
-
+        
         if (!fileInputElement) {
             this.showError('Élément de sélection de fichier non trouvé');
             return false;
         }
-
+        
         const file = fileInputElement.files[0];
-
+        
         if (!file) {
             this.showError('Veuillez sélectionner un fichier');
             return false;
         }
-
+        
         const fileSize = file.size / (1024 * 1024); // MB
         if (fileSize > 100) {
             this.showError('La taille du fichier dépasse la limite de 100 Mo');
             fileInputElement.value = '';
             return false;
         }
-
+        
         const validExtensions = ['step', 'stp'];
         const fileExtension = file.name.split('.').pop().toLowerCase();
         if (!validExtensions.includes(fileExtension)) {
@@ -506,11 +495,11 @@ class STEPViewer {
             fileInputElement.value = '';
             return false;
         }
-
+        
         return true;
     }
-
-
+    
+    
 
 
     async handleUpload(event) {
@@ -520,32 +509,32 @@ class STEPViewer {
         if (!this.validateFile()) {
             return;
         }
-
+        
         const formData = new FormData();
         const fileInputElement = document.getElementById('fileInput');
         const toleranceInput = document.getElementById('toleranceInput');
-
+        
         if (!fileInputElement || !toleranceInput) {
             this.showError('Éléments du formulaire non trouvés');
             return;
         }
-
+        
         const file = fileInputElement.files[0];
-
+        
         // Adjust tolerance based on file size for better performance
         let tolerance = parseFloat(toleranceInput.value);
         const fileSizeMB = file.size / (1024 * 1024);
-
+        
         // For large files, increase tolerance slightly
         if (fileSizeMB > 20) {
             tolerance = Math.min(0.5, tolerance * 1.5);
         }
-
+        
         formData.append('file', file);
         formData.append('tolerance', tolerance);
-
+        
         this.showProgress();
-
+        
         // Update progress message based on file size
         const progressText = document.querySelector('#progressIndicator p.small');
         if (progressText) {
@@ -557,7 +546,7 @@ class STEPViewer {
                 progressText.textContent = `Conversion en cours... Cela peut prendre jusqu'à 60 secondes.`;
             }
         }
-
+        
         try {
             // Create AbortController for timeout handling
             const controller = new AbortController();
@@ -566,15 +555,15 @@ class STEPViewer {
             const timeoutSeconds = Math.max(100, Math.min(920, fileSizeMB * 15 + 20));
             console.log(`Setting client timeout to ${timeoutSeconds} seconds for ${fileSizeMB}MB file`);
             const timeoutId = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
-
+            
             const response = await fetch('/upload', {
                 method: 'POST',
                 body: formData,
                 signal: controller.signal
             });
-
+            
             clearTimeout(timeoutId);
-
+            
             if (!response.ok) {
                 if (response.status === 413) {
                     throw new Error('Le fichier est trop volumineux (max 100 Mo)');
@@ -591,14 +580,9 @@ class STEPViewer {
                 }
                 throw new Error(`Erreur serveur: ${response.status}`);
             }
-
+            
             const result = await response.json();
-
-            // Ajout de cette vérification explicite
-            if (result.code === 403 || result.message?.includes('permission')) {
-                throw new Error('Vous n\'avez plus de crédits. Achetez des crédits ou souscrivez à un abonnement pour continuer.');
-            }
-
+            
             if (result.success) {
                 this.handleUploadSuccess(result);
             } else {
@@ -619,123 +603,149 @@ class STEPViewer {
             this.hideProgress();
         }
     }
+    
+    handleUploadSuccess(result) {
+        console.log('Upload successful:', result);
+        
+        // Store current conversion ID for DFM analysis
+        this.currentConversionId = result.file_id;
 
-handleUploadSuccess(result) {
-    console.log('Upload successful:', result);
-
-    this.currentConversionId = result.file_id;
-
-    if (result.viewer_ready === false) {
-        this.safeSetDisplay('viewer3d', 'none');
-
-        const alertHtml = `
-            <div class="alert alert-warning alert-dismissible fade show border-2 shadow" role="alert">
-                <h5 class="alert-heading"><i class="bi bi-exclamation-triangle-fill me-2"></i>Visualisation 3D non disponible</h5>
-                <p class="fw-bold">⚠️ Le modèle 3D ne peut pas être affiché dans le visualisateur.</p>
-                ${result.viewer_error ? `<p class="text-muted"><small><strong>Raison :</strong> ${result.viewer_error}</small></p>` : ''}
-                <hr>
-                <p class="mb-2"><strong>✅ Les fonctionnalités suivantes restent disponibles :</strong></p>
-                <ul class="mb-0">
-                    <li>🔍 <strong>Analyse DFM complète</strong> (Design for Manufacturing)</li>
-                    <li>📊 <strong>Calcul des dimensions et volumes</strong></li>
-                    <li>📋 <strong>Recommandations de matériaux</strong></li>
-                    <li>📄 <strong>Génération du rapport PDF détaillé</strong></li>
-                    <li>💾 <strong>Téléchargement du package complet (ZIP)</strong></li>
-                </ul>
-                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-            </div>
-        `;
-
-        const viewerSection = document.querySelector('.viewer-section');
-        if (viewerSection) {
-            viewerSection.insertAdjacentHTML('afterbegin', alertHtml);
-        }
-
-        this.safeSetDisplay('viewerToolsPanel', 'block');
-        this.safeSetDisplay('modelInfo', 'block');
-        this.safeSetDisplay('volumeDisplay', 'none');
-
-        const viewerTools = ['toggleWireframeBtn', 'toggleAxesBtn', 'toggleThemeBtn', 'resetViewBtn',
-                             'toggleMeasurementBtn', 'toggleCrossSectionBtn'];
-        viewerTools.forEach(toolId => {
-            const tool = this.safeGetElement(toolId);
-            if (tool) {
-                tool.style.display = 'none';
+        // Check if viewer is ready
+        if (result.viewer_ready === false) {
+            // Hide 3D viewer and show alert message
+            this.safeSetDisplay('viewer3d', 'none');
+            
+            // Create alert message
+            const alertHtml = `
+                <div class="alert alert-warning alert-dismissible fade show border-2 shadow" role="alert">
+                    <h5 class="alert-heading"><i class="bi bi-exclamation-triangle-fill me-2"></i>Visualisation 3D non disponible</h5>
+                    <p class="fw-bold">⚠️ Le modèle 3D ne peut pas être affiché dans le visualisateur.</p>
+                    ${result.viewer_error ? `<p class="text-muted"><small><strong>Raison :</strong> ${result.viewer_error}</small></p>` : ''}
+                    <hr>
+                    <p class="mb-2"><strong>✅ Les fonctionnalités suivantes restent disponibles :</strong></p>
+                    <ul class="mb-0">
+                        <li>🔍 <strong>Analyse DFM complète</strong> (Design for Manufacturing)</li>
+                        <li>📊 <strong>Calcul des dimensions et volumes</strong></li>
+                        <li>📋 <strong>Recommandations de matériaux</strong></li>
+                        <li>📄 <strong>Génération du rapport PDF détaillé</strong></li>
+                        <li>💾 <strong>Téléchargement du package complet (ZIP)</strong></li>
+                    </ul>
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+            `;
+            
+            // Insert alert before the viewer tools panel
+            const viewerSection = document.querySelector('.viewer-section');
+            if (viewerSection) {
+                viewerSection.insertAdjacentHTML('afterbegin', alertHtml);
             }
-        });
-
-    } else {
-        // Normal flow: viewer actif
-        this.safeSetDisplay('viewer3d', 'block');
-        this.safeSetDisplay('viewerToolsPanel', 'block');
-
-        this.setupViewerToolsEvents();
-        this.loadSTLModel(`/view/${result.stl_filename}`);
-
-        this.safeSetDisplay('modelInfo', 'block');
-        this.safeSetDisplay('volumeDisplay', 'block');
-    }
-
-    this.loadConversionHistory();
-
-    const viewer3d = this.safeGetElement('viewer3d');
-    if (viewer3d && result.viewer_ready !== false) {
-        viewer3d.scrollIntoView({ behavior: 'smooth' });
-    }
-}
-
-async loadSTLModel(url) {
-    try {
-        // Remove existing mesh
-        if (this.currentMesh) {
-            this.scene.remove(this.currentMesh);
+            
+            // Still show DFM controls and model info
+            this.safeSetDisplay('viewerToolsPanel', 'block');
+            this.safeSetDisplay('modelInfo', 'block');
+            this.safeSetDisplay('volumeDisplay', 'none'); // Hide volume since we can't calculate it
+            
+            // Hide 3D viewer specific tools
+            const viewerTools = ['toggleWireframeBtn', 'toggleAxesBtn', 'toggleThemeBtn', 'resetViewBtn', 
+                                'toggleMeasurementBtn', 'toggleCrossSectionBtn'];
+            viewerTools.forEach(toolId => {
+                const tool = this.safeGetElement(toolId);
+                if (tool) tool.style.display = 'none';
+            });
+            
+        } else {
+            // Normal flow: show viewer and load model
+            this.safeSetDisplay('viewer3d', 'block');
+            this.safeSetDisplay('viewerToolsPanel', 'block');
+            
+            // Re-attach event listeners for viewer tools since they were just made visible
+            this.setupViewerToolsEvents();
+            
+            // Load and display the STL model directly
+            this.loadSTLModel(`/view/${result.stl_filename}`);
+            
+            // Show model info
+            this.safeSetDisplay('modelInfo', 'block');
+            this.safeSetDisplay('volumeDisplay', 'block');
         }
+        
+        // Refresh history to show the new conversion
+        this.loadConversionHistory();
+        
+        // Scroll to viewer
+        const viewer3d = this.safeGetElement('viewer3d');
+        if (viewer3d && result.viewer_ready !== false) {
+            viewer3d.scrollIntoView({ behavior: 'smooth' });
+        }
+    }
 
-        // Show loading indicator
-        this.showLoadingIndicator('Chargement du modèle 3D...');
-
-        // Load STL with progress tracking and timeout handling
-        const loader = new THREE.STLLoader();
-
-        // Set up timeout for large file loading
-        const controller = new AbortController();
-        let timeoutId = setTimeout(() => {
-            controller.abort();
-            this.hideLoadingIndicator();
-            this.showError('Timeout de chargement du modèle 3D. Le fichier est trop volumineux pour être chargé dans le navigateur.');
-        }, 300000); // 5 minutes timeout
-
-        loader.load(
-            url,
-            (geometry) => { // onLoad
-                clearTimeout(timeoutId);
+    async loadSTLModel(url) {
+        try {
+            // Remove existing mesh
+            if (this.currentMesh) {
+                this.scene.remove(this.currentMesh);
+            }
+            
+            // Show loading indicator
+            this.showLoadingIndicator('Chargement du modèle 3D...');
+            
+            // Load STL with progress tracking and timeout handling
+            const loader = new THREE.STLLoader();
+            
+            // Set up timeout for large file loading
+            const controller = new AbortController();
+            let timeoutId = setTimeout(() => {
+                controller.abort();
                 this.hideLoadingIndicator();
-
-                // ... (reste de ton code existant pour le traitement de geometry)
-
+                this.showError('Timeout de chargement du modèle 3D. Le fichier est trop volumineux pour être chargé dans le navigateur.');
+            }, 300000); // 5 minutes timeout for STL loading
+            
+            // Override the loader's XMLHttpRequest to support abort
+            const originalLoad = loader.load.bind(loader);
+            
+            loader.load(url, (geometry) => {
+                clearTimeout(timeoutId);
+                // Hide loading indicator
+                this.hideLoadingIndicator();
+                
                 // Check if geometry is too complex
                 const vertexCount = geometry.attributes.position.count;
                 console.log(`Model loaded with ${vertexCount} vertices`);
-
+                
+                // Apply optimizations for large models
                 if (vertexCount > 1000000) {
+                    console.warn('Very large model detected, applying maximum optimizations...');
+                    // For extremely large models, compute normals only if needed
                     if (!geometry.attributes.normal) {
                         geometry.computeVertexNormals();
                     }
                 } else if (vertexCount > 500000) {
+                    console.warn('Large model detected, applying optimizations...');
                     geometry.computeVertexNormals();
                 }
-
+                
+                // Center geometry but keep real scale (1:1)
                 geometry.computeBoundingBox();
                 const center = new THREE.Vector3();
                 geometry.boundingBox.getCenter(center);
                 geometry.translate(-center.x, -center.y, -center.z);
-
+                
+                // Create material - always use Lambert for consistent lighting and shadows
                 let material;
                 if (vertexCount > 1000000) {
-                    material = new THREE.MeshLambertMaterial({ color: 0x888888, side: THREE.DoubleSide });
+                    // Lambert material for extremely large models (still has lighting/shadows)
+                    material = new THREE.MeshLambertMaterial({
+                        color: 0x888888,
+                        side: THREE.DoubleSide
+                    });
                 } else if (vertexCount > 500000) {
-                    material = new THREE.MeshLambertMaterial({ color: 0x888888, side: THREE.DoubleSide });
+                    // Lambert material for large models
+                    material = new THREE.MeshLambertMaterial({
+                        color: 0x888888,
+                        side: THREE.DoubleSide
+                    });
                 } else {
+                    // Standard material for normal models
                     material = new THREE.MeshPhysicalMaterial({
                         color: 0x888888,
                         metalness: 0.3,
@@ -744,43 +754,55 @@ async loadSTLModel(url) {
                         clearcoatRoughness: 0.25,
                     });
                 }
-
+                
+                // Create mesh
                 this.currentMesh = new THREE.Mesh(geometry, material);
                 this.currentMesh.castShadow = true;
                 this.currentMesh.receiveShadow = true;
+                
+                // Add to scene
                 this.scene.add(this.currentMesh);
-
+                
+                // Optimize renderer for large models
                 if (vertexCount > 1000000) {
                     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1));
+                    console.log('Renderer pixel ratio reduced to 1 for performance');
                 } else if (vertexCount > 500000) {
                     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+                    console.log('Renderer pixel ratio limited to 1.5 for performance');
                 }
-
+                
+                // Calculate and display volume
                 this.calculateAndDisplayVolume(geometry);
-
+                
+                // Update model info
                 if (this.updateModelInfo) {
                     this.updateModelInfo(url);
                 }
-
+                
+                // Manage axes visibility
                 if (this.manageAxesVisibility) {
                     this.manageAxesVisibility();
                 }
-
+                
+                // Reset camera view
                 this.resetView();
+                
                 console.log('STL model loaded successfully');
-            },
-            (progress) => {
+                
+            }, (progress) => {
+                // Progress callback
                 if (progress.lengthComputable) {
                     const percentComplete = (progress.loaded / progress.total) * 100;
                     this.updateLoadingProgress(percentComplete);
                 }
-            },
-            (error) => {
-                // ERREUR → ici FONCTION anonyme, pas de bloc "catch"
+            }, (error) => {
+                // Error callback
                 clearTimeout(timeoutId);
                 console.error('Error loading STL:', error);
                 this.hideLoadingIndicator();
-
+                
+                // More specific error messages based on error type
                 if (error.name === 'AbortError' || (error.message && error.message.includes('aborted'))) {
                     this.showError('Chargement annulé. Le fichier est trop volumineux pour être chargé dans le navigateur.');
                 } else if (error.message && (error.message.includes('NetworkError') || error.message.includes('fetch'))) {
@@ -788,15 +810,15 @@ async loadSTLModel(url) {
                 } else {
                     this.showError('Échec du chargement du modèle 3D. Le fichier pourrait être trop volumineux ou corrompu.');
                 }
-            }
-        );
-    } catch (error) {
-        console.error('Load STL error:', error);
-        this.hideLoadingIndicator();
-        this.showError('Erreur lors du chargement du modèle 3D');
+            });
+            
+        } catch (error) {
+            console.error('Load STL error:', error);
+            this.hideLoadingIndicator();
+            this.showError('Erreur lors du chargement du modèle 3D');
+        }
     }
-}
-
+    
     showLoadingIndicator(message = 'Chargement...') {
         // Create or update loading indicator
         let loadingDiv = document.getElementById('stlLoadingIndicator');
@@ -805,13 +827,13 @@ async loadSTLModel(url) {
             loadingDiv.id = 'stlLoadingIndicator';
             loadingDiv.className = 'position-absolute top-50 start-50 translate-middle text-center';
             loadingDiv.style.zIndex = '1000';
-
+            
             const viewerContainer = document.getElementById('viewer3d');
             if (viewerContainer) {
                 viewerContainer.appendChild(loadingDiv);
             }
         }
-
+        
         loadingDiv.innerHTML = `
             <div class="spinner-border text-primary mb-3" role="status">
                 <span class="visually-hidden">Chargement...</span>
@@ -823,52 +845,52 @@ async loadSTLModel(url) {
                 </div>
             </div>
         `;
-
+        
         loadingDiv.style.display = 'block';
     }
-
+    
     updateLoadingProgress(percent) {
         const progressBar = document.querySelector('#loadingProgressBar');
         const progressBarInner = document.querySelector('#loadingProgressBar .progress-bar');
-
+        
         if (progressBar && progressBarInner) {
             progressBar.style.display = 'block';
             progressBarInner.style.width = `${percent}%`;
         }
     }
-
+    
     hideLoadingIndicator() {
         const loadingDiv = document.getElementById('stlLoadingIndicator');
         if (loadingDiv) {
             loadingDiv.style.display = 'none';
         }
     }
-
+    
     resetView() {
         if (this.currentMesh) {
             // Calculate bounding box for optimal camera positioning
             const box = new THREE.Box3().setFromObject(this.currentMesh);
             const center = box.getCenter(new THREE.Vector3());
             const size = box.getSize(new THREE.Vector3());
-
+            
             // Position camera
             const maxDim = Math.max(size.x, size.y, size.z);
             const fov = this.camera.fov * (Math.PI / 180);
             let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
             cameraZ *= 2; // Add some padding
-
+            
             this.camera.position.set(cameraZ, cameraZ, cameraZ);
             this.camera.lookAt(center);
             this.controls.target.copy(center);
             this.controls.update();
         }
     }
-
+    
     toggleWireframe() {
         if (this.currentMesh) {
             this.isWireframe = !this.isWireframe;
             this.currentMesh.material.wireframe = this.isWireframe;
-
+            
             const btn = this.safeGetElement('toggleWireframeBtn');
             if (btn) {
                 if (this.isWireframe) {
@@ -879,19 +901,19 @@ async loadSTLModel(url) {
             }
         }
     }
-
+    
     toggleAxes() {
         if (this.axesHelper) {
             this.showAxes = !this.showAxes;
             this.axesHelper.visible = this.showAxes;
-
+            
             // Also toggle labels visibility
             if (this.axesLabels && Array.isArray(this.axesLabels)) {
                 this.axesLabels.forEach(label => {
                     label.visible = this.showAxes;
                 });
             }
-
+            
             const btn = this.safeGetElement('toggleAxesBtn');
             if (btn) {
                 if (this.showAxes) {
@@ -902,11 +924,11 @@ async loadSTLModel(url) {
             }
         }
     }
-
+    
     toggleTheme() {
         this.isDarkMode = !this.isDarkMode;
         const btn = this.safeGetElement('themeToggleBtn');
-
+        
         // Ne changer que la couleur du viewer 3D, pas tout le thème de l'interface
         if (this.isDarkMode) {
             // Darker gray background for better contrast with 3D models
@@ -920,7 +942,7 @@ async loadSTLModel(url) {
             if (btn) btn.innerHTML = '<i class="bi bi-moon me-1"></i>Fond sombre';
         }
     }
-
+    
     showProgress() {
         this.safeSetDisplay('progressSection', 'block');
         this.safeSetDisplay('uploadResults', 'none');
@@ -930,7 +952,7 @@ async loadSTLModel(url) {
             uploadBtn.disabled = true;
         }
     }
-
+    
     hideProgress() {
         this.safeSetDisplay('progressSection', 'none');
         const uploadBtn = this.safeGetElement('uploadBtn');
@@ -938,19 +960,19 @@ async loadSTLModel(url) {
             uploadBtn.disabled = false;
         }
     }
-
+    
     showError(message) {
         const errorMessage = this.safeGetElement('errorMessage');
         if (errorMessage) {
             errorMessage.textContent = message;
         }
-
+        
         this.safeSetDisplay('errorAlert', 'block');
         this.safeSetDisplay('uploadResults', 'none');
-
+        
         console.error('Error:', message);
     }
-
+    
     formatFileSize(bytes) {
         if (bytes === 0) return '0 octets';
         const k = 1024;
@@ -958,19 +980,19 @@ async loadSTLModel(url) {
         const i = Math.floor(Math.log(bytes) / Math.log(k));
         return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     }
-
+    
     animate() {
         requestAnimationFrame(() => this.animate());
-
+        
         this.controls.update();
         this.renderer.render(this.scene, this.camera);
     }
-
+    
     calculateAndDisplayVolume(geometry) {
         // Calculate volume using the divergence theorem (signed volume)
         let volume = 0;
         const position = geometry.attributes.position;
-
+        
         // Iterate through triangles (3 vertices per triangle)
         for (let i = 0; i < position.count; i += 3) {
             const v0 = new THREE.Vector3(
@@ -988,27 +1010,27 @@ async loadSTLModel(url) {
                 position.getY(i + 2),
                 position.getZ(i + 2)
             );
-
+            
             // Calculate signed volume of tetrahedron formed by origin and triangle
             const signedVolume = v0.x * (v1.y * v2.z - v1.z * v2.y) +
                                v1.x * (v2.y * v0.z - v2.z * v0.y) +
                                v2.x * (v0.y * v1.z - v0.z * v1.y);
-
+            
             volume += signedVolume;
         }
-
+        
         // Divide by 6 and take absolute value
         volume = Math.abs(volume) / 6.0;
-
+        
         // Display volume in the UI
         this.displayVolume(volume);
     }
-
+    
     updateModelInfo(url) {
         // Update model information in the UI
         console.log('Model loaded from:', url);
     }
-
+    
     manageAxesVisibility() {
         // Manage axes visibility based on current state
         if (this.axesHelper && this.currentMesh) {
@@ -1017,10 +1039,10 @@ async loadSTLModel(url) {
             const size = box.getSize(new THREE.Vector3());
             const maxDim = Math.max(size.x, size.y, size.z);
             const axesScale = maxDim * 0.5;
-
+            
             this.axesHelper.position.copy(center);
             this.axesHelper.scale.set(axesScale, axesScale, axesScale);
-
+            
             // Update axes labels if they exist
             if (this.axesLabels) {
                 this.axesLabels.forEach((label, index) => {
@@ -1042,18 +1064,18 @@ async loadSTLModel(url) {
             }
         }
     }
-
+    
     calculateSurfaceArea(axis) {
         if (!this.currentMesh) return;
-
+        
         const geometry = this.currentMesh.geometry;
         const position = geometry.attributes.position;
         const boundingBox = new THREE.Box3().setFromObject(this.currentMesh);
         const size = boundingBox.getSize(new THREE.Vector3());
-
+        
         let maxProjectedArea = 0;
         const triangleNormals = [];
-
+        
         // First pass: calculate normals and find triangles facing the projection direction
         for (let i = 0; i < position.count; i += 3) {
             const v0 = new THREE.Vector3(
@@ -1071,15 +1093,15 @@ async loadSTLModel(url) {
                 position.getY(i + 2),
                 position.getZ(i + 2)
             );
-
+            
             // Calculate triangle normal
             const edge1 = v1.clone().sub(v0);
             const edge2 = v2.clone().sub(v0);
             const normal = edge1.cross(edge2).normalize();
-
+            
             // Calculate actual triangle area
             const triangleArea = edge1.cross(edge2).length() / 2;
-
+            
             // Determine projection direction
             let projectionDirection;
             switch(axis) {
@@ -1094,14 +1116,14 @@ async loadSTLModel(url) {
                     projectionDirection = new THREE.Vector3(0, 0, 1);
                     break;
             }
-
+            
             // Calculate projected area using dot product with normal
             const dot = Math.abs(normal.dot(projectionDirection));
             const projectedTriangleArea = triangleArea * dot;
-
+            
             maxProjectedArea += projectedTriangleArea;
         }
-
+        
         // Use bounding box dimensions as reference for axis-based surface calculation
         let axisBasedArea;
         switch(axis) {
@@ -1116,24 +1138,24 @@ async loadSTLModel(url) {
                 axisBasedArea = size.x * size.y;
                 break;
         }
-
+        
         // Use the smaller of the two calculations for more accuracy
         const finalArea = Math.min(maxProjectedArea, axisBasedArea);
-
+        
         console.log(`Axis ${axis}: Projected area = ${maxProjectedArea.toFixed(2)}, Bounding box area = ${axisBasedArea.toFixed(2)}, Final = ${finalArea.toFixed(2)}`);
-
+        
         // Display the calculated surface area
         this.displaySurfaceArea(finalArea, axis);
     }
-
+    
     displaySurfaceArea(area, axis) {
         const surfaceElement = document.getElementById('surfaceValue');
         const surfaceBtn = document.getElementById('surfaceBtn');
-
+        
         if (surfaceElement && surfaceBtn) {
             // Convert from mm² to cm² (divide by 100)
             const areaInCm2 = area / 100;
-
+            
             // Format area in cm²
             let displayText;
             if (areaInCm2 >= 10000) {
@@ -1143,21 +1165,21 @@ async loadSTLModel(url) {
             } else {
                 displayText = `${areaInCm2.toFixed(2)} cm²`;
             }
-
+            
             surfaceElement.textContent = displayText;
             surfaceElement.className = 'badge bg-success ms-2';
             surfaceBtn.innerHTML = `Axe ${axis.toUpperCase()}`;
             surfaceBtn.classList.remove('btn-outline-secondary');
             surfaceBtn.classList.add('btn-secondary');
-
+            
             console.log(`Surface area calculated for axis ${axis}: ${displayText}`);
         }
     }
-
+    
     displayVolume(volume) {
         // Convert from mm³ to cm³
         const volumeInCm3 = volume / 1000;
-
+        
         // Create or update volume display element
         let volumeDisplay = document.getElementById('volumeDisplay');
         if (!volumeDisplay) {
@@ -1169,7 +1191,7 @@ async loadSTLModel(url) {
                 <strong>Volume de la pièce :</strong> 
                 <span id="volumeValue">${volumeInCm3.toFixed(1)} cm³</span>
             `;
-
+            
             // Insert after viewer controls
             const viewerSection = document.querySelector('.card .card-body');
             viewerSection.appendChild(volumeDisplay);
@@ -1177,10 +1199,10 @@ async loadSTLModel(url) {
             document.getElementById('volumeValue').textContent = `${volumeInCm3.toFixed(1)} cm³`;
         }
     }
-
+    
     displayDFMAnalysis(dfmData) {
         console.log('Displaying DFM analysis:', dfmData);
-
+        
         // Show the DFM results section
         const dfmResultsSection = document.getElementById('dfmResultsSection');
         if (dfmResultsSection) {
@@ -1190,7 +1212,7 @@ async loadSTLModel(url) {
             console.error('DFM results section not found');
             return;
         }
-
+        
         // Get the DFM panel container
         const dfmPanel = document.getElementById('dfmAnalysisPanel');
         if (!dfmPanel) {
@@ -1198,34 +1220,34 @@ async loadSTLModel(url) {
             return;
         }
         console.log('DFM panel found, updating content');
-
+        
         // Clear any existing content
         dfmPanel.innerHTML = '';
-
+        
         // Generate the modern DFM interface
         dfmPanel.innerHTML = this.generateModernDFMInterface(dfmData);
-
+        
         // Initialize Bootstrap tabs after HTML insertion
         setTimeout(() => {
             this.initializeDFMTabs();
         }, 100);
-
+        
         // Show action buttons
         this.showChangeDemoldingAxisButton();
         this.enablePDFGeneration();
-
+        
         // Afficher l'indicateur "Prêt pour injection"
         this.updateInjectionReadyIndicator(dfmData);
-
+        
         // Afficher la checklist interactive
         this.updateMoldingChecklist(dfmData);
-
+        
         // Mettre en évidence les défauts dans le viewer 3D
         this.highlightDefectsIn3D(dfmData);
-
+        
         // Activer le bouton de téléchargement ZIP
         this.enableZipDownload();
-
+        
         console.log('DFM analysis displayed successfully');
     }
 
@@ -1234,14 +1256,14 @@ async loadSTLModel(url) {
         const badge = document.getElementById('injectionReadyBadge');
         const icon = document.getElementById('injectionReadyIcon');
         const text = document.getElementById('injectionReadyText');
-
+        
         if (!indicator || !badge || !icon || !text) return;
-
+        
         // Déterminer l'état en fonction du score et des problèmes
         let status = 'green'; // Par défaut vert
         let statusText = 'Prêt pour injection';
         let badgeClass = 'bg-success';
-
+        
         if (dfmData.score < 5 || dfmData.rating === 'critical') {
             status = 'red';
             statusText = 'Non prêt - Corrections majeures';
@@ -1251,12 +1273,12 @@ async loadSTLModel(url) {
             statusText = 'Prêt avec réserves';
             badgeClass = 'bg-warning';
         }
-
+        
         // Mettre à jour l'affichage
         indicator.style.display = 'inline-block';
         badge.className = `badge fs-5 ${badgeClass}`;
         text.textContent = statusText;
-
+        
         // Animation d'apparition
         setTimeout(() => {
             indicator.style.opacity = '0';
@@ -1268,13 +1290,13 @@ async loadSTLModel(url) {
             }, 100);
         }, 100);
     }
-
+    
     updateMoldingChecklist(dfmData) {
         const checklist = document.getElementById('moldingChecklist');
         const checklistItems = document.getElementById('checklistItems');
-
+        
         if (!checklist || !checklistItems) return;
-
+        
         // Définir les critères de la checklist
         const criteria = [
             {
@@ -1343,14 +1365,14 @@ async loadSTLModel(url) {
                 }
             }
         ];
-
+        
         // Générer le HTML de la checklist
         checklistItems.innerHTML = criteria.map(criterion => {
             const isChecked = criterion.check();
             const details = criterion.details();
             const itemClass = isChecked ? 'list-group-item-success' : 'list-group-item-danger';
             const iconClass = isChecked ? 'bi-check-circle-fill text-success' : 'bi-x-circle-fill text-danger';
-
+            
             return `
                 <div class="list-group-item list-group-item-action ${itemClass}" 
                      data-criterion="${criterion.id}" style="cursor: pointer;">
@@ -1364,10 +1386,10 @@ async loadSTLModel(url) {
                 </div>
             `;
         }).join('');
-
+        
         // Afficher la checklist
         checklist.style.display = 'block';
-
+        
         // Ajouter les événements de clic pour afficher plus de détails
         checklistItems.querySelectorAll('.list-group-item').forEach(item => {
             item.addEventListener('click', (e) => {
@@ -1377,23 +1399,23 @@ async loadSTLModel(url) {
             });
         });
     }
-
+    
     highlightDefectsIn3D(dfmData) {
         if (!this.currentMesh) return;
-
+        
         // Stocker les données DFM pour référence
         this.currentDfmData = dfmData;
-
+        
         // Ne pas créer de marqueurs visuels - désactivé à la demande de l'utilisateur
         // Les défauts sont maintenant uniquement visibles dans l'interface texte
-
+        
         // Note: Le bouton défauts ne sera pas ajouté non plus
     }
-
+    
     addDefectToggleButton() {
         // Vérifier si le bouton existe déjà
         if (document.getElementById('toggleDefectsBtn')) return;
-
+        
         // Créer le bouton
         const toolsContainer = document.querySelector('.viewer-tools');
         if (toolsContainer) {
@@ -1402,7 +1424,7 @@ async loadSTLModel(url) {
             toggleBtn.className = 'btn btn-outline-danger btn-sm';
             toggleBtn.innerHTML = '<i class="bi bi-exclamation-triangle me-1"></i>Défauts';
             toggleBtn.title = 'Afficher/Masquer les zones problématiques';
-
+            
             toggleBtn.addEventListener('click', () => {
                 const markers = this.scene.getObjectByName('defectMarkers');
                 if (markers) {
@@ -1411,11 +1433,11 @@ async loadSTLModel(url) {
                     toggleBtn.classList.toggle('btn-outline-danger');
                 }
             });
-
+            
             toolsContainer.appendChild(toggleBtn);
         }
     }
-
+    
     enableZipDownload() {
         const downloadBtn = document.getElementById('downloadZipBtn');
         if (downloadBtn) {
@@ -1425,13 +1447,13 @@ async loadSTLModel(url) {
             };
         }
     }
-
+    
     async downloadZipFile() {
         if (!this.currentConversionId) {
             alert('Aucune analyse disponible pour le téléchargement');
             return;
         }
-
+        
         try {
             // Créer un lien de téléchargement
             const link = document.createElement('a');
@@ -1445,7 +1467,7 @@ async loadSTLModel(url) {
             alert('Erreur lors du téléchargement du fichier ZIP');
         }
     }
-
+    
     initializeDFMTabs() {
         // Initialize Bootstrap tabs manually
         const tabElements = document.querySelectorAll('#dfmTabs .nav-link');
@@ -1454,7 +1476,7 @@ async loadSTLModel(url) {
                 new bootstrap.Tab(tabElement);
             }
         });
-
+        
         // Add click event listeners as fallback
         tabElements.forEach(tabElement => {
             tabElement.addEventListener('click', (e) => {
@@ -1465,32 +1487,32 @@ async loadSTLModel(url) {
                     document.querySelectorAll('.tab-pane').forEach(panel => {
                         panel.classList.remove('show', 'active');
                     });
-
+                    
                     // Remove active from all tab buttons
                     document.querySelectorAll('#dfmTabs .nav-link').forEach(btn => {
                         btn.classList.remove('active');
                     });
-
+                    
                     // Show target panel
                     const targetPanel = document.querySelector(targetId);
                     if (targetPanel) {
                         targetPanel.classList.add('show', 'active');
                     }
-
+                    
                     // Activate clicked tab
                     tabElement.classList.add('active');
                 }
             });
         });
-
+        
         console.log('DFM tabs initialized');
     }
-
+    
     generateModernDFMInterface(dfmData) {
         const scoreColor = this.getScoreColor(dfmData.score);
         const ratingText = this.getDFMRatingText(dfmData.rating);
         const ratingBadgeClass = this.getRatingBadgeClass(dfmData.rating);
-
+        
         return `
             <!-- Carte de score principal -->
             <div class="row mb-4">
@@ -1504,7 +1526,7 @@ async loadSTLModel(url) {
                         <p class="text-muted mb-0">${dfmData.issues_count} problème${dfmData.issues_count > 1 ? 's' : ''} détecté${dfmData.issues_count > 1 ? 's' : ''}</p>
                     </div>
                 </div>
-
+                
                 <div class="col-lg-8">
                     <!-- Métriques principales -->
                     <div class="dfm-metrics-row">
@@ -1518,7 +1540,7 @@ async loadSTLModel(url) {
                             <div class="dfm-metric-value">${dfmData.dimensions.x} × ${dfmData.dimensions.y} × ${dfmData.dimensions.z}</div>
                             <div class="dfm-metric-unit">mm</div>
                         </div>
-
+                        
                         <div class="dfm-metric-card">
                             <div class="dfm-metric-header">
                                 <div class="dfm-metric-icon" style="background: linear-gradient(135deg, #20c997, #17a2b8);">
@@ -1529,7 +1551,7 @@ async loadSTLModel(url) {
                             <div class="dfm-metric-value">${this.formatVolume(dfmData.dimensions.volume)}</div>
                             <div class="dfm-metric-unit">cm³</div>
                         </div>
-
+                        
                         <div class="dfm-metric-card">
                             <div class="dfm-metric-header">
                                 <div class="dfm-metric-icon" style="background: linear-gradient(135deg, #fd7e14, #dc3545);">
@@ -1540,7 +1562,7 @@ async loadSTLModel(url) {
                             <div class="dfm-metric-value">${dfmData.dimensions.max_wall_thickness}</div>
                             <div class="dfm-metric-unit">mm</div>
                         </div>
-
+                        
                         <div class="dfm-metric-card">
                             <div class="dfm-metric-header">
                                 <div class="dfm-metric-icon" style="background: linear-gradient(135deg, #ffc107, #fd7e14);">
@@ -1554,7 +1576,7 @@ async loadSTLModel(url) {
                     </div>
                 </div>
             </div>
-
+            
             <!-- Surface projetée -->
             <div class="dfm-metrics-row mb-4">
                 <div class="dfm-metric-card">
@@ -1567,7 +1589,7 @@ async loadSTLModel(url) {
                     <div class="dfm-metric-value">${this.formatArea(dfmData.dimensions.projected_area_x)}</div>
                     <div class="dfm-metric-unit">cm²</div>
                 </div>
-
+                
                 <div class="dfm-metric-card">
                     <div class="dfm-metric-header">
                         <div class="dfm-metric-icon" style="background: linear-gradient(135deg, #28a745, #20c997);">
@@ -1578,7 +1600,7 @@ async loadSTLModel(url) {
                     <div class="dfm-metric-value">${this.formatArea(dfmData.dimensions.projected_area_y)}</div>
                     <div class="dfm-metric-unit">cm²</div>
                 </div>
-
+                
                 <div class="dfm-metric-card">
                     <div class="dfm-metric-header">
                         <div class="dfm-metric-icon" style="background: linear-gradient(135deg, #007bff, #6f42c1);">
@@ -1590,7 +1612,7 @@ async loadSTLModel(url) {
                     <div class="dfm-metric-unit">cm²</div>
                 </div>
             </div>
-
+            
             <!-- Système d'onglets -->
             <div class="dfm-tabs-container mb-4">
                 <ul class="nav nav-tabs dfm-custom-tabs" id="dfmTabs" role="tablist">
@@ -1605,13 +1627,13 @@ async loadSTLModel(url) {
                         </button>
                     </li>
                 </ul>
-
+                
                 <div class="tab-content dfm-tab-content" id="dfmTabsContent">
                     <!-- Onglet Analyse Technique -->
                     <div class="tab-pane fade show active" id="analysis-panel" role="tabpanel">
                         ${this.generateAnalysisTabContent(dfmData)}
                     </div>
-
+                    
                     <!-- Onglet Recommandations Matériaux -->
                     <div class="tab-pane fade" id="materials-panel" role="tabpanel">
                         ${this.generateMaterialsTabContent()}
@@ -1620,18 +1642,18 @@ async loadSTLModel(url) {
             </div>
         `;
     }
-
+    
     generateAnalysisTabContent(dfmData) {
         return `
             ${this.generateIssuesSection(dfmData.wall_thickness_issues, dfmData.geometry_issues)}
             ${this.generateRecommendationsSection(dfmData.recommendations)}
         `;
     }
-
+    
     generateMaterialsTabContent() {
         return this.generateMaterialRecommendationsSection();
     }
-
+    
     generateIssuesSection(wallIssues, geometryIssues) {
         if (wallIssues.length === 0 && geometryIssues.length === 0) {
             return `
@@ -1644,7 +1666,7 @@ async loadSTLModel(url) {
                 </div>
             `;
         }
-
+        
         let issuesHtml = `
             <div class="dfm-issues-section">
                 <div class="dfm-issues-header">
@@ -1652,7 +1674,7 @@ async loadSTLModel(url) {
                     <h5 class="dfm-issues-title">Problèmes détectés</h5>
                 </div>
         `;
-
+        
         // Wall thickness issues
         if (wallIssues.length > 0) {
             issuesHtml += `
@@ -1674,7 +1696,7 @@ async loadSTLModel(url) {
                 `;
             });
         }
-
+        
         // Geometry issues
         if (geometryIssues.length > 0) {
             issuesHtml += `
@@ -1692,24 +1714,24 @@ async loadSTLModel(url) {
                 `;
             });
         }
-
+        
         issuesHtml += `</div>`;
         return issuesHtml;
     }
-
+    
     generateMaterialRecommendationsSection() {
         // Check both class property and global variable
         const materials = this.materialRecommendations || window.materialRecommendations || [];
         console.log('Generating material recommendations section, materials:', materials);
-
+        
         if (!materials || materials.length === 0) {
             console.log('No material recommendations available');
             return '';
         }
-
+        
         // Store for later use
         this.materialRecommendations = materials;
-
+        
         return `
             <div class="dfm-materials-section mb-4">
                 <div class="dfm-issues-header">
@@ -1717,7 +1739,7 @@ async loadSTLModel(url) {
                     <h5 class="dfm-issues-title">Recommandations Matériaux</h5>
                     <span class="badge bg-success ms-2">${materials.length} matériaux suggérés</span>
                 </div>
-
+                
                 <div class="material-recommendations-grid">
                     ${materials.map((material, index) => `
                         <div class="material-recommendation-card">
@@ -1725,27 +1747,27 @@ async loadSTLModel(url) {
                                 <div class="material-rank">#${index + 1}</div>
                                 <div class="material-score">${Math.round(material.score)}%</div>
                             </div>
-
+                            
                             <div class="material-name">${material.name}</div>
                             <div class="material-category">${material.category}</div>
-
+                            
                             <div class="material-description">
                                 ${material.description}
                             </div>
-
+                            
                             <div class="material-cost-level">
                                 <span class="badge ${this.getCostLevelClass(material.cost_level)}">
                                     ${this.getCostLevelText(material.cost_level)}
                                 </span>
                             </div>
-
+                            
                             <div class="material-advantages">
                                 <strong>Avantages:</strong>
                                 <ul>
                                     ${material.advantages.slice(0, 3).map(adv => `<li>${adv}</li>`).join('')}
                                 </ul>
                             </div>
-
+                            
                             ${material.limitations && material.limitations.length > 0 ? `
                                 <div class="material-limitations">
                                     <strong>Limitations:</strong>
@@ -1754,7 +1776,7 @@ async loadSTLModel(url) {
                                     </ul>
                                 </div>
                             ` : ''}
-
+                            
                             <div class="material-processing-notes">
                                 <small class="text-muted">
                                     <i class="bi bi-info-circle me-1"></i>
@@ -1788,7 +1810,7 @@ async loadSTLModel(url) {
 
     generateRecommendationsSection(recommendations) {
         if (recommendations.length === 0) return '';
-
+        
         return `
             <div class="dfm-recommendations">
                 <div class="dfm-issues-header">
@@ -1804,11 +1826,11 @@ async loadSTLModel(url) {
             </div>
         `;
     }
-
+    
     formatVolume(volume) {
         // Convert from mm³ to cm³ (divide by 1000)
         const volumeInCm3 = volume / 1000;
-
+        
         if (volumeInCm3 >= 1000) {
             return (volumeInCm3 / 1000).toFixed(1) + 'K';
         } else if (volumeInCm3 >= 1) {
@@ -1817,11 +1839,11 @@ async loadSTLModel(url) {
             return volumeInCm3.toFixed(2);
         }
     }
-
+    
     formatAreaShort(area) {
         // Convert from mm² to cm² (divide by 100)
         const areaInCm2 = area / 100;
-
+        
         if (areaInCm2 >= 10000) {
             return (areaInCm2 / 10000).toFixed(1) + 'K';
         } else if (areaInCm2 >= 1) {
@@ -1830,7 +1852,7 @@ async loadSTLModel(url) {
             return areaInCm2.toFixed(2);
         }
     }
-
+    
     getSeverityText(severity) {
         const texts = {
             'critical': 'Critique',
@@ -1839,7 +1861,7 @@ async loadSTLModel(url) {
         };
         return texts[severity] || severity;
     }
-
+    
     getIssueTypeText(issueType) {
         const texts = {
             'too_thin': 'trop fine',
@@ -1848,7 +1870,7 @@ async loadSTLModel(url) {
         };
         return texts[issueType] || issueType;
     }
-
+    
     getWallThicknessRecommendation(issueType, thickness) {
         if (issueType === 'too_thin') {
             return `Augmenter l'épaisseur à minimum 0.8mm pour éviter les problèmes de remplissage`;
@@ -1857,7 +1879,7 @@ async loadSTLModel(url) {
         }
         return 'Épaisseur optimale pour l\'injection plastique';
     }
-
+    
     showDemoldingAxisModal() {
         // Show material questionnaire first
         this.showMaterialQuestionnaireModal();
@@ -1871,10 +1893,10 @@ async loadSTLModel(url) {
                 alert('Erreur: Questionnaire matériaux non disponible');
                 return;
             }
-
+            
             const modal = new bootstrap.Modal(modalElement);
             modal.show();
-
+            
             // Setup submit button handler
             const submitBtn = document.getElementById('submitQuestionnaire');
             if (submitBtn) {
@@ -1893,7 +1915,7 @@ async loadSTLModel(url) {
                         showDemoldingAxisIfQuestionnaireFilled(); // doit déjà être définie globalement
 
                     document.getElementById('demoldingAxisSelect')?.classList.remove('d-none');
-                    document.getElementById('submitQuestionnaire')?.classList.remove('d-none');
+                    document.getElementById('startDFMAnalysis')?.classList.remove('d-none');
 
                         // 🔽 3. (optionnel) Scroll vers le viewer
                         document.getElementById('dfmViewerSection')?.scrollIntoView({ behavior: 'smooth' });
@@ -1914,10 +1936,10 @@ async loadSTLModel(url) {
                 alert('Erreur: Interface de sélection non disponible');
                 return;
             }
-
+            
             const modal = new bootstrap.Modal(modalElement);
             modal.show();
-
+            
             // Setup event listeners for this instance
             const axisButtons = modalElement.querySelectorAll('[data-axis]');
             axisButtons.forEach(btn => {
@@ -1939,14 +1961,14 @@ async loadSTLModel(url) {
     async submitMaterialQuestionnaire() {
         const form = document.getElementById('materialQuestionnaireForm');
         const formData = new FormData(form);
-
+        
         // Validate required fields
         const application = formData.get('application');
         if (!application) {
             alert('Veuillez sélectionner un domaine d\'application');
             return;
         }
-
+        
         // Collect form data
         const questionnaireData = {
             application: application,
@@ -1959,15 +1981,15 @@ async loadSTLModel(url) {
             cost: formData.get('cost'),
             lifespan: formData.get('lifespan')
         };
-
+        
         try {
             // Hide material questionnaire modal
             const materialModal = bootstrap.Modal.getInstance(document.getElementById('materialQuestionnaireModal'));
             materialModal.hide();
-
+            
             // Show demolding axis modal
             this.showDemoldingAxisModalWithMaterials(questionnaireData);
-
+            
         } catch (error) {
             console.error('Material questionnaire error:', error);
             alert(`Erreur lors de l'analyse des matériaux: ${error.message}`);
@@ -1982,20 +2004,20 @@ async loadSTLModel(url) {
                 alert('Erreur: Interface de sélection d\'axe non disponible');
                 return;
             }
-
+            
             const modal = new bootstrap.Modal(modalElement);
             modal.show();
-
+            
             // Setup event listeners with material data
             const axisButtons = modalElement.querySelectorAll('[data-axis]');
             axisButtons.forEach(btn => {
                 btn.onclick = async (e) => {
                     const axis = e.currentTarget.getAttribute('data-axis');
                     modal.hide();
-
+                    
                     // Show loading state
                     this.showDFMAnalysisLoading();
-
+                    
                     try {
                         // Get material recommendations first
                         const response = await fetch('/api/material-recommendations', {
@@ -2008,18 +2030,18 @@ async loadSTLModel(url) {
                                 conversion_id: this.currentConversionId
                             })
                         });
-
+                        
                         const result = await response.json();
-
+                        
                         if (!response.ok) {
                             throw new Error(result.error || 'Erreur lors de l\'analyse des matériaux');
                         }
-
+                        
                         // Store material recommendations globally
                         window.materialRecommendations = result.recommendations;
                         this.materialRecommendations = result.recommendations;
                         console.log('Material recommendations stored:', this.materialRecommendations);
-
+                        
                         // Store the first recommended material type
                         if (result.recommendations && result.recommendations.length > 0) {
                             // Extract material type from the name (e.g., "Polypropylène (PP)" -> "PP")
@@ -2031,10 +2053,10 @@ async loadSTLModel(url) {
                                 this.currentMaterialType = 'GENERIC';
                             }
                         }
-
+                        
                         // Now run DFM analysis
                         await viewer.analyzeDFM(axis);
-
+                        
                     } catch (error) {
                         console.error('Material analysis error:', error);
                         this.hideDFMAnalysisLoading();
@@ -2073,7 +2095,7 @@ async loadSTLModel(url) {
             dfmSection.style.display = 'none';
         }
     }
-
+    
     setupDemoldingAxisModal() {
         // Setup axis selection buttons
         document.addEventListener('DOMContentLoaded', () => {
@@ -2081,7 +2103,7 @@ async loadSTLModel(url) {
             axisButtons.forEach(btn => {
                 btn.addEventListener('click', (e) => {
                     const axis = e.currentTarget.getAttribute('data-axis');
-
+                    
                     // Close modal first
                     const modalElement = document.getElementById('demolding-axis-modal');
                     if (modalElement) {
@@ -2090,23 +2112,23 @@ async loadSTLModel(url) {
                             modal.hide();
                         }
                     }
-
+                    
                     // Start DFM analysis without creating cross-section
                     viewer.analyzeDFM(axis);
                 });
             });
         });
     }
-
-
-
+    
+    
+    
     showChangeDemoldingAxisButton() {
         const btn = document.getElementById('changeDemoldingAxisBtn');
         if (btn) {
             btn.style.display = 'inline-block';
         }
     }
-
+    
     enablePDFGeneration() {
         const generatePdfBtn = document.getElementById('generatePdfBtn');
         if (generatePdfBtn) {
@@ -2115,14 +2137,14 @@ async loadSTLModel(url) {
             generatePdfBtn.innerHTML = '<i class="bi bi-file-earmark-pdf me-2"></i>Générer rapport PDF';
         }
     }
-
+    
     getScoreColor(score) {
         if (score >= 8) return '#28a745';
         if (score >= 6) return '#17a2b8';
         if (score >= 4) return '#ffc107';
         return '#dc3545';
     }
-
+    
     getDFMRatingText(rating) {
         switch(rating) {
             case 'excellent': return 'Excellent';
@@ -2132,7 +2154,7 @@ async loadSTLModel(url) {
             default: return 'Inconnu';
         }
     }
-
+    
     getRatingBadgeClass(rating) {
         switch(rating) {
             case 'excellent': return 'badge bg-success';
@@ -2142,7 +2164,7 @@ async loadSTLModel(url) {
             default: return 'badge bg-secondary';
         }
     }
-
+    
     getSeverityClass(severity) {
         switch(severity.toLowerCase()) {
             case 'critical': return 'dfm-problem-critical';
@@ -2157,7 +2179,7 @@ async loadSTLModel(url) {
             changeDemoldingAxisBtn.style.display = 'inline-block';
         }
     }
-
+    
     enablePDFGeneration() {
         const generatePdfBtn = document.getElementById('generatePdfBtn');
         if (generatePdfBtn) {
@@ -2166,21 +2188,21 @@ async loadSTLModel(url) {
             generatePdfBtn.innerHTML = '<i class="bi bi-file-earmark-pdf me-2"></i>Générer rapport PDF';
         }
     }
-
+    
     async generatePDFReport() {
         if (!this.currentConversionId) {
             alert('Aucune analyse DFM disponible pour la génération du rapport');
             return;
         }
-
+        
         const pdfBtn = document.getElementById('generatePdfBtn');
         const originalText = pdfBtn.innerHTML;
-
+        
         try {
             // Show loading state
             pdfBtn.innerHTML = '<i class="bi bi-file-earmark-pdf me-2"></i>Génération en cours...';
             pdfBtn.disabled = true;
-
+            
             const response = await fetch(`/api/generate-pdf/${this.currentConversionId}`, {
                 method: 'POST',
                 headers: {
@@ -2191,23 +2213,23 @@ async loadSTLModel(url) {
                     material_type: this.currentMaterialType || 'GENERIC'
                 })
             });
-
+            
             if (!response.ok) {
                 // Try to parse JSON, but handle cases where HTML is returned
                 let errorMessage = 'Erreur lors de la génération du PDF';
                 try {
                     const result = await response.json();
                     errorMessage = result.error || errorMessage;
-                } catch (error) {
+                } catch (e) {
                     // If JSON parsing fails, it's probably an HTML error page
                     console.error('Failed to parse error response as JSON:', e);
                     errorMessage = `Erreur serveur (${response.status}): Veuillez réessayer`;
                 }
                 throw new Error(errorMessage);
             }
-
+            
             const result = await response.json();
-
+            
             if (result.success && result.pdf_filename) {
                 // Automatically download the PDF
                 const downloadLink = document.createElement('a');
@@ -2216,11 +2238,11 @@ async loadSTLModel(url) {
                 document.body.appendChild(downloadLink);
                 downloadLink.click();
                 document.body.removeChild(downloadLink);
-
+                
                 // Show success message
                 this.showPDFSuccess(result.message);
             }
-
+            
         } catch (error) {
             console.error('PDF Generation error:', error);
             alert(`Erreur lors de la génération du PDF: ${error.message}`);
@@ -2230,7 +2252,7 @@ async loadSTLModel(url) {
             pdfBtn.disabled = false;
         }
     }
-
+    
     showPDFSuccess(message) {
         // Create success notification
         const notification = document.createElement('div');
@@ -2241,9 +2263,9 @@ async loadSTLModel(url) {
             ${message}
             <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
         `;
-
+        
         document.body.appendChild(notification);
-
+        
         // Auto-remove after 5 seconds
         setTimeout(() => {
             if (notification.parentNode) {
@@ -2260,7 +2282,7 @@ async loadSTLModel(url) {
             default: return 'bg-secondary text-white';
         }
     }
-
+    
     getWallThicknessDescription(issue) {
         const thickness = issue.thickness.toFixed(2);
         switch(issue.issue_type) {
@@ -2279,14 +2301,14 @@ async loadSTLModel(url) {
             default: return 'alert-secondary';
         }
     }
-
+    
     getScoreColor(score) {
         if (score >= 8) return '#28a745';
         if (score >= 6) return '#17a2b8';
         if (score >= 4) return '#ffc107';
         return '#dc3545';
     }
-
+    
     getProjectedArea(dimensions) {
         // Calcule la surface projetée selon l'axe de démoulage sélectionné
         const axis = this.selectedDemoldingAxis || 'z';
@@ -2301,11 +2323,11 @@ async loadSTLModel(url) {
                 return dimensions.projected_area_z || 0;
         }
     }
-
+    
     formatArea(area) {
         // Convert from mm² to cm² (divide by 100)
         const areaInCm2 = area / 100;
-
+        
         // Format the area in cm²
         if (areaInCm2 < 1) {
             return `${areaInCm2.toFixed(2)} cm²`;
@@ -2315,14 +2337,14 @@ async loadSTLModel(url) {
             return `${areaInCm2.toFixed(0)} cm²`;
         }
     }
-
+    
     getProgressBarClass(score) {
         if (score >= 8) return 'bg-success';
         if (score >= 6) return 'bg-info';
         if (score >= 4) return 'bg-warning';
         return 'bg-danger';
     }
-
+    
     getDFMRatingText(rating) {
         switch(rating) {
             case 'excellent': return 'Excellent';
@@ -2342,7 +2364,7 @@ async loadSTLModel(url) {
             default: return 'bg-secondary';
         }
     }
-
+    
     setupSurfaceCalculationListeners() {
         // Surface calculation dropdown items
         const surfaceDropdown = document.querySelectorAll('[data-surface-axis]');
@@ -2354,7 +2376,7 @@ async loadSTLModel(url) {
             });
         });
     }
-
+    
     createAxesLabels() {
         // Create text labels for X, Y, Z axes
         const labels = ['X', 'Y', 'Z'];
@@ -2364,39 +2386,39 @@ async loadSTLModel(url) {
             new THREE.Vector3(0, 60, 0),  // Y axis  
             new THREE.Vector3(0, 0, 60)   // Z axis
         ];
-
+        
         labels.forEach((label, index) => {
             // Create canvas for text
             const canvas = document.createElement('canvas');
             const context = canvas.getContext('2d');
             canvas.width = 64;
             canvas.height = 64;
-
+            
             // Draw text
             context.font = 'Bold 32px Arial';
             context.fillStyle = `#${colors[index].toString(16).padStart(6, '0')}`;
             context.textAlign = 'center';
             context.textBaseline = 'middle';
             context.fillText(label, 32, 32);
-
+            
             // Create texture and material
             const texture = new THREE.CanvasTexture(canvas);
             const material = new THREE.SpriteMaterial({ map: texture });
-
+            
             // Create sprite
             const sprite = new THREE.Sprite(material);
             sprite.position.copy(positions[index]);
             sprite.scale.set(10, 10, 1);
-
+            
             this.axesLabels.push(sprite);
             this.scene.add(sprite);
         });
     }
-
+    
     toggleMeasurementMode() {
         this.measurementMode = !this.measurementMode;
         const btn = document.getElementById('measureBtn');
-
+        
         if (this.measurementMode) {
             btn.classList.remove('btn-outline-primary');
             btn.classList.add('btn-primary');
@@ -2411,26 +2433,26 @@ async loadSTLModel(url) {
             this.hideMeasurementInstructions();
         }
     }
-
+    
     activateCrossSectionMode(axis) {
         // Turn off measurement mode
         this.measurementMode = false;
         this.updateMeasurementButton();
-
+        
         // Activate cross-section mode
         this.crossSectionMode = true;
         this.currentCrossSectionAxis = axis;
         this.updateCrossSectionButton();
-
+        
         this.createCrossSectionPlane(axis);
         this.showCrossSectionInstructions(axis);
     }
-
+    
     toggleCrossSectionMode() {
         console.log('Toggling cross-section mode, current state:', this.crossSectionMode);
-
+        
         this.crossSectionMode = !this.crossSectionMode;
-
+        
         if (this.crossSectionMode) {
             console.log('Activating cross-section mode');
             this.measurementMode = false;
@@ -2442,22 +2464,22 @@ async loadSTLModel(url) {
             this.removeSimpleCrossSectionPlane();
             this.hideInstructions();
         }
-
+        
         this.updateCrossSectionButton();
     }
-
+    
     updateMeasurementButton() {
         const btn = document.getElementById('measureBtn');
         btn.classList.remove('btn-primary');
         btn.classList.add('btn-outline-primary');
         btn.innerHTML = '<i class="bi bi-rulers me-1"></i>Mesurer';
     }
-
+    
     updateCrossSectionButton() {
         const btn = document.getElementById('crossSectionBtn');
         const axisSelect = document.getElementById('crossSectionAxisSelect');
         if (!btn) return;
-
+        
         if (this.crossSectionMode) {
             const axisName = this.crossSectionAxis ? this.crossSectionAxis.toUpperCase() : 'Z';
             btn.classList.remove('btn-outline-secondary');
@@ -2465,7 +2487,7 @@ async loadSTLModel(url) {
             btn.style.fontWeight = 'bold';
             btn.innerHTML = `<i class="bi bi-stop-circle me-1"></i>Arrêter coupe (${axisName})`;
             btn.title = 'Mode coupe actif - Utilisez ↑↓ pour déplacer, menu pour changer d\'axe, Espace pour masquer le plan, Échap pour désactiver';
-
+            
             // Afficher le menu déroulant
             if (axisSelect) {
                 axisSelect.classList.remove('d-none');
@@ -2477,73 +2499,73 @@ async loadSTLModel(url) {
             btn.style.fontWeight = 'normal';
             btn.innerHTML = '<i class="bi bi-scissors me-1"></i>Coupe 3D';
             btn.title = 'Activer la coupe transversale pour voir l\'intérieur de la pièce';
-
+            
             // Masquer le menu déroulant
             if (axisSelect) {
                 axisSelect.classList.add('d-none');
             }
         }
     }
-
+    
     onMouseClick(event) {
         if (!this.measurementMode || !this.currentMesh) return;
-
+        
         event.preventDefault();
-
+        
         const rect = this.renderer.domElement.getBoundingClientRect();
         const mouse = new THREE.Vector2();
         mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
         mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-
+        
         const raycaster = new THREE.Raycaster();
         raycaster.setFromCamera(mouse, this.camera);
-
+        
         // Increase precision by setting raycaster parameters
         raycaster.params.Points.threshold = 0.1;
         raycaster.params.Line.threshold = 0.1;
-
+        
         const intersects = raycaster.intersectObject(this.currentMesh);
-
+        
         if (intersects.length > 0) {
             // Use the closest intersection point for better precision
             const point = intersects[0].point.clone();
-
+            
             // Snap to nearest vertex for even better precision
             const snappedPoint = this.snapToNearestVertex(point, intersects[0].object.geometry);
             this.addMeasurementPoint(snappedPoint || point);
         }
     }
-
+    
     snapToNearestVertex(point, geometry) {
         const position = geometry.attributes.position;
         let minDistance = Infinity;
         let closestVertex = null;
         const snapThreshold = 1.0; // Adjust this value for snap sensitivity
-
+        
         for (let i = 0; i < position.count; i++) {
             const vertex = new THREE.Vector3(
                 position.getX(i),
                 position.getY(i),
                 position.getZ(i)
             );
-
+            
             const distance = point.distanceTo(vertex);
             if (distance < minDistance && distance < snapThreshold) {
                 minDistance = distance;
                 closestVertex = vertex;
             }
         }
-
+        
         return closestVertex;
     }
-
+    
     addMeasurementPoint(point) {
         // Calculate appropriate point size based on model scale
         const box = new THREE.Box3().setFromObject(this.currentMesh);
         const size = box.getSize(new THREE.Vector3());
         const maxDim = Math.max(size.x, size.y, size.z);
         const pointSize = maxDim * 0.005; // Much smaller relative size
-
+        
         // Create point marker
         const pointGeometry = new THREE.SphereGeometry(pointSize, 12, 8);
         const pointMaterial = new THREE.MeshBasicMaterial({ 
@@ -2553,22 +2575,22 @@ async loadSTLModel(url) {
         });
         const pointMesh = new THREE.Mesh(pointGeometry, pointMaterial);
         pointMesh.position.copy(point);
-
+        
         this.scene.add(pointMesh);
         this.measurementPoints.push({ point: point, mesh: pointMesh });
-
+        
         // If we have two points, create measurement line
         if (this.measurementPoints.length === 2) {
             this.createMeasurementLine();
             this.measurementPoints = []; // Reset for next measurement
         }
     }
-
+    
     createMeasurementLine() {
         const point1 = this.measurementPoints[0].point;
         const point2 = this.measurementPoints[1].point;
         const distance = point1.distanceTo(point2);
-
+        
         // Create line geometry with better styling
         const lineGeometry = new THREE.BufferGeometry().setFromPoints([point1, point2]);
         const lineMaterial = new THREE.LineBasicMaterial({ 
@@ -2578,49 +2600,49 @@ async loadSTLModel(url) {
             opacity: 0.9
         });
         const line = new THREE.Line(lineGeometry, lineMaterial);
-
+        
         this.scene.add(line);
-
+        
         // Create distance label
         const midPoint = new THREE.Vector3().addVectors(point1, point2).multiplyScalar(0.5);
         const label = this.createDistanceLabel(distance, midPoint);
-
+        
         this.measurementLines.push({ line: line, label: label, distance: distance });
-
+        
         // Update measurements display
         this.updateMeasurementsDisplay();
     }
-
+    
     createDistanceLabel(distance, position) {
         // Always display in mm as requested
         const displayText = `${distance.toFixed(1)} mm`;
-
+        
         // Create canvas for distance text with high contrast styling
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
         canvas.width = 300;
         canvas.height = 80;
-
+        
         // Clear canvas
         context.clearRect(0, 0, canvas.width, canvas.height);
-
+        
         // Draw bright yellow background for maximum visibility
         context.fillStyle = 'rgba(255, 255, 0, 0.95)';
         context.fillRect(0, 0, canvas.width, canvas.height);
-
+        
         // Draw thick black border
         context.strokeStyle = 'black';
         context.lineWidth = 4;
         context.strokeRect(0, 0, canvas.width, canvas.height);
-
+        
         // Draw text with maximum contrast
         context.font = 'Bold 28px Arial';
         context.fillStyle = 'black';
         context.textAlign = 'center';
         context.textBaseline = 'middle';
         context.fillText(displayText, canvas.width / 2, canvas.height / 2);
-
-
+        
+        
         // Create sprite with maximum visibility settings
         const texture = new THREE.CanvasTexture(canvas);
         const material = new THREE.SpriteMaterial({ 
@@ -2630,39 +2652,39 @@ async loadSTLModel(url) {
             depthWrite: false    // Don't write to depth buffer
         });
         const sprite = new THREE.Sprite(material);
-
+        
         // Position label above the measurement line for better visibility
         const cameraDirection = new THREE.Vector3();
         this.camera.getWorldDirection(cameraDirection);
-
+        
         // Calculate appropriate scale based on distance to camera
         const distanceToCamera = position.distanceTo(this.camera.position);
         const scale = Math.max(distanceToCamera * 0.1, 2);
-
+        
         sprite.position.copy(position);
         // Offset label towards camera for better visibility
         sprite.position.add(cameraDirection.multiplyScalar(-scale * 0.5));
         sprite.scale.set(scale, scale * 0.4, 1);
-
+        
         // Set high render order to ensure it's always in front
         sprite.renderOrder = 1000;
-
+        
         this.scene.add(sprite);
         this.measurementLabels.push(sprite);
-
+        
         return sprite;
     }
-
+    
     createCrossSectionPlane(axis = 'z') {
         if (!this.currentMesh) return;
-
+        
         // Remove existing plane if any
         this.removeCrossSectionPlane();
-
+        
         // Define plane normal based on axis
         let normal;
         let rotation = new THREE.Euler(0, 0, 0);
-
+        
         switch(axis) {
             case 'x':
                 normal = new THREE.Vector3(1, 0, 0);
@@ -2678,26 +2700,26 @@ async loadSTLModel(url) {
                 rotation.set(0, 0, 0);
                 break;
         }
-
+        
         // Create clipping plane
         const plane = new THREE.Plane(normal, 0);
         this.clippingPlanes = [plane];
         this.currentCrossSectionAxis = axis;
-
+        
         // Update material to use clipping planes
         if (this.currentMesh.material) {
             this.currentMesh.material.clippingPlanes = this.clippingPlanes;
             this.currentMesh.material.needsUpdate = true;
         }
-
+        
         // Enable local clipping
         this.renderer.localClippingEnabled = true;
-
+        
         // Create visual representation of the plane with better styling
         const box = new THREE.Box3().setFromObject(this.currentMesh);
         const size = box.getSize(new THREE.Vector3());
         const maxDim = Math.max(size.x, size.y, size.z);
-
+        
         const planeGeometry = new THREE.PlaneGeometry(maxDim * 1.5, maxDim * 1.5);
         const planeMaterial = new THREE.MeshBasicMaterial({ 
             color: 0x00ff88, 
@@ -2706,7 +2728,7 @@ async loadSTLModel(url) {
             side: THREE.DoubleSide,
             wireframe: false
         });
-
+        
         // Add a wireframe outline for better visibility when transparent
         const wireframeGeometry = new THREE.EdgesGeometry(planeGeometry);
         const wireframeMaterial = new THREE.LineBasicMaterial({ 
@@ -2715,31 +2737,31 @@ async loadSTLModel(url) {
             opacity: 0.6
         });
         this.crossSectionWireframe = new THREE.LineSegments(wireframeGeometry, wireframeMaterial);
-
+        
         this.crossSectionPlane = new THREE.Mesh(planeGeometry, planeMaterial);
         this.crossSectionPlane.position.copy(box.getCenter(new THREE.Vector3()));
         this.crossSectionPlane.rotation.copy(rotation);
         this.crossSectionPlane.visible = this.showCrossSectionPlane;
         this.scene.add(this.crossSectionPlane);
-
+        
         // Add wireframe outline
         this.crossSectionWireframe.position.copy(this.crossSectionPlane.position);
         this.crossSectionWireframe.rotation.copy(this.crossSectionPlane.rotation);
         this.crossSectionWireframe.visible = this.showCrossSectionPlane;
         this.scene.add(this.crossSectionWireframe);
-
+        
         // Add plane controls
         this.addCrossSectionControls();
     }
-
+    
     addCrossSectionControls() {
         // Add keyboard controls for moving the plane
         const handleKeyDown = (event) => {
             if (!this.crossSectionMode || !this.crossSectionPlane) return;
-
+            
             const moveStep = 1;
             const axis = this.currentCrossSectionAxis || 'z';
-
+            
             switch(event.key) {
                 case 'ArrowUp':
                     if (axis === 'x') {
@@ -2788,41 +2810,41 @@ async loadSTLModel(url) {
                     this.toggleCrossSectionPlaneVisibility();
                     break;
             }
-
+            
             if (this.currentMesh.material) {
                 this.currentMesh.material.needsUpdate = true;
             }
         };
-
+        
         document.addEventListener('keydown', handleKeyDown);
         this.crossSectionKeyHandler = handleKeyDown;
     }
-
+    
     removeCrossSectionPlane() {
         if (this.crossSectionPlane) {
             this.scene.remove(this.crossSectionPlane);
             this.crossSectionPlane = null;
         }
-
+        
         if (this.crossSectionWireframe) {
             this.scene.remove(this.crossSectionWireframe);
             this.crossSectionWireframe = null;
         }
-
+        
         if (this.currentMesh && this.currentMesh.material) {
             this.currentMesh.material.clippingPlanes = [];
             this.currentMesh.material.needsUpdate = true;
         }
-
+        
         this.renderer.localClippingEnabled = false;
         this.clippingPlanes = [];
-
+        
         if (this.crossSectionKeyHandler) {
             document.removeEventListener('keydown', this.crossSectionKeyHandler);
             this.crossSectionKeyHandler = null;
         }
     }
-
+    
     clearMeasurements() {
         // Remove measurement points (including pending points)
         this.measurementPoints.forEach(point => {
@@ -2833,7 +2855,7 @@ async loadSTLModel(url) {
             }
         });
         this.measurementPoints = [];
-
+        
         // Remove measurement lines and labels
         this.measurementLines.forEach(measurement => {
             if (measurement.line) {
@@ -2848,13 +2870,13 @@ async loadSTLModel(url) {
             }
         });
         this.measurementLines = [];
-
+        
         // Update display
         this.updateMeasurementsDisplay();
-
+        
         console.log('Measurements cleared');
     }
-
+    
     updateMeasurementsDisplay() {
         let display = document.getElementById('measurementsDisplay');
         if (!display) {
@@ -2862,11 +2884,11 @@ async loadSTLModel(url) {
             display.id = 'measurementsDisplay';
             display.className = 'alert alert-secondary mt-2';
             display.style.display = 'none';
-
+            
             const viewerSection = document.querySelector('.card .card-body');
             viewerSection.appendChild(display);
         }
-
+        
         if (this.measurementLines.length > 0) {
             let html = '<i class="bi bi-rulers me-2"></i><strong>Mesures :</strong><br>';
             this.measurementLines.forEach((measurement, index) => {
@@ -2878,62 +2900,62 @@ async loadSTLModel(url) {
             display.style.display = 'none';
         }
     }
-
+    
     showMeasurementInstructions() {
         this.showInstructions('Cliquez sur deux points de la pièce pour mesurer la distance');
     }
-
+    
     toggleCrossSectionPlaneVisibility() {
         if (this.crossSectionPlane) {
             this.showCrossSectionPlane = !this.showCrossSectionPlane;
             this.crossSectionPlane.visible = this.showCrossSectionPlane;
-
+            
             if (this.crossSectionWireframe) {
                 this.crossSectionWireframe.visible = this.showCrossSectionPlane;
             }
-
+            
             // Update instructions
             const axis = this.currentCrossSectionAxis || 'z';
             this.showCrossSectionInstructions(axis);
         }
     }
-
+    
     showCrossSectionInstructions(axis) {
         const axisName = axis === 'x' ? 'X (YZ)' : axis === 'y' ? 'Y (XZ)' : 'Z (XY)';
         const visibilityText = this.showCrossSectionPlane ? 'ESPACE pour masquer le plan' : 'ESPACE pour afficher le plan';
         this.showInstructions(`Plan de coupe ${axisName} actif. Flèches ↑↓ pour déplacer, ${visibilityText}`);
     }
-
+    
     hideMeasurementInstructions() {
         this.hideInstructions();
     }
-
+    
     hideCrossSectionInstructions() {
         this.hideInstructions();
     }
-
+    
     // Nouvelle implémentation simplifiée de la coupe transversale
     createSimpleCrossSectionPlane(axis = 'z') {
         if (!this.currentMesh) {
             console.error('No mesh available for cross-section');
             return;
         }
-
+        
         console.log('Creating simple cross-section plane on axis:', axis);
-
+        
         // Nettoyer les anciens plans
         this.removeSimpleCrossSectionPlane();
-
+        
         // Sauvegarder l'axe actuel
         this.crossSectionAxis = axis || 'z';
-
+        
         // Obtenir les dimensions de la pièce
         const box = new THREE.Box3().setFromObject(this.currentMesh);
         const center = box.getCenter(new THREE.Vector3());
         const size = box.getSize(new THREE.Vector3());
-
+        
         console.log('Mesh center:', center, 'Size:', size);
-
+        
         // Créer le plan de coupe selon l'axe choisi
         let normal, planeWidth, planeHeight;
         switch(this.crossSectionAxis) {
@@ -2954,24 +2976,24 @@ async loadSTLModel(url) {
                 planeHeight = size.y * 1.2;
                 break;
         }
-
+        
         const plane = new THREE.Plane(normal, 0);
-
+        
         // Stocker le plan de coupe
         this.clippingPlanes = [plane];
         this.crossSectionPosition = 0;
-
+        
         // Activer le clipping sur le matériau du mesh
         if (this.currentMesh.material) {
             this.currentMesh.material.clippingPlanes = this.clippingPlanes;
             this.currentMesh.material.needsUpdate = true;
             console.log('Clipping planes applied to material');
         }
-
+        
         // Activer le clipping local dans le renderer
         this.renderer.localClippingEnabled = true;
         console.log('Local clipping enabled');
-
+        
         // Créer une représentation visuelle du plan
         const planeGeometry = new THREE.PlaneGeometry(planeWidth, planeHeight);
         const planeMaterial = new THREE.MeshBasicMaterial({
@@ -2980,9 +3002,9 @@ async loadSTLModel(url) {
             opacity: 0.3,
             side: THREE.DoubleSide
         });
-
+        
         this.crossSectionPlane = new THREE.Mesh(planeGeometry, planeMaterial);
-
+        
         // Orienter le plan selon l'axe
         switch(this.crossSectionAxis) {
             case 'x':
@@ -3000,27 +3022,27 @@ async loadSTLModel(url) {
                 this.crossSectionPlane.position.z = center.z + this.crossSectionPosition;
                 break;
         }
-
+        
         this.scene.add(this.crossSectionPlane);
         console.log('Visual plane added to scene');
-
+        
         // Ajouter les contrôles clavier simplifiés
         this.addSimpleCrossSectionControls();
     }
-
+    
     addSimpleCrossSectionControls() {
         console.log('Adding simple cross-section controls');
-
+        
         // Supprimer les anciens gestionnaires d'événements
         if (this.crossSectionKeyHandler) {
             document.removeEventListener('keydown', this.crossSectionKeyHandler);
         }
-
+        
         this.crossSectionKeyHandler = (event) => {
             if (!this.crossSectionMode || !this.crossSectionPlane) return;
-
+            
             const moveStep = 0.5; // Pas de déplacement plus fin
-
+            
             switch(event.key.toLowerCase()) {
                 case 'arrowup':
                     event.preventDefault();
@@ -3041,20 +3063,20 @@ async loadSTLModel(url) {
                     break;
             }
         };
-
+        
         document.addEventListener('keydown', this.crossSectionKeyHandler);
         console.log('Keyboard controls attached');
     }
-
+    
     moveCrossSectionPlane(step) {
         if (!this.crossSectionPlane || !this.clippingPlanes[0]) return;
-
+        
         this.crossSectionPosition += step;
-
+        
         // Mettre à jour la position du plan visuel selon l'axe
         const box = new THREE.Box3().setFromObject(this.currentMesh);
         const center = box.getCenter(new THREE.Vector3());
-
+        
         switch(this.crossSectionAxis) {
             case 'x':
                 this.crossSectionPlane.position.x = center.x + this.crossSectionPosition;
@@ -3066,21 +3088,21 @@ async loadSTLModel(url) {
                 this.crossSectionPlane.position.z = center.z + this.crossSectionPosition;
                 break;
         }
-
+        
         // Mettre à jour le plan de coupe
         this.clippingPlanes[0].constant = -this.crossSectionPosition;
-
+        
         // Forcer la mise à jour du matériau
         if (this.currentMesh.material) {
             this.currentMesh.material.needsUpdate = true;
         }
-
+        
         console.log('Cross-section moved to position:', this.crossSectionPosition, 'on axis:', this.crossSectionAxis);
     }
-
+    
     removeSimpleCrossSectionPlane() {
         console.log('Removing simple cross-section plane');
-
+        
         // Supprimer le plan visuel
         if (this.crossSectionPlane) {
             this.scene.remove(this.crossSectionPlane);
@@ -3092,27 +3114,27 @@ async loadSTLModel(url) {
             }
             this.crossSectionPlane = null;
         }
-
+        
         // Désactiver le clipping
         if (this.currentMesh && this.currentMesh.material) {
             this.currentMesh.material.clippingPlanes = [];
             this.currentMesh.material.needsUpdate = true;
         }
-
+        
         if (this.renderer) {
             this.renderer.localClippingEnabled = false;
         }
         this.clippingPlanes = [];
-
+        
         // Supprimer les gestionnaires d'événements
         if (this.crossSectionKeyHandler) {
             document.removeEventListener('keydown', this.crossSectionKeyHandler);
             this.crossSectionKeyHandler = null;
         }
-
+        
         console.log('Cross-section cleanup completed');
     }
-
+    
     showSimpleCrossSectionInstructions() {
         const axisName = this.crossSectionAxis ? this.crossSectionAxis.toUpperCase() : 'Z';
         const instructionText = `
@@ -3124,65 +3146,65 @@ async loadSTLModel(url) {
         `;
         this.showInstructions(instructionText);
     }
-
+    
     toggleCrossSectionPlaneVisibility() {
         if (this.crossSectionPlane) {
             this.crossSectionPlane.visible = !this.crossSectionPlane.visible;
             console.log('Cross-section plane visibility:', this.crossSectionPlane.visible);
         }
     }
-
+    
     showInstructions(text) {
         let instructions = document.getElementById('toolInstructions');
         if (!instructions) {
             instructions = document.createElement('div');
             instructions.id = 'toolInstructions';
             instructions.className = 'alert alert-primary mt-2';
-
+            
             const viewerSection = document.querySelector('.card .card-body');
             viewerSection.appendChild(instructions);
         }
-
+        
         instructions.innerHTML = `<i class="bi bi-info-circle me-2"></i>${text}`;
         this.safeSetStyle('toolInstructions', 'display', 'block');
     }
-
+    
     hideInstructions() {
         this.safeSetDisplay('toolInstructions', 'none');
     }
-
+    
     onWindowResize() {
         const container = this.safeGetElement('viewer3d');
-
+        
         if (!container || !this.camera || !this.renderer) {
             return;
         }
-
+        
         this.camera.aspect = container.clientWidth / container.clientHeight;
         this.camera.updateProjectionMatrix();
-
+        
         this.renderer.setSize(container.clientWidth, container.clientHeight);
     }
+    
 
-
-
+    
     async loadConversionHistory() {
         const historyLoading = this.safeGetElement('historyLoading');
         const historyTableBody = this.safeGetElement('historyTableBody');
-
+        
         if (!historyLoading || !historyTableBody) {
             return;
         }
-
+        
         try {
             this.safeSetDisplay('historyLoading', 'block');
-
+            
             const response = await fetch('/api/conversions?per_page=20');
             const data = await response.json();
-
+            
             if (data.conversions && data.conversions.length > 0) {
                 historyTableBody.innerHTML = '';
-
+                
                 data.conversions.forEach(conversion => {
                     const row = this.createHistoryRow(conversion);
                     historyTableBody.appendChild(row);
@@ -3209,10 +3231,10 @@ async loadSTLModel(url) {
             this.safeSetDisplay('historyLoading', 'none');
         }
     }
-
+    
     createHistoryRow(conversion) {
         const row = document.createElement('tr');
-
+        
         // Status badge with DFM score
         let statusBadge = '';
         if (conversion.status === 'completed') {
@@ -3227,16 +3249,16 @@ async loadSTLModel(url) {
         } else {
             statusBadge = '<span class="badge bg-warning">En cours</span>';
         }
-
+        
         // File sizes
         const stepSize = this.formatFileSize(conversion.step_file_size);
         const stlSize = conversion.stl_file_size ? this.formatFileSize(conversion.stl_file_size) : 'N/A';
         const sizeText = `${stepSize} → ${stlSize}`;
-
+        
         // Date formatting
         const date = new Date(conversion.created_at);
         const dateText = date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
-
+        
         // Actions
         let actions = '';
         if (conversion.status === 'completed') {
@@ -3252,7 +3274,7 @@ async loadSTLModel(url) {
                 </button>
             `;
         }
-
+        
         row.innerHTML = `
             <td>
                 <div class="fw-medium">${conversion.original_filename}</div>
@@ -3266,14 +3288,14 @@ async loadSTLModel(url) {
             </td>
             <td>${actions}</td>
         `;
-
+        
         return row;
     }
-
+    
     loadSTLFromHistory(stlFilename) {
         this.loadSTLModel(`/view/${stlFilename}`);
         document.getElementById('viewerControls').style.display = 'block';
-
+        
         // Scroll to viewer
         document.getElementById('viewer3d').scrollIntoView({ behavior: 'smooth' });
     }
@@ -3321,21 +3343,21 @@ async loadSTLModel(url) {
             <div class="insight-tooltip text-start" style="max-width: 350px;">
                 <h6 class="text-warning mb-2"><i class="bi bi-lightbulb-fill me-1"></i>${insight.title}</h6>
                 <p class="mb-2 small">${insight.description}</p>
-
+                
                 <div class="mb-2">
                     <strong class="small text-info">Causes fréquentes:</strong>
                     <ul class="small mb-1 ms-3">
                         ${insight.causes.map(cause => `<li>${cause}</li>`).join('')}
                     </ul>
                 </div>
-
+                
                 <div class="mb-2">
                     <strong class="small text-success">Solutions:</strong>
                     <ul class="small mb-1 ms-3">
                         ${insight.solutions.map(solution => `<li>${solution}</li>`).join('')}
                     </ul>
                 </div>
-
+                
                 <div class="alert alert-warning alert-sm mb-0 p-2">
                     <small><strong>Impact:</strong> ${insight.impact}</small>
                 </div>
@@ -3408,14 +3430,14 @@ async loadSTLModel(url) {
             <div class="insight-tooltip text-start" style="max-width: 350px;">
                 <h6 class="text-warning mb-2"><i class="bi bi-gear-fill me-1"></i>${insight.title}</h6>
                 <p class="mb-2 small">${insight.description}</p>
-
+                
                 <div class="mb-2">
                     <strong class="small text-success">Solutions recommandées:</strong>
                     <ul class="small mb-1 ms-3">
                         ${insight.solutions.map(solution => `<li>${solution}</li>`).join('')}
                     </ul>
                 </div>
-
+                
                 <div class="alert alert-warning alert-sm mb-0 p-2">
                     <small><strong>Impact:</strong> ${insight.impact}</small>
                 </div>
@@ -3524,7 +3546,7 @@ function updateSelections() {
     currentSelections.temperature = tempEl ? tempEl.value : 'ambient';
     currentSelections.application = appEl ? appEl.value : '';
 }
-
+    
 
 // ✅ Active/désactive les options
 function toggleOption(elementId, disable, reason = '') {
@@ -3682,198 +3704,6 @@ function resetForm() {
     document.querySelectorAll('.warning-message').forEach(w => w.style.display = 'none');
     document.getElementById('compatibilityInfo').style.display = 'none';
 }
-// ✅ BLOC 1 : Fonctions principales (AJOUTER EN PREMIER)
-window.viewer = window.viewer || {};
-
-window.viewer.analyzeDFM = function(selectedAxis) {
-  console.log('🎯 Analyse DFM démarrée pour axe:', selectedAxis);
-
-  const analyzeBtn = document.getElementById('dfmAnalyzeBtn');
-  if (analyzeBtn) {
-    analyzeBtn.innerHTML = '<i class="bi bi-hourglass-split me-2"></i>Analyse en cours...';
-    analyzeBtn.disabled = true;
-  }
-
-  setTimeout(() => {
-    const results = {
-      score: 72,
-      potentialScore: 85,
-      axis: selectedAxis,
-      issues: {
-        thickness: [
-          {
-            zone: 'Zone_A',
-            description: 'Épaisseur trop fine détectée',
-            currentThickness: 0.8,
-            recommendedThickness: 1.2,
-            severity: 'critical'
-          }
-        ],
-        undercuts: [
-          {
-            zone: 'Zone_C',
-            description: 'Contre-dépouille nécessitant un tiroir',
-            impact: 'Coût élevé',
-            complexity: 'Haute',
-            severity: 'critical'
-          }
-        ],
-        draft: [
-          {
-            zone: 'Zone_D',
-            description: 'Angle de dépouille insuffisant',
-            currentAngle: 0.5,
-            recommendedAngle: 1.5,
-            severity: 'warning'
-          }
-        ]
-      }
-    };
-
-    displayDFMResults(results);
-  }, 2000);
-};
-
-function displayDFMResults(results) {
-  console.log('📊 Affichage résultats DFM:', results);
-
-  let resultsContainer = document.getElementById('dfmResults');
-  if (!resultsContainer) {
-    resultsContainer = document.createElement('div');
-    resultsContainer.id = 'dfmResults';
-    resultsContainer.className = 'mt-4';
-
-    const analyzeBtn = document.getElementById('dfmAnalyzeBtn');
-    if (analyzeBtn) {
-      analyzeBtn.parentNode.insertBefore(resultsContainer, analyzeBtn.nextSibling);
-    }
-  }
-
-  resultsContainer.innerHTML = `
-    <div class="card mb-4">
-      <div class="card-header bg-primary text-white">
-        <h5 class="mb-0">
-          <i class="bi bi-clipboard-data me-2"></i>
-          Résultats de l'analyse DFM
-        </h5>
-      </div>
-      <div class="card-body">
-        <div class="row text-center">
-          <div class="col-md-4">
-            <div class="score-display">
-              <h2 class="text-primary">${results.score}/100</h2>
-              <p class="text-muted">Score DFM</p>
-            </div>
-          </div>
-          <div class="col-md-4">
-            <div class="score-display">
-              <h2 class="text-success">${results.potentialScore}/100</h2>
-              <p class="text-muted">Score potentiel</p>
-            </div>
-          </div>
-          <div class="col-md-4">
-            <div class="score-display">
-              <h2 class="text-info">${results.axis}</h2>
-              <p class="text-muted">Axe analysé</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
-
-  const checklist = generateImprovementChecklist(results);
-  resultsContainer.appendChild(checklist);
-
-  const analyzeBtn = document.getElementById('dfmAnalyzeBtn');
-  if (analyzeBtn) {
-    analyzeBtn.innerHTML = '<i class="bi bi-gear me-2"></i>Nouvelle analyse';
-    analyzeBtn.disabled = false;
-  }
-
-  initializeChecklistInteractions();
-}
-
-// ✅ BLOC 2 : Toutes les fonctions de checklist (AJOUTER APRÈS BLOC 1)
-function generateImprovementChecklist(dfmResults) {
-  const checklistSection = document.createElement('div');
-  checklistSection.id = 'improvementChecklist';
-  checklistSection.className = 'card mt-4';
-
-  checklistSection.innerHTML = `
-    <div class="card-header bg-warning text-dark">
-      <h5 class="mb-0">
-        <i class="bi bi-clipboard-check me-2"></i>
-        Plan d'amélioration DFM
-        <span class="badge bg-dark ms-2">Score: ${dfmResults.score}/100</span>
-      </h5>
-    </div>
-
-    <div class="card-body">
-      <div class="row">
-        <div class="col-md-8">
-          <div id="checklistItems">
-            ${generateChecklistItems(dfmResults)}
-          </div>
-        </div>
-
-        <div class="col-md-4">
-          <div class="card bg-light">
-            <div class="card-body">
-              <h6><i class="bi bi-graph-up me-2"></i>Progression</h6>
-              <div id="progressOverview">
-                ${generateProgressSummary(dfmResults)}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="mt-3">
-        <button class="btn btn-primary me-2" onclick="exportChecklist()">
-          <i class="bi bi-download me-1"></i>Exporter PDF
-        </button>
-        <button class="btn btn-success me-2" onclick="startGuidedMode()">
-          <i class="bi bi-play-circle me-1"></i>Mode guidé
-        </button>
-        <button class="btn btn-info" onclick="scheduleReview()">
-          <i class="bi bi-calendar me-1"></i>Planifier révision
-        </button>
-      </div>
-    </div>
-  `;
-
-  return checklistSection;
-}
-
-// ✅ TOUT LE CODE DE LA CHECKLIST QUE VOUS AVEZ REÇU
-// (generateChecklistItems, generateCategoryChecklist, etc.)
-
-function initializeChecklistInteractions() {
-  document.querySelectorAll('#improvementChecklist input[type="checkbox"]').forEach(checkbox => {
-    checkbox.addEventListener('change', function() {
-      updateProgress();
-      if (this.checked) {
-        this.parentElement.classList.add('completed');
-      } else {
-        this.parentElement.classList.remove('completed');
-      }
-    });
-  });
-}
-
-function updateProgress() {
-  const total = document.querySelectorAll('#improvementChecklist input[type="checkbox"]').length;
-  const completed = document.querySelectorAll('#improvementChecklist input[type="checkbox"]:checked').length;
-
-  const percentage = Math.round((completed / total) * 100);
-
-  const progressBar = document.querySelector('#progressOverview .progress-bar');
-  if (progressBar) {
-    progressBar.style.width = percentage + '%';
-    progressBar.textContent = percentage + '%';
-  }
-}
 
 // ✅ Événements DOM
 document.addEventListener('DOMContentLoaded', function () {
@@ -3883,201 +3713,59 @@ document.addEventListener('DOMContentLoaded', function () {
     window.viewer = new STEPViewer();
   }
 
-// ✅ Écouteur sur bouton "Analyser" initial
-    // ✅ Écouteur sur bouton "Analyser" initial
-      const analyzeBtn = document.getElementById('dfmAnalyzeBtn');
-      if (analyzeBtn) {
-        analyzeBtn.addEventListener('click', () => {
-          const questionnaireModal = document.getElementById('materialQuestionnaireModal');
-          if (questionnaireModal) {
+  // ✅ Écouteur sur bouton "Analyser" initial
+  const analyzeBtn = document.getElementById('dfmAnalyzeBtn');
+  if (analyzeBtn) {
+    analyzeBtn.addEventListener('click', () => {
+      const questionnaireModal = document.getElementById('materialQuestionnaireModal');
+      if (questionnaireModal) {
+        const modal = new bootstrap.Modal(questionnaireModal);
+        modal.show();
 
-            cleanupModal();
+        // ✅ NOUVEAU : Activer les écouteurs quand la modale s'ouvre
+        questionnaireModal.addEventListener('shown.bs.modal', function() {
+          console.log('🎯 Modale ouverte, activation des écouteurs');
+          initializeMaterialListeners();
+        }, { once: true }); // once: true pour éviter les doublons
 
-            const modal = new bootstrap.Modal(questionnaireModal, {
-              backdrop: 'static',
-              keyboard: false
-            });
-
-            modal.show();
-
-            questionnaireModal.addEventListener('shown.bs.modal', handleModalShown, { once: true });
-            questionnaireModal.addEventListener('hidden.bs.modal', handleModalHidden, { once: true });
-
-            setTimeout(() => {
-              const submitBtn = document.getElementById('submitQuestionnaire');
-
-              if (submitBtn) {
-                console.log('✅ Bouton submitQuestionnaire trouvé');
-
-                submitBtn.addEventListener('click', function() {
-                  console.log('🎯 Clic sur Analyser et recommander');
-
-                  // ✅ Fermer la modale
-                  modal.hide();
-
-                  setTimeout(() => {
-                    showAxisSelection();
-                  }, 500); // Délai pour l'animation de fermeture
-
-                });
-              }
-            }, 1000);
-          }
-        });
+      } else {
+        console.error("❌ Pas de modale questionnaire trouvée.");
       }
+    });
+  }
 
-      // ✅ NOUVELLE FONCTION : Afficher sélection d'axe avec prévisualisation
-      function showAxisSelection() {
-        const analyzeBtn = document.getElementById('dfmAnalyzeBtn');
-        if (!analyzeBtn) return;
+    // ✅ Lancement de l'analyse après sélection d'axe
+    const launchBtn = document.getElementById('submitQuestionnaire');
+    const axisSelect = document.getElementById('demoldingAxisSelect');
 
-        // ✅ Créer la section de sélection d'axe avec prévisualisation
-        const axisSection = document.createElement('div');
-        axisSection.id = 'axisSelectionSection';
-        axisSection.className = 'card mt-3';
-        axisSection.innerHTML = `
-          <div class="card-body">
-            <h5 class="card-title">
-              <i class="bi bi-arrow-up-right-circle me-2"></i>
-              Sélection de l'axe de démoulage
-            </h5>
+    if (launchBtn && axisSelect) {
+      launchBtn.addEventListener('click', () => {
+        const axis = axisSelect.value || 'z';
 
-            <div class="row">
-              <div class="col-md-6">
-                <label for="demoldingAxisSelect" class="form-label">
-                  <i class="bi bi-compass me-1"></i>
-                  Choisir l'axe de démoulage :
-                </label>
-                <select class="form-select" id="demoldingAxisSelect">
-                  <option value="x">Axe X (Rouge)</option>
-                  <option value="y">Axe Y (Vert)</option>
-                  <option value="z" selected>Axe Z (Bleu)</option>
-                </select>
-              </div>
-
-              <div class="col-md-6">
-                <div class="d-flex align-items-center h-100">
-                  <div id="axisPreview" class="border rounded p-3 bg-light w-100">
-                    <div class="d-flex align-items-center">
-                      <div id="axisColor" class="rounded-circle me-2" style="width: 20px; height: 20px; background-color: #0066cc;"></div>
-                      <span id="axisDescription">Axe Z - Démoulage vertical (haut/bas)</span>
-                    </div>
-                    <small class="text-muted mt-1 d-block" id="axisDetails">
-                      Direction recommandée pour la plupart des pièces
-                    </small>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div class="mt-3">
-              <div class="alert alert-info" role="alert">
-                <i class="bi bi-info-circle me-2"></i>
-                <strong>Prévisualisation active :</strong> L'axe sélectionné est visualisé sur la pièce en temps réel.
-                <br><small>Changez d'axe pour voir les différentes orientations de démoulage.</small>
-              </div>
-            </div>
-          </div>
-        `;
-
-        // ✅ Insérer après le bouton
-        analyzeBtn.parentNode.insertBefore(axisSection, analyzeBtn.nextSibling);
-
-        // ✅ Ajouter les écouteurs pour prévisualisation
-        const axisSelect = document.getElementById('demoldingAxisSelect');
-        const axisColor = document.getElementById('axisColor');
-        const axisDescription = document.getElementById('axisDescription');
-        const axisDetails = document.getElementById('axisDetails');
-
-        // ✅ Fonction de mise à jour de la prévisualisation
-        function updateAxisPreview(selectedAxis) {
-          const axisInfo = {
-            'x': {
-              color: '#dc3545',
-              name: 'Axe X',
-              details: `Ouverture principale du moule suivant l'axe X`
-            },
-            'y': {
-              color: '#28a745',
-              name: 'Axe Y',
-              details: `Ouverture principale du moule suivant l'axe Y`
-            },
-            'z': {
-              color: '#0066cc',
-              name: 'Axe Z',
-              details: `Ouverture principale du moule suivant l'axe Z`
-            }
-          };
-
-          const info = axisInfo[selectedAxis];
-          axisColor.style.backgroundColor = info.color;
-          axisDescription.textContent = info.name;
-          axisDetails.textContent = info.details;
-
-          // ✅ Communiquer avec le viewer pour la prévisualisation
-          if (window.viewer && typeof window.viewer.previewDemoldingAxis === 'function') {
-            console.log('🎯 Prévisualisation axe :', selectedAxis);
-            window.viewer.previewDemoldingAxis(selectedAxis);
-          } else {
-            console.log('⚠️ Fonction previewDemoldingAxis non disponible');
+        // ✅ NOUVEAU : Fermer la modale avant l'analyse
+        const questionnaireModal = document.getElementById('materialQuestionnaireModal');
+        if (questionnaireModal) {
+          const modal = bootstrap.Modal.getInstance(questionnaireModal);
+          if (modal) {
+            modal.hide();
           }
         }
 
-        // ✅ Écouteur sur changement d'axe
-        axisSelect.addEventListener('change', function() {
-          const selectedAxis = this.value;
-          console.log('🔄 Changement d\'axe vers :', selectedAxis);
-          updateAxisPreview(selectedAxis);
-        });
+        // ✅ Nettoyer le backdrop au cas où
+        cleanupModal();
 
-        // ✅ Prévisualisation initiale (axe Z par défaut)
-        updateAxisPreview('z');
+        // ✅ Lancer l'analyse
+        if (window.viewer && typeof window.viewer.analyzeDFM === 'function') {
+          window.viewer.analyzeDFM(axis);
+        } else {
+          console.error("❌ viewer.analyzeDFM non défini");
+        }
+      });
+    }
 
-        // ✅ Modification du bouton principal
-        analyzeBtn.innerHTML = '<i class="bi bi-gear me-2"></i>Analyse DFM';
-        analyzeBtn.className = 'btn btn-success btn-lg mt-3';
-
-        // ✅ Supprimer les anciens écouteurs
-        const newBtn = analyzeBtn.cloneNode(true);
-        analyzeBtn.parentNode.replaceChild(newBtn, analyzeBtn);
-
-        // ✅ Nouvel écouteur pour l'analyse finale
-        newBtn.addEventListener('click', function() {
-          console.log('🎯 Clic sur Analyse DFM');
-
-          const selectedAxis = axisSelect.value;
-          console.log('🎯 Axe sélectionné pour analyse :', selectedAxis);
-
-          // ✅ Désactiver la prévisualisation
-          if (window.viewer && typeof window.viewer.clearAxisPreview === 'function') {
-            window.viewer.clearAxisPreview();
-          }
-
-          // ✅ Masquer la section des axes
-          axisSection.style.display = 'none';
-
-          // ✅ Afficher un indicateur de chargement
-          newBtn.innerHTML = '<i class="bi bi-hourglass-split me-2"></i>Analyse en cours...';
-          newBtn.disabled = true;
-
-          // ✅ Lancer l'analyse DFM
-          if (window.viewer && typeof window.viewer.analyzeDFM === 'function') {
-            console.log('🚀 Lancement analyse DFM...');
-            window.viewer.analyzeDFM(selectedAxis);
-          } else {
-            console.error('❌ Fonction analyzeDFM introuvable');
-
-            // ✅ Restaurer le bouton en cas d'erreur
-            newBtn.innerHTML = '<i class="bi bi-gear me-2"></i>Analyse DFM';
-            newBtn.disabled = false;
-          }
-        });
-
-        console.log('✅ Section sélection d\'axe créée avec prévisualisation');
-      }
-
-  
-
+  // ✅ Drag & drop au chargement de la page
+  setupDragAndDrop();
+});
 // ✅ NOUVELLES FONCTIONS À AJOUTER
 
 // Nettoyage des modales
@@ -4130,6 +3818,28 @@ function initializeMaterialListeners() {
     appSelect.addEventListener('change', checkCompatibility);
   }
 
+  if (typeof checkCompatibility === 'function') {
+    checkCompatibility();
+  }
+}
+
+
+// ✅ NOUVELLE FONCTION : Gestion des écouteurs de la modale
+function initializeMaterialListeners() {
+  console.log('🎯 Initialisation des écouteurs matériaux');
+
+  // Écouteurs pour chaque groupe de checkboxes
+  ['mechanical', 'aesthetic', 'regulatory'].forEach(group => {
+    document.querySelectorAll(`input[name="${group}[]"]`).forEach(cb => {
+      cb.addEventListener('change', checkCompatibility);
+    });
+  });
+
+  // Écouteurs pour les sélecteurs simples
+  document.getElementById('temperature')?.addEventListener('change', checkCompatibility);
+  document.querySelector('select[name="application"]')?.addEventListener('change', checkCompatibility);
+
+  // Vérification initiale de compatibilité
   if (typeof checkCompatibility === 'function') {
     checkCompatibility();
   }
