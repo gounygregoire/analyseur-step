@@ -3463,7 +3463,7 @@ class STEPViewer {
      * Fait clignoter l'axe X, Y ou Z du repère dans le viewer 3D (Three.js)
      * @param {string} axis - "x", "y" ou "z"
      */
-highlightDemoldingAxis(axis) {
+    highlightDemoldingAxis(axis) {
     if (this._axisBlinkInterval) clearInterval(this._axisBlinkInterval);
     if (!this.axesHelper || !this.axesHelper.geometry || !this.axesHelper.geometry.attributes.color) return;
     const idx = { x: 0, y: 1, z: 2 }[String(axis).toLowerCase()] ?? 2;
@@ -3492,7 +3492,7 @@ highlightDemoldingAxis(axis) {
     }, 120);
 }
 
-//Fin du Class STEPViewer
+
     document.addEventListener('DOMContentLoaded', function() {
         // Sélecteurs possibles pour AXE (à adapter si tes noms/id changent)
         const allAxisInputs = [
