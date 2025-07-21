@@ -3459,7 +3459,7 @@ class STEPViewer {
             });
         }, 100);
     }
-    /**
+    /*
      * Fait clignoter l'axe X, Y ou Z du repère dans le viewer 3D (Three.js)
      * @param {string} axis - "x", "y" ou "z"
      */
@@ -3773,7 +3773,7 @@ function resetForm() {
     document.querySelectorAll('.warning-message').forEach(w => w.style.display = 'none');
     document.getElementById('compatibilityInfo').style.display = 'none';
 }
-
+}
 // ✅ Événements DOM
 document.addEventListener('DOMContentLoaded', function () {
   // Évite double instanciation du viewer
