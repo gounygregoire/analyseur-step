@@ -4135,28 +4135,6 @@ function initializeMaterialListeners() {
   }
 }
 
-
-// ✅ NOUVELLE FONCTION : Gestion des écouteurs de la modale
-function initializeMaterialListeners() {
-  console.log('🎯 Initialisation des écouteurs matériaux');
-
-  // Écouteurs pour chaque groupe de checkboxes
-  ['mechanical', 'aesthetic', 'regulatory'].forEach(group => {
-    document.querySelectorAll(`input[name="${group}[]"]`).forEach(cb => {
-      cb.addEventListener('change', checkCompatibility);
-    });
-  });
-
-  // Écouteurs pour les sélecteurs simples
-  document.getElementById('temperature')?.addEventListener('change', checkCompatibility);
-  document.querySelector('select[name="application"]')?.addEventListener('change', checkCompatibility);
-
-  // Vérification initiale de compatibilité
-  if (typeof checkCompatibility === 'function') {
-    checkCompatibility();
-  }
-}
-
 function setupDragAndDrop() {
   // Votre logique de drag & drop ici
 }
