@@ -3774,12 +3774,14 @@ function resetForm() {
     document.getElementById('compatibilityInfo').style.display = 'none';
 }
 }
+//Fin de Class STEPViewer
+window.viewer = new STEPViewer();
 // ✅ Événements DOM
 document.addEventListener('DOMContentLoaded', function () {
   // Évite double instanciation du viewer
   if (!window.viewer) {
     console.log('🧠 Viewer instancié depuis DOMContentLoaded');
-    window.viewer = new STEPViewer();
+
   }
     // Quand l'utilisateur change l'axe dans la liste déroulante, on fait clignoter l'axe choisi
     document.addEventListener('DOMContentLoaded', function() {
