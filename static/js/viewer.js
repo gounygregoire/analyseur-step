@@ -3740,14 +3740,14 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 submitBtn.addEventListener('click', function() {
                   console.log('🎯 Clic sur Analyser et recommander');
-
-                  // ✅ Fermer la modale
-                  modal.hide();
-
-                  setTimeout(() => {
-                    showAxisSelection();
-                  }, 500); // Délai pour l'animation de fermeture
-
+                    /*
+                      // ✅ Fermer la modale
+                      modal.hide();
+    
+                      setTimeout(() => {
+                        showAxisSelection();
+                      }, 500); // Délai pour l'animation de fermeture
+                    */
                 });
               }
             }, 1000);
@@ -3834,13 +3834,16 @@ document.addEventListener('DOMContentLoaded', function () {
             'z': {
               color: '#0066cc',
               name: 'Axe Z',
-              details: `Ouverture principale du moule suivant l'axe Z`
+              details: `Ouverture principale du moule suivant l'axe Z
             }
           };
 
           const info = axisInfo[selectedAxis];
           axisColor.style.backgroundColor = info.color;
-          axisDescription.textContent = info.name;
+          axisDescription.innerHTML = `<i class="bi bi-check2-circle text-success me-1"></i> ${info.name}`;
+          axisDescription.classList.remove('selected'); // Nettoie
+          setTimeout(() => axisDescription.classList.add('selected'), 10);
+
           axisDetails.textContent = info.details;
 
           // ✅ Communiquer avec le viewer pour la prévisualisation

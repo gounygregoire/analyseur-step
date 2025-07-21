@@ -205,3 +205,14 @@
 #toggleDefectsBtn {
     margin-left: 0.5rem;
 }
+
+#axisDescription.selected {
+  font-weight: bold;
+  color: #0066cc;
+  animation: axisFlash 1s linear 0s 3; /* Change 3 par "infinite" si tu veux que ça pulse en boucle */
+}
+@keyframes axisFlash {
+  0%, 100% { background-color: transparent; }
+  30% { background-color: #e6f0fa; } /* léger fond bleu clair */
+  70% { background-color: #cce3f6; }
+}
