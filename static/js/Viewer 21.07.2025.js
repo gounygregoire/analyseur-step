@@ -3493,43 +3493,7 @@ highlightDemoldingAxis(axis) {
 }
 
 //Fin du Class STEPViewer
-    document.addEventListener('DOMContentLoaded', function() {
-        // Sélecteurs possibles pour AXE (à adapter si tes noms/id changent)
-        const allAxisInputs = [
-            // Ajoute ici tous tes input/select/bouton-radio relatifs à l’axe de démoulage
-            ...Array.from(document.querySelectorAll('#demoldingAxisSelect')),  // select
-            ...Array.from(document.querySelectorAll('input[name=demoldingAxis]')), // radio
-            ...Array.from(document.querySelectorAll('.custom-demolding-axis-selector')) // par exemple tes autres boutons personnalisés
-        ];
-
-        function getAxisValue(input) {
-            // Adapte si tu stockes l’axe dans "value", "data-axis" ou "id"
-            if(input.tagName === "SELECT") return input.value;
-            if(input.type === "radio" && input.checked) return input.value;
-            if(input.dataset.axis) return input.dataset.axis;
-            return null;
-        }
-
-        function highlightLatestSelected() {
-            for(const input of allAxisInputs) {
-                const axis = getAxisValue(input);
-                if(axis) {
-                    window.viewer && window.viewer.highlightDemoldingAxis(axis);
-                    break; // On s'arrête au premier trouvé/coché
-                }
-            }
-        }
-
-        // Sur chaque select/radio/bouton : triggere au changement/clique
-        allAxisInputs.forEach(input => {
-            input.addEventListener('change', highlightLatestSelected);
-            input.addEventListener('click', highlightLatestSelected); // utile pour les boutons custom
-        });
-
-        // Optionnel : clignote déjà l’axe actif au chargement
-        setTimeout(highlightLatestSelected, 400);
-    });
-
+    
 
 console.log("setupDragAndDrop appelé !");
 document.getElementById("uploadForm").addEventListener("submit", function(e) {
