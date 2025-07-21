@@ -3834,7 +3834,7 @@ document.addEventListener('DOMContentLoaded', function () {
             'z': {
               color: '#0066cc',
               name: 'Axe Z',
-              details: `Ouverture principale du moule suivant l'axe Z
+              details: `Ouverture principale du moule suivant l'axe Z`
             }
           };
 
