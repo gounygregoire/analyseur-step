@@ -3459,7 +3459,50 @@ class STEPViewer {
             });
         }, 100);
     }
+    /**
+     * Fait clignoter l'axe X, Y ou Z du repère dans le viewer 3D (Three.js)
+     * @param {string} axis - "x", "y" ou "z"
+     */
+    highlightDemoldingAxis(axis) {
+        // Stop previous blink if exists
+        if (this._axisBlinkInterval) clearInterval(this._axisBlinkInterval);
+        if (!this.axesHelper || !this.axesHelper.geometry || !this.axesHelper.geometry.attributes.color) return;
+
+        const idx = { x: 0, y: 1, z: 2 }[axis] ?? 2; // par défaut Z
+        // Couleurs d'origine (comme AxesHelper)
+        const originalColors = [
+            [1,0,0], // X rouge
+            [0,1,0], // Y vert
+            [0,0,1]  // Z bleu
+        ];
+
+        // RAZ toutes les couleurs
+        for (let i=0; i<3; i++) {
+            this.axesHelper.geometry.attributes.color.setXYZ(i, ...originalColors[i]);
+        }
+        this.axesHelper.geometry.attributes.color.needsUpdate = true;
+
+        // Clignotement de l'axe sélectionné
+        let t = 0;
+        const blinkColor = [1,1,0]; // jaune flashy
+        this._axisBlinkInterval = setInterval(() => {
+            t++;
+            if(t > 8) {
+                // Fin : couleur normale
+                this.axesHelper.geometry.attributes.color.setXYZ(idx, ...originalColors[idx]);
+                this.axesHelper.geometry.attributes.color.needsUpdate = true;
+                clearInterval(this._axisBlinkInterval);
+                return;
+            }
+            const color = (t % 2 === 0) ? blinkColor : originalColors[idx];
+            this.axesHelper.geometry.attributes.color.setXYZ(idx, ...color);
+            this.axesHelper.geometry.attributes.color.needsUpdate = true;
+        }, 120);
+    }
+
 }
+//Fin du Class STEPViewer
+
 console.log("setupDragAndDrop appelé !");
 document.getElementById("uploadForm").addEventListener("submit", function(e) {
   e.preventDefault(); // ⚠️ empêche le navigateur de bloquer les effets
@@ -3711,6 +3754,19 @@ document.addEventListener('DOMContentLoaded', function () {
     console.log('🧠 Viewer instancié depuis DOMContentLoaded');
     window.viewer = new STEPViewer();
   }
+    // Quand l'utilisateur change l'axe dans la liste déroulante, on fait clignoter l'axe choisi
+    document.addEventListener('DOMContentLoaded', function() {
+        const axisSelect = document.getElementById('demoldingAxisSelect');
+        if(axisSelect && window.viewer && typeof window.viewer.highlightDemoldingAxis === 'function') {
+            // Au chargement, clignote l'axe courant
+            window.viewer.highlightDemoldingAxis(axisSelect.value);
+            // À chaque changement, clignote
+            axisSelect.addEventListener('change', function() {
+                window.viewer.highlightDemoldingAxis(this.value);
+            });
+        }
+    });
+
 
   // ✅ Écouteur sur bouton "Analyser" initial
   const analyzeBtn = document.getElementById('dfmAnalyzeBtn');
