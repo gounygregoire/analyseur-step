@@ -160,7 +160,7 @@ class STEPViewer {
         
         // Add axes labels
         this.createAxesLabels();
-        this.setupDemoldingAxisModal();
+        
         
         // Controls setup
         this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
@@ -229,7 +229,7 @@ class STEPViewer {
         // Change demolding axis button
         const changeDemoldingAxisBtn = this.safeGetElement('changeDemoldingAxisBtn');
         if (changeDemoldingAxisBtn) {
-            changeDemoldingAxisBtn.addEventListener('click', () => this.showDemoldingAxisModal());
+            changeDemoldingAxisBtn.addEventListener('click', () => this.showdemoldingAxisSelect());
         }
         
         // PDF Generation button
@@ -1879,7 +1879,7 @@ class STEPViewer {
         return 'Épaisseur optimale pour l\'injection plastique';
     }
     
-    showDemoldingAxisModal() {
+    showdemoldingAxisSelect() {
         // Show material questionnaire first
         this.showMaterialQuestionnaireModal();
     }
@@ -1923,13 +1923,13 @@ class STEPViewer {
         } catch (error) {
             console.error('Error showing material questionnaire:', error);
             // Fallback to demolding axis selection
-            this.showDemoldingAxisModalFallback();
+            this.showdemoldingAxisSelectFallback();
         }
     }
 
-    showDemoldingAxisModalFallback() {
+    showdemoldingAxisSelectFallback() {
         try {
-            const modalElement = document.getElementById('demoldingAxisModal');
+            const modalElement = document.getElementById('demoldingAxisSelect');
             if (!modalElement) {
                 console.error('Modal element not found');
                 alert('Erreur: Interface de sélection non disponible');
@@ -1987,7 +1987,7 @@ class STEPViewer {
             materialModal.hide();
             
             // Show demolding axis modal
-            this.showDemoldingAxisModalWithMaterials(questionnaireData);
+            this.showdemoldingAxisSelectWithMaterials(questionnaireData);
             
         } catch (error) {
             console.error('Material questionnaire error:', error);
@@ -1995,9 +1995,9 @@ class STEPViewer {
         }
     }
 
-    showDemoldingAxisModalWithMaterials(questionnaireData) {
+    showdemoldingAxisSelectWithMaterials(questionnaireData) {
         try {
-            const modalElement = document.getElementById('demoldingAxisModal');
+            const modalElement = document.getElementById('demoldingAxisSelect');
             if (!modalElement) {
                 console.error('Demolding axis modal not found');
                 alert('Erreur: Interface de sélection d\'axe non disponible');
@@ -2095,7 +2095,7 @@ class STEPViewer {
         }
     }
     
-    setupDemoldingAxisModal() {
+    setupdemoldingAxisSelect() {
         // Setup axis selection buttons
         document.addEventListener('DOMContentLoaded', () => {
             const axisButtons = document.querySelectorAll('.axis-btn');
