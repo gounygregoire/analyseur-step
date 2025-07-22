@@ -3502,14 +3502,7 @@ class STEPViewer {
 
     } // <- FIN DE LA FONCTION highlightDemoldingAxis
 }
-
-
-    
-
-
-
-
-
+  
 // Règles de compatibilité
 const compatibilityRules = {
     mechanical: {
