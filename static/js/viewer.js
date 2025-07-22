@@ -3491,7 +3491,7 @@ class STEPViewer {
         this.axesHelper.geometry.attributes.color.needsUpdate = true;
     }, 120);
 }
-
+}
 
     
 
@@ -3738,7 +3738,7 @@ function resetForm() {
     document.querySelectorAll('.warning-message').forEach(w => w.style.display = 'none');
     document.getElementById('compatibilityInfo').style.display = 'none';
 }
-}
+
 // ————— F I N   D E   L A   C L A S S —————
 console.log("setupDragAndDrop appelé !");
 window.viewer = new STEPViewer();
