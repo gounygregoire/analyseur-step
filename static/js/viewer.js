@@ -2101,7 +2101,7 @@ class STEPViewer {
         }
     }
     
-    setupdemoldingAxisSelect() {
+    /* setupdemoldingAxisSelect() {
         // Setup axis selection buttons
         document.addEventListener('DOMContentLoaded', () => {
             const axisButtons = document.querySelectorAll('.axis-btn');
@@ -2124,7 +2124,7 @@ class STEPViewer {
             });
         });
     }
-    
+    */
     
     
     showChangeDemoldingAxisButton() {
