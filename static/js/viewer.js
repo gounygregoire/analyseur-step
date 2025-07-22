@@ -3497,7 +3497,7 @@ class STEPViewer {
 
 
 
-console.log("setupDragAndDrop appelé !");
+
 
 // Règles de compatibilité
 const compatibilityRules = {
@@ -3740,6 +3740,7 @@ function resetForm() {
 }
 }
 // ————— F I N   D E   L A   C L A S S —————
+console.log("setupDragAndDrop appelé !");
 window.viewer = new STEPViewer();
 
 // UN SEUL ÉVÉNEMENT "DOMContentLoaded" pour tout initialiser
