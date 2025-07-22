@@ -3624,7 +3624,7 @@ const selectionLimits = {
 
 function showDemoldingAxisIfQuestionnaireFilled() {
     const { mechanical, aesthetic, regulatory, temperature } = currentSelections;
-    const selectContainer = document.getElementById('demoldingAxisSelectContainer');
+    const selectContainer = document.getElementById('demoldingAxisSelect');
 
     const isFilled = (
         mechanical.length > 0 &&
@@ -3757,48 +3757,47 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // ———— Gestion du sélecteur/radio d’axes pour DFM ————
-    const allAxisInputs = [
-        ...document.querySelectorAll('#demoldingAxisSelect'),  // select
-        ...document.querySelectorAll('input[name=demoldingAxis]'), // radio
-        ...document.querySelectorAll('.custom-demolding-axis-selector') // ex.: boutons custom
-    ];
+    function initializeMaterialListeners() {
+        // Re-sélectionne tous les inputs d’axe potentiels dans le questionnaire ouvert
+        const allAxisInputs = [
+            ...document.querySelectorAll('#demoldingAxisSelect'),
+            ...document.querySelectorAll('input[name=demoldingAxis]'),
+            ...document.querySelectorAll('.custom-demolding-axis-selector')
+        ];
 
-    function getAxisValue(input) {
-        if (input.tagName === "SELECT") return input.value;
-        if (input.type === "radio" && input.checked) return input.value;
-        if (input.dataset.axis) return input.dataset.axis;
-        return null;
-    }
+        function getAxisValue(input) {
+            if (input.tagName === "SELECT") return input.value;
+            if (input.type === "radio" && input.checked) return input.value;
+            if (input.dataset.axis) return input.dataset.axis;
+            return null;
+        }
 
-    function highlightLatestSelected() {
-        for (const input of allAxisInputs) {
-            const axis = getAxisValue(input);
-            if(axis) {
-                window.viewer && window.viewer.highlightDemoldingAxis(axis);
-                break;
+        function highlightLatestSelected(e) {
+            for (const input of allAxisInputs) {
+                const axis = getAxisValue(input);
+                if(axis && (!e || e.target === input || (input.type === 'radio' && input.checked))) {
+                    window.viewer && window.viewer.highlightDemoldingAxis(axis);
+                    break;
+                }
             }
         }
+
+        allAxisInputs.forEach(input => {
+            input.addEventListener('change', highlightLatestSelected);
+            input.addEventListener('click', highlightLatestSelected);
+        });
     }
 
-    allAxisInputs.forEach(input => {
-        input.addEventListener('change', highlightLatestSelected);
-        input.addEventListener('click', highlightLatestSelected);
-    });
-
-    // Premier clignotement à l’ouverture
-    setTimeout(highlightLatestSelected, 400);
+    
 
     // Si un select pour axes est présent, gestion séparée (pour prévisualisation par exemple)
     const axisSelect = document.getElementById('demoldingAxisSelect');
-    if (axisSelect && window.viewer && typeof window.viewer.highlightDemoldingAxis === 'function') {
-        // Blink initial à l’affichage
-        window.viewer.highlightDemoldingAxis(axisSelect.value);
+    
         // Blink à chaque changement
         axisSelect.addEventListener('change', function () {
             window.viewer.highlightDemoldingAxis(this.value);
         });
-    }
+    
 
     // ———— Gestion du bouton "Analyser DFM" ————
     const analyzeBtn = document.getElementById('dfmAnalyzeBtn');
@@ -3862,8 +3861,9 @@ function handleModalHidden() {
     console.log('🎯 Modale questionnaire fermée');
     setTimeout(cleanupModal, 100);
 }
-
+/*
 // Rajoute ici tes autres fonctions utilitaires si besoin :
-function initializeMaterialListeners() { /* ... */ }
-function setupDragAndDrop() { /* ... */ }
+function initializeMaterialListeners() {  ...  }
+function setupDragAndDrop() {  ...  }
 function submitForm() { alert('Analyse en cours...'); }
+*/
