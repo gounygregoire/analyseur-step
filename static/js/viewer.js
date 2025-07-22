@@ -3460,35 +3460,48 @@ class STEPViewer {
      * Fait clignoter l'axe X, Y ou Z du repère dans le viewer 3D (Three.js)
      * @param {string} axis - "x", "y" ou "z"
      */
-    highlightDemoldingAxis(axis) {
+highlightDemoldingAxis(axis) {
     if (this._axisBlinkInterval) clearInterval(this._axisBlinkInterval);
     if (!this.axesHelper || !this.axesHelper.geometry || !this.axesHelper.geometry.attributes.color) return;
-    const idx = { x: 0, y: 1, z: 2 }[String(axis).toLowerCase()] ?? 2;
-    const originalColors = [
-        [1,0,0], // X
-        [0,1,0], // Y
-        [0,0,1]  // Z
-    ];
-    for (let i=0; i<3; i++) {
-        this.axesHelper.geometry.attributes.color.setXYZ(i, ...originalColors[i]);
+
+    // Indices des segments par axe (2 points par axe)
+    const axisIndices = {
+        x: [0, 1],
+        y: [2, 3],
+        z: [4, 5],
+    };
+
+    const selected = axisIndices[String(axis).toLowerCase()] ?? axisIndices.z;
+
+    const colors = this.axesHelper.geometry.attributes.color;
+    const originalColors = {
+        x: [1, 0, 0], // rouge
+        y: [0, 1, 0], // vert
+        z: [0, 0, 1], // bleu
+    };
+    const blinkColor = [1, 1, 0]; // jaune clignotant
+
+    // Réinitialise toutes les couleurs à leur valeur d’origine
+    for (const [a, indices] of Object.entries(axisIndices)) {
+        indices.forEach(i => colors.setXYZ(i, ...originalColors[a]));
     }
-    this.axesHelper.geometry.attributes.color.needsUpdate = true;
+    colors.needsUpdate = true;
+
     let t = 0;
-    const blinkColor = [1,1,0];
     this._axisBlinkInterval = setInterval(() => {
         t++;
-        if(t > 8) {
-            this.axesHelper.geometry.attributes.color.setXYZ(idx, ...originalColors[idx]);
-            this.axesHelper.geometry.attributes.color.needsUpdate = true;
+        if (t > 8) {
+            selected.forEach(i => colors.setXYZ(i, ...originalColors[axis]));
+            colors.needsUpdate = true;
             clearInterval(this._axisBlinkInterval);
             return;
         }
-        const color = (t % 2 === 0) ? blinkColor : originalColors[idx];
-        this.axesHelper.geometry.attributes.color.setXYZ(idx, ...color);
-        this.axesHelper.geometry.attributes.color.needsUpdate = true;
+        const color = (t % 2 === 0) ? blinkColor : originalColors[axis];
+        selected.forEach(i => colors.setXYZ(i, ...color));
+        colors.needsUpdate = true;
     }, 120);
 }
-}
+
 
     
 
