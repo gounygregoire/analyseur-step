@@ -3797,7 +3797,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
 
     // Si un select pour axes est présent, gestion séparée (pour prévisualisation par exemple)
-    const axisSelect = document.getElementById('demoldingAxisSelect');
+        axisSelect = document.getElementById('demoldingAxisSelect');
     
         // Blink à chaque changement
         axisSelect.addEventListener('change', function () {
@@ -3838,7 +3838,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     // On récupère le select et le bouton vert
-      const axisSelect = document.getElementById('demoldingAxisSelect');
+      
       const startBtn = document.getElementById('startDFMAnalysis');
 
       // Quand le bouton vert est cliqué, on lance l'analyse si un axe est choisi
