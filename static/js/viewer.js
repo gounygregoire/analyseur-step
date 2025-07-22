@@ -3460,46 +3460,47 @@ class STEPViewer {
      * Fait clignoter l'axe X, Y ou Z du repère dans le viewer 3D (Three.js)
      * @param {string} axis - "x", "y" ou "z"
      */
-highlightDemoldingAxis(axis) {
-    if (this._axisBlinkInterval) clearInterval(this._axisBlinkInterval);
-    if (!this.axesHelper || !this.axesHelper.geometry || !this.axesHelper.geometry.attributes.color) return;
+    highlightDemoldingAxis(axis) {
+        if (this._axisBlinkInterval) clearInterval(this._axisBlinkInterval);
+        if (!this.axesHelper || !this.axesHelper.geometry || !this.axesHelper.geometry.attributes.color) return;
 
-    // Indices des segments par axe (2 points par axe)
-    const axisIndices = {
-        x: [0, 1],
-        y: [2, 3],
-        z: [4, 5],
-    };
+        const axisIndices = {
+            x: [0, 1],
+            y: [2, 3],
+            z: [4, 5],
+        };
 
-    const selected = axisIndices[String(axis).toLowerCase()] ?? axisIndices.z;
+        const selected = axisIndices[String(axis).toLowerCase()] ?? axisIndices.z;
 
-    const colors = this.axesHelper.geometry.attributes.color;
-    const originalColors = {
-        x: [1, 0, 0], // rouge
-        y: [0, 1, 0], // vert
-        z: [0, 0, 1], // bleu
-    };
-    const blinkColor = [1, 1, 0]; // jaune clignotant
+        const colors = this.axesHelper.geometry.attributes.color;
+        const originalColors = {
+            x: [1, 0, 0],
+            y: [0, 1, 0],
+            z: [0, 0, 1],
+        };
+        const blinkColor = [1, 1, 0];
 
-    // Réinitialise toutes les couleurs à leur valeur d’origine
-    for (const [a, indices] of Object.entries(axisIndices)) {
-        indices.forEach(i => colors.setXYZ(i, ...originalColors[a]));
-    }
-    colors.needsUpdate = true;
-
-    let t = 0;
-    this._axisBlinkInterval = setInterval(() => {
-        t++;
-        if (t > 8) {
-            selected.forEach(i => colors.setXYZ(i, ...originalColors[axis]));
-            colors.needsUpdate = true;
-            clearInterval(this._axisBlinkInterval);
-            return;
+        // Réinitialise toutes les couleurs
+        for (const [a, indices] of Object.entries(axisIndices)) {
+            indices.forEach(i => colors.setXYZ(i, ...originalColors[a]));
         }
-        const color = (t % 2 === 0) ? blinkColor : originalColors[axis];
-        selected.forEach(i => colors.setXYZ(i, ...color));
         colors.needsUpdate = true;
-    }, 120);
+
+        let t = 0;
+        this._axisBlinkInterval = setInterval(() => {
+            t++;
+            if (t > 8) {
+                selected.forEach(i => colors.setXYZ(i, ...originalColors[axis]));
+                colors.needsUpdate = true;
+                clearInterval(this._axisBlinkInterval);
+                return;
+            }
+            const color = (t % 2 === 0) ? blinkColor : originalColors[axis];
+            selected.forEach(i => colors.setXYZ(i, ...color));
+            colors.needsUpdate = true;
+        }, 120); // <- FIN DU setInterval
+
+    } // <- FIN DE LA FONCTION highlightDemoldingAxis
 
 
 
