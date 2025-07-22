@@ -3501,7 +3501,7 @@ class STEPViewer {
         }, 120); // <- FIN DU setInterval
 
     } // <- FIN DE LA FONCTION highlightDemoldingAxis
-
+}
 
 
     
