@@ -67,7 +67,8 @@ class STEPViewer {
     async analyzeDFM(demoldingAxis = null) {
         if (!demoldingAxis) {
             const axisSelect = document.getElementById('demoldingAxisSelect');
-            demoldingAxis = axisSelect?.value || 'z';
+            const selectedAxis = axisSelect?.value || 'z';
+            viewer.analyzeDFM(selectedAxis);
         }
 
 
@@ -2004,80 +2005,58 @@ class STEPViewer {
 
     showdemoldingAxisSelectWithMaterials(questionnaireData) {
         try {
-            const modalElement = document.getElementById('demoldingAxisSelect');
-            if (!modalElement) {
-                console.error('Demolding axis modal not found');
-                alert('Erreur: Interface de sélection d\'axe non disponible');
-                return;
-            }
-            
-            const modal = new bootstrap.Modal(modalElement);
-            modal.show();
-            
-            // Setup event listeners with material data
-            const axisButtons = modalElement.querySelectorAll('[data-axis]');
-            axisButtons.forEach(btn => {
-                btn.onclick = async (e) => {
-                    const axis = e.currentTarget.getAttribute('data-axis');
-                    modal.hide();
-                    
-                    // Show loading state
-                    this.showDFMAnalysisLoading();
-                    
-                    try {
-                        // Get material recommendations first
-                        const response = await fetch('/api/material-recommendations', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                            },
-                            body: JSON.stringify({
-                                questionnaire: questionnaireData,
-                                conversion_id: this.currentConversionId
-                            })
-                        });
-                        
-                        const result = await response.json();
-                        
-                        if (!response.ok) {
-                            throw new Error(result.error || 'Erreur lors de l\'analyse des matériaux');
-                        }
-                        
-                        // Store material recommendations globally
-                        window.materialRecommendations = result.recommendations;
-                        this.materialRecommendations = result.recommendations;
-                        console.log('Material recommendations stored:', this.materialRecommendations);
-                        
-                        // Store the first recommended material type
-                        if (result.recommendations && result.recommendations.length > 0) {
-                            // Extract material type from the name (e.g., "Polypropylène (PP)" -> "PP")
-                            const firstMaterial = result.recommendations[0].name;
-                            const match = firstMaterial.match(/\(([^)]+)\)/);
-                            if (match) {
-                                this.currentMaterialType = match[1];
-                            } else {
-                                this.currentMaterialType = 'GENERIC';
-                            }
-                        }
-                        
-                        // Now run DFM analysis
-                        await viewer.analyzeDFM(axis);
-                        
-                    } catch (error) {
-                        console.error('Material analysis error:', error);
-                        this.hideDFMAnalysisLoading();
-                        alert(`Erreur lors de l'analyse: ${error.message}`);
-                    }
-                };
+            // Affiche le sélecteur d'axe et le bouton d’analyse
+            const axisSelect = document.getElementById('demoldingAxisSelect');
+            const dfmBtn = document.getElementById('startDFMAnalysis');
+
+            if (axisSelect) axisSelect.classList.remove('d-none');
+            if (dfmBtn) dfmBtn.classList.remove('d-none');
+
+            // Optionnel : scroll vers les contrôles DFM
+            const dfmControls = document.getElementById('dfmControls');
+            if (dfmControls) dfmControls.scrollIntoView({ behavior: 'smooth' });
+
+            // Lance en arrière-plan la requête pour recommandations matériaux
+            fetch('/api/material-recommendations', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    questionnaire: questionnaireData,
+                    conversion_id: this.currentConversionId
+                })
+            })
+            .then(async (response) => {
+                const result = await response.json();
+
+                if (!response.ok) throw new Error(result.error || 'Erreur analyse matériaux');
+
+                window.materialRecommendations = result.recommendations;
+                this.materialRecommendations = result.recommendations;
+                console.log('✅ Recommandations matériaux :', this.materialRecommendations);
+
+                // Stocke le type matière recommandé principal
+                if (result.recommendations?.length > 0) {
+                    const firstMaterial = result.recommendations[0].name;
+                    const match = firstMaterial.match(/\(([^)]+)\)/);
+                    this.currentMaterialType = match ? match[1] : 'GENERIC';
+                } else {
+                    this.currentMaterialType = 'GENERIC';
+                }
+
+            })
+            .catch(error => {
+                console.error('Material analysis error:', error);
+                alert(`Erreur lors de l'analyse matériaux : ${error.message}`);
             });
-        } catch (error) {
-            console.error('Error showing demolding axis modal:', error);
-            // Fallback: direct analysis with default axis
-            if (confirm('Erreur d\'interface. Utiliser l\'axe Z par défaut pour l\'analyse DFM?')) {
-                viewer.analyzeDFM('z');
+
+        } catch (err) {
+            console.error('Erreur interface :', err);
+            if (confirm("Problème d'affichage. Utiliser l'axe Z par défaut pour l'analyse DFM ?")) {
+                this.analyzeDFM('z');
             }
         }
     }
+
 
     showDFMAnalysisLoading() {
         const dfmSection = document.getElementById('dfmAnalysisSection');
