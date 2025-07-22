@@ -3853,8 +3853,8 @@ document.addEventListener('DOMContentLoaded', function() {
           window.viewer.analyzeDFM(axis);
 
           // (Optionnel) On recache le select et le bouton
-          axisSelect.classList.add('d-none');
-          startBtn.classList.add('d-none');
+          // axisSelect.classList.add('d-none');
+          // startBtn.classList.add('d-none');
         };
       }
 
