@@ -3830,6 +3830,9 @@ document.addEventListener('DOMContentLoaded', function() {
                         newSubmitBtn.addEventListener('click', function() {
                             console.log('🎯 Clic sur Analyser et recommander');
                             modal.hide();
+                            document.getElementById('demoldingAxisSelect').classList.remove('d-none');
+                            document.getElementById('startDFMAnalysis').classList.remove('d-none');
+
                             // (Ici tu peux déclencher une suite : afficher un composant, lancer DFM, etc.)
                         });
                     }
