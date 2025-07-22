@@ -1913,11 +1913,17 @@ class STEPViewer {
                         // 🔽 2. Forcer l'affichage de l'axe si tout est rempli
                         showDemoldingAxisIfQuestionnaireFilled(); // doit déjà être définie globalement
 
-                    document.getElementById('demoldingAxisSelect')?.classList.remove('d-none');
-                    document.getElementById('submitQuestionnaire')?.classList.remove('d-none');
+                    // Après avoir fermé la modale questionnaire :
+                    const axisSelect = document.getElementById('demoldingAxisSelect');
+                    const startBtn = document.getElementById('startDFMAnalysis');
+                    if (axisSelect) axisSelect.classList.remove('d-none');       // montre le menu déroulant
+                    if (startBtn) startBtn.classList.remove('d-none');           // montre le bouton "Lancer analyse"
+
 
                         // 🔽 3. (optionnel) Scroll vers le viewer
                         document.getElementById('dfmViewerSection')?.scrollIntoView({ behavior: 'smooth' });
+                
+                    
                     }
                 };
         } catch (error) {
@@ -3831,7 +3837,33 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
+    // On récupère le select et le bouton vert
+      const axisSelect = document.getElementById('demoldingAxisSelect');
+      const startBtn = document.getElementById('startDFMAnalysis');
 
+      // Quand le bouton vert est cliqué, on lance l'analyse si un axe est choisi
+      if (axisSelect && startBtn) {
+        startBtn.onclick = () => {
+          const axis = axisSelect.value;
+          if (!axis) {
+            alert('Sélectionnez un axe de démoulage');
+            return;
+          }
+          // Lancer ton analyse
+          window.viewer.analyzeDFM(axis);
+
+          // (Optionnel) On recache le select et le bouton
+          axisSelect.classList.add('d-none');
+          startBtn.classList.add('d-none');
+        };
+      }
+
+      // Quand le menu déroulant change, on fait clignoter l'axe correspondant
+      if (axisSelect) {
+        axisSelect.addEventListener('change', function () {
+          window.viewer && window.viewer.highlightDemoldingAxis(this.value);
+        });
+      }
     // ———— Gestion Drag & Drop si besoin ————
     if (typeof setupDragAndDrop === "function")
         setupDragAndDrop();
