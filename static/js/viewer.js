@@ -70,6 +70,7 @@ class STEPViewer {
             demoldingAxis = axisSelect?.value || 'z';
         }
 
+
         if (!this.currentConversionId) {
             alert('Aucun fichier converti disponible pour l\'analyse DFM');
             return;
@@ -229,7 +230,7 @@ class STEPViewer {
         // Change demolding axis button
         const changeDemoldingAxisBtn = this.safeGetElement('changeDemoldingAxisBtn');
         if (changeDemoldingAxisBtn) {
-            changeDemoldingAxisBtn.addEventListener('click', () => this.showdemoldingAxisSelect());
+            changeDemoldingAxisBtn.addEventListener('click', () => this.showDemoldingAxisSelect());
         }
         
         // PDF Generation button
@@ -3191,6 +3192,17 @@ class STEPViewer {
         this.renderer.setSize(container.clientWidth, container.clientHeight);
     }
     
+    showDemoldingAxisSelect() {
+        const axisSelect = document.getElementById('demoldingAxisSelect');
+        const startBtn = document.getElementById('startDFMAnalysis');
+
+        if (axisSelect) {
+            axisSelect.classList.remove('d-none');
+            axisSelect.scrollIntoView({ behavior: 'smooth' });
+        }
+        if (startBtn) startBtn.classList.remove('d-none');
+    }
+
 
     
     async loadConversionHistory() {
