@@ -3500,7 +3500,7 @@ highlightDemoldingAxis(axis) {
         selected.forEach(i => colors.setXYZ(i, ...color));
         colors.needsUpdate = true;
     }, 120);
-}
+
 
 
     
