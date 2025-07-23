@@ -217,3 +217,16 @@
   50% { background: #b6e2ff8f; }
   75% { background: #dee2e64a;}
 }
+
+/* Heatmap issue markers */
+.issue-marker-critical {
+  background-color: rgba(255, 0, 0, 0.8);
+}
+
+.issue-marker-warning {
+  background-color: rgba(255, 165, 0, 0.7);
+}
+
+.issue-marker-info {
+  background-color: rgba(255, 255, 0, 0.6);
+}
