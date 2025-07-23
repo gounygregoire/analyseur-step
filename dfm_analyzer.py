@@ -743,22 +743,42 @@ class DFMAnalyzer:
                 return 1000.0
     
     def _find_sharp_edges(self, workplane) -> List[Tuple[float, float, float]]:
-        """Find sharp edges that need fillets (simplified for performance)"""
+        """Locate sharp edges by analyzing adjacent face normals"""
         sharp_edges = []
-        
+
         try:
-            # Quick approximation: assume complex parts have sharp edges
-            bbox = workplane.val().BoundingBox()
             edges = workplane.edges().vals()
-            
-            # If part has many edges, likely has sharp corners
-            if len(edges) > 20:
-                # Add a representative sharp edge at the corner
-                sharp_edges.append((bbox.xmax, bbox.ymax, bbox.zmax))
-            
+
+            for edge in edges:
+                try:
+                    # Only consider linear edges (no existing fillet)
+                    if hasattr(edge, "geomType") and edge.geomType() != "LINE":
+                        continue
+
+                    # Retrieve adjacent faces
+                    adjacent = edge.faces().vals() if hasattr(edge, "faces") else []
+                    if len(adjacent) < 2:
+                        continue
+
+                    face1, face2 = adjacent[:2]
+
+                    # Compute normals at edge midpoint
+                    mid = edge.Center() if hasattr(edge, "Center") else edge.val().Center()
+                    n1 = face1.normalAt(mid)
+                    n2 = face2.normalAt(mid)
+
+                    # Angle between normals in degrees
+                    ang = math.degrees(n1.getAngle(n2)) if hasattr(n1, "getAngle") else 180
+
+                    if ang < 160:  # Sharp if faces form an angle < 160°
+                        sharp_edges.append((round(mid.x, 3), round(mid.y, 3), round(mid.z, 3)))
+
+                except Exception:
+                    continue
+
         except Exception as e:
             print(f"Error finding sharp edges: {e}")
-        
+
         return sharp_edges
     
     def _find_perpendicular_faces(self, workplane, demolding_axis: str) -> List[Tuple[float, float, float]]:
@@ -821,23 +841,32 @@ class DFMAnalyzer:
         return perpendicular_faces
     
     def _find_deep_blind_holes(self, workplane) -> List[Tuple[float, float, float]]:
-        """Find deep blind holes that may cause molding issues (simplified for performance)"""
+        """Detect blind holes where depth greatly exceeds diameter"""
         deep_holes = []
-        
+
         try:
-            bbox = workplane.val().BoundingBox()
-            volume = workplane.val().Volume()
-            bbox_volume = bbox.xlen * bbox.ylen * bbox.zlen
-            
-            # If actual volume is much less than bounding box, likely has holes/cavities
-            volume_ratio = volume / bbox_volume if bbox_volume > 0 else 1
-            
-            if volume_ratio < 0.7:  # Less than 70% solid
-                deep_holes.append((bbox.center.x, bbox.center.y, bbox.center.z))
-            
+            cyl_faces = workplane.faces("%Circle").vals() if hasattr(workplane, "faces") else []
+
+            for face in cyl_faces:
+                try:
+                    bbox = face.BoundingBox()
+                    diameter = min(bbox.xlen, bbox.ylen, bbox.zlen)
+                    depth = max(bbox.xlen, bbox.ylen, bbox.zlen)
+
+                    if diameter == 0:
+                        continue
+
+                    ratio = depth / diameter
+                    if ratio > self.max_blind_hole_depth_ratio:
+                        center = face.Center()
+                        deep_holes.append((round(center.x, 3), round(center.y, 3), round(center.z, 3)))
+
+                except Exception:
+                    continue
+
         except Exception as e:
             print(f"Error finding deep holes: {e}")
-        
+
         return deep_holes
     
     def _calculate_overall_rating(self, dimensions: DimensionAnalysis, 
