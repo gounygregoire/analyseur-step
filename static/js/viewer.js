@@ -1453,7 +1453,18 @@ class STEPViewer {
             const geom = new THREE.SphereGeometry(markerSize, 12, 8);
             const mat = new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: opacity });
             const sphere = new THREE.Mesh(geom, mat);
-            sphere.position.set(issue.location.x, issue.location.y, issue.location.z);
+
+            // Support both {x, y, z} objects and [x, y, z] arrays
+            let x = 0, y = 0, z = 0;
+            if (issue.location) {
+                if (Array.isArray(issue.location)) {
+                    [x, y, z] = issue.location;
+                } else if (typeof issue.location === 'object') {
+                    ({ x, y, z } = issue.location);
+                }
+            }
+
+            sphere.position.set(x, y, z);
             this.scene.add(sphere);
             this.issueMarkers.push(sphere);
         });
