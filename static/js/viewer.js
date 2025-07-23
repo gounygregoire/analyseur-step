@@ -1442,6 +1442,7 @@ class STEPViewer {
             }
             geometry.attributes.color.needsUpdate = true;
             this.currentMesh.material.vertexColors = false;
+            this.currentMesh.material.needsUpdate = true;
         }
 
         this.highlightedFaceIndices = [];
@@ -1490,6 +1491,7 @@ class STEPViewer {
         }
 
         material.vertexColors = true;
+        material.needsUpdate = true;
 
         const colors = geometry.attributes.color.array;
 
