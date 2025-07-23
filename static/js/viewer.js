@@ -43,6 +43,8 @@ class STEPViewer {
         this.measurementPoints = [];
         this.measurementLines = [];
         this.issueMarkers = [];
+        this.issueMarkersVisible = true;
+        this.markerSizeScale = 1;
         this.crossSectionMode = false;
         this.crossSectionPlane = null;
         this.clippingPlanes = [];
@@ -1408,14 +1410,24 @@ class STEPViewer {
         // Stocker les données DFM pour référence
         this.currentDfmData = dfmData;
         this.issueMarkers = [];
+
+        // Préparer les contrôles liés aux marqueurs
+        this.addDefectToggleButton();
+        this.addMarkerSizeSlider();
     }
 
     clearIssueMarkers() {
         if (this.issueMarkers && this.issueMarkers.length > 0) {
             this.issueMarkers.forEach(m => {
-                this.scene.remove(m);
-                if (m.geometry) m.geometry.dispose();
-                if (m.material) m.material.dispose();
+                const sphere = m.sphere || m;
+                this.scene.remove(sphere);
+                if (sphere.geometry) sphere.geometry.dispose();
+                if (sphere.material) sphere.material.dispose();
+                if (m.sprite) {
+                    this.scene.remove(m.sprite);
+                    if (m.sprite.material.map) m.sprite.material.map.dispose();
+                    m.sprite.material.dispose();
+                }
             });
         }
         this.issueMarkers = [];
@@ -1453,6 +1465,7 @@ class STEPViewer {
             const geom = new THREE.SphereGeometry(markerSize, 12, 8);
             const mat = new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: opacity });
             const sphere = new THREE.Mesh(geom, mat);
+            sphere.scale.set(this.markerSizeScale, this.markerSizeScale, this.markerSizeScale);
 
             // Support both {x, y, z} objects and [x, y, z] arrays
             let x = 0, y = 0, z = 0;
@@ -1466,7 +1479,12 @@ class STEPViewer {
 
             sphere.position.set(x, y, z);
             this.scene.add(sphere);
-            this.issueMarkers.push(sphere);
+
+            const sprite = this.createIssueSprite(issue, markerSize);
+            sprite.position.set(x, y + markerSize * 1.5 * this.markerSizeScale, z);
+            this.scene.add(sprite);
+
+            this.issueMarkers.push({ sphere: sphere, sprite: sprite, baseSize: markerSize });
         });
     }
     
@@ -1475,27 +1493,77 @@ class STEPViewer {
         if (document.getElementById('toggleDefectsBtn')) return;
         
         // Créer le bouton
-        const toolsContainer = document.querySelector('.viewer-tools');
+        const toolsContainer = document.querySelector('#viewerToolsPanel .d-flex.flex-wrap');
         if (toolsContainer) {
             const toggleBtn = document.createElement('button');
             toggleBtn.id = 'toggleDefectsBtn';
             toggleBtn.className = 'btn btn-outline-danger btn-sm';
             toggleBtn.innerHTML = '<i class="bi bi-exclamation-triangle me-1"></i>Défauts';
             toggleBtn.title = 'Afficher/Masquer les zones problématiques';
-            
+
             toggleBtn.addEventListener('click', () => {
-                const markers = this.scene.getObjectByName('defectMarkers');
-                if (markers) {
-                    markers.visible = !markers.visible;
-                    toggleBtn.classList.toggle('btn-danger');
-                    toggleBtn.classList.toggle('btn-outline-danger');
-                }
+                this.toggleIssueMarkers();
+                toggleBtn.classList.toggle('btn-danger', this.issueMarkersVisible);
+                toggleBtn.classList.toggle('btn-outline-danger', !this.issueMarkersVisible);
             });
-            
+
             toolsContainer.appendChild(toggleBtn);
         }
     }
-    
+
+    addMarkerSizeSlider() {
+        if (document.getElementById('markerSizeSlider')) return;
+        const toolsContainer = document.querySelector('#viewerToolsPanel .d-flex.flex-wrap');
+        if (toolsContainer) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'd-flex align-items-center ms-2';
+            const label = document.createElement('label');
+            label.className = 'form-label mb-0 me-2';
+            label.textContent = 'Taille marqueurs';
+            label.htmlFor = 'markerSizeSlider';
+            const input = document.createElement('input');
+            input.type = 'range';
+            input.min = '0.5';
+            input.max = '3';
+            input.step = '0.1';
+            input.value = this.markerSizeScale;
+            input.id = 'markerSizeSlider';
+            input.className = 'form-range';
+            input.style.width = '120px';
+            input.addEventListener('input', (e) => {
+                this.updateMarkerSizes(parseFloat(e.target.value));
+            });
+            wrapper.appendChild(label);
+            wrapper.appendChild(input);
+            toolsContainer.appendChild(wrapper);
+        }
+    }
+
+    updateMarkerSizes(scale) {
+        this.markerSizeScale = scale;
+        this.issueMarkers.forEach(m => {
+            const sphere = m.sphere || m;
+            sphere.scale.set(scale, scale, scale);
+            if (m.sprite) {
+                m.sprite.scale.set((m.baseSize * 5) * scale, (m.baseSize * 2) * scale, 1);
+                m.sprite.position.set(
+                    sphere.position.x,
+                    sphere.position.y + m.baseSize * 1.5 * scale,
+                    sphere.position.z
+                );
+            }
+        });
+    }
+
+    toggleIssueMarkers() {
+        this.issueMarkersVisible = !this.issueMarkersVisible;
+        this.issueMarkers.forEach(m => {
+            const sphere = m.sphere || m;
+            sphere.visible = this.issueMarkersVisible;
+            if (m.sprite) m.sprite.visible = this.issueMarkersVisible;
+        });
+    }
+
     enableZipDownload() {
         const downloadBtn = document.getElementById('downloadZipBtn');
         if (downloadBtn) {
@@ -2713,7 +2781,32 @@ class STEPViewer {
         
         this.scene.add(sprite);
         this.measurementLabels.push(sprite);
-        
+
+        return sprite;
+    }
+
+    createIssueSprite(issue, baseSize) {
+        const text = `${issue.severity || ''}: ${issue.description || ''}`;
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        context.font = '24px Arial';
+        const padding = 10;
+        const textWidth = context.measureText(text).width;
+        canvas.width = textWidth + padding * 2;
+        canvas.height = 40;
+
+        context.fillStyle = 'rgba(255,255,255,0.9)';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.fillStyle = 'black';
+        context.textBaseline = 'middle';
+        context.font = '24px Arial';
+        context.fillText(text, padding, canvas.height / 2);
+
+        const texture = new THREE.CanvasTexture(canvas);
+        const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false });
+        const sprite = new THREE.Sprite(material);
+        sprite.scale.set((baseSize * 5) * this.markerSizeScale, (baseSize * 2) * this.markerSizeScale, 1);
+        sprite.renderOrder = 1000;
         return sprite;
     }
     
