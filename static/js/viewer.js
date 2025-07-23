@@ -44,6 +44,7 @@ class STEPViewer {
         this.measurementLines = [];
         this.issueMarkers = [];
         this.issueMarkersVisible = true;
+        this.highlightedFaceIndices = [];
         this.markerSizeScale = 1;
         this.crossSectionMode = false;
         this.crossSectionPlane = null;
@@ -1431,6 +1432,20 @@ class STEPViewer {
             });
         }
         this.issueMarkers = [];
+
+        if (this.currentMesh && this.currentMesh.geometry.attributes.color) {
+            const geometry = this.currentMesh.geometry;
+            const baseColor = new THREE.Color(this.currentMesh.material.color);
+            const colors = geometry.attributes.color.array;
+            for (let i = 0; i < geometry.attributes.position.count; i++) {
+                baseColor.toArray(colors, i * 3);
+            }
+            geometry.attributes.color.needsUpdate = true;
+            this.currentMesh.material.vertexColors = false;
+        }
+
+        this.highlightedFaceIndices = [];
+        this.currentHighlightedIssues = null;
     }
 
     showHeatmapForCriterion(criterionId) {
@@ -1453,23 +1468,35 @@ class STEPViewer {
 
         if (issues.length === 0) return;
 
-        const box = new THREE.Box3().setFromObject(this.currentMesh);
-        const size = box.getSize(new THREE.Vector3());
-        // Utilise 0.5 % de la diagonale du volume pour garder une taille cohérente quel que soit le modèle
-        const diag = Math.sqrt(size.x * size.x + size.y * size.y + size.z * size.z);
-        const markerSize = diag * 0.005;
+        this.highlightFacesForIssues(issues);
+    }
+
+    highlightFacesForIssues(issues) {
+        if (!this.currentMesh) return;
+
+        this.currentHighlightedIssues = issues;
+
+        const geometry = this.currentMesh.geometry;
+        const material = this.currentMesh.material;
+
+        if (!geometry.attributes.color) {
+            const count = geometry.attributes.position.count;
+            const baseColor = new THREE.Color(material.color);
+            const colors = new Float32Array(count * 3);
+            for (let i = 0; i < count; i++) {
+                baseColor.toArray(colors, i * 3);
+            }
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        }
+
+        material.vertexColors = true;
+
+        const colors = geometry.attributes.color.array;
 
         issues.forEach(issue => {
             const severity = issue.severity || 'info';
-            const color = severity === 'critical' ? 0xff0000 : severity === 'warning' ? 0xffa500 : 0xffff00;
-            const opacity = severity === 'critical' ? 0.9 : severity === 'warning' ? 0.6 : 0.4;
+            const highlight = new THREE.Color(severity === 'critical' ? 0xff0000 : severity === 'warning' ? 0xffa500 : 0xffff00);
 
-            const geom = new THREE.SphereGeometry(markerSize, 12, 8);
-            const mat = new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: opacity });
-            const sphere = new THREE.Mesh(geom, mat);
-            sphere.scale.set(this.markerSizeScale, this.markerSizeScale, this.markerSizeScale);
-
-            // Support both {x, y, z} objects and [x, y, z] arrays
             let x = 0, y = 0, z = 0;
             if (issue.location) {
                 if (Array.isArray(issue.location)) {
@@ -1479,15 +1506,21 @@ class STEPViewer {
                 }
             }
 
-            sphere.position.set(x, y, z);
-            this.scene.add(sphere);
-
-            const sprite = this.createIssueSprite(issue, markerSize);
-            sprite.position.set(x, y + markerSize * 1.5 * this.markerSizeScale, z);
-            this.scene.add(sprite);
-
-            this.issueMarkers.push({ sphere: sphere, sprite: sprite, baseSize: markerSize });
+            const origin = this.camera.position.clone();
+            const direction = new THREE.Vector3(x, y, z).sub(origin).normalize();
+            const raycaster = new THREE.Raycaster(origin, direction);
+            const intersects = raycaster.intersectObject(this.currentMesh, false);
+            if (intersects.length > 0 && intersects[0].faceIndex !== undefined) {
+                const faceIndex = intersects[0].faceIndex;
+                this.highlightedFaceIndices.push(faceIndex);
+                for (let i = 0; i < 3; i++) {
+                    const vertexIndex = faceIndex * 3 + i;
+                    highlight.toArray(colors, vertexIndex * 3);
+                }
+            }
         });
+
+        geometry.attributes.color.needsUpdate = true;
     }
     
     addDefectToggleButton() {
@@ -1559,11 +1592,13 @@ class STEPViewer {
 
     toggleIssueMarkers() {
         this.issueMarkersVisible = !this.issueMarkersVisible;
-        this.issueMarkers.forEach(m => {
-            const sphere = m.sphere || m;
-            sphere.visible = this.issueMarkersVisible;
-            if (m.sprite) m.sprite.visible = this.issueMarkersVisible;
-        });
+        if (this.issueMarkersVisible) {
+            if (this.currentHighlightedIssues && this.currentHighlightedIssues.length > 0) {
+                this.highlightFacesForIssues(this.currentHighlightedIssues);
+            }
+        } else {
+            this.clearIssueMarkers();
+        }
     }
 
     enableZipDownload() {
