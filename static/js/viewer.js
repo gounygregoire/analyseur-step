@@ -38,7 +38,7 @@ class STEPViewer {
         this.axesHelper = null;
         this.axesLabels = [];
         this.showAxes = true;
-        this.isDarkMode = true;
+        this.isDarkMode = false;
         this.measurementMode = false;
         this.measurementPoints = [];
         this.measurementLines = [];
@@ -46,6 +46,8 @@ class STEPViewer {
         this.issueMarkersVisible = true;
         this.highlightedFaceIndices = [];
         this.markerSizeScale = 1;
+        this.meshEdges = null;
+        this.highlightOverlays = [];
         this.crossSectionMode = false;
         this.crossSectionPlane = null;
         this.clippingPlanes = [];
@@ -137,7 +139,7 @@ class STEPViewer {
         
         // Scene setup
         this.scene = new THREE.Scene();
-        this.scene.background = new THREE.Color(0x2a2a2a); // Dark background with kaki theme
+        this.scene.background = new THREE.Color(0xe8e9ea);
         
         // Camera setup
         this.camera = new THREE.PerspectiveCamera(
@@ -154,7 +156,7 @@ class STEPViewer {
             alpha: true
         });
         this.renderer.setSize(container.clientWidth, container.clientHeight);
-        this.renderer.setClearColor(0x2a2a2a, 1); // Consistent with kaki theme
+        this.renderer.setClearColor(0xe8e9ea, 1);
         this.renderer.shadowMap.enabled = false; // Désactiver les ombres pour améliorer les performances
         
         // Add the renderer to the container
@@ -185,22 +187,22 @@ class STEPViewer {
     
     setupLighting() {
         // Ambient light
-        const ambientLight = new THREE.AmbientLight(0x404040, 0.4);
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
         this.scene.add(ambientLight);
         
         // Main directional light (sans ombres)
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
         directionalLight.position.set(10, 10, 5);
         directionalLight.castShadow = false; // Désactiver les ombres
         this.scene.add(directionalLight);
         
         // Fill light
-        const fillLight = new THREE.DirectionalLight(0xffffff, 0.3);
+        const fillLight = new THREE.DirectionalLight(0xffffff, 0.6);
         fillLight.position.set(-10, -10, -5);
         this.scene.add(fillLight);
         
         // Point light for highlights
-        const pointLight = new THREE.PointLight(0xffffff, 0.5, 100);
+        const pointLight = new THREE.PointLight(0xffffff, 0.8, 100);
         pointLight.position.set(0, 20, 0);
         this.scene.add(pointLight);
     }
@@ -690,6 +692,12 @@ class STEPViewer {
             if (this.currentMesh) {
                 this.scene.remove(this.currentMesh);
             }
+            if (this.meshEdges) {
+                this.scene.remove(this.meshEdges);
+                if (this.meshEdges.geometry) this.meshEdges.geometry.dispose();
+                if (this.meshEdges.material) this.meshEdges.material.dispose();
+                this.meshEdges = null;
+            }
             
             // Show loading indicator
             this.showLoadingIndicator('Chargement du modèle 3D...');
@@ -767,6 +775,16 @@ class STEPViewer {
                 
                 // Add to scene
                 this.scene.add(this.currentMesh);
+                if (this.meshEdges) {
+                    this.scene.remove(this.meshEdges);
+                    this.meshEdges.geometry.dispose();
+                    this.meshEdges.material.dispose();
+                }
+                this.meshEdges = new THREE.LineSegments(
+                    new THREE.EdgesGeometry(geometry, 1),
+                    new THREE.LineBasicMaterial({ color: 0x000000 })
+                );
+                this.scene.add(this.meshEdges);
                 
                 // Optimize renderer for large models
                 if (vertexCount > 1000000) {
@@ -1414,7 +1432,6 @@ class STEPViewer {
 
         // Préparer les contrôles liés aux marqueurs
         this.addDefectToggleButton();
-        this.addMarkerSizeSlider();
     }
 
     clearIssueMarkers() {
@@ -1433,20 +1450,21 @@ class STEPViewer {
         }
         this.issueMarkers = [];
 
-        if (this.currentMesh && this.currentMesh.geometry.attributes.color) {
-            const geometry = this.currentMesh.geometry;
-            const baseColor = new THREE.Color(this.currentMesh.material.color);
-            const colors = geometry.attributes.color.array;
-            for (let i = 0; i < geometry.attributes.position.count; i++) {
-                baseColor.toArray(colors, i * 3);
-            }
-            geometry.attributes.color.needsUpdate = true;
-            this.currentMesh.material.vertexColors = false;
-            this.currentMesh.material.needsUpdate = true;
-        }
+        this.clearHighlightOverlays();
 
         this.highlightedFaceIndices = [];
         this.currentHighlightedIssues = null;
+    }
+
+    clearHighlightOverlays() {
+        if (this.highlightOverlays && this.highlightOverlays.length > 0) {
+            this.highlightOverlays.forEach(o => {
+                this.scene.remove(o);
+                if (o.geometry) o.geometry.dispose();
+                if (o.material) o.material.dispose();
+            });
+        }
+        this.highlightOverlays = [];
     }
 
     showHeatmapForCriterion(criterionId) {
@@ -1477,31 +1495,16 @@ class STEPViewer {
 
         this.currentHighlightedIssues = issues;
         this.highlightedFaceIndices = [];
+        this.clearHighlightOverlays();
 
         const geometry = this.currentMesh.geometry;
-        const material = this.currentMesh.material;
-
-        if (!geometry.attributes.color) {
-            const count = geometry.attributes.position.count;
-            const baseColor = new THREE.Color(material.color);
-            const colors = new Float32Array(count * 3);
-            for (let i = 0; i < count; i++) {
-                baseColor.toArray(colors, i * 3);
-            }
-            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-        }
-
-        material.vertexColors = true;
-        material.needsUpdate = true;
-
-        const colors = geometry.attributes.color.array;
         const positions = geometry.attributes.position.array;
         const indices = geometry.index ? geometry.index.array : null;
         const faceCount = indices ? indices.length / 3 : positions.length / 9;
 
         issues.forEach(issue => {
             const severity = issue.severity || 'info';
-            const highlight = new THREE.Color(
+            const highlightColor = new THREE.Color(
                 severity === 'critical' ? 0xff0000 :
                 severity === 'warning' ? 0xffa500 :
                 0xffff00
@@ -1568,13 +1571,38 @@ class STEPViewer {
                     i3 = closestFace * 3 + 2;
                 }
 
-                [i1, i2, i3].forEach(vertexIndex => {
-                    highlight.toArray(colors, vertexIndex * 3);
+                const v1 = new THREE.Vector3(
+                    positions[i1 * 3], positions[i1 * 3 + 1], positions[i1 * 3 + 2]
+                );
+                const v2 = new THREE.Vector3(
+                    positions[i2 * 3], positions[i2 * 3 + 1], positions[i2 * 3 + 2]
+                );
+                const v3 = new THREE.Vector3(
+                    positions[i3 * 3], positions[i3 * 3 + 1], positions[i3 * 3 + 2]
+                );
+
+                const faceGeometry = new THREE.BufferGeometry();
+                faceGeometry.setFromPoints([v1, v2, v3]);
+                faceGeometry.setIndex([0, 1, 2]);
+
+                const faceMaterial = new THREE.MeshBasicMaterial({
+                    color: highlightColor,
+                    transparent: true,
+                    opacity: 0.5,
+                    side: THREE.DoubleSide,
+                    depthWrite: false
                 });
+                const faceMesh = new THREE.Mesh(faceGeometry, faceMaterial);
+
+                const edgesGeom = new THREE.EdgesGeometry(faceGeometry);
+                const edgesMat = new THREE.LineBasicMaterial({ color: highlightColor });
+                const edges = new THREE.LineSegments(edgesGeom, edgesMat);
+
+                this.scene.add(faceMesh);
+                this.scene.add(edges);
+                this.highlightOverlays.push(faceMesh, edges);
             }
         });
-
-        geometry.attributes.color.needsUpdate = true;
     }
     
     addDefectToggleButton() {
@@ -1600,49 +1628,6 @@ class STEPViewer {
         }
     }
 
-    addMarkerSizeSlider() {
-        if (document.getElementById('markerSizeSlider')) return;
-        const toolsContainer = document.querySelector('#viewerToolsPanel .d-flex.flex-wrap');
-        if (toolsContainer) {
-            const wrapper = document.createElement('div');
-            wrapper.className = 'd-flex align-items-center ms-2';
-            const label = document.createElement('label');
-            label.className = 'form-label mb-0 me-2';
-            label.textContent = 'Taille marqueurs';
-            label.htmlFor = 'markerSizeSlider';
-            const input = document.createElement('input');
-            input.type = 'range';
-            input.min = '0.5';
-            input.max = '3';
-            input.step = '0.1';
-            input.value = this.markerSizeScale;
-            input.id = 'markerSizeSlider';
-            input.className = 'form-range';
-            input.style.width = '120px';
-            input.addEventListener('input', (e) => {
-                this.updateMarkerSizes(parseFloat(e.target.value));
-            });
-            wrapper.appendChild(label);
-            wrapper.appendChild(input);
-            toolsContainer.appendChild(wrapper);
-        }
-    }
-
-    updateMarkerSizes(scale) {
-        this.markerSizeScale = scale;
-        this.issueMarkers.forEach(m => {
-            const sphere = m.sphere || m;
-            sphere.scale.set(scale, scale, scale);
-            if (m.sprite) {
-                m.sprite.scale.set((m.baseSize * 5) * scale, (m.baseSize * 2) * scale, 1);
-                m.sprite.position.set(
-                    sphere.position.x,
-                    sphere.position.y + m.baseSize * 1.5 * scale,
-                    sphere.position.z
-                );
-            }
-        });
-    }
 
     toggleIssueMarkers() {
         this.issueMarkersVisible = !this.issueMarkersVisible;
