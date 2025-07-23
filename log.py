@@ -1,62 +1,33 @@
-"""
-Système de logging des actions utilisateurs pour CADlytics
-"""
-import json
-import os
+"""Système de logging des actions utilisateurs pour CADlytics."""
 from datetime import datetime
-from threading import Lock
 
-# Lock pour éviter les conflits d'écriture
-log_lock = Lock()
-
-# Fichier de log
-LOG_FILE = 'analytics.json'
+from models import db, LogEntry
 
 def log_action(action, user_id=None, extra=None):
-    """
-    Log une action utilisateur dans le fichier JSONL
-    
-    Args:
-        action: Type d'action (upload, analyze, download, login, etc.)
-        user_id: ID de l'utilisateur (optionnel)
-        extra: Dictionnaire avec des données supplémentaires (optionnel)
-    """
-    log_entry = {
-        'timestamp': datetime.utcnow().isoformat(),
-        'action': action,
-        'user_id': user_id
-    }
-    
-    # Ajouter les données supplémentaires si présentes
-    if extra:
-        log_entry.update(extra)
-    
-    # Écrire dans le fichier avec un lock pour éviter les conflits
-    with log_lock:
-        try:
-            with open(LOG_FILE, 'a', encoding='utf-8') as f:
-                # Format JSONL : une ligne JSON par entrée
-                f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
-        except Exception as e:
-            print(f"Erreur lors du logging: {e}")
+    """Enregistre une action utilisateur en base de données."""
+    entry = LogEntry(
+        action=action,
+        user_id=user_id,
+        timestamp=datetime.utcnow(),
+    )
 
-def read_logs():
-    """
-    Lit tous les logs du fichier JSONL
-    
-    Returns:
-        Liste des entrées de log
-    """
-    logs = []
-    if os.path.exists(LOG_FILE):
-        try:
-            with open(LOG_FILE, 'r', encoding='utf-8') as f:
-                for line in f:
-                    if line.strip():
-                        logs.append(json.loads(line))
-        except Exception as e:
-            print(f"Erreur lors de la lecture des logs: {e}")
-    return logs
+    if extra:
+        entry.user_email = extra.get("user_email")
+        entry.details = extra
+
+    db.session.add(entry)
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        print(f"Erreur lors du logging: {e}")
+
+def read_logs(limit=1000):
+    """Retourne les logs stockés en base."""
+    entries = (
+        LogEntry.query.order_by(LogEntry.timestamp.desc()).limit(limit).all()
+    )
+    return [e.to_dict() for e in reversed(entries)]
 
 def get_stats():
     """
@@ -66,7 +37,6 @@ def get_stats():
         Dictionnaire avec les statistiques
     """
     logs = read_logs()
-    from datetime import datetime, timedelta
     
     stats = {
         'total_uploads': 0,
