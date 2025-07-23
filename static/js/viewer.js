@@ -42,6 +42,7 @@ class STEPViewer {
         this.measurementMode = false;
         this.measurementPoints = [];
         this.measurementLines = [];
+        this.issueMarkers = [];
         this.crossSectionMode = false;
         this.crossSectionPlane = null;
         this.clippingPlanes = [];
@@ -1395,7 +1396,7 @@ class STEPViewer {
         checklistItems.querySelectorAll('.list-group-item').forEach(item => {
             item.addEventListener('click', (e) => {
                 const criterionId = e.currentTarget.dataset.criterion;
-                // Ici on pourrait ouvrir un modal avec plus de détails
+                this.showHeatmapForCriterion(criterionId);
                 console.log('Clicked on criterion:', criterionId);
             });
         });
@@ -1403,14 +1404,59 @@ class STEPViewer {
     
     highlightDefectsIn3D(dfmData) {
         if (!this.currentMesh) return;
-        
+
         // Stocker les données DFM pour référence
         this.currentDfmData = dfmData;
-        
-        // Ne pas créer de marqueurs visuels - désactivé à la demande de l'utilisateur
-        // Les défauts sont maintenant uniquement visibles dans l'interface texte
-        
-        // Note: Le bouton défauts ne sera pas ajouté non plus
+        this.issueMarkers = [];
+    }
+
+    clearIssueMarkers() {
+        if (this.issueMarkers && this.issueMarkers.length > 0) {
+            this.issueMarkers.forEach(m => {
+                this.scene.remove(m);
+                if (m.geometry) m.geometry.dispose();
+                if (m.material) m.material.dispose();
+            });
+        }
+        this.issueMarkers = [];
+    }
+
+    showHeatmapForCriterion(criterionId) {
+        if (!this.currentDfmData || !this.currentMesh) return;
+
+        this.clearIssueMarkers();
+
+        let issues = [];
+        if (criterionId === 'wall_thickness') {
+            issues = this.currentDfmData.wall_thickness_issues || [];
+        } else {
+            const geomIssues = this.currentDfmData.geometry_issues || [];
+            issues = geomIssues.filter(i => {
+                if (criterionId === 'draft_angles') return i.issue_type === 'no_draft_angle';
+                if (criterionId === 'sharp_edges') return i.issue_type === 'sharp_edge';
+                if (criterionId === 'undercuts') return i.issue_type === 'deep_blind_hole';
+                return false;
+            });
+        }
+
+        if (issues.length === 0) return;
+
+        const box = new THREE.Box3().setFromObject(this.currentMesh);
+        const size = box.getSize(new THREE.Vector3());
+        const markerSize = Math.max(size.x, size.y, size.z) * 0.01;
+
+        issues.forEach(issue => {
+            const severity = issue.severity || 'info';
+            const color = severity === 'critical' ? 0xff0000 : severity === 'warning' ? 0xffa500 : 0xffff00;
+            const opacity = severity === 'critical' ? 0.9 : severity === 'warning' ? 0.6 : 0.4;
+
+            const geom = new THREE.SphereGeometry(markerSize, 12, 8);
+            const mat = new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: opacity });
+            const sphere = new THREE.Mesh(geom, mat);
+            sphere.position.set(issue.location.x, issue.location.y, issue.location.z);
+            this.scene.add(sphere);
+            this.issueMarkers.push(sphere);
+        });
     }
     
     addDefectToggleButton() {
