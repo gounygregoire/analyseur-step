@@ -1476,6 +1476,7 @@ class STEPViewer {
         if (!this.currentMesh) return;
 
         this.currentHighlightedIssues = issues;
+        this.highlightedFaceIndices = [];
 
         const geometry = this.currentMesh.geometry;
         const material = this.currentMesh.material;
@@ -1494,10 +1495,17 @@ class STEPViewer {
         material.needsUpdate = true;
 
         const colors = geometry.attributes.color.array;
+        const positions = geometry.attributes.position.array;
+        const indices = geometry.index ? geometry.index.array : null;
+        const faceCount = indices ? indices.length / 3 : positions.length / 9;
 
         issues.forEach(issue => {
             const severity = issue.severity || 'info';
-            const highlight = new THREE.Color(severity === 'critical' ? 0xff0000 : severity === 'warning' ? 0xffa500 : 0xffff00);
+            const highlight = new THREE.Color(
+                severity === 'critical' ? 0xff0000 :
+                severity === 'warning' ? 0xffa500 :
+                0xffff00
+            );
 
             let x = 0, y = 0, z = 0;
             if (issue.location) {
@@ -1507,18 +1515,62 @@ class STEPViewer {
                     ({ x, y, z } = issue.location);
                 }
             }
+            const issuePos = new THREE.Vector3(x, y, z);
 
-            const origin = this.camera.position.clone();
-            const direction = new THREE.Vector3(x, y, z).sub(origin).normalize();
-            const raycaster = new THREE.Raycaster(origin, direction);
-            const intersects = raycaster.intersectObject(this.currentMesh, false);
-            if (intersects.length > 0 && intersects[0].faceIndex !== undefined) {
-                const faceIndex = intersects[0].faceIndex;
-                this.highlightedFaceIndices.push(faceIndex);
-                for (let i = 0; i < 3; i++) {
-                    const vertexIndex = faceIndex * 3 + i;
-                    highlight.toArray(colors, vertexIndex * 3);
+            let closestFace = -1;
+            let minDist = Infinity;
+
+            for (let f = 0; f < faceCount; f++) {
+                let i1, i2, i3;
+                if (indices) {
+                    i1 = indices[f * 3];
+                    i2 = indices[f * 3 + 1];
+                    i3 = indices[f * 3 + 2];
+                } else {
+                    i1 = f * 3;
+                    i2 = f * 3 + 1;
+                    i3 = f * 3 + 2;
                 }
+
+                const v1 = new THREE.Vector3(
+                    positions[i1 * 3], positions[i1 * 3 + 1], positions[i1 * 3 + 2]
+                );
+                const v2 = new THREE.Vector3(
+                    positions[i2 * 3], positions[i2 * 3 + 1], positions[i2 * 3 + 2]
+                );
+                const v3 = new THREE.Vector3(
+                    positions[i3 * 3], positions[i3 * 3 + 1], positions[i3 * 3 + 2]
+                );
+
+                const centroid = new THREE.Vector3()
+                    .addVectors(v1, v2)
+                    .add(v3)
+                    .divideScalar(3);
+
+                const dist = centroid.distanceTo(issuePos);
+                if (dist < minDist) {
+                    minDist = dist;
+                    closestFace = f;
+                }
+            }
+
+            if (closestFace !== -1) {
+                this.highlightedFaceIndices.push(closestFace);
+
+                let i1, i2, i3;
+                if (indices) {
+                    i1 = indices[closestFace * 3];
+                    i2 = indices[closestFace * 3 + 1];
+                    i3 = indices[closestFace * 3 + 2];
+                } else {
+                    i1 = closestFace * 3;
+                    i2 = closestFace * 3 + 1;
+                    i3 = closestFace * 3 + 2;
+                }
+
+                [i1, i2, i3].forEach(vertexIndex => {
+                    highlight.toArray(colors, vertexIndex * 3);
+                });
             }
         });
 
