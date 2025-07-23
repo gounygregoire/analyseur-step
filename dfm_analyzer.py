@@ -743,101 +743,106 @@ class DFMAnalyzer:
                 return 1000.0
     
     def _find_sharp_edges(self, workplane) -> List[Tuple[float, float, float]]:
-        """Find sharp edges that need fillets (simplified for performance)"""
+        """Find edges forming sharp angles between faces using CadQuery"""
         sharp_edges = []
-        
+
         try:
-            # Quick approximation: assume complex parts have sharp edges
-            bbox = workplane.val().BoundingBox()
-            edges = workplane.edges().vals()
-            
-            # If part has many edges, likely has sharp corners
-            if len(edges) > 20:
-                # Add a representative sharp edge at the corner
-                sharp_edges.append((bbox.xmax, bbox.ymax, bbox.zmax))
-            
+            shape = workplane.val()
+            for edge in shape.Edges():
+                try:
+                    # Skip curved edges (already filleted)
+                    if edge.geomType() != "LINE":
+                        continue
+
+                    faces_comp = edge.ancestors(shape, "Face")
+                    faces = faces_comp.Faces()
+                    if len(faces) < 2:
+                        continue
+
+                    f1, f2 = faces[0], faces[1]
+                    n1 = f1.normalAt(f1.Center())
+                    n2 = f2.normalAt(f2.Center())
+
+                    dot = max(-1.0, min(1.0, n1.dot(n2)))
+                    angle = math.degrees(math.acos(dot))
+
+                    # Consider edges with angle < 150° as sharp
+                    if angle < 150.0 and edge.Length() > 0.5:
+                        c = edge.Center()
+                        sharp_edges.append((c.x, c.y, c.z))
+
+                except Exception:
+                    continue
+
         except Exception as e:
             print(f"Error finding sharp edges: {e}")
-        
+
         return sharp_edges
     
     def _find_perpendicular_faces(self, workplane, demolding_axis: str) -> List[Tuple[float, float, float]]:
-        """Find faces perpendicular to demolding axis that need draft angles"""
+        """Find planar faces nearly parallel to the demolding direction"""
         perpendicular_faces = []
-        
+
         try:
-            faces = workplane.faces().vals()
-            
-            # Define the demolding direction vector
-            demolding_vector = {
-                'x': (1, 0, 0),
-                'y': (0, 1, 0),
-                'z': (0, 0, 1)
+            axis_vec = {
+                'x': cq.Vector(1, 0, 0),
+                'y': cq.Vector(0, 1, 0),
+                'z': cq.Vector(0, 0, 1)
             }[demolding_axis]
-            
-            # Analyze each face
-            for face in faces[:30]:  # Limit to first 30 faces for performance
+
+            for face in workplane.val().Faces():
                 try:
+                    if face.geomType() != "PLANE":
+                        continue
+
                     center = face.Center()
                     normal = face.normalAt(center)
-                    
-                    # Calculate dot product between face normal and demolding direction
-                    dot_product = (normal.x * demolding_vector[0] + 
-                                 normal.y * demolding_vector[1] + 
-                                 normal.z * demolding_vector[2])
-                    
-                    # If dot product is close to 0, face is perpendicular to demolding axis
-                    # This means the face is parallel to the demolding direction (vertical wall)
-                    if abs(dot_product) < 0.1:  # Tolerance for perpendicularity
-                        # Check if it's a significant face (not too small)
-                        area = face.Area()
-                        if area > 10:  # Minimum area of 10 mm²
-                            perpendicular_faces.append((center.x, center.y, center.z))
-                            
-                            # Limit the number of issues reported
-                            if len(perpendicular_faces) >= 5:
-                                break
-                            
+                    dot = abs(normal.dot(axis_vec))
+
+                    if dot < 0.1 and face.Area() > 10.0:
+                        perpendicular_faces.append((center.x, center.y, center.z))
+
                 except Exception:
                     continue
-                    
+
         except Exception as e:
             print(f"Error finding perpendicular faces: {e}")
-            
-            # Fallback method if face analysis fails
-            try:
-                bbox = workplane.val().BoundingBox()
-                
-                # Check dimension along demolding axis
-                if demolding_axis == 'x' and bbox.xlen > 10:
-                    perpendicular_faces.append((bbox.center.x, bbox.center.y, bbox.center.z))
-                elif demolding_axis == 'y' and bbox.ylen > 10:
-                    perpendicular_faces.append((bbox.center.x, bbox.center.y, bbox.center.z))
-                elif demolding_axis == 'z' and bbox.zlen > 10:
-                    perpendicular_faces.append((bbox.center.x, bbox.center.y, bbox.center.z))
-            except:
-                pass
-        
+
         return perpendicular_faces
     
     def _find_deep_blind_holes(self, workplane) -> List[Tuple[float, float, float]]:
-        """Find deep blind holes that may cause molding issues (simplified for performance)"""
+        """Detect cylindrical blind holes with high depth/diameter ratio"""
         deep_holes = []
-        
+
         try:
-            bbox = workplane.val().BoundingBox()
-            volume = workplane.val().Volume()
-            bbox_volume = bbox.xlen * bbox.ylen * bbox.zlen
-            
-            # If actual volume is much less than bounding box, likely has holes/cavities
-            volume_ratio = volume / bbox_volume if bbox_volume > 0 else 1
-            
-            if volume_ratio < 0.7:  # Less than 70% solid
-                deep_holes.append((bbox.center.x, bbox.center.y, bbox.center.z))
-            
+            shape = workplane.val()
+            for face in shape.Faces():
+                try:
+                    if face.geomType() != "CYLINDER":
+                        continue
+
+                    circular_edges = [e for e in face.Edges() if e.geomType() == "CIRCLE"]
+                    if len(circular_edges) != 2:
+                        continue
+
+                    centers = [e.Center() for e in circular_edges]
+                    radius = circular_edges[0].radius()
+
+                    depth = centers[0].sub(centers[1]).Length
+                    if radius <= 0:
+                        continue
+
+                    ratio = depth / (2 * radius)
+                    if ratio > self.max_blind_hole_depth_ratio:
+                        mid = centers[0].add(centers[1]).multiply(0.5)
+                        deep_holes.append((mid.x, mid.y, mid.z))
+
+                except Exception:
+                    continue
+
         except Exception as e:
             print(f"Error finding deep holes: {e}")
-        
+
         return deep_holes
     
     def _calculate_overall_rating(self, dimensions: DimensionAnalysis, 
