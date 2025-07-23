@@ -33,6 +33,7 @@ class STEPViewer {
         this.camera = null;
         this.renderer = null;
         this.controls = null;
+        this.labelRenderer = null;
         this.currentMesh = null;
         this.isWireframe = false;
         this.axesHelper = null;
@@ -146,16 +147,23 @@ class STEPViewer {
         this.camera.position.set(10, 10, 10);
         
         // Renderer setup
-        this.renderer = new THREE.WebGLRenderer({ 
+        this.renderer = new THREE.WebGLRenderer({
             antialias: true,
             alpha: true
         });
         this.renderer.setSize(container.clientWidth, container.clientHeight);
         this.renderer.setClearColor(0x2a2a2a, 1); // Consistent with kaki theme
         this.renderer.shadowMap.enabled = false; // Désactiver les ombres pour améliorer les performances
-        
+
         // Add the renderer to the container
         container.appendChild(this.renderer.domElement);
+
+        // CSS2D renderer for HTML-based labels
+        this.labelRenderer = new THREE.CSS2DRenderer();
+        this.labelRenderer.setSize(container.clientWidth, container.clientHeight);
+        this.labelRenderer.domElement.style.position = 'absolute';
+        this.labelRenderer.domElement.style.top = '0px';
+        container.appendChild(this.labelRenderer.domElement);
         
         // Add axes helper
         this.axesHelper = new THREE.AxesHelper(50);
@@ -988,6 +996,9 @@ class STEPViewer {
         
         this.controls.update();
         this.renderer.render(this.scene, this.camera);
+        if (this.labelRenderer) {
+            this.labelRenderer.render(this.scene, this.camera);
+        }
     }
     
     calculateAndDisplayVolume(geometry) {
@@ -1412,10 +1423,12 @@ class STEPViewer {
 
     clearIssueMarkers() {
         if (this.issueMarkers && this.issueMarkers.length > 0) {
-            this.issueMarkers.forEach(m => {
-                this.scene.remove(m);
-                if (m.geometry) m.geometry.dispose();
-                if (m.material) m.material.dispose();
+            this.issueMarkers.forEach(group => {
+                this.scene.remove(group);
+                group.traverse(obj => {
+                    if (obj.geometry) obj.geometry.dispose();
+                    if (obj.material) obj.material.dispose();
+                });
             });
         }
         this.issueMarkers = [];
@@ -1465,9 +1478,28 @@ class STEPViewer {
             }
 
             sphere.position.set(x, y, z);
-            this.scene.add(sphere);
-            this.issueMarkers.push(sphere);
+
+            // Tooltip element
+            const tooltipText = issue.description || issue.issue_type || '';
+            const div = document.createElement('div');
+            div.className = 'issue-tooltip';
+            div.setAttribute('data-bs-toggle', 'tooltip');
+            div.setAttribute('title', tooltipText);
+            div.style.pointerEvents = 'auto';
+
+            const label = new THREE.CSS2DObject(div);
+            label.position.set(0, markerSize * 1.2, 0);
+
+            const group = new THREE.Group();
+            group.add(sphere);
+            group.add(label);
+
+            this.scene.add(group);
+            this.issueMarkers.push(group);
         });
+
+        // Activate Bootstrap tooltips for new elements
+        this.initializeTooltips();
     }
     
     addDefectToggleButton() {
@@ -3224,8 +3256,11 @@ class STEPViewer {
         
         this.camera.aspect = container.clientWidth / container.clientHeight;
         this.camera.updateProjectionMatrix();
-        
+
         this.renderer.setSize(container.clientWidth, container.clientHeight);
+        if (this.labelRenderer) {
+            this.labelRenderer.setSize(container.clientWidth, container.clientHeight);
+        }
     }
     
     showDemoldingAxisSelect() {
