@@ -43,6 +43,7 @@ class STEPViewer {
         this.measurementPoints = [];
         this.measurementLines = [];
         this.issueMarkers = [];
+        this.modelOffset = new THREE.Vector3(0, 0, 0);
         this.crossSectionMode = false;
         this.crossSectionPlane = null;
         this.clippingPlanes = [];
@@ -731,6 +732,7 @@ class STEPViewer {
                 const center = new THREE.Vector3();
                 geometry.boundingBox.getCenter(center);
                 geometry.translate(-center.x, -center.y, -center.z);
+                this.modelOffset = center.clone();
                 
                 // Create material - always use Lambert for consistent lighting and shadows
                 let material;
@@ -1464,7 +1466,15 @@ class STEPViewer {
                 }
             }
 
-            sphere.position.set(x, y, z);
+            if (this.modelOffset) {
+                sphere.position.set(
+                    x - this.modelOffset.x,
+                    y - this.modelOffset.y,
+                    z - this.modelOffset.z
+                );
+            } else {
+                sphere.position.set(x, y, z);
+            }
             this.scene.add(sphere);
             this.issueMarkers.push(sphere);
         });
