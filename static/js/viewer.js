@@ -1455,7 +1455,9 @@ class STEPViewer {
 
         const box = new THREE.Box3().setFromObject(this.currentMesh);
         const size = box.getSize(new THREE.Vector3());
-        const markerSize = Math.max(size.x, size.y, size.z) * 0.01;
+        // Utilise 0.5 % de la diagonale du volume pour garder une taille cohérente quel que soit le modèle
+        const diag = Math.sqrt(size.x * size.x + size.y * size.y + size.z * size.z);
+        const markerSize = diag * 0.005;
 
         issues.forEach(issue => {
             const severity = issue.severity || 'info';
