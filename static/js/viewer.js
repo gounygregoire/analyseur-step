@@ -45,6 +45,8 @@ class STEPViewer {
         this.issueMarkers = [];
         this.issueMarkersVisible = true;
         this.highlightedFaceIndices = [];
+        this.highlightLines = [];
+        this.modelEdges = null;
         this.markerSizeScale = 1;
         this.crossSectionMode = false;
         this.crossSectionPlane = null;
@@ -185,22 +187,22 @@ class STEPViewer {
     
     setupLighting() {
         // Ambient light
-        const ambientLight = new THREE.AmbientLight(0x404040, 0.4);
+        const ambientLight = new THREE.AmbientLight(0x606060, 0.8);
         this.scene.add(ambientLight);
         
         // Main directional light (sans ombres)
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
         directionalLight.position.set(10, 10, 5);
         directionalLight.castShadow = false; // Désactiver les ombres
         this.scene.add(directionalLight);
         
         // Fill light
-        const fillLight = new THREE.DirectionalLight(0xffffff, 0.3);
+        const fillLight = new THREE.DirectionalLight(0xffffff, 0.6);
         fillLight.position.set(-10, -10, -5);
         this.scene.add(fillLight);
         
         // Point light for highlights
-        const pointLight = new THREE.PointLight(0xffffff, 0.5, 100);
+        const pointLight = new THREE.PointLight(0xffffff, 0.8, 100);
         pointLight.position.set(0, 20, 0);
         this.scene.add(pointLight);
     }
@@ -740,19 +742,19 @@ class STEPViewer {
                 if (vertexCount > 1000000) {
                     // Lambert material for extremely large models (still has lighting/shadows)
                     material = new THREE.MeshLambertMaterial({
-                        color: 0x888888,
+                        color: 0xaaaaaa,
                         side: THREE.DoubleSide
                     });
                 } else if (vertexCount > 500000) {
                     // Lambert material for large models
                     material = new THREE.MeshLambertMaterial({
-                        color: 0x888888,
+                        color: 0xaaaaaa,
                         side: THREE.DoubleSide
                     });
                 } else {
                     // Standard material for normal models
                     material = new THREE.MeshPhysicalMaterial({
-                        color: 0x888888,
+                        color: 0xaaaaaa,
                         metalness: 0.3,
                         roughness: 0.4,
                         clearcoat: 0.3,
@@ -767,6 +769,19 @@ class STEPViewer {
                 
                 // Add to scene
                 this.scene.add(this.currentMesh);
+
+                // Remove previous edge overlay if any
+                if (this.modelEdges) {
+                    this.currentMesh.remove(this.modelEdges);
+                    this.scene.remove(this.modelEdges);
+                    if (this.modelEdges.geometry) this.modelEdges.geometry.dispose();
+                    if (this.modelEdges.material) this.modelEdges.material.dispose();
+                }
+
+                const edgesGeom = new THREE.EdgesGeometry(geometry, 1);
+                const edgesMat = new THREE.LineBasicMaterial({ color: 0x000000 });
+                this.modelEdges = new THREE.LineSegments(edgesGeom, edgesMat);
+                this.currentMesh.add(this.modelEdges);
                 
                 // Optimize renderer for large models
                 if (vertexCount > 1000000) {
@@ -1414,7 +1429,6 @@ class STEPViewer {
 
         // Préparer les contrôles liés aux marqueurs
         this.addDefectToggleButton();
-        this.addMarkerSizeSlider();
     }
 
     clearIssueMarkers() {
@@ -1433,17 +1447,16 @@ class STEPViewer {
         }
         this.issueMarkers = [];
 
-        if (this.currentMesh && this.currentMesh.geometry.attributes.color) {
-            const geometry = this.currentMesh.geometry;
-            const baseColor = new THREE.Color(this.currentMesh.material.color);
-            const colors = geometry.attributes.color.array;
-            for (let i = 0; i < geometry.attributes.position.count; i++) {
-                baseColor.toArray(colors, i * 3);
-            }
-            geometry.attributes.color.needsUpdate = true;
-            this.currentMesh.material.vertexColors = false;
-            this.currentMesh.material.needsUpdate = true;
+
+        if (this.highlightLines && this.highlightLines.length > 0) {
+            this.highlightLines.forEach(line => {
+                this.scene.remove(line);
+                if (line.geometry) line.geometry.dispose();
+                if (line.material) line.material.dispose();
+            });
         }
+        this.highlightLines = [];
+
 
         this.highlightedFaceIndices = [];
         this.currentHighlightedIssues = null;
@@ -1476,28 +1489,30 @@ class STEPViewer {
         if (!this.currentMesh) return;
 
         this.currentHighlightedIssues = issues;
+        this.highlightedFaceIndices = [];
 
         const geometry = this.currentMesh.geometry;
-        const material = this.currentMesh.material;
 
-        if (!geometry.attributes.color) {
-            const count = geometry.attributes.position.count;
-            const baseColor = new THREE.Color(material.color);
-            const colors = new Float32Array(count * 3);
-            for (let i = 0; i < count; i++) {
-                baseColor.toArray(colors, i * 3);
-            }
-            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        if (this.highlightLines && this.highlightLines.length > 0) {
+            this.highlightLines.forEach(line => {
+                this.scene.remove(line);
+                if (line.geometry) line.geometry.dispose();
+                if (line.material) line.material.dispose();
+            });
         }
+        this.highlightLines = [];
 
-        material.vertexColors = true;
-        material.needsUpdate = true;
-
-        const colors = geometry.attributes.color.array;
+        const positions = geometry.attributes.position.array;
+        const indices = geometry.index ? geometry.index.array : null;
+        const faceCount = indices ? indices.length / 3 : positions.length / 9;
 
         issues.forEach(issue => {
             const severity = issue.severity || 'info';
-            const highlight = new THREE.Color(severity === 'critical' ? 0xff0000 : severity === 'warning' ? 0xffa500 : 0xffff00);
+            const highlight = new THREE.Color(
+                severity === 'critical' ? 0xff0000 :
+                severity === 'warning' ? 0xffa500 :
+                0xffff00
+            );
 
             let x = 0, y = 0, z = 0;
             if (issue.location) {
@@ -1507,22 +1522,78 @@ class STEPViewer {
                     ({ x, y, z } = issue.location);
                 }
             }
+            const issuePos = new THREE.Vector3(x, y, z);
 
-            const origin = this.camera.position.clone();
-            const direction = new THREE.Vector3(x, y, z).sub(origin).normalize();
-            const raycaster = new THREE.Raycaster(origin, direction);
-            const intersects = raycaster.intersectObject(this.currentMesh, false);
-            if (intersects.length > 0 && intersects[0].faceIndex !== undefined) {
-                const faceIndex = intersects[0].faceIndex;
-                this.highlightedFaceIndices.push(faceIndex);
-                for (let i = 0; i < 3; i++) {
-                    const vertexIndex = faceIndex * 3 + i;
-                    highlight.toArray(colors, vertexIndex * 3);
+            let closestFace = -1;
+            let minDist = Infinity;
+
+            for (let f = 0; f < faceCount; f++) {
+                let i1, i2, i3;
+                if (indices) {
+                    i1 = indices[f * 3];
+                    i2 = indices[f * 3 + 1];
+                    i3 = indices[f * 3 + 2];
+                } else {
+                    i1 = f * 3;
+                    i2 = f * 3 + 1;
+                    i3 = f * 3 + 2;
+                }
+
+                const v1 = new THREE.Vector3(
+                    positions[i1 * 3], positions[i1 * 3 + 1], positions[i1 * 3 + 2]
+                );
+                const v2 = new THREE.Vector3(
+                    positions[i2 * 3], positions[i2 * 3 + 1], positions[i2 * 3 + 2]
+                );
+                const v3 = new THREE.Vector3(
+                    positions[i3 * 3], positions[i3 * 3 + 1], positions[i3 * 3 + 2]
+                );
+
+                const centroid = new THREE.Vector3()
+                    .addVectors(v1, v2)
+                    .add(v3)
+                    .divideScalar(3);
+
+                const dist = centroid.distanceTo(issuePos);
+                if (dist < minDist) {
+                    minDist = dist;
+                    closestFace = f;
                 }
             }
-        });
 
-        geometry.attributes.color.needsUpdate = true;
+            if (closestFace !== -1) {
+                this.highlightedFaceIndices.push(closestFace);
+
+                let i1, i2, i3;
+                if (indices) {
+                    i1 = indices[closestFace * 3];
+                    i2 = indices[closestFace * 3 + 1];
+                    i3 = indices[closestFace * 3 + 2];
+                } else {
+                    i1 = closestFace * 3;
+                    i2 = closestFace * 3 + 1;
+                    i3 = closestFace * 3 + 2;
+                }
+
+                const v1 = new THREE.Vector3(
+                    positions[i1 * 3], positions[i1 * 3 + 1], positions[i1 * 3 + 2]
+                );
+                const v2 = new THREE.Vector3(
+                    positions[i2 * 3], positions[i2 * 3 + 1], positions[i2 * 3 + 2]
+                );
+                const v3 = new THREE.Vector3(
+                    positions[i3 * 3], positions[i3 * 3 + 1], positions[i3 * 3 + 2]
+                );
+
+                const lineGeometry = new THREE.BufferGeometry().setFromPoints([
+                    v1, v2, v3, v1
+                ]);
+                const lineMaterial = new THREE.LineBasicMaterial({ color: highlight });
+                const line = new THREE.Line(lineGeometry, lineMaterial);
+                this.scene.add(line);
+                this.highlightLines.push(line);
+            }
+        });
     }
     
     addDefectToggleButton() {
@@ -1548,49 +1619,7 @@ class STEPViewer {
         }
     }
 
-    addMarkerSizeSlider() {
-        if (document.getElementById('markerSizeSlider')) return;
-        const toolsContainer = document.querySelector('#viewerToolsPanel .d-flex.flex-wrap');
-        if (toolsContainer) {
-            const wrapper = document.createElement('div');
-            wrapper.className = 'd-flex align-items-center ms-2';
-            const label = document.createElement('label');
-            label.className = 'form-label mb-0 me-2';
-            label.textContent = 'Taille marqueurs';
-            label.htmlFor = 'markerSizeSlider';
-            const input = document.createElement('input');
-            input.type = 'range';
-            input.min = '0.5';
-            input.max = '3';
-            input.step = '0.1';
-            input.value = this.markerSizeScale;
-            input.id = 'markerSizeSlider';
-            input.className = 'form-range';
-            input.style.width = '120px';
-            input.addEventListener('input', (e) => {
-                this.updateMarkerSizes(parseFloat(e.target.value));
-            });
-            wrapper.appendChild(label);
-            wrapper.appendChild(input);
-            toolsContainer.appendChild(wrapper);
-        }
-    }
 
-    updateMarkerSizes(scale) {
-        this.markerSizeScale = scale;
-        this.issueMarkers.forEach(m => {
-            const sphere = m.sphere || m;
-            sphere.scale.set(scale, scale, scale);
-            if (m.sprite) {
-                m.sprite.scale.set((m.baseSize * 5) * scale, (m.baseSize * 2) * scale, 1);
-                m.sprite.position.set(
-                    sphere.position.x,
-                    sphere.position.y + m.baseSize * 1.5 * scale,
-                    sphere.position.z
-                );
-            }
-        });
-    }
 
     toggleIssueMarkers() {
         this.issueMarkersVisible = !this.issueMarkersVisible;
