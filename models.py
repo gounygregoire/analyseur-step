@@ -125,6 +125,30 @@ class OAuth(OAuthConsumerMixin, db.Model):
         name='uq_user_browser_session_key_provider',
     ),)
 
+# Logs applicatifs
+class LogEntry(db.Model):
+    __tablename__ = 'log_entries'
+
+    id = db.Column(db.Integer, primary_key=True)
+    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    action = db.Column(db.String(50), nullable=False)
+    user_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=True)
+    user_email = db.Column(db.String(120), nullable=True)
+    details = db.Column(db.JSON, nullable=True)
+
+    user = db.relationship('User')
+
+    def to_dict(self):
+        data = {
+            'timestamp': self.timestamp.isoformat(),
+            'action': self.action,
+            'user_id': self.user_id,
+            'user_email': self.user_email,
+        }
+        if self.details:
+            data.update(self.details)
+        return data
+
 # Profils de matériaux pour l'analyse DFM
 MATERIAL_PROFILES = {
     'PP': {  # Polypropylène
