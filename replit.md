@@ -88,9 +88,11 @@ CADlytitcs est une application SaaS basée sur Flask qui permet aux utilisateurs
 - **Platform**: Replit with Nix package management
 
 ### Configuration
-- Environment-based secret key management
-- Configurable upload limits and directories
-- CORS enabled for API flexibility
+- Gestion des clés secrètes par variables d'environnement
+- Limites de téléchargement et dossiers configurables
+- CORS activé pour plus de flexibilité API
+- Lancer un worker Celery avec la même valeur `CELERY_BROKER_URL` (Redis) pour
+  traiter les tâches en arrière-plan
 
 ## Changelog
 
