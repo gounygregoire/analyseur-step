@@ -564,11 +564,11 @@ class STEPViewer {
         const progressText = document.querySelector('#progressIndicator p.small');
         if (progressText) {
             if (fileSizeMB > 20) {
-                progressText.textContent = `Fichier complexe détecté (${Math.round(fileSizeMB)} Mo). La conversion peut prendre jusqu'à 5 minutes. Merci de patienter...`;
+                progressText.textContent = `Fichier complexe détecté (${Math.round(fileSizeMB)} Mo). La conversion peut prendre du temps...`;
             } else if (fileSizeMB > 10) {
-                progressText.textContent = `La conversion peut prendre jusqu'à ${Math.ceil(fileSizeMB * 10)} secondes pour ce fichier de ${Math.round(fileSizeMB)} Mo.`;
+                progressText.textContent = `La conversion peut prendre du temps pour ce fichier de ${Math.round(fileSizeMB)} Mo.`;
             } else {
-                progressText.textContent = `Conversion en cours... Cela peut prendre jusqu'à 60 secondes.`;
+                progressText.textContent = `Conversion en cours... Cela peut prendre un peu de temps.`;
             }
         }
         
@@ -948,6 +948,10 @@ class STEPViewer {
         if (loadingDiv) {
             loadingDiv.style.display = 'none';
         }
+        // Ensure the global progress section disappears once loading is done
+        if (typeof this.hideProgress === 'function') {
+            this.hideProgress();
+        }
     }
     
     resetView() {
@@ -1326,6 +1330,8 @@ class STEPViewer {
         
         // Generate the modern DFM interface
         dfmPanel.innerHTML = this.generateModernDFMInterface(dfmData);
+        // If material recommendations were fetched earlier, display them now
+        this.renderMaterialRecommendations();
         
         // Initialize Bootstrap tabs after HTML insertion
         setTimeout(() => {
@@ -4241,6 +4247,19 @@ document.addEventListener('DOMContentLoaded', function() {
             input.addEventListener('change', highlightLatestSelected);
             input.addEventListener('click', highlightLatestSelected);
         });
+
+        // Écouteurs pour la compatibilité des matériaux
+        ['mechanical', 'aesthetic', 'regulatory'].forEach(group => {
+            document.querySelectorAll(`input[name="${group}[]"]`).forEach(cb => {
+                cb.addEventListener('change', checkCompatibility);
+            });
+        });
+        document.getElementById('temperature')?.addEventListener('change', checkCompatibility);
+        document.querySelector('select[name="application"]')?.addEventListener('change', checkCompatibility);
+
+        if (typeof checkCompatibility === 'function') {
+            checkCompatibility();
+        }
     }
 
     
