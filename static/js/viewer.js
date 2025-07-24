@@ -589,6 +589,8 @@ class STEPViewer {
                     throw new Error('Le fichier est trop volumineux (max 100 Mo)');
                 } else if (response.status === 504) {
                     throw new Error('La conversion prend trop de temps. Essayez avec un fichier plus simple.');
+                } else if (response.status === 502) {
+                    throw new Error('Serveur indisponible (502). Veuillez réessayer plus tard.');
                 } else if (response.status === 403) {
                     // Try to get the error message from the response
                     const errorData = await response.json().catch(() => null);
