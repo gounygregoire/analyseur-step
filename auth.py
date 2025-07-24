@@ -154,4 +154,3 @@ def check_auth():
             'is_premium': current_user.is_premium
         })
     return jsonify({'authenticated': False})
-    
