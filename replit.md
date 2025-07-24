@@ -93,6 +93,7 @@ CADlytitcs est une application SaaS basée sur Flask qui permet aux utilisateurs
 - CORS activé pour plus de flexibilité API
 - Lancer un worker Celery avec la même valeur `CELERY_BROKER_URL` (Redis) pour
   traiter les tâches en arrière-plan
+- Pour Nginx, ajouter `client_max_body_size 100M;` et `proxy_read_timeout 600;`
 
 ## Changelog
 
