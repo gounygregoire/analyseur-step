@@ -681,8 +681,12 @@ class STEPViewer {
             // Re-attach event listeners for viewer tools since they were just made visible
             this.setupViewerToolsEvents();
             
+            // Determine STL file size and choose loading message
+            const stlSize = result.stl_size || result.stl_file_size || 0;
+            const message = stlSize > 10 * 1024 * 1024 ? 'Chargement long…' : 'Chargement du modèle 3D...';
+
             // Load and display the STL model directly
-            this.loadSTLModel(`/view/${result.stl_filename}`);
+            this.loadSTLModel(`/view/${result.stl_filename}`, message);
             
             // Show model info
             this.safeSetDisplay('modelInfo', 'block');
@@ -699,7 +703,7 @@ class STEPViewer {
         }
     }
 
-    async loadSTLModel(url) {
+    async loadSTLModel(url, loadingMessage = 'Chargement du modèle 3D...') {
         try {
             // Remove existing mesh
             if (this.currentMesh) {
@@ -713,7 +717,7 @@ class STEPViewer {
             }
             
             // Show loading indicator
-            this.showLoadingIndicator('Chargement du modèle 3D...');
+            this.showLoadingIndicator(loadingMessage);
             
             // Load STL with progress tracking and timeout handling
             const loader = new THREE.STLLoader();
@@ -3515,7 +3519,7 @@ class STEPViewer {
         let actions = '';
         if (conversion.status === 'completed') {
             actions = `
-                <button class="btn btn-sm btn-outline-primary" onclick="viewer.loadSTLFromHistory('${conversion.stl_filename}')">
+                <button class="btn btn-sm btn-outline-primary" onclick="viewer.loadSTLFromHistory('${conversion.stl_filename}', ${conversion.stl_file_size || 0})">
                     <i class="bi bi-eye"></i>
                 </button>
             `;
@@ -3544,8 +3548,9 @@ class STEPViewer {
         return row;
     }
     
-    loadSTLFromHistory(stlFilename) {
-        this.loadSTLModel(`/view/${stlFilename}`);
+    loadSTLFromHistory(stlFilename, stlSize = 0) {
+        const message = stlSize > 10 * 1024 * 1024 ? 'Chargement long…' : 'Chargement du modèle 3D...';
+        this.loadSTLModel(`/view/${stlFilename}`, message);
         document.getElementById('viewerControls').style.display = 'block';
         
         // Scroll to viewer
