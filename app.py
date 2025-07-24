@@ -68,6 +68,49 @@ app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
 db.init_app(app)
 migrate = Migrate(app, db)
 
+# Celery pour traiter les conversions en arrière-plan
+from celery import Celery
+
+def make_celery(flask_app):
+    broker = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+    celery = Celery(flask_app.import_name, broker=broker, backend=broker)
+    celery.conf.update(flask_app.config)
+
+    class ContextTask(celery.Task):
+        def __call__(self, *args, **kwargs):
+            with flask_app.app_context():
+                return super().__call__(*args, **kwargs)
+
+    celery.Task = ContextTask
+    return celery
+
+celery = make_celery(app)
+
+@celery.task()
+def convert_step_to_stl(job_id):
+    """Conversion asynchrone STEP vers STL"""
+    job = ConversionJob.query.get(job_id)
+    if not job:
+        return
+
+    job.status = 'processing'
+    db.session.commit()
+
+    step_path = os.path.join(app.config['UPLOAD_FOLDER'], job.step_filename)
+    stl_path = os.path.join(app.config['CONVERTED_FOLDER'], job.stl_filename)
+
+    try:
+        result = cq.importers.importStep(step_path)
+        cq.exporters.export(result, stl_path, "STL", tolerance=job.tolerance)
+        job.stl_file_size = os.path.getsize(stl_path)
+        job.status = 'completed'
+        job.completed_at = datetime.utcnow()
+    except Exception as e:
+        job.status = 'failed'
+        job.error_message = str(e)
+
+    db.session.commit()
+
 # Configuration
 UPLOAD_FOLDER = 'uploads'
 CONVERTED_FOLDER = 'converted'
@@ -248,271 +291,29 @@ def upload_file():
             tolerance = max(tolerance, min_tolerance)
             if tolerance != original_tolerance:
                 logger.info(f"File size: {file_size_mb:.1f}MB, adjusted tolerance from {original_tolerance} to {tolerance} for performance")
+        conversion_job = ConversionJob(
+            id=file_id,
+            user_id=current_user.id if current_user.is_authenticated else None,
+            original_filename=original_filename,
+            step_filename=step_filename,
+            stl_filename=stl_filename,
+            tolerance=tolerance,
+            step_file_size=step_size,
+            status='queued'
+        )
+        db.session.add(conversion_job)
+        db.session.commit()
+
+        convert_step_to_stl.delay(file_id)
+
+        log_action('upload', user_id=current_user.id, extra={
+            'filename': original_filename,
+            'file_size': step_size,
+            'conversion_id': file_id
+        })
+
+        return jsonify({'success': True, 'job_id': file_id})
         
-        # Create database record with error handling
-        try:
-            conversion_job = ConversionJob(
-                id=file_id,
-                user_id=current_user.id if current_user.is_authenticated else None,
-                original_filename=original_filename,
-                step_filename=step_filename,
-                stl_filename=stl_filename,
-                tolerance=tolerance,
-                step_file_size=step_size,
-                status='processing'
-            )
-            db.session.add(conversion_job)
-            db.session.commit()
-        except Exception as db_error:
-            logger.error(f"Database error: {db_error}")
-            db.session.rollback()
-            # Try to reconnect
-            try:
-                db.session.close()
-                db.engine.dispose()
-                # Create a simple in-memory tracking object
-                conversion_job = type('ConversionJob', (), {
-                    'id': file_id,
-                    'user_id': current_user.id if current_user.is_authenticated else None,
-                    'original_filename': original_filename,
-                    'step_filename': step_filename,
-                    'stl_filename': stl_filename,
-                    'tolerance': tolerance,
-                    'step_file_size': step_size,
-                    'status': 'processing',
-                    'stl_file_size': None,
-                    'completed_at': None,
-                    'error_message': None
-                })()
-                logger.info("Using in-memory tracking due to database issues")
-            except Exception as fallback_error:
-                logger.error(f"Fallback error: {fallback_error}")
-                conversion_job = None
-        
-        # Convert STEP to STL using CadQuery
-        try:
-            logger.info(f"Starting STEP to STL conversion with tolerance: {tolerance}")
-            
-            # Import STEP file with timeout handling
-            import signal
-            
-            def timeout_handler(signum, frame):
-                raise TimeoutError("La conversion prend trop de temps")
-            
-            # Set timeout based on file size (larger files need more time)
-            file_size_mb = step_size / (1024 * 1024)
-            # Timeout généreux pour fichiers complexes : 10 secondes par MB, minimum 60s, max 10 minutes
-            timeout_seconds = max(60, min(600, int(file_size_mb * 10)))
-            logger.info(f"Timeout défini à {timeout_seconds} secondes pour fichier de {file_size_mb:.1f}MB")
-            
-            signal.signal(signal.SIGALRM, timeout_handler)
-            signal.alarm(timeout_seconds)
-            
-            try:
-                # Try multiple import strategies for better robustness
-                result = None
-                import_errors = []
-                
-                # Strategy 1: Standard CadQuery import
-                try:
-                    logger.info(f"Attempting CadQuery import of {step_path}")
-                    result = cq.importers.importStep(step_path)
-                    if result is not None:
-                        logger.info("Standard CadQuery import successful")
-                        # Log some info about the imported shape
-                        try:
-                            if hasattr(result, 'val'):
-                                bb = result.val().BoundingBox()
-                            else:
-                                bb = result.BoundingBox()
-                            logger.info(f"Shape imported: {bb.xmax-bb.xmin:.1f} x {bb.ymax-bb.ymin:.1f} x {bb.zmax-bb.zmin:.1f} mm")
-                        except:
-                            pass
-                except Exception as e:
-                    import_errors.append(f"CadQuery: {str(e)}")
-                    logger.error(f"CadQuery import failed: {e}", exc_info=True)
-                
-                # OCC imports are not available on this system, skip this strategy
-                
-                if result is None:
-                    error_msg = f"Échec de l'importation du fichier STEP. Erreurs: {'; '.join(import_errors)}. Le fichier est peut-être trop complexe ou corrompu."
-                    raise Exception(error_msg)
-                
-                # Export to STL
-                stl_path = os.path.join(app.config['CONVERTED_FOLDER'], stl_filename)
-                
-                # Export to STL with multiple fallback strategies
-                logger.info(f"Starting STL export to: {stl_path}")
-                
-                export_success = False
-                export_errors = []
-                
-                # Strategy 1: CadQuery exporters with high tolerance first
-                try:
-                    if hasattr(result, 'val'):
-                        shape_to_export = result.val()
-                    else:
-                        shape_to_export = result
-                    
-                    logger.info(f"Shape type: {type(shape_to_export)}")
-                    
-                    # Use the tolerance as specified without minimum
-                    logger.info(f"Using export tolerance: {tolerance}")
-                    
-                    cq.exporters.export(shape_to_export, stl_path, "STL", tolerance=tolerance)
-                    export_success = True
-                    logger.info("Strategy 1: CadQuery exporters successful")
-                    
-                except Exception as e:
-                    export_errors.append(f"CadQuery exporters: {str(e)}")
-                    logger.warning(f"CadQuery exporters failed: {e}")
-                
-                # Strategy 2: Direct exportStl method
-                if not export_success and hasattr(result, 'exportStl'):
-                    try:
-                        result.exportStl(stl_path)
-                        export_success = True
-                        logger.info("Strategy 2: Direct exportStl successful")
-                    except Exception as e:
-                        export_errors.append(f"Direct exportStl: {str(e)}")
-                        logger.warning(f"Direct exportStl failed: {e}")
-                
-                if not export_success:
-                    logger.error(f"All export strategies failed: {'; '.join(export_errors)}")
-                    raise Exception(f"Tous les exports STL ont échoué: {'; '.join(export_errors)}. Essayez d'augmenter la tolérance ou utilisez un fichier plus simple.")
-                
-                logger.info(f"STL export completed, checking file existence")
-            finally:
-                # Cancel the alarm
-                signal.alarm(0)
-            
-            logger.info(f"Successfully converted to STL: {stl_path}")
-            
-            # Verify STL file was created
-            if not os.path.exists(stl_path):
-                raise Exception("Le fichier STL n'a pas été créé")
-            
-            # Get STL file size and update database (without DFM analysis for now)
-            stl_size = os.path.getsize(stl_path)
-            
-            # Check if STL can be loaded for 3D viewer
-            viewer_ready = True
-            viewer_error = None
-            try:
-                import trimesh
-                logger.info(f"Checking if STL can be loaded for viewer: {stl_path}")
-                
-                # Try to load the mesh with trimesh - be more tolerant
-                try:
-                    mesh = trimesh.load(stl_path, force='mesh')
-                    
-                    # Check if mesh is valid
-                    if mesh is None or not hasattr(mesh, 'vertices'):
-                        # Try alternative loading method
-                        mesh = trimesh.load_mesh(stl_path)
-                        
-                    if mesh is not None and hasattr(mesh, 'vertices') and hasattr(mesh, 'faces'):
-                        vertex_count = len(mesh.vertices) if hasattr(mesh.vertices, '__len__') else 0
-                        face_count = len(mesh.faces) if hasattr(mesh.faces, '__len__') else 0
-                        logger.info(f"Mesh loaded: {vertex_count} vertices, {face_count} faces")
-                        
-                        # Simplify mesh for viewer performance and memory management
-                        if face_count > 100000:  # Reduce threshold for simplification
-                            logger.warning(f"Mesh is complex ({face_count} faces), attempting simplification")
-                            try:
-                                # More aggressive simplification for very large meshes
-                                if face_count > 1000000:
-                                    target_faces = 100000  # Reduce to 100k faces for very large meshes
-                                elif face_count > 500000:
-                                    target_faces = 150000  # Reduce to 150k faces for large meshes
-                                else:
-                                    target_faces = min(50000, face_count // 2)  # Reduce to 50k or half
-                                
-                                simplified = mesh.simplify_quadric_decimation(target_faces)
-                                if simplified and hasattr(simplified, 'faces') and len(simplified.faces) > 0:
-                                    simplified.export(stl_path)
-                                    logger.info(f"Mesh simplified from {face_count} to {len(simplified.faces)} faces")
-                                    mesh = simplified  # Update mesh reference
-                                else:
-                                    logger.info("Simplification produced invalid mesh, keeping original")
-                            except Exception as simplify_error:
-                                logger.warning(f"Could not simplify mesh: {simplify_error}, keeping original")
-                                # Don't fail - keep the original mesh
-                    else:
-                        # Even if trimesh can't load it properly, the viewer might still work
-                        logger.warning("Trimesh couldn't validate mesh structure, but viewer may still work")
-                        
-                except Exception as load_error:
-                    logger.warning(f"Trimesh loading failed: {load_error}, but STL file exists")
-                    # Don't fail completely - the browser viewer might still handle it
-                    
-            except ImportError:
-                logger.warning("Trimesh not available, skipping viewer validation")
-                # Don't fail if trimesh is not available
-                
-            except Exception as viewer_check_error:
-                logger.warning(f"Viewer check error: {viewer_check_error}")
-                # Still mark as ready - let the browser decide
-            
-            # Update database with error handling
-            if conversion_job and hasattr(conversion_job, '__dict__'):
-                try:
-                    conversion_job.stl_file_size = stl_size
-                    conversion_job.status = 'completed'
-                    conversion_job.completed_at = datetime.utcnow()
-                    conversion_job.viewer_ready = viewer_ready
-                    conversion_job.viewer_error = viewer_error
-                    if hasattr(conversion_job, 'id') and hasattr(db.session, 'commit'):
-                        db.session.commit()
-                except Exception as db_update_error:
-                    logger.error(f"Database update error: {db_update_error}")
-                    db.session.rollback()
-                    # Continue without database update
-            
-            # Log l'action d'upload
-            user_id = current_user.id if current_user.is_authenticated else None
-            user_email = current_user.email if current_user.is_authenticated else None
-            log_action('upload', user_id=user_id, extra={
-                'filename': original_filename,
-                'file_size': step_size,
-                'user_email': user_email,
-                'conversion_id': file_id
-            })
-            
-            return jsonify({
-                'success': True,
-                'file_id': file_id,
-                'stl_filename': stl_filename,
-                'original_filename': original_filename,
-                'tolerance': tolerance,
-                'step_size': step_size,
-                'stl_size': stl_size,
-                'viewer_ready': viewer_ready,
-                'viewer_error': viewer_error,
-                'message': f'Fichier converti avec succès. Tolérance: {tolerance}'
-            })
-            
-        except Exception as e:
-            logger.error(f"Conversion error: {str(e)}")
-            # Update database with error handling
-            if conversion_job:
-                try:
-                    conversion_job.status = 'failed'
-                    conversion_job.error_message = str(e)
-                    conversion_job.completed_at = datetime.utcnow()
-                    if hasattr(db.session, 'commit'):
-                        db.session.commit()
-                except Exception as db_error:
-                    logger.error(f"Database error during failure update: {db_error}")
-                    db.session.rollback()
-            
-            # Clean up uploaded file on conversion failure
-            if os.path.exists(step_path):
-                os.remove(step_path)
-            error_msg = str(e)
-            if "timeout" in error_msg.lower() or isinstance(e, TimeoutError):
-                error_msg = "La conversion prend trop de temps. Essayez d'augmenter la tolérance (ex: 0.5) pour simplifier le maillage."
-            return jsonify({'error': f'Échec de la conversion : {error_msg}'}), 500
             
     except Exception as e:
         logger.error(f"Upload error: {str(e)}")
@@ -565,6 +366,27 @@ def view_file(filename):
     except Exception as e:
         logger.error(f"Error serving file {filename}: {str(e)}")
         return jsonify({'error': 'Erreur lors du chargement du fichier'}), 500
+
+@app.route('/api/job-status/<job_id>')
+def job_status(job_id):
+    """Retourne l\'état d\'une conversion"""
+    job = ConversionJob.query.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job introuvable'}), 404
+
+    data = {
+        'status': job.status,
+        'stl_filename': job.stl_filename if job.status == 'completed' else None,
+        'stl_size': job.stl_file_size,
+        'error': job.error_message
+    }
+    return jsonify(data)
+
+@app.route('/view/<job_id>.stl')
+def view_stl_job(job_id):
+    """Télécharge le STL généré pour un job"""
+    job = ConversionJob.query.get_or_404(job_id)
+    return view_file(job.stl_filename)
 
 @app.route('/api/conversions')
 def get_conversions():
