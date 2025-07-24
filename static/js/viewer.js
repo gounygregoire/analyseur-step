@@ -47,6 +47,7 @@ class STEPViewer {
         this.highlightedFaceIndices = [];
         this.markerSizeScale = 1;
         this.meshEdges = null;
+        this.showEdges = true;
         this.highlightOverlays = [];
         this.crossSectionMode = false;
         this.crossSectionPlane = null;
@@ -256,6 +257,11 @@ class STEPViewer {
         if (toggleWireframeBtn) {
             toggleWireframeBtn.addEventListener('click', () => this.toggleWireframe());
         }
+
+        const toggleEdgesBtn = this.safeGetElement('toggleEdgesBtn');
+        if (toggleEdgesBtn) {
+            toggleEdgesBtn.addEventListener('click', () => this.toggleEdges());
+        }
         
         const toggleAxesBtn = this.safeGetElement('toggleAxesBtn');
         if (toggleAxesBtn) {
@@ -365,6 +371,13 @@ class STEPViewer {
             const newWireframeBtn = oldWireframeBtn.cloneNode(true);
             oldWireframeBtn.parentNode.replaceChild(newWireframeBtn, oldWireframeBtn);
             newWireframeBtn.addEventListener('click', () => this.toggleWireframe());
+        }
+
+        const oldEdgesBtn = this.safeGetElement('toggleEdgesBtn');
+        if (oldEdgesBtn) {
+            const newEdgesBtn = oldEdgesBtn.cloneNode(true);
+            oldEdgesBtn.parentNode.replaceChild(newEdgesBtn, oldEdgesBtn);
+            newEdgesBtn.addEventListener('click', () => this.toggleEdges());
         }
         
         const oldAxesBtn = this.safeGetElement('toggleAxesBtn');
@@ -784,6 +797,7 @@ class STEPViewer {
                     new THREE.EdgesGeometry(geometry, 1),
                     new THREE.LineBasicMaterial({ color: 0x000000 })
                 );
+                this.meshEdges.visible = this.showEdges;
                 this.scene.add(this.meshEdges);
                 
                 // Optimize renderer for large models
@@ -920,6 +934,22 @@ class STEPViewer {
                     btn.innerHTML = '<i class="bi bi-square me-1"></i>Solide';
                 } else {
                     btn.innerHTML = '<i class="bi bi-grid-3x3 me-1"></i>Filaire';
+                }
+            }
+        }
+    }
+
+    toggleEdges() {
+        if (this.meshEdges) {
+            this.showEdges = !this.showEdges;
+            this.meshEdges.visible = this.showEdges;
+
+            const btn = this.safeGetElement('toggleEdgesBtn');
+            if (btn) {
+                if (this.showEdges) {
+                    btn.innerHTML = '<i class="bi bi-bounding-box me-1"></i>Arêtes';
+                } else {
+                    btn.innerHTML = '<i class="bi bi-bounding-box me-1"></i>Masquer';
                 }
             }
         }
