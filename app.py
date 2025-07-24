@@ -11,6 +11,7 @@ from pathlib import Path
 from datetime import datetime
 from models import db, ConversionJob, UserSession, User, OAuth
 from dfm_analyzer import analyze_dfm, DFMReport
+from heatmap import generate_heatmap
 from material_recommender import recommend_materials_for_questionnaire
 from flask_login import LoginManager, login_required, current_user
 from translations import get_translation, get_all_translations
@@ -632,6 +633,9 @@ def analyze_dfm_endpoint(conversion_id):
                 'success': False,
                 'error': 'Fichier STEP non trouvé'
             }), 404
+
+        # STL path for heatmap generation
+        stl_path = os.path.join(app.config['CONVERTED_FOLDER'], conversion_job.stl_filename)
         
         # Check user authentication and credits
         if current_user.is_authenticated:
@@ -647,6 +651,7 @@ def analyze_dfm_endpoint(conversion_id):
         # Perform DFM analysis with proper error handling
         try:
             dfm_report = analyze_dfm(step_path, demolding_axis)
+            heatmap_data = generate_heatmap(stl_path)
             
             if dfm_report is None:
                 logger.error("DFM analysis returned None")
@@ -734,7 +739,8 @@ def analyze_dfm_endpoint(conversion_id):
                         'severity': str(issue.severity) if issue.severity else 'unknown',
                         'recommendation': str(issue.recommendation) if issue.recommendation else 'Recommandation non disponible'
                     } for issue in dfm_report.geometry_issues if issue
-                ]
+                ],
+                'heatmap': heatmap_data
             }
             
             # Test JSON serialization
