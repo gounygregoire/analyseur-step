@@ -18,6 +18,8 @@ from translations import get_translation, get_all_translations
 from log import log_action
 from flask_dance.contrib.google import make_google_blueprint, google
 from dotenv import load_dotenv
+from kombu.exceptions import OperationalError as KombuOperationalError
+from redis.exceptions import ConnectionError as RedisConnectionError
 load_dotenv()
 
 # Create Flask app once
@@ -305,7 +307,16 @@ def upload_file():
         db.session.add(conversion_job)
         db.session.commit()
 
-        convert_step_to_stl.delay(file_id)
+        try:
+            convert_step_to_stl.delay(file_id)
+        except (KombuOperationalError, RedisConnectionError) as e:
+            logger.exception(f"Celery unavailable for job {file_id}: {e}")
+            try:
+                convert_step_to_stl(file_id)
+            except Exception as sync_e:
+                logger.error(f"Synchronous conversion failed for {file_id}: {sync_e}")
+                return jsonify({'success': False,
+                                'error': 'Service temporairement indisponible'}), 503
 
         log_action('upload', user_id=current_user.id, extra={
             'filename': original_filename,
