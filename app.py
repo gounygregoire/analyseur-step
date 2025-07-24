@@ -49,6 +49,8 @@ app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SECURE'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size
+# Execute Celery tasks synchronously when no worker is running
+app.config['CELERY_TASK_ALWAYS_EAGER'] = os.getenv('CELERY_TASK_ALWAYS_EAGER', 'True').lower() == 'true'
 
 # Database configuration
 database_url = os.environ.get("DATABASE_URL")
@@ -72,6 +74,7 @@ def make_celery(flask_app):
     broker = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
     celery = Celery(flask_app.import_name, broker=broker, backend=broker)
     celery.conf.update(flask_app.config)
+    celery.conf.update(task_always_eager=flask_app.config['CELERY_TASK_ALWAYS_EAGER'])
 
     class ContextTask(celery.Task):
         def __call__(self, *args, **kwargs):
