@@ -82,3 +82,5 @@ pyparsing==3.2.3
 networkx==3.4.2
 flask-cors
 flask-sqlalchemy
+celery==5.3.6
+redis==5.0.1

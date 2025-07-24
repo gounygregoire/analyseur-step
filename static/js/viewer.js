@@ -602,11 +602,13 @@ class STEPViewer {
             }
             
             const result = await response.json();
-            
-            if (result.success) {
-                this.handleUploadSuccess(result);
+
+            if (result.success && result.job_id) {
+                this.currentConversionId = result.job_id;
+                this.pollJobStatus(result.job_id);
             } else {
                 this.showError(result.error || 'Upload failed');
+                this.hideProgress();
             }
         } catch (error) {
             console.error('Upload error:', error);
@@ -619,11 +621,37 @@ class STEPViewer {
             } else {
                 this.showError(error.message || 'Une erreur réseau s\'est produite pendant le téléchargement');
             }
-        } finally {
             this.hideProgress();
         }
+
+    pollJobStatus(jobId) {
+        const interval = setInterval(async () => {
+            try {
+                const resp = await fetch(`/api/job-status/${jobId}`);
+                if (!resp.ok) throw new Error('Erreur suivi conversion');
+                const data = await resp.json();
+                if (data.status === 'completed') {
+                    clearInterval(interval);
+                    this.hideProgress();
+                    this.handleUploadSuccess({
+                        file_id: jobId,
+                        stl_filename: data.stl_filename,
+                        stl_size: data.stl_size,
+                        viewer_ready: true
+                    });
+                } else if (data.status === 'failed') {
+                    clearInterval(interval);
+                    this.hideProgress();
+                    this.showError(data.error || 'Conversion échouée');
+                }
+            } catch (err) {
+                clearInterval(interval);
+                this.hideProgress();
+                this.showError(err.message || 'Erreur suivi conversion');
+            }
+        }, 3000);
     }
-    
+
     handleUploadSuccess(result) {
         console.log('Upload successful:', result);
         
