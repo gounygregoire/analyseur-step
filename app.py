@@ -93,8 +93,8 @@ def convert_step_to_stl(job_id):
     job.status = 'processing'
     db.session.commit()
 
-    step_path = os.path.join(app.config['UPLOAD_FOLDER'], job.step_filename)
-    stl_path = os.path.join(app.config['CONVERTED_FOLDER'], job.stl_filename)
+    step_path = os.path.abspath(os.path.join(app.config['UPLOAD_FOLDER'], job.step_filename))
+    stl_path = os.path.abspath(os.path.join(app.config['CONVERTED_FOLDER'], job.stl_filename))
 
     try:
         result = cq.importers.importStep(step_path)
@@ -109,8 +109,9 @@ def convert_step_to_stl(job_id):
     db.session.commit()
 
 # Configuration
-UPLOAD_FOLDER = 'uploads'
-CONVERTED_FOLDER = 'converted'
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
+CONVERTED_FOLDER = os.path.join(BASE_DIR, 'converted')
 ALLOWED_EXTENSIONS = {'step', 'stp'}
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -262,7 +263,7 @@ def upload_file():
         stl_filename = f"{file_id}.stl"
         
         # Save uploaded file
-        step_path = os.path.join(app.config['UPLOAD_FOLDER'], step_filename)
+        step_path = os.path.abspath(os.path.join(app.config['UPLOAD_FOLDER'], step_filename))
         file.save(step_path)
         step_size = os.path.getsize(step_path)
         
@@ -322,7 +323,7 @@ def upload_file():
 def view_file(filename):
     """Serve STL files for 3D viewer with chunked streaming for large files"""
     try:
-        file_path = os.path.join(app.config['CONVERTED_FOLDER'], filename)
+        file_path = os.path.abspath(os.path.join(app.config['CONVERTED_FOLDER'], filename))
         if not os.path.exists(file_path):
             return jsonify({'error': 'Fichier non trouvé'}), 404
         
@@ -445,7 +446,7 @@ def analyze_dfm_endpoint(conversion_id):
             }), 400
         
         # Get STEP file path
-        step_path = os.path.join(app.config['UPLOAD_FOLDER'], conversion_job.step_filename)
+        step_path = os.path.abspath(os.path.join(app.config['UPLOAD_FOLDER'], conversion_job.step_filename))
         if not os.path.exists(step_path):
             logger.error(f"STEP file not found: {step_path}")
             return jsonify({
@@ -454,7 +455,7 @@ def analyze_dfm_endpoint(conversion_id):
             }), 404
 
         # STL path for heatmap generation
-        stl_path = os.path.join(app.config['CONVERTED_FOLDER'], conversion_job.stl_filename)
+        stl_path = os.path.abspath(os.path.join(app.config['CONVERTED_FOLDER'], conversion_job.stl_filename))
         
         # Check user authentication and credits
         if current_user.is_authenticated:
@@ -617,7 +618,7 @@ def generate_pdf_report(conversion_id):
             return jsonify({'error': 'L\'analyse DFM doit être effectuée avant la génération du rapport'}), 400
         
         # Get STEP file path
-        step_path = os.path.join(app.config['UPLOAD_FOLDER'], conversion_job.step_filename)
+        step_path = os.path.abspath(os.path.join(app.config['UPLOAD_FOLDER'], conversion_job.step_filename))
         if not os.path.exists(step_path):
             return jsonify({'error': 'Fichier STEP non trouvé'}), 404
         
@@ -793,7 +794,7 @@ def download_zip(conversion_id):
         
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             # 1. Ajouter le fichier STEP original
-            step_path = os.path.join(UPLOAD_FOLDER, conversion.step_filename)
+            step_path = os.path.abspath(os.path.join(UPLOAD_FOLDER, conversion.step_filename))
             if os.path.exists(step_path):
                 zip_file.write(step_path, f"original/{conversion.original_filename}")
             
