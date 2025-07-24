@@ -2147,7 +2147,7 @@ class STEPViewer {
         
         if (!materials || materials.length === 0) {
             console.log('No material recommendations available');
-            return `<p class="text-muted">Aucune recommandation générée</p>`;
+            return `<p class="text-muted">Aucune recommandation disponible pour cette géométrie.</p>`;
         }
         
         // Store for later use
@@ -2455,7 +2455,12 @@ class STEPViewer {
                 })
             })
             .then(async (response) => {
-                const result = await response.json();
+                let result;
+                try {
+                    result = await response.json();
+                } catch (err) {
+                    throw new Error('Réponse serveur invalide');
+                }
 
                 if (!response.ok) throw new Error(result.error || 'Erreur analyse matériaux');
 
@@ -2477,7 +2482,7 @@ class STEPViewer {
             })
             .catch(error => {
                 console.error('Material analysis error:', error);
-                alert(`Erreur lors de l'analyse matériaux : ${error.message}`);
+                alert(`Erreur lors de la récupération des recommandations matériaux : ${error.message}`);
             });
 
         } catch (err) {
