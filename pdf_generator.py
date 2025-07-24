@@ -1184,4 +1184,3 @@ def generate_dfm_pdf_report(dfm_data: Dict[str, Any], step_file_path: str,
         print(f"Error generating DFM PDF report: {e}")
         # Return the output path even on error to prevent None return
         return output_path
-        return output_path

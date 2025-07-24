@@ -20,8 +20,9 @@ from flask_dance.contrib.google import make_google_blueprint, google
 from dotenv import load_dotenv
 load_dotenv()
 
+# Create Flask app once
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "dev")  # ou une clé plus sécurisée
+app.secret_key = os.environ.get("SESSION_SECRET", os.getenv("SECRET_KEY", "dev"))
 
 app.config["SESSION_COOKIE_SECURE"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
@@ -39,10 +40,6 @@ app.register_blueprint(google_bp, url_prefix="/auth")
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
-
-# Create Flask app
-app = Flask(__name__)
-app.secret_key = os.environ.get("SESSION_SECRET", "dev-secret-key-change-in-production")
 
 # Enable CORS for API endpoints
 CORS(app)
