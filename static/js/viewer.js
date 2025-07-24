@@ -624,6 +624,8 @@ class STEPViewer {
             this.hideProgress();
         }
 
+    }
+
     pollJobStatus(jobId) {
         const interval = setInterval(async () => {
             try {
