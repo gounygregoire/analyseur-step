@@ -724,7 +724,7 @@ def analyze_dfm_endpoint(conversion_id):
                         'thickness': safe_float(issue.thickness, 0),
                         'issue_type': str(issue.issue_type) if issue.issue_type else 'unknown',
                         'severity': str(issue.severity) if issue.severity else 'unknown'
-                    } for issue in dfm_report.wall_thickness_issues[:5] if issue  # Limit to 5 issues
+                    } for issue in dfm_report.wall_thickness_issues if issue
                 ],
                 'geometry_issues': [
                     {
@@ -733,7 +733,7 @@ def analyze_dfm_endpoint(conversion_id):
                         'description': str(issue.description) if issue.description else 'Description non disponible',
                         'severity': str(issue.severity) if issue.severity else 'unknown',
                         'recommendation': str(issue.recommendation) if issue.recommendation else 'Recommandation non disponible'
-                    } for issue in dfm_report.geometry_issues[:5] if issue  # Limit to 5 issues
+                    } for issue in dfm_report.geometry_issues if issue
                 ]
             }
             
