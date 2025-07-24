@@ -1536,13 +1536,25 @@ class STEPViewer {
         const indices = geometry.index ? geometry.index.array : null;
         const faceCount = indices ? indices.length / 3 : positions.length / 9;
 
+        // Helper to compute color from severity or magnitude
+        const getGradientColor = (issue) => {
+            let t = 0; // 0 = green, 1 = red
+            if (typeof issue.magnitude === 'number') {
+                t = THREE.MathUtils.clamp(issue.magnitude, 0, 1);
+            } else {
+                const sev = (issue.severity || 'info').toLowerCase();
+                if (sev === 'critical') t = 1;
+                else if (sev === 'warning') t = 0.5;
+                else t = 0;
+            }
+            const h = (1 - t) * 0.33; // green (0.33) -> red (0)
+            const color = new THREE.Color();
+            color.setHSL(h, 1, 0.5);
+            return color;
+        };
+
         issues.forEach(issue => {
-            const severity = issue.severity || 'info';
-            const highlightColor = new THREE.Color(
-                severity === 'critical' ? 0xff0000 :
-                severity === 'warning' ? 0xffa500 :
-                0xffff00
-            );
+            const highlightColor = getGradientColor(issue);
 
             let x = 0, y = 0, z = 0;
             if (issue.location) {
@@ -1619,8 +1631,16 @@ class STEPViewer {
                 faceGeometry.setFromPoints([v1, v2, v3]);
                 faceGeometry.setIndex([0, 1, 2]);
 
+                // Apply vertex colors for gradient support
+                const colors = new Float32Array([
+                    highlightColor.r, highlightColor.g, highlightColor.b,
+                    highlightColor.r, highlightColor.g, highlightColor.b,
+                    highlightColor.r, highlightColor.g, highlightColor.b
+                ]);
+                faceGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
                 const faceMaterial = new THREE.MeshBasicMaterial({
-                    color: highlightColor,
+                    vertexColors: true,
                     transparent: true,
                     opacity: 0.5,
                     side: THREE.DoubleSide,
