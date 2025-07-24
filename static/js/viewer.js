@@ -1549,7 +1549,14 @@ class STEPViewer {
 
         if (issues.length === 0) return;
 
-        this.highlightFacesForIssues(issues);
+        if (criterionId === 'sharp_edges') {
+            if (!this.isWireframe) {
+                this.toggleWireframe();
+            }
+            this.highlightEdgesForSharpEdges(issues);
+        } else {
+            this.highlightFacesForIssues(issues);
+        }
     }
 
     highlightFacesForIssues(issues) {
@@ -1686,6 +1693,56 @@ class STEPViewer {
             }
         });
     }
+
+    highlightEdgesForSharpEdges(issues) {
+        if (!this.currentMesh) return;
+
+        this.currentHighlightedIssues = issues;
+        this.clearHighlightOverlays();
+
+        const getGradientColor = (issue) => {
+            let t = 0;
+            if (typeof issue.magnitude === 'number') {
+                t = THREE.MathUtils.clamp(issue.magnitude, 0, 1);
+            } else {
+                const sev = (issue.severity || 'info').toLowerCase();
+                if (sev === 'critical') t = 1;
+                else if (sev === 'warning') t = 0.5;
+                else t = 0;
+            }
+            const h = (1 - t) * 0.33;
+            const color = new THREE.Color();
+            color.setHSL(h, 1, 0.5);
+            return color;
+        };
+
+        issues.forEach(issue => {
+            const color = getGradientColor(issue);
+            const coords = issue.edge_coords || issue.edge_points || issue.edge;
+            if (!Array.isArray(coords) || coords.length < 2) return;
+
+            const verts = [];
+            for (let i = 0; i < coords.length - 1; i++) {
+                const p1 = coords[i];
+                const p2 = coords[i + 1];
+                if (p1 && p2) {
+                    verts.push(p1[0], p1[1], p1[2]);
+                    verts.push(p2[0], p2[1], p2[2]);
+                }
+            }
+
+            if (verts.length === 0) return;
+
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+
+            const material = new THREE.LineBasicMaterial({ color });
+            const lines = new THREE.LineSegments(geometry, material);
+
+            this.scene.add(lines);
+            this.highlightOverlays.push(lines);
+        });
+    }
     
     addDefectToggleButton() {
         // Vérifier si le bouton existe déjà
@@ -1715,7 +1772,12 @@ class STEPViewer {
         this.issueMarkersVisible = !this.issueMarkersVisible;
         if (this.issueMarkersVisible) {
             if (this.currentHighlightedIssues && this.currentHighlightedIssues.length > 0) {
-                this.highlightFacesForIssues(this.currentHighlightedIssues);
+                const first = this.currentHighlightedIssues[0];
+                if (first.issue_type === 'sharp_edge') {
+                    this.highlightEdgesForSharpEdges(this.currentHighlightedIssues);
+                } else {
+                    this.highlightFacesForIssues(this.currentHighlightedIssues);
+                }
             }
         } else {
             this.clearIssueMarkers();
