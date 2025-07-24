@@ -1336,6 +1336,7 @@ class STEPViewer {
         // Initialize Bootstrap tabs after HTML insertion
         setTimeout(() => {
             this.initializeDFMTabs();
+            this.initializeIssueGroupToggle();
         }, 100);
         
         // Show action buttons
@@ -1874,6 +1875,30 @@ class STEPViewer {
         
         console.log('DFM tabs initialized');
     }
+
+    initializeIssueGroupToggle() {
+        const toggleBtn = document.getElementById('toggleAllIssues');
+        if (!toggleBtn) return;
+        toggleBtn.addEventListener('click', () => this.toggleAllIssueGroups());
+    }
+
+    toggleAllIssueGroups() {
+        const headers = document.querySelectorAll('.issue-group-header');
+        const btn = document.getElementById('toggleAllIssues');
+        if (!btn) return;
+        const expand = btn.dataset.expanded !== 'true';
+        headers.forEach(header => {
+            const target = header.getAttribute('data-bs-target');
+            if (!target) return;
+            const el = document.querySelector(target);
+            if (!el) return;
+            let instance = bootstrap.Collapse.getInstance(el);
+            if (!instance) instance = new bootstrap.Collapse(el, { toggle: false });
+            expand ? instance.show() : instance.hide();
+        });
+        btn.dataset.expanded = expand ? 'true' : 'false';
+        btn.textContent = expand ? 'Tout replier' : 'Tout afficher';
+    }
     
     generateModernDFMInterface(dfmData) {
         const scoreColor = this.getScoreColor(dfmData.score);
@@ -2038,6 +2063,7 @@ class STEPViewer {
                     <i class="bi bi-exclamation-triangle-fill text-warning me-2"></i>
                     <h5 class="dfm-issues-title">Problèmes détectés</h5>
                 </div>
+                <button id="toggleAllIssues" class="btn btn-sm btn-outline-secondary mb-3">Tout afficher</button>
         `;
 
         const sharpEdges = geometryIssues.filter(i => i.issue_type === 'sharp_edge');

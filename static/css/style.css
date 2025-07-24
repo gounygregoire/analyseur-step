@@ -354,6 +354,11 @@ body {
     box-shadow: 0 5px 15px var(--shadow);
 }
 
+/* Animation pour les collapses DFM */
+.collapse {
+    transition: height 0.3s ease;
+}
+
 .dfm-issue-header {
     display: flex;
     align-items: center;
