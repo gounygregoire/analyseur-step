@@ -1919,9 +1919,7 @@ class STEPViewer {
                     </div>
                     
                     <!-- Onglet Recommandations Matériaux -->
-                    <div class="tab-pane fade" id="materials-panel" role="tabpanel">
-                        ${this.generateMaterialsTabContent()}
-                    </div>
+                    <div class="tab-pane fade" id="materials-panel" role="tabpanel"></div>
                 </div>
             </div>
         `;
@@ -2010,7 +2008,7 @@ class STEPViewer {
         
         if (!materials || materials.length === 0) {
             console.log('No material recommendations available');
-            return '';
+            return `<p class="text-muted">Aucune recommandation générée</p>`;
         }
         
         // Store for later use
@@ -2072,6 +2070,15 @@ class STEPViewer {
                 </div>
             </div>
         `;
+    }
+
+    renderMaterialRecommendations() {
+        const panel = document.getElementById('materials-panel');
+        if (!panel) {
+            console.warn('materials-panel not found');
+            return;
+        }
+        panel.innerHTML = this.generateMaterialRecommendationsSection();
     }
 
     getCostLevelClass(costLevel) {
@@ -2325,6 +2332,8 @@ class STEPViewer {
                 } else {
                     this.currentMaterialType = 'GENERIC';
                 }
+
+                this.renderMaterialRecommendations();
 
             })
             .catch(error => {
