@@ -1,2 +1,3 @@
 web: gunicorn app:app --timeout 600
 worker: ./start_worker.sh
+beat: ./start_beat.sh
