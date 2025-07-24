@@ -1,1 +1,4 @@
 analytics.json
+__pycache__/
+*.pyc
+test_env/
