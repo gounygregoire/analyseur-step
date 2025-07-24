@@ -11,10 +11,9 @@
     <!-- Custom CSS -->
     <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
     
-    <!-- Three.js and STL Loader -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <!-- xeokit SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk/dist/xeokit-sdk.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     
     <!-- Bootstrap Icons -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css">
@@ -686,7 +685,7 @@
                   });
                 </script>
             <!-- Tes scripts JS d'abord -->
-            <script src="{{ url_for('static', filename='js/viewer.js') }}"></script>
+            <script src="{{ url_for('static', filename='js/xeokit_viewer.js') }}"></script>
             <script src="{{ url_for('static', filename='js/design-insights.js') }}"></script>
 
             
