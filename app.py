@@ -8,7 +8,7 @@ import cadquery as cq
 import uuid
 import time
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from models import db, ConversionJob, UserSession, User, OAuth
 from dfm_analyzer import analyze_dfm, DFMReport
 from heatmap import generate_heatmap
@@ -87,6 +87,14 @@ def make_celery(flask_app):
     return celery
 
 celery = make_celery(app)
+from celery.schedules import crontab
+
+celery.conf.beat_schedule = {
+    'cleanup-old-files': {
+        'task': 'app.cleanup_old_files',
+        'schedule': crontab(hour=0, minute=0),
+    }
+}
 
 @celery.task()
 def convert_step_to_stl(job_id):
@@ -113,14 +121,33 @@ def convert_step_to_stl(job_id):
 
     db.session.commit()
 
+
+@celery.task()
+def cleanup_old_files():
+    """Supprime les fichiers trop anciens dans uploads/ et converted/"""
+    retention_days = app.config.get('FILE_RETENTION_DAYS', 7)
+    cutoff = datetime.utcnow() - timedelta(days=retention_days)
+    for folder in (app.config['UPLOAD_FOLDER'], app.config['CONVERTED_FOLDER']):
+        for name in os.listdir(folder):
+            path = os.path.join(folder, name)
+            try:
+                mtime = datetime.utcfromtimestamp(os.path.getmtime(path))
+                if mtime < cutoff:
+                    os.remove(path)
+                    logger.info(f"Deleted old file {path}")
+            except Exception as e:
+                logger.exception(f"Error deleting {path}: {e}")
+
 # Configuration
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
 CONVERTED_FOLDER = os.path.join(BASE_DIR, 'converted')
 ALLOWED_EXTENSIONS = {'step', 'stp'}
+FILE_RETENTION_DAYS = int(os.getenv('FILE_RETENTION_DAYS', '7'))
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['CONVERTED_FOLDER'] = CONVERTED_FOLDER
+app.config['FILE_RETENTION_DAYS'] = FILE_RETENTION_DAYS
 
 # Ensure directories exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
