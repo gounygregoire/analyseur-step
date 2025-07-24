@@ -538,8 +538,13 @@ class STEPViewer {
             this.showError('Éléments du formulaire non trouvés');
             return;
         }
-        
+
         const file = fileInputElement.files[0];
+
+        // Large file feedback
+        if (file && file.size > 10 * 1024 * 1024) {
+            this.showLoadingIndicator("⏳ Fichier volumineux en cours de traitement... Cela peut prendre un peu de temps.");
+        }
         
         // Adjust tolerance based on file size for better performance
         let tolerance = parseFloat(toleranceInput.value);
@@ -893,6 +898,12 @@ class STEPViewer {
     }
     
     showLoadingIndicator(message = 'Chargement...') {
+        // Ensure progress section is visible
+        const progressSection = document.getElementById('progressSection');
+        if (progressSection && progressSection.style.display === 'none') {
+            progressSection.style.display = 'block';
+        }
+
         // Create or update loading indicator
         let loadingDiv = document.getElementById('stlLoadingIndicator');
         if (!loadingDiv) {
