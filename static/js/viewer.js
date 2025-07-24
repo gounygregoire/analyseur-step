@@ -1948,7 +1948,7 @@ class STEPViewer {
                 </div>
             `;
         }
-        
+
         let issuesHtml = `
             <div class="dfm-issues-section">
                 <div class="dfm-issues-header">
@@ -1956,47 +1956,103 @@ class STEPViewer {
                     <h5 class="dfm-issues-title">Problèmes détectés</h5>
                 </div>
         `;
-        
-        // Wall thickness issues
+
+        const sharpEdges = geometryIssues.filter(i => i.issue_type === 'sharp_edge');
+        const undercuts = geometryIssues.filter(i => i.issue_type === 'deep_blind_hole');
+        const generalGeom = geometryIssues.filter(i => i.issue_type !== 'sharp_edge' && i.issue_type !== 'deep_blind_hole');
+
+        // Épaisseurs
         if (wallIssues.length > 0) {
             issuesHtml += `
-                <h6 class="mt-3 mb-2"><i class="bi bi-layers me-2"></i>Épaisseur des parois</h6>
-            `;
-            wallIssues.forEach(issue => {
-                issuesHtml += `
-                    <div class="dfm-issue-item severity-${issue.severity}">
-                        <div class="dfm-issue-header">
-                            <span class="dfm-issue-severity">${this.getSeverityText(issue.severity)}</span>
-                        </div>
-                        <div class="dfm-issue-description">
-                            Épaisseur ${issue.thickness}mm - ${this.getIssueTypeText(issue.issue_type)}
-                        </div>
-                        <div class="dfm-issue-recommendation">
-                            ${this.getWallThicknessRecommendation(issue.issue_type, issue.thickness)}
-                        </div>
+                <div class="issue-group mb-2">
+                    <div class="issue-group-header fw-bold" role="button" data-bs-toggle="collapse" data-bs-target="#collapse-walls" aria-expanded="false" aria-controls="collapse-walls">
+                        <i class="bi bi-layers me-2"></i>Épaisseurs
                     </div>
-                `;
-            });
+                    <div id="collapse-walls" class="collapse show">
+                        ${wallIssues.map(issue => `
+                            <div class="dfm-issue-item severity-${issue.severity}">
+                                <div class="dfm-issue-header">
+                                    <span class="dfm-issue-severity">${this.getSeverityText(issue.severity)}</span>
+                                </div>
+                                <div class="dfm-issue-description">
+                                    Épaisseur ${issue.thickness}mm - ${this.getIssueTypeText(issue.issue_type)}
+                                </div>
+                                <div class="dfm-issue-recommendation">
+                                    ${this.getWallThicknessRecommendation(issue.issue_type, issue.thickness)}
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
         }
-        
-        // Geometry issues
-        if (geometryIssues.length > 0) {
+
+        // Géométrie générale
+        if (generalGeom.length > 0) {
             issuesHtml += `
-                <h6 class="mt-3 mb-2"><i class="bi bi-shapes me-2"></i>Géométrie</h6>
-            `;
-            geometryIssues.forEach(issue => {
-                issuesHtml += `
-                    <div class="dfm-issue-item severity-${issue.severity}">
-                        <div class="dfm-issue-header">
-                            <span class="dfm-issue-severity">${this.getSeverityText(issue.severity)}</span>
-                        </div>
-                        <div class="dfm-issue-description">${issue.description}</div>
-                        <div class="dfm-issue-recommendation">${issue.recommendation}</div>
+                <div class="issue-group mb-2">
+                    <div class="issue-group-header fw-bold" role="button" data-bs-toggle="collapse" data-bs-target="#collapse-geom" aria-expanded="false" aria-controls="collapse-geom">
+                        <i class="bi bi-shapes me-2"></i>Géométrie
                     </div>
-                `;
-            });
+                    <div id="collapse-geom" class="collapse">
+                        ${generalGeom.map(issue => `
+                            <div class="dfm-issue-item severity-${issue.severity}">
+                                <div class="dfm-issue-header">
+                                    <span class="dfm-issue-severity">${this.getSeverityText(issue.severity)}</span>
+                                </div>
+                                <div class="dfm-issue-description">${issue.description}</div>
+                                <div class="dfm-issue-recommendation">${issue.recommendation}</div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
         }
-        
+
+        // Contre-dépouilles
+        if (undercuts.length > 0) {
+            issuesHtml += `
+                <div class="issue-group mb-2">
+                    <div class="issue-group-header fw-bold" role="button" data-bs-toggle="collapse" data-bs-target="#collapse-undercut" aria-expanded="false" aria-controls="collapse-undercut">
+                        <i class="bi bi-boxes me-2"></i>Contre-dépouilles
+                    </div>
+                    <div id="collapse-undercut" class="collapse">
+                        ${undercuts.map(issue => `
+                            <div class="dfm-issue-item severity-${issue.severity}">
+                                <div class="dfm-issue-header">
+                                    <span class="dfm-issue-severity">${this.getSeverityText(issue.severity)}</span>
+                                </div>
+                                <div class="dfm-issue-description">${issue.description}</div>
+                                <div class="dfm-issue-recommendation">${issue.recommendation}</div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        // Arêtes vives
+        if (sharpEdges.length > 0) {
+            issuesHtml += `
+                <div class="issue-group mb-2">
+                    <div class="issue-group-header fw-bold" role="button" data-bs-toggle="collapse" data-bs-target="#collapse-sharp" aria-expanded="false" aria-controls="collapse-sharp">
+                        <i class="bi bi-triangle me-2"></i>Arêtes vives
+                    </div>
+                    <div id="collapse-sharp" class="collapse">
+                        ${sharpEdges.map(issue => `
+                            <div class="dfm-issue-item severity-${issue.severity}">
+                                <div class="dfm-issue-header">
+                                    <span class="dfm-issue-severity">${this.getSeverityText(issue.severity)}</span>
+                                </div>
+                                <div class="dfm-issue-description">${issue.description}</div>
+                                <div class="dfm-issue-recommendation">${issue.recommendation}</div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
         issuesHtml += `</div>`;
         return issuesHtml;
     }
