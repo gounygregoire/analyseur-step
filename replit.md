@@ -91,8 +91,18 @@ CADlytitcs est une application SaaS basée sur Flask qui permet aux utilisateurs
 - Gestion des clés secrètes par variables d'environnement
 - Limites de téléchargement et dossiers configurables
 - CORS activé pour plus de flexibilité API
-- Lancer un worker Celery avec la même valeur `CELERY_BROKER_URL` (Redis) pour
-  traiter les tâches en arrière-plan
+- Démarrer Redis puis le worker Celery avec la même variable `CELERY_BROKER_URL`
+  que le processus web :
+
+```bash
+redis-server --daemonize yes
+CELERY_BROKER_URL=redis://localhost:6379/0 ./start_worker.sh
+```
+- Lancer Gunicorn en utilisant la même variable :
+
+```bash
+CELERY_BROKER_URL=redis://localhost:6379/0 gunicorn app:app --timeout 600
+```
 - Pour Nginx, ajouter `client_max_body_size 100M;` et `proxy_read_timeout 600;`
 
 ## Changelog
