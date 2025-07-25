@@ -668,6 +668,7 @@ def generate_pdf_report(conversion_id):
         
         # Use existing DFM data from database instead of re-analyzing (to avoid timeout)
         request_data = request.get_json() or {}
+        screenshot_data = request_data.get('screenshot')
         
         # Create simplified DFM data from database values
         class SimplifiedDFMReport:
@@ -776,12 +777,13 @@ def generate_pdf_report(conversion_id):
         # Create PDF with user language
         generator = DFMReportGenerator(language=user_lang)
         generated_path = generator.generate_report(
-            dfm_data, 
-            step_path, 
-            pdf_path, 
+            dfm_data,
+            step_path,
+            pdf_path,
             conversion_job.original_filename,
             material_recommendations,
-            lang=user_lang
+            lang=user_lang,
+            screenshot_image=screenshot_data
         )
         
         logger.info(f"PDF report generated: {generated_path}")
