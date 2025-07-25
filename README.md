@@ -1,6 +1,8 @@
 # Cadlytics
 
 Ce dépôt contient le code du MVP de Cadlytics, SaaS d'analyse DFM et de visualisation 3D pour fichiers STEP.
+Le viewer 3D repose désormais sur **Xeokit** et rend les modèles au format **XKT**
+(conversion réalisée via `xkt_converter.py`).
 
 ## Nettoyage automatique des fichiers
 
