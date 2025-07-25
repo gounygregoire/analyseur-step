@@ -58,6 +58,15 @@ class XeokitViewerApp {
         }
     }
 
+    toggleEdges() {
+        const state = !this._edgesVisible;
+        this._edgesVisible = state;
+        const objects = this.viewer.scene.objects;
+        for (const id in objects) {
+            objects[id].edges = state;
+        }
+    }
+
     enableSection(axis) {
         this._section.removeSectionPlanes();
         const dir = axis === 'x' ? [1, 0, 0] : axis === 'y' ? [0, 1, 0] : [0, 0, 1];
@@ -117,6 +126,7 @@ class XeokitViewerApp {
     _bindUI() {
         document.getElementById('resetViewBtn')?.addEventListener('click', () => this.resetView());
         document.getElementById('toggleWireframeBtn')?.addEventListener('click', () => this.toggleWireframe());
+        document.getElementById('toggleEdgesBtn')?.addEventListener('click', () => this.toggleEdges());
         document.getElementById('crossSectionBtn')?.addEventListener('click', () => {
             const axis = document.getElementById('crossSectionAxisSelect')?.value || 'z';
             this.toggleSection(axis);
