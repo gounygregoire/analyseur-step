@@ -25,6 +25,7 @@ class XeokitViewerApp {
         };
 
         this._bindUI();
+        this._initPicking();
     }
 
     _isWebGL2() {
@@ -132,6 +133,57 @@ class XeokitViewerApp {
         if (this._initialCamera) {
             this.viewer.cameraFlight.flyTo(this._initialCamera);
         }
+    }
+
+    _initPicking() {
+        this._selectedEntity = null;
+        this._selectedColor = null;
+
+        this._tooltip = document.createElement('div');
+        this._tooltip.id = 'entityTooltip';
+        this._tooltip.style.position = 'absolute';
+        this._tooltip.style.pointerEvents = 'none';
+        this._tooltip.style.display = 'none';
+        document.body.appendChild(this._tooltip);
+
+        const canvas = this.viewer.canvas;
+        canvas.addEventListener('mousemove', (e) => this._handleHover(e));
+        canvas.addEventListener('click', (e) => this._handleSelect(e));
+    }
+
+    _handleHover(e) {
+        const hit = this.viewer.scene.pick({ canvasPos: [e.offsetX, e.offsetY] });
+        if (hit && hit.entity) {
+            const entity = hit.entity;
+            const label = entity.name || entity.id;
+            this._tooltip.textContent = label;
+            this._tooltip.style.left = `${e.clientX + 10}px`;
+            this._tooltip.style.top = `${e.clientY + 10}px`;
+            this._tooltip.style.display = 'block';
+        } else {
+            this._tooltip.style.display = 'none';
+        }
+    }
+
+    _handleSelect(e) {
+        const hit = this.viewer.scene.pick({ canvasPos: [e.offsetX, e.offsetY] });
+        if (hit && hit.entity) {
+            this._highlightEntity(hit.entity);
+        }
+    }
+
+    _highlightEntity(entity) {
+        if (this._selectedEntity && this._selectedEntity.id !== entity.id) {
+            if (this._selectedColor) {
+                this._selectedEntity.colorize = this._selectedColor;
+            } else {
+                this._selectedEntity.colorize = null;
+            }
+        }
+
+        this._selectedColor = entity.colorize ? entity.colorize.slice() : null;
+        entity.colorize = [1, 0.8, 0];
+        this._selectedEntity = entity;
     }
 
     _bindUI() {

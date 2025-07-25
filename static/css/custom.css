@@ -230,3 +230,15 @@
 .issue-marker-info {
   background-color: rgba(255, 255, 0, 0.6);
 }
+
+/* Tooltip pour la sélection d'entité */
+#entityTooltip {
+  position: absolute;
+  background: rgba(0, 0, 0, 0.8);
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  pointer-events: none;
+  z-index: 10000;
+}
