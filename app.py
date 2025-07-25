@@ -24,7 +24,10 @@ load_dotenv()
 
 # Create Flask app once
 app = Flask(__name__)
-app.secret_key = os.environ.get("SESSION_SECRET", os.getenv("SECRET_KEY", "dev"))
+secret = os.environ.get("SESSION_SECRET") or os.getenv("SECRET_KEY")
+if not secret:
+    raise RuntimeError("SESSION_SECRET environment variable is required")
+app.secret_key = secret
 
 app.config["SESSION_COOKIE_SECURE"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"

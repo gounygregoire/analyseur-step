@@ -17,3 +17,8 @@ CELERY_BROKER_URL=redis://localhost:6379/0 ./start_worker.sh
 CELERY_BROKER_URL=redis://localhost:6379/0 ./start_beat.sh
 CELERY_BROKER_URL=redis://localhost:6379/0 gunicorn app:app --timeout 600
 ```
+
+## Variables d'environnement importantes
+
+- `SESSION_SECRET` : clé secrète pour chiffrer les sessions Flask. Obligation
+  de définir une valeur aléatoire en production.
