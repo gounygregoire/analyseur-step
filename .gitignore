@@ -2,3 +2,4 @@ analytics.json
 __pycache__/
 *.pyc
 test_env/
+debug_redirect_uri.py
