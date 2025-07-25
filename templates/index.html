@@ -669,21 +669,6 @@
             </div>
         </div>
     </footer>
-                <!-- Zone de test Drag & Drop -->
-                <div id="testDrop" style="border: 2px dashed grey; padding: 30px; margin-top: 40px; text-align: center;">
-                  Dropzone de test (pas liée à ton form)
-                </div>
-
-                <script>
-                  const testDrop = document.getElementById("testDrop");
-                  testDrop.addEventListener("dragover", e => {
-                    e.preventDefault();
-                    testDrop.style.backgroundColor = "yellow";
-                  });
-                  testDrop.addEventListener("dragleave", () => {
-                    testDrop.style.backgroundColor = "white";
-                  });
-                </script>
             <!-- Tes scripts JS d'abord -->
             <script src="{{ url_for('static', filename='js/xeokit_viewer.js') }}"></script>
             <script src="{{ url_for('static', filename='js/design-insights.js') }}"></script>
