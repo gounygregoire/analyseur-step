@@ -679,6 +679,12 @@
                                     const tooltips = Array.from(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
                                     tooltips.forEach(el => new bootstrap.Tooltip(el));
                                   });
+
+                                  function onConversionFinished(jobId) {
+                                    if (window.xeokitApp) {
+                                      xeokitApp.loadModel('/view/' + jobId + '.xkt');
+                                    }
+                                  }
                                 </script>
 </body>
 </html>
