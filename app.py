@@ -3,7 +3,7 @@ import logging
 from flask import Flask, render_template, request, jsonify, send_file, send_from_directory, session, Response, redirect, url_for, flash
 from flask_cors import CORS
 from flask_migrate import Migrate
-from werkzeug.utils import secure_filename
+from werkzeug.utils import secure_filename, safe_join
 import cadquery as cq
 import trimesh
 import uuid
@@ -396,9 +396,12 @@ def upload_file():
 @app.route('/view/<filename>')
 def view_file(filename):
     """Serve STL files for 3D viewer with chunked streaming for large files"""
+    # Validate filename to prevent path traversal
+    if '..' in filename or os.path.isabs(filename):
+        return jsonify({'error': 'Nom de fichier invalide'}), 400
     try:
-        file_path = os.path.abspath(os.path.join(app.config['CONVERTED_FOLDER'], filename))
-        if not os.path.exists(file_path):
+        file_path = safe_join(app.config['CONVERTED_FOLDER'], filename)
+        if not file_path or not os.path.exists(file_path):
             return jsonify({'error': 'Fichier non trouvé'}), 404
         
         file_size = os.path.getsize(file_path)
