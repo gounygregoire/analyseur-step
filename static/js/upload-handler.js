@@ -13,6 +13,14 @@ document.addEventListener('DOMContentLoaded', function () {
     const fileInput = document.getElementById('fileInput');
     const fileNameDisplay = document.getElementById('fileNameDisplay');
 
+    function onUploadSuccess(jobId) {
+        if (window.xeokitApp) {
+            xeokitApp.loadModel('/view/' + jobId + '.xkt');
+        }
+        if (viewerToolsPanel) viewerToolsPanel.style.display = 'block';
+        if (dfmControls) dfmControls.style.display = 'flex';
+    }
+
     if (fileInput) {
         fileInput.addEventListener('change', () => {
             if (fileNameDisplay) {
@@ -54,14 +62,11 @@ document.addEventListener('DOMContentLoaded', function () {
                         clearInterval(interval);
                         if (progressSection) progressSection.style.display = 'none';
                         if (uploadResults) uploadResults.style.display = 'block';
-                        const filename = info.xkt_filename || info.stl_filename;
-                        if (info.viewer_ready && window.xeokitApp && filename) {
-                            xeokitApp.loadModel('/view/' + filename);
-                            if (viewerToolsPanel) viewerToolsPanel.style.display = 'block';
-                        } else if (!info.viewer_ready) {
+                        if (info.viewer_ready) {
+                            onUploadSuccess(jobId);
+                        } else {
                             showError(info.viewer_error || 'Visualisation 3D impossible');
                         }
-                        if (dfmControls) dfmControls.style.display = 'flex';
                     } else if (info.status === 'failed') {
                         clearInterval(interval);
                         showError(info.error || 'Conversion échouée');
