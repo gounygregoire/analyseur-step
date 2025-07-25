@@ -945,6 +945,36 @@ def get_material_recommendations():
         logger.error(f"Material recommendations error: {str(e)}")
         return jsonify({'error': f'Erreur lors de la génération des recommandations: {str(e)}'}), 500
 
+@app.route('/api/dfm-summary')
+def dfm_summary():
+    """Return a short summary for the last DFM analysis"""
+    try:
+        query = ConversionJob.query.filter(ConversionJob.dfm_score.isnot(None))
+        if current_user.is_authenticated:
+            query = query.filter_by(user_id=current_user.id)
+        conversion = query.order_by(ConversionJob.created_at.desc()).first()
+        if not conversion:
+            return jsonify({'summary': ''})
+
+        lang = session.get('language', 'fr')
+        if lang == 'en':
+            summary = (
+                f"Moldability score: {conversion.dfm_score}/10 - "
+                f"{conversion.dfm_overall_rating or 'N/A'}, "
+                f"{conversion.dfm_issues_count or 0} issue(s)."
+            )
+        else:
+            summary = (
+                f"Score DFM : {conversion.dfm_score}/10 - "
+                f"{conversion.dfm_overall_rating or 'N/A'}, "
+                f"{conversion.dfm_issues_count or 0} problème(s)."
+            )
+
+        return jsonify({'summary': summary})
+    except Exception as e:
+        logger.error(f"Error fetching DFM summary: {str(e)}")
+        return jsonify({'summary': ''}), 500
+
 @app.route('/health')
 def health_check():
     """Health check endpoint"""
