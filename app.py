@@ -5,6 +5,7 @@ from flask_cors import CORS
 from flask_migrate import Migrate
 from werkzeug.utils import secure_filename
 import cadquery as cq
+import trimesh
 import uuid
 import time
 from pathlib import Path
@@ -114,16 +115,40 @@ def convert_step_to_stl(job_id):
     stl_path = os.path.abspath(os.path.join(app.config['CONVERTED_FOLDER'], job.stl_filename))
     xkt_path = os.path.abspath(os.path.join(app.config['CONVERTED_FOLDER'], job.xkt_filename))
 
+    viewer_ready = True
+    viewer_error = None
     try:
         result = cq.importers.importStep(step_path)
         cq.exporters.export(result, stl_path, "STL", tolerance=job.tolerance)
-        xkt_converter.convert_step_to_xkt(step_path, xkt_path)
+        try:
+            xkt_converter.convert_step_to_xkt(step_path, xkt_path)
+        except Exception as xkt_err:
+            viewer_ready = False
+            viewer_error = f"Conversion XKT échouée: {xkt_err}"
+
         job.stl_file_size = os.path.getsize(stl_path)
+
+        try:
+            mesh = trimesh.load(stl_path, force='mesh', skip_materials=True, process=False)
+            if mesh.is_empty or len(getattr(mesh, 'faces', [])) == 0:
+                viewer_ready = False
+                if not viewer_error:
+                    viewer_error = 'STL invalide pour le viewer'
+        except Exception as val_err:
+            viewer_ready = False
+            if not viewer_error:
+                viewer_error = f'Validation viewer échouée: {val_err}'
+
         job.status = 'completed'
         job.completed_at = datetime.utcnow()
     except Exception as e:
         job.status = 'failed'
         job.error_message = str(e)
+        viewer_ready = False
+        viewer_error = str(e)
+
+    job.viewer_ready = viewer_ready
+    job.viewer_error = viewer_error
 
     db.session.commit()
 
@@ -431,7 +456,9 @@ def job_status(job_id):
         'stl_filename': job.stl_filename if job.status == 'completed' else None,
         'xkt_filename': job.xkt_filename if job.status == 'completed' else None,
         'stl_size': job.stl_file_size,
-        'error': job.error_message
+        'error': job.error_message,
+        'viewer_ready': job.viewer_ready,
+        'viewer_error': job.viewer_error,
     }
     return jsonify(data)
 
