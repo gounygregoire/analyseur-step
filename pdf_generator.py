@@ -609,8 +609,9 @@ class DFMReportGenerator:
         import base64
         return base64.b64encode(svg_content.encode()).decode()
         
-    def generate_report(self, dfm_data: Dict[str, Any], step_file_path: str, 
-                       filename: str, original_filename: str, material_recommendations: List[Dict] = None, lang: str = 'fr') -> str:
+    def generate_report(self, dfm_data: Dict[str, Any], step_file_path: str,
+                       filename: str, original_filename: str, material_recommendations: List[Dict] = None,
+                       lang: str = 'fr', screenshot_image: str | None = None) -> str:
         """Generate complete DFM PDF report"""
         try:
             # Generate 3D views from STEP file
@@ -630,7 +631,7 @@ class DFMReportGenerator:
             story = []
             
             # Title page
-            story.extend(self._create_title_page(original_filename, dfm_data, lang))
+            story.extend(self._create_title_page(original_filename, dfm_data, lang, screenshot_image))
             story.append(PageBreak())
             
             # Executive summary
@@ -669,7 +670,8 @@ class DFMReportGenerator:
                 pass
             return filename
         
-    def _create_title_page(self, original_filename: str, dfm_data: Dict[str, Any], lang: str = 'fr') -> List:
+    def _create_title_page(self, original_filename: str, dfm_data: Dict[str, Any],
+                           lang: str = 'fr', screenshot_image: str | None = None) -> List:
         """Create title page"""
         content = []
         
@@ -749,7 +751,19 @@ class DFMReportGenerator:
         ]))
         
         content.append(stats_table)
-        
+
+        if screenshot_image:
+            try:
+                if screenshot_image.startswith('data:image'):
+                    screenshot_image = screenshot_image.split(',', 1)[1]
+                img_data = base64.b64decode(screenshot_image)
+                from io import BytesIO
+                img_buffer = BytesIO(img_data)
+                content.append(Spacer(1, 20))
+                content.append(Image(img_buffer, width=160, height=120))
+            except Exception as e:
+                print(f"Failed to embed screenshot: {e}")
+
         return content
         
     def _create_executive_summary(self, dfm_data: Dict[str, Any]) -> List:

@@ -105,16 +105,27 @@ class XeokitViewerApp {
         }
     }
 
+    captureScreenshot() {
+        return this.viewer.canvas.toDataURL('image/png');
+    }
+
     exportPDF() {
-        const { jsPDF } = window.jspdf;
-        const doc = new jsPDF();
-        const img = this.viewer.canvas.toDataURL('image/png');
-        doc.text('Rapport DFM', 10, 10);
-        doc.addImage(img, 'PNG', 10, 20, 180, 120);
-        fetch('/api/dfm-summary').then(r => r.json()).then(data => {
-            doc.text(data.summary || '', 10, 150);
-            doc.save('rapport.pdf');
-        });
+        const screenshot = this.captureScreenshot();
+        const convId = window.currentConversionId || '';
+        fetch(`/api/generate-pdf/${convId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ screenshot })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success && data.pdf_filename) {
+                window.location.href = `/download-pdf/${data.pdf_filename}`;
+            } else {
+                console.error('Erreur génération PDF', data);
+            }
+        })
+        .catch(err => console.error('PDF request failed', err));
     }
 
     resetView() {
