@@ -2,26 +2,26 @@
 
 ## Vue d'ensemble
 
-CADlytitcs est une application SaaS basée sur Flask qui permet aux utilisateurs de télécharger des fichiers STEP (.step, .stp), de les analyser pour la manufacturabilité (DFM) en injection plastique, et de les visualiser dans un viewer 3D avancé. L'application convertit les fichiers STEP au format STL en utilisant CadQuery pour la visualisation 3D dans le navigateur avec Three.js et génère des rapports PDF détaillés.
+CADlytitcs est une application SaaS basée sur Flask qui permet aux utilisateurs de télécharger des fichiers STEP (.step, .stp), de les analyser pour la manufacturabilité (DFM) en injection plastique, et de les visualiser dans un viewer 3D avancé. L'application convertit les fichiers STEP au format **XKT** (via `xkt_converter.py`) pour la visualisation 3D avec **Xeokit** et génère des rapports PDF détaillés.
 
 ## System Architecture
 
 ### Backend Architecture
 - **Framework**: Flask (Python web framework)
-- **File Processing**: CadQuery for STEP to STL conversion
+- **File Processing**: CadQuery pour la conversion STEP→XKT (`xkt_converter.py`)
 - **Web Server**: Gunicorn for production deployment
 - **CORS**: Flask-CORS for cross-origin resource sharing
 - **File Handling**: Werkzeug for secure file uploads
 
 ### Frontend Architecture
-- **3D Rendering**: Three.js for WebGL-based 3D visualization
+- **3D Rendering**: Xeokit for WebGL-based 3D visualization (format XKT)
 - **UI Framework**: Bootstrap 5 with dark theme
 - **File Upload**: HTML5 file API with progress tracking
 - **Controls**: OrbitControls for 3D navigation
 
 ### Key Design Decisions
-- **File Format Choice**: STEP files are industry-standard CAD format, converted to STL for web display
-- **Client-Side Rendering**: Three.js provides hardware-accelerated 3D rendering without server load
+- **File Format Choice**: STEP files are industry-standard CAD format, converted to XKT for web display
+- **Client-Side Rendering**: Xeokit provides hardware-accelerated 3D rendering without server load
 - **Temporary Storage**: Files are stored locally in uploads/ and converted/ directories
 - **Security**: File extension validation and secure filename handling
 
@@ -40,7 +40,7 @@ CADlytitcs est une application SaaS basée sur Flask qui permet aux utilisateurs
 ├── app.py                 # Main Flask application
 ├── main.py               # Entry point
 ├── uploads/              # Temporary STEP file storage
-├── converted/            # Generated STL files
+├── converted/            # Generated XKT files
 ├── templates/            # HTML templates
 └── static/              # CSS, JS, and assets
 ```
@@ -49,9 +49,9 @@ CADlytitcs est une application SaaS basée sur Flask qui permet aux utilisateurs
 
 1. **File Upload**: User selects STEP file through web interface
 2. **Validation**: Server validates file extension and size (max 50MB)
-3. **Conversion**: CadQuery converts STEP to STL format
-4. **Storage**: STL file saved to converted/ directory
-5. **Visualization**: Three.js loads and renders STL in browser
+3. **Conversion**: CadQuery converts STEP to XKT format
+4. **Storage**: XKT file saved to converted/ directory
+5. **Visualization**: Xeokit loads and renders XKT in browser
 6. **Interaction**: User can rotate, zoom, and inspect 3D model
 
 ## External Dependencies
@@ -65,7 +65,7 @@ CADlytitcs est une application SaaS basée sur Flask qui permet aux utilisateurs
 - `psycopg2-binary`: PostgreSQL adapter (for future database needs)
 
 ### Frontend Libraries
-- `Three.js`: 3D graphics library
+- `Xeokit`: 3D graphics library
 - `Bootstrap 5`: UI framework
 - `Bootstrap Icons`: Icon set
 
