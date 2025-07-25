@@ -202,6 +202,16 @@ class XeokitViewerApp {
     }
 }
 
+function initXeokitViewer() {
+    if (typeof xeokit === 'object') {
+        window.xeokitApp = new XeokitViewerApp();
+    } else {
+        console.error('xeokit SDK non chargé, le viewer ne peut pas démarrer.');
+    }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
-    window.xeokitApp = new XeokitViewerApp();
+    if (typeof xeokit !== 'undefined') {
+        initXeokitViewer();
+    }
 });

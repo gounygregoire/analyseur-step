@@ -11,8 +11,6 @@
     <!-- Custom CSS -->
     <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
     
-    <!-- xeokit SDK -->
-    <script src="https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@1.6.2/dist/xeokit-sdk.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     
     <!-- Bootstrap Icons -->
@@ -669,6 +667,18 @@
             </div>
         </div>
     </footer>
+            <script>
+                const xeokitScript = document.createElement('script');
+                xeokitScript.src = "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@1.6.2/dist/xeokit-sdk.min.js";
+                xeokitScript.onload = () => {
+                    console.log("\u2705 xeokit SDK charg\u00e9 !");
+                    if (typeof initXeokitViewer === 'function') {
+                        initXeokitViewer();
+                    }
+                };
+                xeokitScript.onerror = () => console.error("\u274c Impossible de charger xeokit SDK");
+                document.head.appendChild(xeokitScript);
+            </script>
             <!-- Tes scripts JS d'abord -->
             <script defer src="{{ url_for('static', filename='js/xeokit_viewer.js') }}"></script>
             <script defer src="{{ url_for('static', filename='js/upload-handler.js') }}"></script>
