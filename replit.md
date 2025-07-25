@@ -31,7 +31,7 @@ CADlytitcs est une application SaaS basée sur Flask qui permet aux utilisateurs
 - `main.py`: Application entry point
 - `app.py`: Main Flask application with upload and conversion logic
 - `templates/index.html`: Single-page application template
-- `static/js/viewer.js`: 3D viewer implementation
+- `static/js/xeokit_viewer.js`: 3D viewer implementation
 - `static/css/custom.css`: Custom styling
 
 ### Directory Structure
