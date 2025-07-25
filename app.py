@@ -13,6 +13,7 @@ from models import db, ConversionJob, UserSession, User, OAuth
 from dfm_analyzer import analyze_dfm, DFMReport
 from heatmap import generate_heatmap
 from material_recommender import recommend_materials_for_questionnaire
+import xkt_converter
 from flask_login import LoginManager, login_required, current_user
 from translations import get_translation, get_all_translations
 from log import log_action
@@ -111,10 +112,12 @@ def convert_step_to_stl(job_id):
 
     step_path = os.path.abspath(os.path.join(app.config['UPLOAD_FOLDER'], job.step_filename))
     stl_path = os.path.abspath(os.path.join(app.config['CONVERTED_FOLDER'], job.stl_filename))
+    xkt_path = os.path.abspath(os.path.join(app.config['CONVERTED_FOLDER'], job.xkt_filename))
 
     try:
         result = cq.importers.importStep(step_path)
         cq.exporters.export(result, stl_path, "STL", tolerance=job.tolerance)
+        xkt_converter.convert_step_to_xkt(step_path, xkt_path)
         job.stl_file_size = os.path.getsize(stl_path)
         job.status = 'completed'
         job.completed_at = datetime.utcnow()
@@ -296,6 +299,7 @@ def upload_file():
         original_filename = secure_filename(file.filename)
         step_filename = f"{file_id}_{original_filename}"
         stl_filename = f"{file_id}.stl"
+        xkt_filename = f"{file_id}.xkt"
         
         # Save uploaded file
         step_path = os.path.abspath(os.path.join(app.config['UPLOAD_FOLDER'], step_filename))
@@ -330,6 +334,7 @@ def upload_file():
             original_filename=original_filename,
             step_filename=step_filename,
             stl_filename=stl_filename,
+            xkt_filename=xkt_filename,
             tolerance=tolerance,
             step_file_size=step_size,
             status='queued'
@@ -372,6 +377,11 @@ def view_file(filename):
             return jsonify({'error': 'Fichier non trouvé'}), 404
         
         file_size = os.path.getsize(file_path)
+        mime = "application/octet-stream"
+        if filename.lower().endswith(".stl"):
+            mime = "application/octet-stream"
+        elif filename.lower().endswith(".xkt"):
+            mime = "application/octet-stream"
         
         # For large files (>5MB), use chunked streaming
         if file_size > 5 * 1024 * 1024:
@@ -394,7 +404,7 @@ def view_file(filename):
                             break
                         yield data
             
-            response = Response(generate(), mimetype='application/octet-stream')
+            response = Response(generate(), mimetype=mime)
             response.headers['Content-Length'] = str(file_size)
             response.headers['Content-Disposition'] = f'inline; filename={filename}'
             # Add cache and streaming headers
@@ -404,7 +414,7 @@ def view_file(filename):
         else:
             # For smaller files, use normal send_from_directory
             return send_from_directory(app.config['CONVERTED_FOLDER'], filename, 
-                                     mimetype='application/octet-stream')
+                                     mimetype=mime)
     except Exception as e:
         logger.error(f"Error serving file {filename}: {str(e)}")
         return jsonify({'error': 'Erreur lors du chargement du fichier'}), 500
@@ -419,6 +429,7 @@ def job_status(job_id):
     data = {
         'status': job.status,
         'stl_filename': job.stl_filename if job.status == 'completed' else None,
+        'xkt_filename': job.xkt_filename if job.status == 'completed' else None,
         'stl_size': job.stl_file_size,
         'error': job.error_message
     }
@@ -429,6 +440,12 @@ def view_stl_job(job_id):
     """Télécharge le STL généré pour un job"""
     job = ConversionJob.query.get_or_404(job_id)
     return view_file(job.stl_filename)
+
+@app.route('/view/<job_id>.xkt')
+def view_xkt_job(job_id):
+    """Télécharge le XKT généré pour un job"""
+    job = ConversionJob.query.get_or_404(job_id)
+    return view_file(job.xkt_filename)
 
 @app.route('/api/conversions')
 def get_conversions():

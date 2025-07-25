@@ -19,6 +19,7 @@ class ConversionJob(db.Model):
     original_filename = db.Column(db.String(255), nullable=False)
     step_filename = db.Column(db.String(255), nullable=False)
     stl_filename = db.Column(db.String(255), nullable=False)
+    xkt_filename = db.Column(db.String(255), nullable=True)
     tolerance = db.Column(db.Float, nullable=False, default=0.1)
     step_file_size = db.Column(db.Integer, nullable=False)
     stl_file_size = db.Column(db.Integer, nullable=True)
@@ -48,6 +49,7 @@ class ConversionJob(db.Model):
             'original_filename': self.original_filename,
             'step_filename': self.step_filename,
             'stl_filename': self.stl_filename,
+            'xkt_filename': self.xkt_filename,
             'tolerance': self.tolerance,
             'step_file_size': self.step_file_size,
             'stl_file_size': self.stl_file_size,
