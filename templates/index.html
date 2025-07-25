@@ -673,18 +673,11 @@
             <script defer src="{{ url_for('static', filename='js/upload-handler.js') }}"></script>
             <script src="{{ url_for('static', filename='js/design-insights.js') }}"></script>
 
-            
                                 <script>
                                   document.addEventListener('DOMContentLoaded', function () {
                                     const tooltips = Array.from(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
                                     tooltips.forEach(el => new bootstrap.Tooltip(el));
                                   });
-
-                                  function onConversionFinished(jobId) {
-                                    if (window.xeokitApp) {
-                                      xeokitApp.loadModel('/view/' + jobId + '.xkt');
-                                    }
-                                  }
                                 </script>
 </body>
 </html>
