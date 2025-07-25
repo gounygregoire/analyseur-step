@@ -24,6 +24,12 @@ class XeokitViewerApp {
         this._measure = new xeokit.MeasurementsPlugin(this.viewer);
         this._annotations = new xeokit.AnnotationPlugin(this.viewer);
 
+        this._initialCamera = {
+            eye: this.viewer.camera.eye.slice(),
+            look: this.viewer.camera.look.slice(),
+            up: this.viewer.camera.up.slice()
+        };
+
         this._bindUI();
     }
 
@@ -34,7 +40,19 @@ class XeokitViewerApp {
 
     loadModel(url) {
         const loader = new xeokit.XKTLoaderPlugin(this.viewer);
-        loader.load({ src: url, edges: true });
+        loader.load({
+            src: url,
+            edges: true,
+            success: () => {
+                const aabb = this.viewer.scene.getAABB();
+                this.viewer.cameraFlight.flyTo({ aabb });
+                this._initialCamera = {
+                    eye: this.viewer.camera.eye.slice(),
+                    look: this.viewer.camera.look.slice(),
+                    up: this.viewer.camera.up.slice()
+                };
+            }
+        });
     }
 
     toggleWireframe() {
@@ -50,6 +68,20 @@ class XeokitViewerApp {
         this._section.removeSectionPlanes();
         const dir = axis === 'x' ? [1, 0, 0] : axis === 'y' ? [0, 1, 0] : [0, 0, 1];
         this._section.createSectionPlane({ id: 'cut', dir, pos: [0, 0, 0] });
+        this._currentSection = axis;
+    }
+
+    disableSection() {
+        this._section.removeSectionPlanes();
+        this._currentSection = null;
+    }
+
+    toggleSection(axis = 'z') {
+        if (this._currentSection) {
+            this.disableSection();
+        } else {
+            this.enableSection(axis);
+        }
     }
 
     toggleMeasurements() {
@@ -60,6 +92,13 @@ class XeokitViewerApp {
         for (const [id, color] of Object.entries(data)) {
             const obj = this.viewer.scene.objects[id];
             if (obj) obj.colorize = color;
+        }
+    }
+
+    clearHeatmap() {
+        const objects = this.viewer.scene.objects;
+        for (const id in objects) {
+            objects[id].colorize = null;
         }
     }
 
@@ -75,9 +114,22 @@ class XeokitViewerApp {
         });
     }
 
+    resetView() {
+        if (this._initialCamera) {
+            this.viewer.cameraFlight.flyTo(this._initialCamera);
+        }
+    }
+
     _bindUI() {
+        document.getElementById('resetViewBtn')?.addEventListener('click', () => this.resetView());
         document.getElementById('toggleWireframeBtn')?.addEventListener('click', () => this.toggleWireframe());
-        document.getElementById('crossSectionBtn')?.addEventListener('click', () => this.enableSection('z'));
+        document.getElementById('crossSectionBtn')?.addEventListener('click', () => {
+            const axis = document.getElementById('crossSectionAxisSelect')?.value || 'z';
+            this.toggleSection(axis);
+        });
+        document.getElementById('crossSectionAxisSelect')?.addEventListener('change', (e) => {
+            if (this._currentSection) this.enableSection(e.target.value);
+        });
         document.getElementById('measureBtn')?.addEventListener('click', () => this.toggleMeasurements());
         document.getElementById('generatePdfBtn')?.addEventListener('click', () => this.exportPDF());
     }
