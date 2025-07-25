@@ -1,17 +1,11 @@
 class XeokitViewerApp {
     constructor() {
         if (typeof window.xeokit === 'undefined') {
-            console.error('xeokit SDK non chargé, bascule vers viewer.js');
-            const fallbackScript = document.createElement('script');
-            fallbackScript.src = '/static/js/viewer.js';
-            document.body.appendChild(fallbackScript);
+            console.error('xeokit SDK non chargé, le viewer ne peut pas démarrer.');
             return;
         }
         if (!this._isWebGL2()) {
-            console.warn('WebGL2 non disponible, chargement du viewer Three.js en secours');
-            const fallbackScript = document.createElement('script');
-            fallbackScript.src = '/static/js/viewer.js';
-            document.body.appendChild(fallbackScript);
+            console.warn('WebGL2 non disponible, le viewer ne peut pas démarrer.');
             return;
         }
 
