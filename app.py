@@ -8,6 +8,7 @@ import cadquery as cq
 import trimesh
 import uuid
 import time
+import shutil
 from pathlib import Path
 from datetime import datetime, timedelta
 from models import db, ConversionJob, UserSession, User, OAuth
@@ -113,18 +114,23 @@ def convert_step_to_stl(job_id):
 
     step_path = os.path.abspath(os.path.join(app.config['UPLOAD_FOLDER'], job.step_filename))
     stl_path = os.path.abspath(os.path.join(app.config['CONVERTED_FOLDER'], job.stl_filename))
+    ext = os.path.splitext(step_path)[1].lower()
     xkt_path = os.path.abspath(os.path.join(app.config['CONVERTED_FOLDER'], job.xkt_filename))
 
     viewer_ready = True
     viewer_error = None
     try:
-        result = cq.importers.importStep(step_path)
-        cq.exporters.export(result, stl_path, "STL", tolerance=job.tolerance)
-        try:
-            xkt_converter.convert_step_to_xkt(step_path, xkt_path)
-        except Exception as xkt_err:
-            viewer_ready = False
-            viewer_error = f"Conversion XKT échouée: {xkt_err}"
+        if ext == '.stl':
+            # Fichier déjà au format STL, simplement le copier
+            shutil.copyfile(step_path, stl_path)
+        else:
+            result = cq.importers.importStep(step_path)
+            cq.exporters.export(result, stl_path, "STL", tolerance=job.tolerance)
+            try:
+                xkt_converter.convert_step_to_xkt(step_path, xkt_path)
+            except Exception as xkt_err:
+                viewer_ready = False
+                viewer_error = f"Conversion XKT échouée: {xkt_err}"
 
         job.stl_file_size = os.path.getsize(stl_path)
 
@@ -165,18 +171,27 @@ def process_step_file(job_id, demolding_axis='z'):
 
     step_path = os.path.abspath(os.path.join(app.config['UPLOAD_FOLDER'], job.step_filename))
     stl_path = os.path.abspath(os.path.join(app.config['CONVERTED_FOLDER'], job.stl_filename))
+    ext = os.path.splitext(step_path)[1].lower()
 
     try:
-        dfm_report = analyze_dfm(step_path, demolding_axis)
-        generate_heatmap(stl_path)
+        if ext == '.stl':
+            # Pas d'analyse DFM possible, seulement la heatmap
+            generate_heatmap(stl_path)
+            dfm_report = None
+        else:
+            dfm_report = analyze_dfm(step_path, demolding_axis)
+            generate_heatmap(stl_path)
 
         if job.user:
             job.user.use_credit()
 
-        job.dfm_score = dfm_report.moldability_rating
-        job.dfm_issues_count = len(dfm_report.wall_thickness_issues) + len(dfm_report.geometry_issues)
-        job.dfm_overall_rating = dfm_report.overall_score
-        job.status = 'dfm_done'
+        if dfm_report:
+            job.dfm_score = dfm_report.moldability_rating
+            job.dfm_issues_count = len(dfm_report.wall_thickness_issues) + len(dfm_report.geometry_issues)
+            job.dfm_overall_rating = dfm_report.overall_score
+            job.status = 'dfm_done'
+        else:
+            job.status = 'completed'
     except Exception as e:
         job.status = 'failed'
         job.error_message = str(e)
@@ -205,6 +220,7 @@ def cleanup_old_files():
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
 CONVERTED_FOLDER = os.path.join(BASE_DIR, 'converted')
+# Types de fichiers autorisés pour l'upload
 ALLOWED_EXTENSIONS = {'step', 'stp', 'stl'}
 FILE_RETENTION_DAYS = int(os.getenv('FILE_RETENTION_DAYS', '7'))
 
@@ -384,7 +400,7 @@ def upload_file():
             return jsonify({'error': 'Aucun fichier sélectionné'}), 400
         
         if not allowed_file(file.filename):
-            return jsonify({'error': 'Type de fichier invalide. Seuls les fichiers STEP (.step, .stp) sont autorisés'}), 400
+            return jsonify({'error': 'Type de fichier invalide. Seuls les fichiers STEP (.step, .stp) ou STL (.stl) sont autorisés'}), 400
         
         # Get tolerance parameter
         tolerance = float(request.form.get('tolerance', 0.1))
