@@ -108,9 +108,5 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    function showError(msg) {
-        if (progressSection) progressSection.style.display = 'none';
-        if (errorMessage) errorMessage.textContent = msg;
-        if (errorAlert) errorAlert.style.display = 'block';
-    }
+    // La fonction showError est désormais définie globalement dans error-handler.js
 });

@@ -2,10 +2,16 @@ class XeokitViewerApp {
     constructor() {
         if (typeof window.xeokit === 'undefined') {
             console.error('xeokit SDK non chargé, le viewer ne peut pas démarrer.');
+            if (typeof window.showError === 'function') {
+                window.showError('Visualiseur indisponible : SDK manquant.');
+            }
             return;
         }
         if (!this._isWebGL2()) {
             console.warn('WebGL2 non disponible, le viewer ne peut pas démarrer.');
+            if (typeof window.showError === 'function') {
+                window.showError('Visualiseur indisponible : WebGL2 non disponible.');
+            }
             return;
         }
 
@@ -208,6 +214,9 @@ function initViewer() {
         window.viewer = window.xeokitApp;
     } else {
         console.error('xeokit SDK non chargé, le viewer ne peut pas démarrer.');
+        if (typeof window.showError === 'function') {
+            window.showError('Visualiseur indisponible : SDK manquant.');
+        }
     }
 }
 
