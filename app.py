@@ -205,7 +205,7 @@ def cleanup_old_files():
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
 CONVERTED_FOLDER = os.path.join(BASE_DIR, 'converted')
-ALLOWED_EXTENSIONS = {'step', 'stp'}
+ALLOWED_EXTENSIONS = {'step', 'stp', 'stl'}
 FILE_RETENTION_DAYS = int(os.getenv('FILE_RETENTION_DAYS', '7'))
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -322,6 +322,46 @@ def change_language(lang):
 def serve_static(filename):
     """Serve static files"""
     return send_from_directory('static', filename)
+
+
+@app.route('/upload_file', methods=['POST'])
+def upload_file_api():
+    """Upload STEP/STL file and launch processing"""
+    if 'file' not in request.files:
+        return jsonify({'error': 'Aucun fichier'}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'Nom de fichier manquant'}), 400
+    if not allowed_file(file.filename):
+        return jsonify({'error': 'Extension non autorisée'}), 400
+
+    job_id = str(uuid.uuid4())
+    original_filename = secure_filename(file.filename)
+    step_filename = f"{job_id}_{original_filename}"
+    stl_filename = f"{job_id}.stl"
+    xkt_filename = f"{job_id}.xkt"
+
+    step_path = os.path.join(app.config['UPLOAD_FOLDER'], step_filename)
+    file.save(step_path)
+
+    job = ConversionJob(
+        id=job_id,
+        original_filename=original_filename,
+        step_filename=step_filename,
+        stl_filename=stl_filename,
+        xkt_filename=xkt_filename,
+        step_file_size=os.path.getsize(step_path),
+        status='queued'
+    )
+    db.session.add(job)
+    db.session.commit()
+
+    try:
+        process_step_file.delay(job_id)
+    except (KombuOperationalError, RedisConnectionError):
+        process_step_file(job_id)
+
+    return jsonify({'id': job_id})
 
 @app.route('/upload', methods=['POST'])
 @login_required
@@ -496,6 +536,15 @@ def job_status(job_id):
         'viewer_error': job.viewer_error,
     }
     return jsonify(data)
+
+
+@app.route('/result/<job_id>')
+def get_result(job_id):
+    """Return job status and DFM data"""
+    job = ConversionJob.query.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job introuvable'}), 404
+    return jsonify(job.to_dict())
 
 @app.route('/view/<job_id>.stl')
 def view_stl_job(job_id):
