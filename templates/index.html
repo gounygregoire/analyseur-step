@@ -668,7 +668,8 @@
         </div>
     </footer>
             <script defer src="https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@1.6.2/dist/xeokit-sdk.min.js"></script>
-            <!-- Tes scripts JS d'abord -->
+            <!-- Scripts JS de l'application -->
+            <script defer src="{{ url_for('static', filename='js/error-handler.js') }}"></script>
             <script defer src="{{ url_for('static', filename='js/xeokit_viewer.js') }}"></script>
             <script defer src="{{ url_for('static', filename='js/upload-handler.js') }}"></script>
             <script src="{{ url_for('static', filename='js/design-insights.js') }}"></script>
