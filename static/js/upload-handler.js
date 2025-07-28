@@ -86,22 +86,25 @@ document.addEventListener('DOMContentLoaded', function () {
         console.log('Résultats DFM:', data);
 
         const stlFile = data.stl_filename;
-        if (stlFile) {
-            const stlPath = '/uploads/' + stlFile;
-            console.log('Loading STL:', stlPath);
-            try {
-                if (window.viewer && typeof window.viewer.loadModel === 'function') {
-                    window.viewer.loadModel(stlPath);
-                } else {
-                    console.error('viewer.loadModel non disponible');
-                    showError("Viewer non prêt pour l'affichage 3D");
-                }
-            } catch (err) {
-                console.error('Erreur chargement modèle:', err);
-                showError('Impossible de charger le modèle 3D');
-            }
-        } else {
+        if (!stlFile) {
             console.error('stl_filename manquant dans les données');
+            return;
+        }
+
+        if (!window.viewer || typeof window.viewer.loadModel !== 'function') {
+            console.error('Viewer non initialisé');
+            showError("Viewer non prêt pour l'affichage 3D");
+            return;
+        }
+
+        const url = '/uploads/' + stlFile;
+        console.log('Loading STL:', url);
+
+        try {
+            viewer.loadModel(url);
+        } catch (err) {
+            console.error('Erreur chargement modèle:', err);
+            showError('Impossible de charger le modèle 3D');
         }
     }
 
