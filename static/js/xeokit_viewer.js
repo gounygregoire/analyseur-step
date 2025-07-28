@@ -229,7 +229,7 @@ function loadXeokitSDK(callback) {
 
     console.log('Chargement du SDK xeokit...');
     const script = document.createElement('script');
-    script.src = 'https://cdn.jsdelivr.net/npm/xeokit-sdk@1.5.2/dist/xeokit.min.js';
+    script.src = '/static/js/xeokit.min.js';
 
     script.onload = () => {
         console.log('SDK xeokit chargé');
