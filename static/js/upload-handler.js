@@ -38,14 +38,14 @@ document.addEventListener('DOMContentLoaded', function () {
 
         const formData = new FormData(form);
 
-        fetch('/upload', {
+        fetch('/upload_file', {
             method: 'POST',
             body: formData
         })
             .then((r) => r.json())
             .then((data) => {
-                if (data.success && data.job_id) {
-                    pollStatus(data.job_id);
+                if (data.id) {
+                    pollResult(data.id);
                 } else {
                     showError(data.error || 'Erreur serveur');
                 }
@@ -53,30 +53,33 @@ document.addEventListener('DOMContentLoaded', function () {
             .catch(() => showError('Erreur réseau'));
     });
 
-    function pollStatus(jobId) {
+    function pollResult(jobId) {
         const interval = setInterval(() => {
-            fetch(`/api/job-status/${jobId}`)
+            fetch(`/result/${jobId}`)
                 .then((r) => r.json())
                 .then((info) => {
-                    if (info.status === 'completed') {
+                    if (info.status === 'dfm_done') {
                         clearInterval(interval);
                         if (progressSection) progressSection.style.display = 'none';
                         if (uploadResults) uploadResults.style.display = 'block';
-                        if (info.viewer_ready) {
-                            onUploadSuccess(jobId);
-                        } else {
-                            showError(info.viewer_error || 'Visualisation 3D impossible');
-                        }
+                        onUploadSuccess(jobId);
+                        displayResults(info);
                     } else if (info.status === 'failed') {
                         clearInterval(interval);
-                        showError(info.error || 'Conversion échouée');
+                        showError(info.error_message || 'Analyse échouée');
                     }
                 })
                 .catch(() => {
                     clearInterval(interval);
                     showError('Erreur serveur');
                 });
-        }, 3000);
+        }, 5000);
+    }
+
+    function displayResults(info) {
+        const dfmSection = document.getElementById('dfmResultsSection');
+        if (dfmSection) dfmSection.style.display = 'block';
+        console.log('Résultats DFM:', info);
     }
 
     function showError(msg) {
