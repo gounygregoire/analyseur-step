@@ -14,8 +14,8 @@ document.addEventListener('DOMContentLoaded', function () {
     const fileNameDisplay = document.getElementById('fileNameDisplay');
 
     function onUploadSuccess(jobId) {
-        if (window.xeokitApp) {
-            xeokitApp.loadModel('/view/' + jobId + '.xkt');
+        if (window.viewer) {
+            window.viewer.loadModel('/view/' + jobId + '.xkt');
         }
         if (viewerToolsPanel) viewerToolsPanel.style.display = 'block';
         if (dfmControls) dfmControls.style.display = 'flex';
