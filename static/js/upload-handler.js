@@ -1,6 +1,10 @@
 // Gestion de l'upload et du suivi de conversion
 
 document.addEventListener('DOMContentLoaded', function () {
+    if (typeof initViewer === 'function') {
+        initViewer();
+    }
+
     const form = document.getElementById('uploadForm');
     if (!form) return;
 
