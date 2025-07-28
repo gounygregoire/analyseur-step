@@ -154,6 +154,38 @@ def convert_step_to_stl(job_id):
 
 
 @celery.task()
+def process_step_file(job_id, demolding_axis='z'):
+    """Analyse DFM et génération de heatmap"""
+    job = ConversionJob.query.get(job_id)
+    if not job:
+        return
+
+    job.status = 'processing'
+    db.session.commit()
+
+    step_path = os.path.abspath(os.path.join(app.config['UPLOAD_FOLDER'], job.step_filename))
+    stl_path = os.path.abspath(os.path.join(app.config['CONVERTED_FOLDER'], job.stl_filename))
+
+    try:
+        dfm_report = analyze_dfm(step_path, demolding_axis)
+        generate_heatmap(stl_path)
+
+        if job.user:
+            job.user.use_credit()
+
+        job.dfm_score = dfm_report.moldability_rating
+        job.dfm_issues_count = len(dfm_report.wall_thickness_issues) + len(dfm_report.geometry_issues)
+        job.dfm_overall_rating = dfm_report.overall_score
+        job.status = 'dfm_done'
+    except Exception as e:
+        job.status = 'failed'
+        job.error_message = str(e)
+        logger.exception(f"DFM processing failed for {job_id}: {e}")
+
+    db.session.commit()
+
+
+@celery.task()
 def cleanup_old_files():
     """Supprime les fichiers trop anciens dans uploads/ et converted/"""
     retention_days = app.config.get('FILE_RETENTION_DAYS', 7)
@@ -510,186 +542,31 @@ def get_conversion(conversion_id):
 
 @app.route('/api/analyze-dfm/<conversion_id>', methods=['POST'])
 def analyze_dfm_endpoint(conversion_id):
-    """Separate endpoint for DFM analysis"""
+    """Déclenche l'analyse DFM en tâche de fond"""
     try:
-        logger.info(f"DFM analysis request received for conversion {conversion_id}")
-        
-        # Get request data
         data = request.get_json() or {}
         demolding_axis = data.get('demolding_axis', 'z')
-        
-        logger.info(f"Demolding axis: {demolding_axis}")
-        
-        # Get conversion job from database
-        conversion_job = ConversionJob.query.get(conversion_id)
-        if not conversion_job:
-            logger.error(f"Conversion job not found: {conversion_id}")
-            return jsonify({
-                'success': False,
-                'error': 'Job de conversion non trouvé'
-            }), 404
-        
-        if conversion_job.status != 'completed':
-            logger.error(f"Conversion job not completed: {conversion_job.status}")
-            return jsonify({
-                'success': False,
-                'error': 'La conversion doit être terminée avant l\'analyse DFM'
-            }), 400
-        
-        # Get STEP file path
-        step_path = os.path.abspath(os.path.join(app.config['UPLOAD_FOLDER'], conversion_job.step_filename))
-        if not os.path.exists(step_path):
-            logger.error(f"STEP file not found: {step_path}")
-            return jsonify({
-                'success': False,
-                'error': 'Fichier STEP non trouvé'
-            }), 404
 
-        # STL path for heatmap generation
-        stl_path = os.path.abspath(os.path.join(app.config['CONVERTED_FOLDER'], conversion_job.stl_filename))
-        
-        # Check user authentication and credits
-        if current_user.is_authenticated:
-            if not current_user.has_access():
-                logger.warning(f"User {current_user.id} has no credits left")
-                return jsonify({
-                    'success': False,
-                    'error': 'Crédits insuffisants. Veuillez acheter des crédits ou vous abonner.'
-                }), 403
-        
-        logger.info(f"Starting DFM analysis for job {conversion_id} with demolding axis: {demolding_axis}")
-        
-        # Perform DFM analysis with proper error handling
+        job = ConversionJob.query.get(conversion_id)
+        if not job:
+            return jsonify({'success': False, 'error': 'Job de conversion non trouvé'}), 404
+
+        if job.status != 'completed':
+            return jsonify({'success': False, 'error': 'La conversion doit être terminée'}), 400
+
+        if current_user.is_authenticated and not current_user.has_access():
+            return jsonify({'success': False, 'error': 'Crédits insuffisants. Veuillez acheter des crédits ou vous abonner.'}), 403
+
         try:
-            dfm_report = analyze_dfm(step_path, demolding_axis)
-            heatmap_data = generate_heatmap(stl_path)
-            
-            if dfm_report is None:
-                logger.error("DFM analysis returned None")
-                return jsonify({
-                    'success': False,
-                    'error': 'Échec de l\'analyse DFM - Aucun résultat retourné'
-                }), 500
-                
-        except Exception as dfm_error:
-            logger.error(f"DFM analysis exception: {str(dfm_error)}")
-            import traceback
-            logger.error(traceback.format_exc())
+            process_step_file.delay(conversion_id, demolding_axis)
+        except (KombuOperationalError, RedisConnectionError):
+            process_step_file(conversion_id, demolding_axis)
 
-            # Message utilisateur personnalisé pour l'axe
-            if "axis" in str(dfm_error).lower() or "démoulage" in str(dfm_error).lower():
-                return jsonify({
-                    'success': False,
-                    'error': '❌ Erreur dans le choix de l’axe de démoulage. Veuillez réessayer avec un autre axe.'
-                }), 400
+        return jsonify({'success': True})
 
-            # Fallback générique
-            return jsonify({
-                'success': False,
-                'error': 'Une erreur est survenue pendant l’analyse DFM. Merci de réessayer.'
-            }), 500
-
-        
-        # Deduct credit after successful analysis
-        if current_user.is_authenticated:
-            current_user.use_credit()
-            logger.info(f"Credit used. User {current_user.id} has {current_user.credits} credits remaining")
-        
-        # Update database with DFM results
-        conversion_job.dfm_score = dfm_report.moldability_rating
-        conversion_job.dfm_issues_count = len(dfm_report.wall_thickness_issues) + len(dfm_report.geometry_issues)
-        conversion_job.dfm_overall_rating = dfm_report.overall_score
-        db.session.commit()
-        
-        logger.info(f"DFM Analysis completed - Score: {dfm_report.moldability_rating}/10, Rating: {dfm_report.overall_score}")
-        
-        # Prepare DFM data with safe value conversion
-        try:
-            # Safe value conversion function
-            def safe_float(value, default=0.0):
-                try:
-                    if value is None:
-                        return default
-                    if isinstance(value, (int, float)):
-                        if str(value) in ['inf', '-inf', 'nan']:
-                            return default
-                        return float(value)
-                    return default
-                except (ValueError, TypeError):
-                    return default
-            
-            dfm_data = {
-                'score': safe_float(dfm_report.moldability_rating, 1),
-                'rating': str(dfm_report.overall_score) if dfm_report.overall_score else 'critical',
-                'issues_count': len(dfm_report.wall_thickness_issues) + len(dfm_report.geometry_issues),
-                'dimensions': {
-                    'x': round(safe_float(dfm_report.dimensions.x_max, 0), 2),
-                    'y': round(safe_float(dfm_report.dimensions.y_max, 0), 2),
-                    'z': round(safe_float(dfm_report.dimensions.z_max, 0), 2),
-                    'volume': round(safe_float(dfm_report.dimensions.volume, 0), 2),
-                    'max_wall_thickness': round(safe_float(dfm_report.dimensions.max_wall_thickness, 1), 2),
-                    'projected_area_x': round(safe_float(dfm_report.dimensions.projected_area_x, 0), 2),
-                    'projected_area_y': round(safe_float(dfm_report.dimensions.projected_area_y, 0), 2),
-                    'projected_area_z': round(safe_float(dfm_report.dimensions.projected_area_z, 0), 2),
-                    'cooling_time': round(safe_float(dfm_report.dimensions.cooling_time, 10), 1)
-                },
-                'recommendations': dfm_report.recommendations[:3] if dfm_report.recommendations else [],
-                'wall_thickness_issues': [
-                    {
-                        'location': list(issue.location) if issue.location else [0, 0, 0],
-                        'thickness': safe_float(issue.thickness, 0),
-                        'issue_type': str(issue.issue_type) if issue.issue_type else 'unknown',
-                        'severity': str(issue.severity) if issue.severity else 'unknown'
-                    } for issue in dfm_report.wall_thickness_issues if issue
-                ],
-                'geometry_issues': [
-                    {
-                        'location': list(issue.location) if issue.location else [0, 0, 0],
-                        'issue_type': str(issue.issue_type) if issue.issue_type else 'unknown',
-                        'description': str(issue.description) if issue.description else 'Description non disponible',
-                        'severity': str(issue.severity) if issue.severity else 'unknown',
-                        'recommendation': str(issue.recommendation) if issue.recommendation else 'Recommandation non disponible'
-                    } for issue in dfm_report.geometry_issues if issue
-                ],
-                'heatmap': heatmap_data
-            }
-            
-            # Test JSON serialization
-            import json
-            json.dumps(dfm_data)
-            logger.info(f"DFM data JSON serialization successful")
-            
-        except Exception as json_error:
-            logger.error(f"Error preparing DFM data: {str(json_error)}")
-            return jsonify({
-                'success': False,
-                'error': f'Erreur de sérialisation des données DFM: {str(json_error)}'
-            }), 500
-        
-        # Avoid storing large data in session to prevent 502 errors
-        # DFM data is already stored in database via ConversionJob
-        session.permanent = True
-        
-        # Log l'action d'analyse
-        user_id = current_user.id if current_user.is_authenticated else None
-        user_email = current_user.email if current_user.is_authenticated else None
-        log_action('analyze', user_id=user_id, extra={
-            'conversion_id': conversion_id,
-            'dfm_score': dfm_report.moldability_rating,
-            'overall_rating': dfm_report.overall_score,
-            'issues_count': len(dfm_report.wall_thickness_issues) + len(dfm_report.geometry_issues),
-            'user_email': user_email,
-            'filename': conversion_job.original_filename
-        })
-        
-        return jsonify({
-            'success': True,
-            'dfm_analysis': dfm_data
-        })
-        
     except Exception as e:
         logger.error(f"DFM Analysis error: {str(e)}")
-        return jsonify({'error': f'Erreur lors de l\'analyse DFM: {str(e)}'}), 500
+        return jsonify({'error': f"Erreur lors de l'analyse DFM: {str(e)}"}), 500
 
 @app.route('/api/generate-pdf/<conversion_id>', methods=['POST'])
 def generate_pdf_report(conversion_id):
