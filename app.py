@@ -340,6 +340,12 @@ def serve_static(filename):
     return send_from_directory('static', filename)
 
 
+@app.route('/uploads/<path:filename>')
+def serve_upload(filename):
+    """Serve converted files for front-end requests"""
+    return send_from_directory(app.config['CONVERTED_FOLDER'], filename)
+
+
 @app.route('/upload_file', methods=['POST'])
 def upload_file_api():
     """Upload STEP/STL file and launch processing"""
