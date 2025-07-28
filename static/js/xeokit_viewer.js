@@ -221,31 +221,34 @@ function initViewer() {
 }
 
 function loadXeokitSDK(callback) {
-    if (typeof window.xeokit !== 'undefined') {
-        console.log('SDK xeokit déjà présent');
+    if (typeof Viewer !== 'undefined') {
+        console.log("✅ Viewer déjà défini");
         callback();
         return;
     }
 
-    console.log('Chargement du SDK xeokit...');
+    console.log("Chargement du SDK xeokit...");
     const script = document.createElement('script');
-    script.src = '/static/js/xeokit.min.js';
-
+    script.src = "https://cdn.jsdelivr.net/npm/xeokit-sdk@1.5.2/dist/xeokit.min.js";
     script.onload = () => {
-        console.log('SDK xeokit chargé');
+        if (typeof Viewer === 'undefined') {
+            console.error("❌ SDK chargé mais Viewer introuvable");
+            showError("Visualiseur indisponible : SDK incompatible");
+            return;
+        }
+        console.log("✅ SDK xeokit chargé et Viewer accessible");
         callback();
     };
-
     script.onerror = () => {
-        console.error('Échec du chargement du SDK xeokit');
-        if (typeof window.showError === 'function') {
-            window.showError('Visualiseur indisponible : SDK manquant.');
-        }
+        console.error("❌ Échec du chargement du SDK xeokit");
+        showError("Visualiseur indisponible : SDK non chargé.");
     };
-
     document.head.appendChild(script);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    loadXeokitSDK(initViewer);
+    loadXeokitSDK(() => {
+        initViewer();
+    });
 });
+
