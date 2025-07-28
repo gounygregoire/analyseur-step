@@ -1,8 +1,10 @@
 // Gestion de l'upload et du suivi de conversion
 
 document.addEventListener('DOMContentLoaded', function () {
-    if (typeof initViewer === 'function') {
+    if (typeof initViewer === 'function' && typeof xeokit !== 'undefined') {
         initViewer();
+    } else {
+        console.log('Initialisation du viewer différée : SDK non disponible');
     }
 
     const form = document.getElementById('uploadForm');

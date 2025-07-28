@@ -221,7 +221,22 @@ function initViewer() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    if (typeof xeokit !== 'undefined') {
+    if (typeof xeokit === 'undefined') {
+        console.log('xeokit SDK manquant, chargement dynamique...');
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.min.js';
+        script.onload = () => {
+            console.log('xeokit SDK chargé');
+            initViewer();
+        };
+        script.onerror = () => {
+            console.error('Échec du chargement du SDK xeokit');
+            if (typeof window.showError === 'function') {
+                window.showError('Visualiseur indisponible : SDK manquant.');
+            }
+        };
+        document.head.appendChild(script);
+    } else {
         initViewer();
     }
 });
