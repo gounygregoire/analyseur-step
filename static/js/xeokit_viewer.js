@@ -1,12 +1,13 @@
 class XeokitViewerApp {
     constructor() {
-        if (typeof window.xeokit === 'undefined') {
-            console.error('xeokit SDK non chargé, le viewer ne peut pas démarrer.');
-            if (typeof window.showError === 'function') {
-                window.showError('Visualiseur indisponible : SDK manquant.');
-            }
-            return;
-        }
+        if (typeof Viewer === 'undefined') {
+    console.error('Viewer non trouvé : le SDK xeokit est absent.');
+    if (typeof window.showError === 'function') {
+        window.showError('Visualiseur indisponible : Viewer introuvable.');
+    }
+    return;
+}
+
         if (!this._isWebGL2()) {
             console.warn('WebGL2 non disponible, le viewer ne peut pas démarrer.');
             if (typeof window.showError === 'function') {
@@ -15,14 +16,14 @@ class XeokitViewerApp {
             return;
         }
 
-        this.viewer = new xeokit.Viewer({
+        this.viewer = new Viewer({
             canvasId: 'viewer3d',
             transparent: true
         });
 
-        this._section = new xeokit.SectionPlanesPlugin(this.viewer);
-        this._measure = new xeokit.MeasurementsPlugin(this.viewer);
-        this._annotations = new xeokit.AnnotationPlugin(this.viewer);
+        this._section = new SectionPlanesPlugin(this.viewer);
+        this._measure = new MeasurementsPlugin(this.viewer);
+        this._annotations = new AnnotationPlugin(this.viewer);
 
         this._initialCamera = {
             eye: this.viewer.camera.eye.slice(),
@@ -40,7 +41,7 @@ class XeokitViewerApp {
     }
 
     loadModel(url) {
-        const loader = new xeokit.XKTLoaderPlugin(this.viewer);
+        const loader = new XKTLoaderPlugin(this.viewer);
         loader.load({
             src: url,
             edges: true,
