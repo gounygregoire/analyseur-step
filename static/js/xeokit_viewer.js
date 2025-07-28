@@ -220,23 +220,32 @@ function initViewer() {
     }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-    if (typeof xeokit === 'undefined') {
-        console.log('xeokit SDK manquant, chargement dynamique...');
-        const script = document.createElement('script');
-        script.src = 'https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.min.js';
-        script.onload = () => {
-            console.log('xeokit SDK chargé');
-            initViewer();
-        };
-        script.onerror = () => {
-            console.error('Échec du chargement du SDK xeokit');
-            if (typeof window.showError === 'function') {
-                window.showError('Visualiseur indisponible : SDK manquant.');
-            }
-        };
-        document.head.appendChild(script);
-    } else {
-        initViewer();
+function loadXeokitSDK(callback) {
+    if (typeof window.xeokit !== 'undefined') {
+        console.log('SDK xeokit déjà présent');
+        callback();
+        return;
     }
+
+    console.log('Chargement du SDK xeokit...');
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/xeokit-sdk@1.5.2/dist/xeokit.min.js';
+
+    script.onload = () => {
+        console.log('SDK xeokit chargé');
+        callback();
+    };
+
+    script.onerror = () => {
+        console.error('Échec du chargement du SDK xeokit');
+        if (typeof window.showError === 'function') {
+            window.showError('Visualiseur indisponible : SDK manquant.');
+        }
+    };
+
+    document.head.appendChild(script);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    loadXeokitSDK(initViewer);
 });
