@@ -15,7 +15,11 @@ def generate_heatmap(stl_path: str) -> List[Dict[str, float]]:
     Severity is based on the maximum angular deviation between a face and
     its neighbours. Values are expressed in degrees.
     """
-    mesh = trimesh.load(stl_path, process=False)
+    try:
+        with open(stl_path, "rb") as f:
+            mesh = trimesh.load(f, file_type="stl", process=False)
+    except FileNotFoundError:
+        return []
 
     if isinstance(mesh, trimesh.Scene):
         # Take first geometry if a scene is loaded
