@@ -45,7 +45,7 @@ document.addEventListener('DOMContentLoaded', function () {
             .then((r) => r.json())
             .then((data) => {
                 if (data.id) {
-                    pollResult(data.id);
+                    pollDFMResults(data.id);
                 } else {
                     showError(data.error || 'Erreur serveur');
                 }
@@ -53,7 +53,7 @@ document.addEventListener('DOMContentLoaded', function () {
             .catch(() => showError('Erreur réseau'));
     });
 
-    function pollResult(jobId) {
+    function pollDFMResults(jobId) {
         const interval = setInterval(() => {
             fetch(`/result/${jobId}`)
                 .then((r) => r.json())
@@ -63,7 +63,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         if (progressSection) progressSection.style.display = 'none';
                         if (uploadResults) uploadResults.style.display = 'block';
                         onUploadSuccess(jobId);
-                        displayResults(info);
+                        displayDFMResults(info);
                     } else if (info.status === 'failed') {
                         clearInterval(interval);
                         showError(info.error_message || 'Analyse échouée');
@@ -76,7 +76,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }, 5000);
     }
 
-    function displayResults(info) {
+    function displayDFMResults(info) {
         const dfmSection = document.getElementById('dfmResultsSection');
         if (dfmSection) dfmSection.style.display = 'block';
         console.log('Résultats DFM:', info);
