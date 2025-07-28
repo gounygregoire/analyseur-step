@@ -76,10 +76,29 @@ document.addEventListener('DOMContentLoaded', function () {
         }, 5000);
     }
 
-    function displayDFMResults(info) {
+    function displayDFMResults(data) {
         const dfmSection = document.getElementById('dfmResultsSection');
         if (dfmSection) dfmSection.style.display = 'block';
-        console.log('Résultats DFM:', info);
+        console.log('Résultats DFM:', data);
+
+        const stlFile = data.stl_filename;
+        if (stlFile) {
+            const stlPath = '/uploads/' + stlFile;
+            console.log('Loading STL:', stlPath);
+            try {
+                if (window.viewer && typeof window.viewer.loadModel === 'function') {
+                    window.viewer.loadModel(stlPath);
+                } else {
+                    console.error('viewer.loadModel non disponible');
+                    showError("Viewer non prêt pour l'affichage 3D");
+                }
+            } catch (err) {
+                console.error('Erreur chargement modèle:', err);
+                showError('Impossible de charger le modèle 3D');
+            }
+        } else {
+            console.error('stl_filename manquant dans les données');
+        }
     }
 
     function showError(msg) {
