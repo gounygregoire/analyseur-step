@@ -202,9 +202,10 @@ class XeokitViewerApp {
     }
 }
 
-function initXeokitViewer() {
+function initViewer() {
     if (typeof xeokit === 'object') {
         window.xeokitApp = new XeokitViewerApp();
+        window.viewer = window.xeokitApp;
     } else {
         console.error('xeokit SDK non chargé, le viewer ne peut pas démarrer.');
     }
@@ -212,6 +213,6 @@ function initXeokitViewer() {
 
 document.addEventListener('DOMContentLoaded', () => {
     if (typeof xeokit !== 'undefined') {
-        initXeokitViewer();
+        initViewer();
     }
 });
