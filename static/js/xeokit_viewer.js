@@ -209,7 +209,7 @@ class XeokitViewerApp {
 }
 
 function initViewer() {
-    if (typeof xeokit === 'object') {
+    if (typeof Viewer === 'function') {
         window.xeokitApp = new XeokitViewerApp();
         window.viewer = window.xeokitApp;
     } else {
