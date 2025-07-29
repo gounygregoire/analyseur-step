@@ -1,11 +1,18 @@
 // Gestion de l'upload et du suivi de conversion
 
 document.addEventListener('DOMContentLoaded', function () {
-        if (typeof initViewer === 'function' && typeof Viewer === 'function') {
+    if (typeof initViewer === 'function' && typeof Viewer === 'function') {
         console.log('✅ SDK détecté, initialisation du viewer...');
         initViewer();
-        } else {
+    } else {
         console.log('❌ Viewer non disponible, initialisation différée');
+    }
+
+    const initialModel = document.body.dataset.model;
+    if (initialModel && window.viewer && typeof window.viewer.loadModel === 'function') {
+        window.viewer.loadModel('/view/' + initialModel);
+        document.getElementById('viewerToolsPanel')?.style.display = 'block';
+        document.getElementById('dfmControls')?.style.display = 'flex';
     }
 
 
