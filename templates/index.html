@@ -679,13 +679,38 @@
             <script src="{{ url_for('static', filename='js/design-insights.js') }}"></script>
 
             <script>
-              document.addEventListener('DOMContentLoaded', function () {
+              document.addEventListener('DOMContentLoaded', () => {
                 const model = document.body.dataset.model;
-                if (model && window.viewer && typeof window.viewer.loadModel === 'function') {
+
+                const showTools = () => {
+                  const panel = document.getElementById('viewerToolsPanel');
+                  if (panel) panel.style.display = 'block';
+                  const dfm = document.getElementById('dfmControls');
+                  if (dfm) dfm.style.display = 'flex';
+                };
+
+                const loadModel = () => {
+                  if (!model || !window.viewer || typeof window.viewer.loadModel !== 'function') return;
                   window.viewer.loadModel('/view/' + model);
-                  document.getElementById('viewerToolsPanel')?.style.display = 'block';
-                  document.getElementById('dfmControls')?.style.display = 'flex';
-                }
+                  showTools();
+                };
+
+                const ensureViewer = () => {
+                  if (window.viewer) {
+                    loadModel();
+                    return;
+                  }
+                  if (typeof Viewer === 'undefined') {
+                    setTimeout(ensureViewer, 500);
+                    return;
+                  }
+                  if (typeof initViewer === 'function') {
+                    initViewer();
+                    loadModel();
+                  }
+                };
+
+                ensureViewer();
               });
             </script>
 
