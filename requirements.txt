@@ -69,6 +69,7 @@ Pillow==11.2.1
 cadquery==2.4.0
 casadi==3.7.0
 trimesh==4.6.13
+OCP==0.1.9
 
 # Mathematical/Scientific (required for CAD packages)
 numpy==1.24.4
