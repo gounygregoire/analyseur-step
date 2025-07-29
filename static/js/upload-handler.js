@@ -21,9 +21,9 @@ document.addEventListener('DOMContentLoaded', function () {
     const fileInput = document.getElementById('fileInput');
     const fileNameDisplay = document.getElementById('fileNameDisplay');
 
-    function onUploadSuccess(jobId) {
+    function onUploadSuccess(xktFile) {
         if (window.viewer) {
-            window.viewer.loadModel('/view/' + jobId + '.xkt');
+            window.viewer.loadModel('/uploads/' + xktFile);
         }
         if (viewerToolsPanel) viewerToolsPanel.style.display = 'block';
         if (dfmControls) dfmControls.style.display = 'flex';
@@ -70,7 +70,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         clearInterval(interval);
                         if (progressSection) progressSection.style.display = 'none';
                         if (uploadResults) uploadResults.style.display = 'block';
-                        onUploadSuccess(jobId);
+                        onUploadSuccess(info.xkt_filename);
                         displayDFMResults(info);
                     } else if (info.status === 'failed') {
                         clearInterval(interval);
@@ -89,9 +89,9 @@ document.addEventListener('DOMContentLoaded', function () {
         if (dfmSection) dfmSection.style.display = 'block';
         console.log('Résultats DFM:', data);
 
-        const stlFile = data.stl_filename;
-        if (!stlFile) {
-            console.error('stl_filename manquant dans les données');
+        const xktFile = data.xkt_filename;
+        if (!xktFile) {
+            console.error('xkt_filename manquant dans les données');
             return;
         }
 
@@ -101,8 +101,8 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
 
-        const url = '/uploads/' + stlFile;
-        console.log('Loading STL:', url);
+        const url = '/uploads/' + xktFile;
+        console.log('Loading XKT:', url);
 
         try {
             viewer.loadModel(url);
