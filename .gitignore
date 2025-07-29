@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 test_env/
 debug_redirect_uri.py
+static/models/
