@@ -11,6 +11,7 @@ dependencies = [
     "gunicorn>=23.0.0",
     "psycopg2-binary>=2.9.10",
     "cadquery>=2.5.2",
+    "OCP>=0.1.9",
     "werkzeug>=3.1.3",
     "flask-migrate>=4.1.0",
     "sqlalchemy>=2.0.41",

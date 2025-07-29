@@ -4,6 +4,8 @@ Ce dépôt contient le code du MVP de Cadlytics, SaaS d'analyse DFM et de visual
 Le viewer 3D repose désormais sur **Xeokit** et rend les modèles au format **XKT**
 (conversion réalisée via `xkt_converter.py`).
 
+La conversion STEP vers STL s'appuie sur la librairie **OCP** (`pythonocc-core`).
+
 ## Nettoyage automatique des fichiers
 
 Les fichiers téléchargés (`uploads/`) et convertis (`converted/`) sont conservés pendant **7 jours** par défaut. La tâche Celery `cleanup_old_files` supprime quotidiennement les fichiers plus anciens.
