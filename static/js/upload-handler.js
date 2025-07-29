@@ -11,8 +11,10 @@ document.addEventListener('DOMContentLoaded', function () {
     const initialModel = document.body.dataset.model;
     if (initialModel && window.viewer && typeof window.viewer.loadModel === 'function') {
         window.viewer.loadModel('/view/' + initialModel);
-        document.getElementById('viewerToolsPanel')?.style.display = 'block';
-        document.getElementById('dfmControls')?.style.display = 'flex';
+        const toolsEl = document.getElementById('viewerToolsPanel');
+        if (toolsEl) toolsEl.style.display = 'block';
+        const dfmEl = document.getElementById('dfmControls');
+        if (dfmEl) dfmEl.style.display = 'flex';
     }
 
 
