@@ -406,7 +406,7 @@ def upload_file_api():
 
 @app.route('/upload', methods=['POST'])
 def upload():
-    """Upload a STEP/STP file, convert to STL and redirect to viewer"""
+    """Upload a STEP/STP file then ouvrir le viewer intégré"""
     if 'file' not in request.files:
         flash('Aucun fichier sélectionné', 'error')
         return redirect(request.referrer or url_for('landing'))
@@ -432,7 +432,7 @@ def upload():
         os.makedirs(dest_dir, exist_ok=True)
         shutil.move(input_path, os.path.join(dest_dir, out_name))
         shutil.rmtree(temp_dir, ignore_errors=True)
-        return redirect(url_for('viewer', filename=out_name))
+        return redirect(url_for('index', model=out_name))
 
     stl_name = f"{uuid.uuid4()}.stl"
     stl_path = os.path.join(temp_dir, stl_name)
@@ -450,7 +450,7 @@ def upload():
     shutil.move(stl_path, final_path)
     shutil.rmtree(temp_dir, ignore_errors=True)
 
-    return redirect(url_for('viewer', filename=stl_name))
+    return redirect(url_for('index', model=stl_name))
 
 @app.route('/api/upload_job', methods=['POST'])
 @login_required
@@ -649,12 +649,6 @@ def view_xkt_job(job_id):
     return view_file(job.xkt_filename)
 
 
-@app.route('/viewer/<filename>')
-def viewer(filename):
-    """Affiche un modèle STL dans un template dédié"""
-    if '..' in filename or os.path.isabs(filename):
-        return jsonify({'error': 'Nom de fichier invalide'}), 400
-    return render_template('viewer.html', model_file=filename)
 
 @app.route('/api/conversions')
 def get_conversions():

@@ -22,7 +22,7 @@
     <!-- Plausible Analytics -->
     <script async defer data-domain="cadlytics.replit.app" src="https://plausible.io/js/script.js"></script>
 </head>
-<body>
+<body {% if request.args.get('model') %}data-model="{{ request.args.get('model') }}"{% endif %}>
     <!-- Navigation -->
     <nav class="navbar navbar-expand-lg" style="background: rgba(26, 26, 26, 0.95); border-bottom: 1px solid var(--kaki-dark);">
         <div class="container">
@@ -677,6 +677,17 @@
             <script defer src="{{ url_for('static', filename='js/xeokit_viewer.js') }}"></script>
             <script defer src="{{ url_for('static', filename='js/upload-handler.js') }}"></script>
             <script src="{{ url_for('static', filename='js/design-insights.js') }}"></script>
+
+            <script>
+              document.addEventListener('DOMContentLoaded', function () {
+                const model = document.body.dataset.model;
+                if (model && window.viewer && typeof window.viewer.loadModel === 'function') {
+                  window.viewer.loadModel('/view/' + model);
+                  document.getElementById('viewerToolsPanel')?.style.display = 'block';
+                  document.getElementById('dfmControls')?.style.display = 'flex';
+                }
+              });
+            </script>
 
                                 <script>
                                   document.addEventListener('DOMContentLoaded', function () {
