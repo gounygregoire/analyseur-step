@@ -561,7 +561,8 @@ def view_file(filename):
     if '..' in filename or os.path.isabs(filename):
         return jsonify({'error': 'Nom de fichier invalide'}), 400
     try:
-        file_path = safe_join(app.config['CONVERTED_FOLDER'], filename)
+        models_dir = os.path.join(app.root_path, 'static', 'models')
+        file_path = safe_join(models_dir, filename)
         if not file_path or not os.path.exists(file_path):
             return jsonify({'error': 'Fichier non trouvé'}), 404
         
@@ -602,7 +603,7 @@ def view_file(filename):
             return response
         else:
             # For smaller files, use normal send_from_directory
-            return send_from_directory(app.config['CONVERTED_FOLDER'], filename, 
+            return send_from_directory(models_dir, filename,
                                      mimetype=mime)
     except Exception as e:
         logger.error(f"Error serving file {filename}: {str(e)}")
