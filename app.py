@@ -580,6 +580,14 @@ def view_xkt_job(job_id):
     job = ConversionJob.query.get_or_404(job_id)
     return view_file(job.xkt_filename)
 
+
+@app.route('/viewer/<filename>')
+def viewer(filename):
+    """Affiche un modèle STL dans un template dédié"""
+    if '..' in filename or os.path.isabs(filename):
+        return jsonify({'error': 'Nom de fichier invalide'}), 400
+    return render_template('viewer.html', model_file=filename)
+
 @app.route('/api/conversions')
 def get_conversions():
     """Get list of conversion jobs - limited to 5 most recent for current user"""
