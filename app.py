@@ -9,6 +9,10 @@ import trimesh
 import uuid
 import time
 import shutil
+import tempfile
+from OCP.STEPControl import STEPControl_Reader
+from OCP.StlAPI import StlAPI_Writer
+from OCP.Interface import Interface_Static
 from pathlib import Path
 from datetime import datetime, timedelta
 from models import db, ConversionJob, UserSession, User, OAuth
@@ -157,6 +161,20 @@ def convert_step_to_stl(job_id):
     job.viewer_error = viewer_error
 
     db.session.commit()
+
+
+def ocp_step_to_stl(step_path: str, stl_path: str) -> None:
+    """Convertit un fichier STEP en STL via OCP"""
+    reader = STEPControl_Reader()
+    status = reader.ReadFile(step_path)
+    if status != 1:
+        raise RuntimeError("Lecture STEP échouée")
+    reader.TransferRoots()
+    shape = reader.OneShape()
+    writer = StlAPI_Writer()
+    Interface_Static.SetCVal("write.stl.ascii", "False")
+    writer.SetASCIIMode(False)
+    writer.Write(shape, stl_path)
 
 
 @celery.task()
@@ -385,10 +403,59 @@ def upload_file_api():
 
     return jsonify({'id': job_id})
 
+
 @app.route('/upload', methods=['POST'])
+def upload():
+    """Upload a STEP/STP file, convert to STL and redirect to viewer"""
+    if 'file' not in request.files:
+        flash('Aucun fichier sélectionné', 'error')
+        return redirect(request.referrer or url_for('landing'))
+
+    file = request.files['file']
+    if file.filename == '':
+        flash('Aucun fichier sélectionné', 'error')
+        return redirect(request.referrer or url_for('landing'))
+
+    filename = secure_filename(file.filename)
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in ('.step', '.stp', '.xkt'):
+        flash('Format non supporté', 'error')
+        return redirect(request.referrer or url_for('landing'))
+
+    temp_dir = tempfile.mkdtemp()
+    input_path = os.path.join(temp_dir, filename)
+    file.save(input_path)
+
+    if filename.endswith('.xkt'):
+        out_name = f"{uuid.uuid4()}.xkt"
+        dest_dir = os.path.join('static', 'models')
+        os.makedirs(dest_dir, exist_ok=True)
+        shutil.move(input_path, os.path.join(dest_dir, out_name))
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return redirect(url_for('viewer', filename=out_name))
+
+    stl_name = f"{uuid.uuid4()}.stl"
+    stl_path = os.path.join(temp_dir, stl_name)
+    try:
+        ocp_step_to_stl(input_path, stl_path)
+    except Exception as e:
+        logger.exception(f"Conversion STEP->STL échouée: {e}")
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        flash('Erreur de conversion', 'error')
+        return redirect(request.referrer or url_for('landing'))
+
+    dest_dir = os.path.join('static', 'models')
+    os.makedirs(dest_dir, exist_ok=True)
+    final_path = os.path.join(dest_dir, stl_name)
+    shutil.move(stl_path, final_path)
+    shutil.rmtree(temp_dir, ignore_errors=True)
+
+    return redirect(url_for('viewer', filename=stl_name))
+
+@app.route('/api/upload_job', methods=['POST'])
 @login_required
-def upload_file():
-    """Handle STEP file upload and conversion"""
+def upload_job():
+    """Handle STEP file upload and conversion (legacy async flow)"""
     # Vérifier les crédits/abonnement
     if not current_user.has_access():
         return jsonify({
