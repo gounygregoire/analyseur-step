@@ -189,16 +189,40 @@ def process_step_file(job_id, demolding_axis='z'):
 
     step_path = os.path.abspath(os.path.join(app.config['UPLOAD_FOLDER'], job.step_filename))
     stl_path = os.path.abspath(os.path.join(app.config['CONVERTED_FOLDER'], job.stl_filename))
+    xkt_path = os.path.abspath(os.path.join(app.config['CONVERTED_FOLDER'], job.xkt_filename))
     ext = os.path.splitext(step_path)[1].lower()
+
+    viewer_ready = True
+    viewer_error = None
 
     try:
         if ext == '.stl':
-            # Pas d'analyse DFM possible, seulement la heatmap
-            generate_heatmap(stl_path)
+            # Copie directe du fichier téléchargé
+            shutil.copyfile(step_path, stl_path)
             dfm_report = None
         else:
+            ocp_step_to_stl(step_path, stl_path)
+            try:
+                xkt_converter.convert_step_to_xkt(step_path, xkt_path)
+            except Exception as xkt_err:
+                viewer_ready = False
+                viewer_error = f"Conversion XKT échouée: {xkt_err}"
             dfm_report = analyze_dfm(step_path, demolding_axis)
-            generate_heatmap(stl_path)
+
+        generate_heatmap(stl_path)
+
+        job.stl_file_size = os.path.getsize(stl_path)
+
+        try:
+            mesh = trimesh.load(stl_path, force='mesh', skip_materials=True, process=False)
+            if mesh.is_empty or len(getattr(mesh, 'faces', [])) == 0:
+                viewer_ready = False
+                if not viewer_error:
+                    viewer_error = 'STL invalide pour le viewer'
+        except Exception as val_err:
+            viewer_ready = False
+            if not viewer_error:
+                viewer_error = f'Validation viewer échouée: {val_err}'
 
         if job.user:
             job.user.use_credit()
@@ -210,10 +234,15 @@ def process_step_file(job_id, demolding_axis='z'):
             job.status = 'dfm_done'
         else:
             job.status = 'completed'
+
+        job.completed_at = datetime.utcnow()
     except Exception as e:
         job.status = 'failed'
         job.error_message = str(e)
         logger.exception(f"DFM processing failed for {job_id}: {e}")
+
+    job.viewer_ready = viewer_ready
+    job.viewer_error = viewer_error
 
     db.session.commit()
 
