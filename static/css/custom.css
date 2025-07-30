@@ -5,11 +5,7 @@
     position: relative;
     overflow: hidden;
     border-radius: var(--bs-border-radius);
-}
-
-#viewer3d canvas {
     display: block;
-    border-radius: var(--bs-border-radius);
 }
 
 /* Progress bar styling */
