@@ -1,0 +1,18 @@
+{
+  "name": "analyseur-step",
+  "version": "1.0.0",
+  "description": "Ce dépôt contient le code du MVP de Cadlytics, SaaS d'analyse DFM et de visualisation 3D pour fichiers STEP. Le viewer 3D repose désormais sur **Xeokit** et rend les modèles au format **XKT** (conversion réalisée via `xkt_converter.py`).",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "vite build"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "@xeokit/xeokit-sdk": "^2.6.86",
+    "vite": "^7.0.6"
+  }
+}
