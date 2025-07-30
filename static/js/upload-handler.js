@@ -1,11 +1,18 @@
 // Gestion de l'upload et du suivi de conversion
 
 document.addEventListener('DOMContentLoaded', function () {
-    if (typeof initViewer === 'function' && typeof Viewer === 'function') {
+    if (typeof Viewer === 'function' && typeof initViewer === 'function') {
         console.log('✅ SDK détecté, initialisation du viewer...');
         initViewer();
     } else {
         console.log('❌ Viewer non disponible, initialisation différée');
+        const retry = setInterval(() => {
+            if (typeof Viewer === 'function' && typeof initViewer === 'function') {
+                console.log('🔁 SDK maintenant disponible, initialisation...');
+                initViewer();
+                clearInterval(retry);
+            }
+        }, 500);
     }
 
     const initialModel = document.body.dataset.model;
