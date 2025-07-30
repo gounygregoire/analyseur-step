@@ -3,7 +3,12 @@ export default {
     outDir: 'static/dist',
     emptyOutDir: true,
     rollupOptions: {
-      input: 'src/main.js'
+      input: 'src/main.js',
+      output: {
+        entryFileNames: 'main.js',
+        assetFileNames: '[name][extname]',
+        chunkFileNames: '[name].js'
+      }
     }
   }
 };
