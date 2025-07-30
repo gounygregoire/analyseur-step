@@ -26,3 +26,17 @@ CELERY_BROKER_URL=redis://localhost:6379/0 gunicorn app:app --timeout 600
 
 - `SESSION_SECRET` : clé secrète pour chiffrer les sessions Flask. Obligation
   de définir une valeur aléatoire en production.
+
+## Construction du bundle JavaScript
+
+Exécuter une seule fois :
+
+```bash
+npm install
+```
+
+Pour générer le bundle dans `static/dist/` :
+
+```bash
+npm run build
+```

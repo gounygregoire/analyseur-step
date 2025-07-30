@@ -4,3 +4,6 @@ __pycache__/
 test_env/
 debug_redirect_uri.py
 static/models/
+
+node_modules/
+static/dist/
