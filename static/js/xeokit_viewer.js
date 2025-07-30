@@ -23,7 +23,7 @@ class XeokitViewerApp {
 
         this._section = new SectionPlanesPlugin(this.viewer);
         this._measure = new MeasurementsPlugin(this.viewer);
-        this._annotations = new AnnotationPlugin(this.viewer);
+        this._annotations = new AnnotationPlugin(this.viewer, {});
 
         this._initialCamera = {
             eye: this.viewer.camera.eye.slice(),

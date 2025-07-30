@@ -18,7 +18,7 @@ class XeokitViewerApp {
 
         this._section = new SectionPlanesPlugin(this.viewer);
         this._measure = new DistanceMeasurementsPlugin(this.viewer);
-        this._annotations = new AnnotationsPlugin(this.viewer);
+        this._annotations = new AnnotationsPlugin(this.viewer, {});
 
         this._initialCamera = {
             eye: this.viewer.camera.eye.slice(),
