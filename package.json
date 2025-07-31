@@ -14,5 +14,8 @@
   "devDependencies": {
     "@xeokit/xeokit-sdk": "^2.6.86",
     "vite": "^7.0.6"
+  },
+  "dependencies": {
+    "jspdf": "^3.0.1"
   }
 }
