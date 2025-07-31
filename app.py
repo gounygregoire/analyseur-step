@@ -393,6 +393,39 @@ def serve_upload(filename):
     return send_from_directory(app.config['CONVERTED_FOLDER'], filename)
 
 
+@app.route('/convert', methods=['POST'])
+def convert_step():
+    """Convertit un fichier STEP en XKT via xeokit-convert"""
+    if 'file' not in request.files or request.files['file'].filename == '':
+        return jsonify({'success': False, 'error': 'Aucun fichier'}), 400
+
+    file = request.files['file']
+    filename = secure_filename(file.filename)
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in ('.step', '.stp'):
+        return jsonify({'success': False, 'error': 'Format non supporté'}), 400
+
+    temp_dir = tempfile.mkdtemp()
+    step_path = os.path.join(temp_dir, filename)
+    file.save(step_path)
+
+    dest_dir = os.path.join(app.root_path, 'static', 'xkt')
+    os.makedirs(dest_dir, exist_ok=True)
+    out_name = f"{uuid.uuid4()}.xkt"
+    out_path = os.path.join(dest_dir, out_name)
+
+    try:
+        xkt_converter.convert_step_to_xkt(step_path, out_path)
+    except Exception as e:
+        logger.exception(f"Conversion STEP->XKT échouée: {e}")
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return jsonify({'success': False, 'error': 'Erreur de conversion'}), 500
+
+    shutil.rmtree(temp_dir, ignore_errors=True)
+
+    return jsonify({'success': True, 'url': f"/static/xkt/{out_name}"})
+
+
 @app.route('/upload_file', methods=['POST'])
 def upload_file_api():
     """Upload STEP/STL file and launch processing"""
