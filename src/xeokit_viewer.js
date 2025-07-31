@@ -12,7 +12,7 @@ class XeokitViewerApp {
         }
 
         this.viewer = new Viewer({
-            canvas: document.getElementById("viewer3d"),
+            canvasElement: document.getElementById("viewer3d"),
             transparent: true
         });
 
