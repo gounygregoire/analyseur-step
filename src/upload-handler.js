@@ -62,20 +62,29 @@ document.addEventListener('DOMContentLoaded', function () {
 
         const formData = new FormData(form);
 
-        fetch('/upload_file', {
+        convertAndDisplay(formData);
+    });
+
+    function convertAndDisplay(formData) {
+        fetch('/convert', {
             method: 'POST',
             body: formData
         })
             .then((r) => r.json())
             .then((data) => {
-                if (data.id) {
-                    pollDFMResults(data.id);
+                if (data.success && data.url) {
+                    if (progressSection) progressSection.style.display = 'none';
+                    if (window.viewer) {
+                        window.viewer.loadModel(data.url);
+                    }
+                    if (viewerToolsPanel) viewerToolsPanel.style.display = 'block';
+                    if (dfmControls) dfmControls.style.display = 'flex';
                 } else {
                     showError(data.error || 'Erreur serveur');
                 }
             })
             .catch(() => showError('Erreur réseau'));
-    });
+    }
 
     function pollDFMResults(jobId) {
         const interval = setInterval(() => {
