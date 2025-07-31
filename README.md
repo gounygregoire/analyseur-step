@@ -40,3 +40,4 @@ Pour générer le bundle dans `static/dist/` :
 ```bash
 npm run build
 ```
+Ce script régénère `static/dist/main.js`, fichier ignoré par Git.
