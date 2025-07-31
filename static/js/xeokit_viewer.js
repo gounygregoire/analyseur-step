@@ -21,7 +21,11 @@ class XeokitViewerApp {
             return;
         }
 
-         this.viewer = new Viewer({ canvasId: "viewer3d", transparent: true });
+// Pour v2.x
+            this.viewer = new Viewer({
+                canvas: document.getElementById("viewer3d"),
+                transparent: true
+            });
             console.log("Viewer instancié", this.viewer);
             console.log("Canvas dans viewer :", this.viewer.canvas);
             if (!this.viewer.canvas) {
