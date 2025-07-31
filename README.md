@@ -1,10 +1,8 @@
 # Cadlytics
 
 Ce dépôt contient le code du MVP de Cadlytics, SaaS d'analyse DFM et de visualisation 3D pour fichiers STEP.
-Le viewer 3D repose désormais sur **Xeokit** et rend les modèles au format **XKT**
-(conversion réalisée via `xkt_converter.py`).
-
-La conversion STEP vers STL s'appuie sur la librairie **OCP** (`pythonocc-core`).
+Le viewer 3D fonctionne avec **Xeokit** et attend des modèles au format **XKT**.
+La conversion des fichiers STEP s'appuie sur l'outil `xeokit-convert` via le script `xkt_converter.py`.
 
 ## Nettoyage automatique des fichiers
 
@@ -48,3 +46,21 @@ Pendant le développement il suffit de lancer
 npm run dev
 ```
 pour reconstruire automatiquement ce fichier à chaque modification.
+
+## Conversion STEP → XKT et endpoint `/convert`
+
+L'outil [`xeokit-convert`](https://www.npmjs.com/package/@xeokit/xeokit-convert) est installé avec `npm install`. Il permet de générer un fichier XKT utilisable par le viewer.
+
+Le serveur expose une route **POST** `/convert` prenant un fichier STEP et renvoyant l'URL du XKT généré :
+
+```bash
+curl -F "file=@modele.step" http://localhost:5000/convert
+```
+
+La réponse ressemble à :
+
+```json
+{"success": true, "url": "/static/xkt/abc123.xkt"}
+```
+
+Ouvrez ensuite `http://localhost:5000/?model=abc123.xkt` pour visualiser le modèle dans Xeokit.
