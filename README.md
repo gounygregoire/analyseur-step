@@ -40,5 +40,6 @@ Pour générer le bundle dans `static/dist/` :
 ```bash
 npm run build
 ```
-Ce script régénère `static/dist/main.js`, fichier ignoré par Git.
-Exécuter `npm run build` avant chaque déploiement ou lancement de l'application afin de garantir la présence de `static/dist/main.js`.
+Ce script régénère `static/dist/main.js`.
+Exécuter `npm run build` après chaque modification du front pour mettre 
+à jour ce bundle avant de déployer ou lancer l'application.
