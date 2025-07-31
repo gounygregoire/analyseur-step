@@ -1,2 +1,2 @@
-# This file keeps the converted directory in version control  
-# The converted directory is needed for storing generated STL files
+# Keeps this directory in version control.
+# Stores XKT files generated for the viewer and optional STL outputs.
