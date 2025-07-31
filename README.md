@@ -34,6 +34,7 @@ Exécuter une seule fois :
 ```bash
 npm install
 ```
+Cette commande installe notamment `@xeokit/xeokit-convert` pour la conversion des modèles au format XKT.
 
 Pour générer le bundle dans `static/dist/` :
 
