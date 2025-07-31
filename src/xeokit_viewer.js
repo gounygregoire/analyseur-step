@@ -148,7 +148,11 @@ class XeokitViewerApp {
         this._tooltip.style.display = 'none';
         document.body.appendChild(this._tooltip);
 
-        const canvas = this.viewer.canvas;
+        const canvas = this.viewer.scene.canvas.canvas;
+            if (!canvas) {
+                console.error('Viewer canvas introuvable');
+                return;
+            }    
         canvas.addEventListener('mousemove', (e) => this._handleHover(e));
         canvas.addEventListener('click', (e) => this._handleSelect(e));
     }
