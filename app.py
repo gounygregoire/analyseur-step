@@ -172,7 +172,7 @@ def ocp_step_to_stl(step_path: str, stl_path: str) -> None:
     reader.TransferRoots()
     shape = reader.OneShape()
     writer = StlAPI_Writer()
-    Interface_Static.SetCVal("write.stl.ascii", "False")
+    Interface_Static.SetIVal_s("write.stl.mode", 0)
     writer.SetASCIIMode(False)
     writer.Write(shape, stl_path)
 
