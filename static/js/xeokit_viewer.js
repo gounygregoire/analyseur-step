@@ -21,9 +21,11 @@ class XeokitViewerApp {
             return;
         }
 
-        this.viewer = new Viewer({
-            canvasId: "viewer3d",
-            transparent: true
+         this.viewer = new Viewer({ canvasId: "viewer3d", transparent: true });
+            console.log("Viewer instancié", this.viewer);
+            console.log("Canvas dans viewer :", this.viewer.canvas);
+            if (!this.viewer.canvas) {
+                console.error("Le viewer Xeokit n'a pas pu trouver le canvas !");
         });
 
         this._section = new SectionPlanesPlugin(this.viewer);
