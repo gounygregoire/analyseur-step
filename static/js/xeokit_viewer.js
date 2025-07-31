@@ -1,4 +1,5 @@
 class XeokitViewerApp {
+    console.log("main.js chargé !");
     constructor() {
         if (typeof Viewer === 'undefined') {
     console.error('Viewer non trouvé : le SDK xeokit est absent.');
