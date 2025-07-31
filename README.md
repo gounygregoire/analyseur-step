@@ -41,5 +41,9 @@ Pour générer le bundle dans `static/dist/` :
 npm run build
 ```
 Ce script régénère `static/dist/main.js`.
-Exécuter `npm run build` après chaque modification du front pour mettre 
-à jour ce bundle avant de déployer ou lancer l'application.
+Pendant le développement il suffit de lancer
+
+```bash
+npm run dev
+```
+pour reconstruire automatiquement ce fichier à chaque modification.
