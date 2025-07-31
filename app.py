@@ -173,7 +173,7 @@ def ocp_step_to_stl(step_path: str, stl_path: str) -> None:
     shape = reader.OneShape()
     writer = StlAPI_Writer()
     Interface_Static.SetIVal_s("write.stl.mode", 0)
-    writer.SetASCIIMode(False)
+    writer.ASCIIMode = False
     writer.Write(shape, stl_path)
 
 
@@ -463,23 +463,24 @@ def upload():
         shutil.rmtree(temp_dir, ignore_errors=True)
         return redirect(url_for('index', model=out_name))
 
-    stl_name = f"{uuid.uuid4()}.stl"
-    stl_path = os.path.join(temp_dir, stl_name)
+    xkt_name = f"{uuid.uuid4()}.xkt"
+    xkt_path = os.path.join(temp_dir, xkt_name)
+
     try:
-        ocp_step_to_stl(input_path, stl_path)
+        xkt_converter.convert_step_to_xkt(input_path, xkt_path)
     except Exception as e:
-        logger.exception(f"Conversion STEP->STL échouée: {e}")
+        logger.exception(f"Conversion STEP->XKT échouée: {e}")
         shutil.rmtree(temp_dir, ignore_errors=True)
         flash('Erreur de conversion', 'error')
         return redirect(request.referrer or url_for('landing'))
 
     dest_dir = os.path.join('static', 'models')
     os.makedirs(dest_dir, exist_ok=True)
-    final_path = os.path.join(dest_dir, stl_name)
-    shutil.move(stl_path, final_path)
+    final_path = os.path.join(dest_dir, xkt_name)
+    shutil.move(xkt_path, final_path)
     shutil.rmtree(temp_dir, ignore_errors=True)
 
-    return redirect(url_for('index', model=stl_name))
+    return redirect(url_for('index', model=xkt_name))
 
 @app.route('/api/upload_job', methods=['POST'])
 @login_required
