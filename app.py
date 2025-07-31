@@ -422,12 +422,18 @@ def upload_file_api():
         step_file_size=os.path.getsize(step_path),
         status='queued'
     )
-    db.session.add(job)
-    db.session.commit()
+
+    try:
+        db.session.add(job)
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        logger.exception(f"DB error for job {job_id}: {exc}")
+        return jsonify({'error': "Erreur base de données"}), 500
 
     try:
         process_step_file.delay(job_id)
-    except (KombuOperationalError, RedisConnectionError):
+    except Exception:
         process_step_file(job_id)
 
     return jsonify({'id': job_id})
