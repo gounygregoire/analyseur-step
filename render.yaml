@@ -2,7 +2,7 @@ services:
 - type: web
   name: cadlytics
   env: python
-  buildCommand: "pip install -r requirements.txt"
+  buildCommand: "npm install && npm run build && pip install -r requirements.txt"
   startCommand: "gunicorn app:app --timeout 600"
   pythonVersion: 3.10
   plan: free
