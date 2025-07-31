@@ -1,5 +1,9 @@
+console.log("main.js chargé !");
+document.addEventListener('DOMContentLoaded', function () {
+    // Ici, on est sûr que le DOM (canvas inclus) est chargé
+    window.xeokitApp = new XeokitViewerApp();
+});
 class XeokitViewerApp {
-    console.log("main.js chargé !");
     constructor() {
         if (typeof Viewer === 'undefined') {
     console.error('Viewer non trouvé : le SDK xeokit est absent.');
@@ -18,7 +22,7 @@ class XeokitViewerApp {
         }
 
         this.viewer = new Viewer({
-            canvasId: 'viewer3d',
+            canvasId: "viewer3d",
             transparent: true
         });
 
