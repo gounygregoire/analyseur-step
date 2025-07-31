@@ -109,7 +109,7 @@ class XeokitViewerApp {
     }
 
     captureScreenshot() {
-        return this.viewer.canvas.toDataURL('image/png');
+        return this.viewer.scene.canvas.canvas.toDataURL('image/png');
     }
 
     exportPDF() {
