@@ -36,6 +36,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const dfmControls = document.getElementById('dfmControls');
     const fileInput = document.getElementById('fileInput');
     const fileNameDisplay = document.getElementById('fileNameDisplay');
+    const uploadArea = document.getElementById('uploadArea');
 
     function onUploadSuccess(xktFile) {
         if (window.viewer) {
@@ -51,6 +52,26 @@ document.addEventListener('DOMContentLoaded', function () {
                 const file = fileInput.files[0];
                 fileNameDisplay.textContent = file ? file.name : '';
             }
+        });
+    }
+
+    if (uploadArea && fileInput) {
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('drag-over');
+        });
+
+        uploadArea.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('drag-over');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('drag-over');
+            fileInput.files = e.dataTransfer.files;
+            fileInput.dispatchEvent(new Event('change'));
+            form.dispatchEvent(new Event('submit', { cancelable: true }));
         });
     }
 
