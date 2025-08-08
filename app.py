@@ -267,8 +267,7 @@ def cleanup_old_files():
 # Configuration
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
-# Allow override via environment variable, defaulting to repo 'converted' directory
-CONVERTED_FOLDER = os.getenv('CONVERTED_FOLDER', os.path.join(BASE_DIR, 'converted'))
+CONVERTED_FOLDER = os.getenv("CONVERTED_FOLDER", "/tmp/converted")
 # Types de fichiers autorisés pour l'upload
 ALLOWED_EXTENSIONS = {'step', 'stp', 'stl'}
 FILE_RETENTION_DAYS = int(os.getenv('FILE_RETENTION_DAYS', '7'))
@@ -280,6 +279,7 @@ app.config['FILE_RETENTION_DAYS'] = FILE_RETENTION_DAYS
 # Ensure directories exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(CONVERTED_FOLDER, exist_ok=True)
+logger.info("CONVERTED_FOLDER=%s", CONVERTED_FOLDER)
 
 # Initialize Flask-Login
 login_manager = LoginManager(app)
