@@ -4,6 +4,7 @@ from flask import Flask, render_template, request, jsonify, send_file, send_from
 from flask_cors import CORS
 from flask_migrate import Migrate
 from werkzeug.utils import secure_filename, safe_join
+from werkzeug.exceptions import RequestEntityTooLarge
 import cadquery as cq
 import trimesh
 import uuid
@@ -61,7 +62,12 @@ CORS(app)
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SECURE'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size
+app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024  # 200MB max file size
+
+@app.errorhandler(RequestEntityTooLarge)
+def handle_file_too_large(e):
+    return jsonify({"success": False, "error": "file_too_large"}), 413
+
 # Execute Celery tasks synchronously when no worker is running
 app.config['CELERY_TASK_ALWAYS_EAGER'] = os.getenv('CELERY_TASK_ALWAYS_EAGER', 'False').lower() == 'true'
 
