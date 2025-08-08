@@ -1394,7 +1394,11 @@ body {
     }
 
     .upload-content {
-      pointer-events: none; /* Permet au dragover de traverser */
+      pointer-events: auto; /* Autorise les clics sur le contenu */
+    }
+
+    .upload-content label[for="fileInput"] {
+      pointer-events: auto;
     }
 
     #fileNameDisplay {
