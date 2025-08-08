@@ -56,6 +56,10 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     if (uploadArea && fileInput) {
+        uploadArea.addEventListener('click', () => {
+            fileInput.click();
+        });
+
         uploadArea.addEventListener('dragover', (e) => {
             e.preventDefault();
             uploadArea.classList.add('drag-over');
