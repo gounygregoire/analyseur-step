@@ -2,13 +2,16 @@ services:
 - type: web
   name: cadlytics
   env: python
+  envVars:
+    - key: CONVERTED_FOLDER
+      value: /tmp/converted
   buildCommand: |
     curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
     apt-get install -y nodejs
-    npm ci
+    npm ci || npm install
     npm install -g @xeokit/xeokit-convert
     npm run build
     pip install -r requirements.txt
-  startCommand: "gunicorn app:app --timeout 600"
+  startCommand: "gunicorn app:app --workers=2 --timeout=180"
   pythonVersion: 3.10
   plan: free
