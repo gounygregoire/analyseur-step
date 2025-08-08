@@ -6,12 +6,14 @@ services:
     - key: CONVERTED_FOLDER
       value: /tmp/converted
   buildCommand: |
-    curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
-    apt-get install -y nodejs
-    npm ci || npm install
     npm install -g @xeokit/xeokit-convert
-    npm run build
+    echo ">>> npm bin -g: $(npm bin -g)"
+    echo ">>> which xeokit-convert (build): $(which xeokit-convert)"
     pip install -r requirements.txt
-  startCommand: "gunicorn app:app --workers=2 --timeout=180"
+  startCommand: |
+    export PATH="/usr/local/bin:$PATH"
+    echo ">>> PATH at start: $PATH"
+    echo ">>> which xeokit-convert (start): $(which xeokit-convert)"
+    gunicorn app:app --workers=2 --timeout=180
   pythonVersion: 3.10
   plan: free
