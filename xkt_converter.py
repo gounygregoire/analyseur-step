@@ -7,7 +7,11 @@ Exemple d'utilisation :
 
 import subprocess
 import sys
+import logging
 from pathlib import Path
+
+
+logger = logging.getLogger(__name__)
 
 
 def convert_step_to_xkt(step_path: str, xkt_path: str) -> None:
@@ -16,9 +20,16 @@ def convert_step_to_xkt(step_path: str, xkt_path: str) -> None:
     if not step.exists():
         raise FileNotFoundError(step)
     out.parent.mkdir(parents=True, exist_ok=True)
+    node_v = subprocess.run(["node", "-v"], capture_output=True, text=True)
+    npm_v = subprocess.run(["npm", "-v"], capture_output=True, text=True)
+    logger.info("node -v: %s", node_v.stdout.strip())
+    logger.info("npm -v: %s", npm_v.stdout.strip())
     cmd = ["npx", "@xeokit/xeokit-convert", "-s", str(step), "-o", str(out)]
+    logger.info("Executing: %s", " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
+        logger.error("stdout: %s", result.stdout)
+        logger.error("stderr: %s", result.stderr)
         raise subprocess.CalledProcessError(
             result.returncode, cmd, output=result.stdout, stderr=result.stderr
         )
