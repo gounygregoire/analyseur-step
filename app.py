@@ -267,7 +267,8 @@ def cleanup_old_files():
 # Configuration
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
-CONVERTED_FOLDER = os.path.join(BASE_DIR, 'converted')
+# Allow override via environment variable, defaulting to repo 'converted' directory
+CONVERTED_FOLDER = os.getenv('CONVERTED_FOLDER', os.path.join(BASE_DIR, 'converted'))
 # Types de fichiers autorisés pour l'upload
 ALLOWED_EXTENSIONS = {'step', 'stp', 'stl'}
 FILE_RETENTION_DAYS = int(os.getenv('FILE_RETENTION_DAYS', '7'))
@@ -410,7 +411,7 @@ def convert_step():
     step_path = os.path.join(temp_dir, filename)
     file.save(step_path)
 
-    dest_dir = os.path.join(app.root_path, 'static', 'xkt')
+    dest_dir = app.config["CONVERTED_FOLDER"]  # dossier writable, ex. /tmp/converted
     os.makedirs(dest_dir, exist_ok=True)
     out_name = f"{uuid.uuid4()}.xkt"
     out_path = os.path.join(dest_dir, out_name)
@@ -441,7 +442,7 @@ def convert_step():
 
     shutil.rmtree(temp_dir, ignore_errors=True)
 
-    return jsonify({'success': True, 'url': f"/static/xkt/{out_name}"})
+    return jsonify({"success": True, "url": f"/uploads/{out_name}"})
 
 
 @app.route('/upload_file', methods=['POST'])
