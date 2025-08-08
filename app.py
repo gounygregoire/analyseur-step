@@ -439,7 +439,9 @@ def convert_step():
             logger.info("xeokit-convert not found, using npx fallback")
         else:
             cmd = [XEOKIT_BIN, "--input", step_path, "--output", str(out_path)]
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, check=False, timeout=150
+        )
         logger.info(
             "xeokit-convert rc=%s stdout=%s stderr=%s",
             proc.returncode,
@@ -460,6 +462,11 @@ def convert_step():
                 ),
                 400,
             )
+    except subprocess.TimeoutExpired:
+        duration = time.time() - start
+        logger.exception("xeokit-convert timeout après %.2fs", duration)
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return jsonify({"success": False, "error": "convert_timeout"}), 504
     except FileNotFoundError:
         duration = time.time() - start
         logger.exception("xeokit-convert introuvable après %.2fs", duration)
