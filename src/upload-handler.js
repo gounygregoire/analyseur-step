@@ -105,7 +105,13 @@ document.addEventListener('DOMContentLoaded', function () {
                     if (viewerToolsPanel) viewerToolsPanel.style.display = 'block';
                     if (dfmControls) dfmControls.style.display = 'flex';
                 } else {
-                    showError(data.error || 'Erreur serveur');
+                    const msg = data.details
+                        ? `${data.error || 'Erreur serveur'}: ${data.details}`
+                        : data.error || 'Erreur serveur';
+                    if (data.details) {
+                        console.error(data.details);
+                    }
+                    showError(msg);
                 }
             })
             .catch(() => showError('Erreur réseau'));

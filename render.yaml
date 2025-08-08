@@ -5,8 +5,8 @@ services:
   buildCommand: |
     curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
     apt-get install -y nodejs
+    npm ci
     npm install -g @xeokit/xeokit-convert
-    npm install
     npm run build
     pip install -r requirements.txt
   startCommand: "gunicorn app:app --timeout 600"
