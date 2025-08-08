@@ -10,6 +10,7 @@ import uuid
 import time
 import shutil
 import tempfile
+import subprocess
 from OCP.STEPControl import STEPControl_Reader
 from OCP.StlAPI import StlAPI_Writer
 from OCP.Interface import Interface_Static
@@ -416,6 +417,23 @@ def convert_step():
 
     try:
         xkt_converter.convert_step_to_xkt(step_path, out_path)
+    except subprocess.CalledProcessError as e:
+        logger.exception(f"Conversion STEP->XKT échouée: {e}")
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": "xeokit-convert a échoué",
+                    "details": e.stderr,
+                }
+            ),
+            400,
+        )
+    except FileNotFoundError:
+        logger.exception("npx ou xeokit-convert introuvable")
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return jsonify({'success': False, 'error': 'xeokit-convert non installé'}), 400
     except Exception as e:
         logger.exception(f"Conversion STEP->XKT échouée: {e}")
         shutil.rmtree(temp_dir, ignore_errors=True)
