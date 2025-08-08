@@ -287,6 +287,10 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(CONVERTED_FOLDER, exist_ok=True)
 logger.info("CONVERTED_FOLDER=%s", CONVERTED_FOLDER)
 
+XEOKIT_BIN = os.getenv("XEOKIT_CONVERT") or shutil.which("xeokit-convert") or "/usr/local/bin/xeokit-convert"
+logger.info("PATH at runtime=%s", os.getenv("PATH"))
+logger.info("XEOKIT_BIN resolved to %s", XEOKIT_BIN)
+
 # Initialize Flask-Login
 login_manager = LoginManager(app)
 login_manager.login_view = 'auth.login'
