@@ -130,7 +130,7 @@ document.addEventListener('DOMContentLoaded', function () {
         console.log('Loading XKT:', url);
 
         try {
-            viewer.loadModel(url);
+            window.viewer.loadModel(url);
         } catch (err) {
             console.error('Erreur chargement modèle:', err);
             showError('Impossible de charger le modèle 3D');
