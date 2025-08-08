@@ -395,10 +395,10 @@ def serve_static(filename):
     return send_from_directory('static', filename)
 
 
-@app.route('/uploads/<path:filename>')
-def serve_upload(filename):
+@app.route("/uploads/<path:fname>")
+def serve_xkt(fname):
     """Serve converted files for front-end requests"""
-    return send_from_directory(app.config['CONVERTED_FOLDER'], filename)
+    return send_from_directory(app.config["CONVERTED_FOLDER"], fname, as_attachment=False)
 
 
 @app.route('/convert', methods=['POST'])
