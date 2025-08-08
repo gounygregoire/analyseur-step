@@ -430,7 +430,7 @@ def convert_step():
     logger.info("Début conversion STEP->XKT: %s", step_path)
     try:
         proc = subprocess.run(
-            ["xeokit-convert", "--input", step_path, "--output", out_path],
+            [XEOKIT_BIN, "--input", step_path, "--output", out_path],
             capture_output=True, text=True, check=False
         )
         logger.info(
