@@ -287,9 +287,14 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(CONVERTED_FOLDER, exist_ok=True)
 logger.info("CONVERTED_FOLDER=%s", CONVERTED_FOLDER)
 
-XEOKIT_BIN = os.getenv("XEOKIT_CONVERT") or shutil.which("xeokit-convert") or "/usr/local/bin/xeokit-convert"
 logger.info("PATH at runtime=%s", os.getenv("PATH"))
-logger.info("XEOKIT_BIN resolved to %s", XEOKIT_BIN)
+XEOKIT_BIN = os.getenv("XEOKIT_CONVERT") or shutil.which("xeokit-convert")
+if XEOKIT_BIN:
+    logger.info("XEOKIT_BIN resolved to %s", XEOKIT_BIN)
+else:
+    XEOKIT_BIN = "npx"
+    logger.warning("xeokit-convert not found, falling back to npx")
+    logger.info("XEOKIT_BIN resolved to %s", XEOKIT_BIN)
 
 # Initialize Flask-Login
 login_manager = LoginManager(app)
@@ -429,10 +434,12 @@ def convert_step():
     start = time.time()
     logger.info("Début conversion STEP->XKT: %s", step_path)
     try:
-        proc = subprocess.run(
-            [XEOKIT_BIN, "--input", step_path, "--output", out_path],
-            capture_output=True, text=True, check=False
-        )
+        if XEOKIT_BIN == "npx":
+            cmd = [XEOKIT_BIN, "-y", "@xeokit/xeokit-convert", "--input", step_path, "--output", str(out_path)]
+            logger.info("xeokit-convert not found, using npx fallback")
+        else:
+            cmd = [XEOKIT_BIN, "--input", step_path, "--output", str(out_path)]
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
         logger.info(
             "xeokit-convert rc=%s stdout=%s stderr=%s",
             proc.returncode,
