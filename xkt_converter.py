@@ -16,8 +16,12 @@ def convert_step_to_xkt(step_path: str, xkt_path: str) -> None:
     if not step.exists():
         raise FileNotFoundError(step)
     out.parent.mkdir(parents=True, exist_ok=True)
-    cmd = ["npx", "@xeokit/xeokit-convert", str(step), "-o", str(out)]
-    subprocess.check_call(cmd)
+    cmd = ["npx", "@xeokit/xeokit-convert", "-s", str(step), "-o", str(out)]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(
+            result.returncode, cmd, output=result.stdout, stderr=result.stderr
+        )
 
 
 if __name__ == "__main__":
