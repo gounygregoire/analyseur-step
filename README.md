@@ -47,20 +47,25 @@ npm run dev
 ```
 pour reconstruire automatiquement ce fichier à chaque modification.
 
-## Conversion STEP → XKT et endpoint `/convert`
+## Conversion STEP → XKT
 
-L'outil [`xeokit-convert`](https://www.npmjs.com/package/@xeokit/xeokit-convert) est installé avec `npm install`. Il permet de générer un fichier XKT utilisable par le viewer.
+### Prérequis
 
-Le serveur expose une route **POST** `/convert` prenant un fichier STEP et renvoyant l'URL du XKT généré :
+- Node.js ≥ 14
+- `npm install -g @xeokit/xeokit-convert`
+
+### Variable d'environnement
+
+- `CONVERTED_FOLDER` : chemin de sortie des fichiers XKT.
+
+### Test de l'endpoint `/convert`
 
 ```bash
-curl -F "file=@modele.step" http://localhost:5000/convert
+curl -F "file=@tests/cubes.step" http://localhost:5000/convert
 ```
 
-La réponse ressemble à :
+Le fichier converti est accessible via :
 
-```json
-{"success": true, "url": "/static/xkt/abc123.xkt"}
 ```
-
-Ouvrez ensuite `http://localhost:5000/?model=abc123.xkt` pour visualiser le modèle dans Xeokit.
+http://localhost:5000/uploads/<uuid>.xkt
+```
