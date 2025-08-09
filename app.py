@@ -414,15 +414,18 @@ def serve_xkt(fname):
 
 @app.route('/convert', methods=['POST'])
 def convert_step():
-    """Convertit un fichier STEP en XKT via xeokit-convert (-s/-o ou --source/--output selon la version)."""
+    """Convertit un fichier STEP en XKT via xeokit-convert (gère -s/-o, --source/--output et source-format)."""
     f = request.files.get('file')
     if not f or f.filename == '':
         return jsonify(success=False, error='Aucun fichier'), 400
 
-    filename = secure_filename(f.filename)
-    ext = os.path.splitext(filename)[1].lower()
-    if ext not in ('.step', '.stp'):
+    # Normaliser le nom et l'extension (évite les .STEP en majuscule non reconnus)
+    orig = secure_filename(f.filename)
+    base, ext = os.path.splitext(orig)
+    ext_lower = ext.lower()
+    if ext_lower not in ('.step', '.stp'):
         return jsonify(success=False, error='Format non supporté'), 400
+    filename = base + ext_lower  # force l’extension en minuscule
 
     # Dossier temporaire pour l’input
     temp_dir = tempfile.mkdtemp()
@@ -440,30 +443,37 @@ def convert_step():
     logger.info("Début conversion STEP->XKT: %s (bin=%s)", step_path, xeokit_bin)
 
     try:
-        # Essai 1 : options courtes (-s / -o)
-        if xeokit_bin == "npx":
-            base_cmd = [xeokit_bin, "-y", "@xeokit/xeokit-convert"]
-        else:
-            base_cmd = [xeokit_bin]
+        # Base de commande
+        base_cmd = [xeokit_bin, "-y", "@xeokit/xeokit-convert"] if xeokit_bin == "npx" else [xeokit_bin]
 
+        # Essai 1 : options courtes (-s/-o)
         cmd = base_cmd + ["-s", step_path, "-o", str(out_path)]
         proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=600)
+        out_txt = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
 
-        # Si erreur "unknown option", on retente avec --source/--output
-        if proc.returncode != 0 and "unknown option" in (proc.stdout or proc.stderr or "").lower():
+        # Essai 2 : si "unknown option" → options longues (--source/--output)
+        if proc.returncode != 0 and "unknown option" in out_txt.lower():
             cmd = base_cmd + ["--source", step_path, "--output", str(out_path)]
             proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=600)
+            out_txt = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
 
-        logger.info(
-            "xeokit-convert rc=%s stdout=%s stderr=%s",
-            proc.returncode,
-            (proc.stdout or "")[:1000],
-            (proc.stderr or "")[:1000],
-        )
+        # Essai 3 : si "unsupported source format" → forcer le format source
+        if proc.returncode != 0 and "unsupported source format" in out_txt.lower():
+            # on force 'step' comme format source
+            cmd = base_cmd + ["-s", step_path, "-o", str(out_path), "--source-format", "step"]
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=600)
+            out_txt = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+            if proc.returncode != 0:
+                cmd = base_cmd + ["--source", step_path, "--output", str(out_path), "--source-format", "step"]
+                proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=600)
+                out_txt = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+
+        logger.info("xeokit-convert rc=%s\ncmd=%s\nstdout<=\n%s",
+                    proc.returncode, " ".join(cmd), out_txt[:1000])
 
         if proc.returncode != 0 or not os.path.exists(out_path):
             shutil.rmtree(temp_dir, ignore_errors=True)
-            return jsonify(success=False, error="convert_failed", details=(proc.stdout or proc.stderr or "")[:500]), 400
+            return jsonify(success=False, error="convert_failed", details=out_txt[:800]), 400
 
     except subprocess.TimeoutExpired:
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -482,6 +492,7 @@ def convert_step():
     shutil.rmtree(temp_dir, ignore_errors=True)
     logger.info("Fin conversion (succès) durée=%.2fs", time.time()-start)
 
+    # /uploads/<name> est servi par la route serve_xkt plus haut
     return jsonify(success=True, url=f"/uploads/{out_name}")
 
 
