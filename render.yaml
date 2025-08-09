@@ -5,12 +5,15 @@ services:
   envVars:
     - key: CONVERTED_FOLDER
       value: /tmp/converted
+    - key: XEOKIT_CONVERT
+      value: /root/.nvm/versions/node/v22.18.0/bin/xeokit-convert
   buildCommand: |
     npm install -g @xeokit/xeokit-convert
     echo ">>> npm bin -g: $(npm bin -g)"
     echo ">>> which xeokit-convert (build): $(which xeokit-convert)"
     pip install -r requirements.txt
   startCommand: |
+    export PATH="/root/.nvm/versions/node/v22.18.0/bin:$PATH"
     export PATH="/usr/local/bin:$PATH"
     echo ">>> PATH at start: $PATH"
     echo ">>> which xeokit-convert (start): $(which xeokit-convert)"
