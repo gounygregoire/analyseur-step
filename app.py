@@ -64,6 +64,15 @@ app.config['SESSION_COOKIE_SECURE'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024  # 200MB max file size
 
+def _resolve_xeokit():
+    """Résout le binaire xeokit-convert ou renvoie 'npx'."""
+    xeokit = os.getenv("XEOKIT_CONVERT") or shutil.which("xeokit-convert")
+    if xeokit:
+        logger.info("XEOKIT_BIN resolved to %s", xeokit)
+        return xeokit
+    logger.warning("xeokit-convert not found, falling back to npx")
+    return "npx"
+
 @app.errorhandler(RequestEntityTooLarge)
 def handle_file_too_large(e):
     return jsonify({"success": False, "error": "file_too_large"}), 413
@@ -288,13 +297,6 @@ os.makedirs(CONVERTED_FOLDER, exist_ok=True)
 logger.info("CONVERTED_FOLDER=%s", CONVERTED_FOLDER)
 
 logger.info("PATH at runtime=%s", os.getenv("PATH"))
-XEOKIT_BIN = os.getenv("XEOKIT_CONVERT") or shutil.which("xeokit-convert")
-if XEOKIT_BIN:
-    logger.info("XEOKIT_BIN resolved to %s", XEOKIT_BIN)
-else:
-    XEOKIT_BIN = "npx"
-    logger.warning("xeokit-convert not found, falling back to npx")
-    logger.info("XEOKIT_BIN resolved to %s", XEOKIT_BIN)
 
 # Initialize Flask-Login
 login_manager = LoginManager(app)
@@ -431,14 +433,15 @@ def convert_step():
     out_name = f"{uuid.uuid4()}.xkt"
     out_path = os.path.join(dest_dir, out_name)
 
+    xeokit_bin = _resolve_xeokit()
     start = time.time()
     logger.info("Début conversion STEP->XKT: %s", step_path)
     try:
-        if XEOKIT_BIN == "npx":
-            cmd = [XEOKIT_BIN, "-y", "@xeokit/xeokit-convert", "--input", step_path, "--output", str(out_path)]
+        if xeokit_bin == "npx":
+            cmd = [xeokit_bin, "-y", "@xeokit/xeokit-convert", "--input", step_path, "--output", str(out_path)]
             logger.info("xeokit-convert not found, using npx fallback")
         else:
-            cmd = [XEOKIT_BIN, "--input", step_path, "--output", str(out_path)]
+            cmd = [xeokit_bin, "--input", step_path, "--output", str(out_path)]
         proc = subprocess.run(
             cmd, capture_output=True, text=True, check=False, timeout=150
         )
