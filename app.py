@@ -443,7 +443,7 @@ def convert_step():
         else:
             cmd = [xeokit_bin, "--input", step_path, "--output", str(out_path)]
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, check=False, timeout=150
+            cmd, capture_output=True, text=True, check=False, timeout=600
         )
         logger.info(
             "xeokit-convert rc=%s stdout=%s stderr=%s",
