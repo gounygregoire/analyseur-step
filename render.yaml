@@ -6,15 +6,15 @@ services:
     - key: CONVERTED_FOLDER
       value: /tmp/converted
     - key: XEOKIT_CONVERT
-      value: /root/.nvm/versions/node/v22.18.0/bin/xeokit-convert
+      value: /usr/local/bin/xeokit-convert
   buildCommand: |
     npm install -g @xeokit/xeokit-convert
-    echo ">>> npm bin -g: $(npm bin -g)"
+    ln -sf $(npm config get prefix | tail -n 1)/bin/xeokit-convert /usr/local/bin/xeokit-convert
+    echo ">>> npm prefix -g: $(npm config get prefix | tail -n 1)"
     echo ">>> which xeokit-convert (build): $(which xeokit-convert)"
     pip install -r requirements.txt
   startCommand: |
-    export PATH="/root/.nvm/versions/node/v22.18.0/bin:$PATH"
-    export PATH="/usr/local/bin:$PATH"
+    export PATH="/usr/local/bin:/root/.nvm/versions/node/v22.18.0/bin:$PATH"
     echo ">>> PATH at start: $PATH"
     echo ">>> which xeokit-convert (start): $(which xeokit-convert)"
     gunicorn app:app --workers=2 --timeout=300
