@@ -415,69 +415,69 @@ def serve_xkt(fname):
 @app.route('/convert', methods=['POST'])
 def convert_step():
     """
-    Convertit en XKT :
-      - STEP/STP -> via xkt_converter (Python, OCC)
-      - GLTF/GLB/OBJ/STL -> via @xeokit/xeokit-convert (CLI)
+    Convertit un fichier en XKT :
+      - .step/.stp  -> xkt_converter (STEP -> STL -> XKT)
+      - .stl       -> xeokit-convert directement
+    Réponse JSON: { success: bool, url?: str, error?: str, details?: str }
     """
     f = request.files.get('file')
     if not f or f.filename == '':
         return jsonify(success=False, error='Aucun fichier'), 400
 
+    # Normaliser le nom et l’extension
     orig = secure_filename(f.filename)
     base, ext = os.path.splitext(orig)
     ext_lower = ext.lower()
 
-    # Dossier temporaire pour l’input
-    temp_dir = tempfile.mkdtemp()
-    in_name = base + ext_lower
+    if ext_lower not in ('.step', '.stp', '.stl'):
+        return jsonify(success=False, error='Format non supporté'), 400
+
+    # Préparer chemins
+    temp_dir = tempfile.mkdtemp(prefix="convert_")
+    in_name = base + ext_lower           # garde l’extension d’origine en minuscule
     in_path = os.path.join(temp_dir, in_name)
     f.save(in_path)
 
-    dest_dir = app.config["CONVERTED_FOLDER"]
+    dest_dir = app.config.get("CONVERTED_FOLDER", "/tmp/converted")
     os.makedirs(dest_dir, exist_ok=True)
     out_name = f"{uuid.uuid4()}.xkt"
     out_path = os.path.join(dest_dir, out_name)
 
     start = time.time()
     try:
-        # 1) STEP/STP -> passer par le convertisseur Python
         if ext_lower in ('.step', '.stp'):
-            logger.info("STEP/STP détecté -> conversion Python via xkt_converter")
+            # STEP/STP -> pipeline Python (CadQuery -> STL) puis xeokit-convert
+            logger.info("STEP/STP détecté -> conversion via xkt_converter: %s -> %s", in_path, out_path)
             try:
-                xkt_converter.convert_step_to_xkt(in_path, out_path)
+                # tolérance STL un peu large pour rester rapide/sobre en mémoire
+                xkt_converter.convert_step_to_xkt(in_path, out_path, stl_tolerance=0.6, timeout=600)
             except Exception as e:
                 logger.exception("convert_step_to_xkt a échoué")
                 shutil.rmtree(temp_dir, ignore_errors=True)
                 return jsonify(success=False, error="convert_failed", details=str(e)[:800]), 400
 
-        # 2) Autres formats supportés par le CLI xeokit
         else:
-            supported_cli = {'.stl', '.obj', '.gltf', '.glb'}
-            if ext_lower not in supported_cli:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                return jsonify(success=False, error="format_non_supporte",
-                               details=f"Format {ext_lower} non supporté pour conversion XKT"), 400
-
+            # STL -> XKT avec le binaire xeokit-convert
             xeokit_bin = _resolve_xeokit()
             base_cmd = [xeokit_bin, "-y", "@xeokit/xeokit-convert"] if xeokit_bin == "npx" else [xeokit_bin]
 
-            # Tentative 1 : -s/-o
+            # 1er essai : -s/-o
             cmd = base_cmd + ["-s", in_path, "-o", str(out_path)]
+            logger.info("STL détecté -> xeokit-convert: %s", " ".join(cmd))
             proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=600)
-            out_txt = ((proc.stdout or "") + "\n" + (proc.stderr or "")).lower()
+            out_txt = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
 
-            # Tentative 2 si binaire ancien : --source/--output
-            if proc.returncode != 0 and "unknown option" in out_txt:
+            # Si binaire ancien : réessayer avec --source/--output
+            if proc.returncode != 0 and "unknown option" in out_txt.lower():
                 cmd = base_cmd + ["--source", in_path, "--output", str(out_path)]
+                logger.info("Retry with --source/--output: %s", " ".join(cmd))
                 proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=600)
+                out_txt = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
 
-            logger.info("xeokit rc=%s cmd=%s", proc.returncode, " ".join(cmd))
-            logger.info("xeokit out:\n%s", ((proc.stdout or "") + (proc.stderr or ""))[:1000])
-
+            logger.info("xeokit rc=%s", proc.returncode)
             if proc.returncode != 0 or not os.path.exists(out_path):
                 shutil.rmtree(temp_dir, ignore_errors=True)
-                return jsonify(success=False, error="convert_failed",
-                               details=((proc.stdout or "") + (proc.stderr or ""))[:800]), 400
+                return jsonify(success=False, error="convert_failed", details=out_txt[:1200]), 400
 
     except subprocess.TimeoutExpired:
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -485,13 +485,18 @@ def convert_step():
     except FileNotFoundError:
         shutil.rmtree(temp_dir, ignore_errors=True)
         return jsonify(success=False, error="xeokit_missing"), 500
+    except PermissionError:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return jsonify(success=False, error="permission_denied"), 400
     except Exception as e:
-        logger.exception("Erreur inattendue durant la conversion")
+        logger.exception("Erreur inattendue durant /convert")
         shutil.rmtree(temp_dir, ignore_errors=True)
         return jsonify(success=False, error=str(e) or "unexpected"), 500
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
-    shutil.rmtree(temp_dir, ignore_errors=True)
     logger.info("Conversion OK en %.2fs -> %s", time.time() - start, out_path)
+    # La route /uploads/<fname> doit servir CONVERTED_FOLDER
     return jsonify(success=True, url=f"/uploads/{out_name}")
 
 
