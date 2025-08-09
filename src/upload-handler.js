@@ -86,6 +86,14 @@ document.addEventListener('DOMContentLoaded', function () {
         if (errorAlert) errorAlert.style.display = 'none';
 
         const formData = new FormData(form);
+        const fieldName = fileInput ? fileInput.name : null;
+        if (fieldName && fieldName !== 'file') {
+            const file = formData.get(fieldName);
+            if (file) {
+                formData.delete(fieldName);
+                formData.append('file', file);
+            }
+        }
 
         convertAndDisplay(formData);
     });
