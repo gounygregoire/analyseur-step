@@ -414,83 +414,75 @@ def serve_xkt(fname):
 
 @app.route('/convert', methods=['POST'])
 def convert_step():
-    """Convertit un fichier STEP en XKT via xeokit-convert"""
-    if 'file' not in request.files or request.files['file'].filename == '':
-        return jsonify({'success': False, 'error': 'Aucun fichier'}), 400
+    """Convertit un fichier STEP en XKT via xeokit-convert (-s/-o ou --source/--output selon la version)."""
+    f = request.files.get('file')
+    if not f or f.filename == '':
+        return jsonify(success=False, error='Aucun fichier'), 400
 
-    file = request.files['file']
-    filename = secure_filename(file.filename)
+    filename = secure_filename(f.filename)
     ext = os.path.splitext(filename)[1].lower()
     if ext not in ('.step', '.stp'):
-        return jsonify({'success': False, 'error': 'Format non supporté'}), 400
+        return jsonify(success=False, error='Format non supporté'), 400
 
+    # Dossier temporaire pour l’input
     temp_dir = tempfile.mkdtemp()
     step_path = os.path.join(temp_dir, filename)
-    file.save(step_path)
+    f.save(step_path)
 
-    dest_dir = app.config["CONVERTED_FOLDER"]  # dossier writable, ex. /tmp/converted
+    # Dossier de sortie
+    dest_dir = app.config["CONVERTED_FOLDER"]
     os.makedirs(dest_dir, exist_ok=True)
     out_name = f"{uuid.uuid4()}.xkt"
     out_path = os.path.join(dest_dir, out_name)
 
     xeokit_bin = _resolve_xeokit()
     start = time.time()
-    logger.info("Début conversion STEP->XKT: %s", step_path)
+    logger.info("Début conversion STEP->XKT: %s (bin=%s)", step_path, xeokit_bin)
+
     try:
+        # Essai 1 : options courtes (-s / -o)
         if xeokit_bin == "npx":
-            cmd = [xeokit_bin, "-y", "@xeokit/xeokit-convert", "--input", step_path, "--output", str(out_path)]
-            logger.info("xeokit-convert not found, using npx fallback")
+            base_cmd = [xeokit_bin, "-y", "@xeokit/xeokit-convert"]
         else:
-            cmd = [xeokit_bin, "--input", step_path, "--output", str(out_path)]
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, check=False, timeout=600
-        )
+            base_cmd = [xeokit_bin]
+
+        cmd = base_cmd + ["-s", step_path, "-o", str(out_path)]
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=600)
+
+        # Si erreur "unknown option", on retente avec --source/--output
+        if proc.returncode != 0 and "unknown option" in (proc.stdout or proc.stderr or "").lower():
+            cmd = base_cmd + ["--source", step_path, "--output", str(out_path)]
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=600)
+
         logger.info(
             "xeokit-convert rc=%s stdout=%s stderr=%s",
             proc.returncode,
-            proc.stdout,
-            proc.stderr,
+            (proc.stdout or "")[:1000],
+            (proc.stderr or "")[:1000],
         )
-        if proc.returncode != 0:
-            duration = time.time() - start
-            logger.info("Fin conversion (échec) durée=%.2fs", duration)
+
+        if proc.returncode != 0 or not os.path.exists(out_path):
             shutil.rmtree(temp_dir, ignore_errors=True)
-            return (
-                jsonify(
-                    {
-                        "success": False,
-                        "error": "convert_failed",
-                        "details": proc.stderr[:500],
-                    }
-                ),
-                400,
-            )
+            return jsonify(success=False, error="convert_failed", details=(proc.stdout or proc.stderr or "")[:500]), 400
+
     except subprocess.TimeoutExpired:
-        duration = time.time() - start
-        logger.exception("xeokit-convert timeout après %.2fs", duration)
         shutil.rmtree(temp_dir, ignore_errors=True)
-        return jsonify({"success": False, "error": "convert_timeout"}), 504
+        return jsonify(success=False, error="convert_timeout"), 504
     except FileNotFoundError:
-        duration = time.time() - start
-        logger.exception("xeokit-convert introuvable après %.2fs", duration)
         shutil.rmtree(temp_dir, ignore_errors=True)
-        return jsonify({"success": False, "error": "xeokit_missing"}), 500
+        return jsonify(success=False, error="xeokit_missing"), 500
     except PermissionError:
-        duration = time.time() - start
-        logger.exception("Permission refusée pour xeokit-convert après %.2fs", duration)
         shutil.rmtree(temp_dir, ignore_errors=True)
-        return jsonify({"success": False, "error": "permission_denied"}), 400
-    except Exception:
-        duration = time.time() - start
-        logger.exception("Erreur inattendue xeokit-convert après %.2fs", duration)
+        return jsonify(success=False, error="permission_denied"), 400
+    except Exception as e:
+        logger.exception("Erreur inattendue xeokit-convert après %.2fs", time.time()-start)
         shutil.rmtree(temp_dir, ignore_errors=True)
-        return jsonify({"success": False, "error": "unexpected"}), 500
+        return jsonify(success=False, error=str(e) or "unexpected"), 500
 
-    duration = time.time() - start
-    logger.info("Fin conversion (succès) durée=%.2fs", duration)
     shutil.rmtree(temp_dir, ignore_errors=True)
+    logger.info("Fin conversion (succès) durée=%.2fs", time.time()-start)
 
-    return jsonify({"success": True, "url": f"/uploads/{out_name}"})
+    return jsonify(success=True, url=f"/uploads/{out_name}")
 
 
 @app.route('/upload_file', methods=['POST'])
