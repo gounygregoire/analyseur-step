@@ -1,0 +1,132 @@
+/* NEW: conteneur principal */
+.viewer-wrapper {
+  position: relative;
+  height: 600px;
+  background: #e8e9ea;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* NEW: canvas */
+#viewerCanvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* NEW: barre d’outils */
+.toolbar {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: flex;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+
+.toolbar button {
+  color: #fff;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.toolbar button.active {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* NEW: slider explosion */
+.explode-slider {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  width: 120px;
+}
+
+/* NEW: panneau latéral */
+.panel {
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 260px;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.95);
+  border-left: 1px solid #ccc;
+  transform: translateX(0);
+  transition: transform 0.3s;
+  display: flex;
+  flex-direction: column;
+}
+
+.panel.collapsed {
+  transform: translateX(100%);
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid #ddd;
+}
+
+.panel-section {
+  padding: 10px;
+  overflow-y: auto;
+}
+
+.chevron {
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+/* NEW: menu contextuel */
+.context-menu {
+  position: absolute;
+  display: none;
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  background: #fff;
+  border: 1px solid #ccc;
+  z-index: 1000;
+}
+
+.context-menu.show {
+  display: block;
+}
+
+.context-menu li {
+  padding: 4px 12px;
+  cursor: pointer;
+}
+
+.context-menu li:hover {
+  background: #eee;
+}
+
+/* NEW: tooltip survol */
+.tooltip {
+  position: fixed;
+  background: #333;
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  pointer-events: none;
+  display: none;
+}
+
+.tooltip.show {
+  display: block;
+}
+
+/* responsive */
+@media (max-width: 768px) {
+  .panel {
+    width: 70%;
+  }
+}
