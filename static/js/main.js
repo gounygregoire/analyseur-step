@@ -2,22 +2,19 @@
 import {
   Viewer,
   XKTLoaderPlugin,
-  CameraControl,
   DistanceMeasurementsPlugin,
   SectionPlanesPlugin,
-  EdgesPlugin,
-  GizmoPlugin
-} from "@xeokit/xeokit-sdk"; // NEW:
+  EdgesPlugin
+} from "@xeokit/xeokit-sdk";
 
 // --- initialisation ---------------------------------------------------------
-const canvas = document.getElementById("viewerCanvas");             // NEW:
-const viewer = new Viewer({ canvasId: "viewerCanvas" });            // NEW:
-const cameraControl = new CameraControl(viewer.scene);              // NEW:
-const xktLoader = new XKTLoaderPlugin(viewer);                      // NEW:
-const dist = new DistanceMeasurementsPlugin(viewer);                // NEW:
-const sections = new SectionPlanesPlugin(viewer);                   // NEW:
-const edges = new EdgesPlugin(viewer);                              // NEW:
-const gizmo = new GizmoPlugin(viewer);                              // NEW:
+const canvas = document.getElementById("viewerCanvas");
+const viewer = new Viewer({ canvasId: "viewerCanvas" });
+const cameraControl = viewer.cameraControl;
+const xktLoader = new XKTLoaderPlugin(viewer);
+const dist = new DistanceMeasurementsPlugin(viewer);
+const sections = new SectionPlanesPlugin(viewer);
+const edges = new EdgesPlugin(viewer);                           // NEW:
 
 let loadedModel = null;                                             // NEW:
 const measurements = [];                                           // NEW:
