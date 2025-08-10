@@ -1,15 +1,15 @@
 // src/main.js
-// Xeokit + outils barre + contexte, aligné avec ton HTML
+// Viewer Xeokit + outils, aligné avec ton HTML actuel
 
 import {
   Viewer,
   XKTLoaderPlugin,
   DistanceMeasurementsPlugin,
-  SectionPlanesPlugin,
-  EdgesPlugin
+  SectionPlanesPlugin
+  // PAS d'EdgesPlugin dans ta version
 } from "@xeokit/xeokit-sdk";
 
-let viewer, cameraControl, xktLoader, dist, sections, edges;
+let viewer, cameraControl, xktLoader, dist, sections;
 
 const state = {
   measurements: [],
@@ -19,23 +19,20 @@ const state = {
 
 // ---------- Initialisation ---------------------------------------------------
 export async function initViewer(modelUrl) {
-  // IMPORTANT : assure-toi que le canvas dans ton HTML a bien id="viewerCanvas"
-  viewer = new Viewer({ canvasId: "viewerCanvas" });
-  window.viewer = viewer; // compat éventuelle
+  viewer = new Viewer({ canvasId: "viewer3d" });
+  window.viewer = viewer;
 
-  // En v2, pas d'import CameraControl : on le lit depuis le viewer
   cameraControl = viewer.cameraControl;
 
   xktLoader = new XKTLoaderPlugin(viewer);
   dist      = new DistanceMeasurementsPlugin(viewer);
   sections  = new SectionPlanesPlugin(viewer);
-  edges     = new EdgesPlugin(viewer);
 
-  // Empêche le scroll de la page quand on zoome à la molette (SEULEMENT sur le canvas)
+  // Empêcher le scroll de page quand la molette est sur le canvas
   viewer.canvas.addEventListener("wheel", (e) => e.preventDefault(), { passive: false });
 
-  // Mesures créées -> UI
-  dist.on("measurementCreated", (m) => {
+  // Mesures -> UI
+  dist.on?.("measurementCreated", (m) => {
     state.measurements.push(m);
     renderMeasurements();
   });
@@ -50,53 +47,53 @@ export async function initViewer(modelUrl) {
 }
 window.initViewer = initViewer;
 
-// --------- Chargement auto via data-model -----------------------------------
+// Chargement auto via data-model
 document.addEventListener("DOMContentLoaded", () => {
   const fname = document.body.dataset.model;
-  // Sur ton backend, les XKT sont servis par /uploads/<fname>
   initViewer(fname ? `/uploads/${fname}` : undefined);
 });
 
 // ---------- UI ---------------------------------------------------------------
 function bindUI() {
+  // Fit
+  byId("fitBtn")?.addEventListener("click", () => cameraControl.fit?.());
+
+  // Mesure (toggle)
   byId("measureBtn")?.addEventListener("click", () => {
-    // Certaines versions exposent dist.control, d'autres dist.setActive
-    const currentlyOn = !!(dist.control?.active || dist.active);
-    if (dist.control?.activate) {
-      dist.control.activate(!currentlyOn);
-    } else if (typeof dist.setActive === "function") {
-      dist.setActive(!currentlyOn);
-    }
-    toggleActive("measureBtn", !currentlyOn);
+    const on = !(dist.control?.active || dist.active);
+    if (dist.control?.activate) dist.control.activate(on);
+    else if (typeof dist.setActive === "function") dist.setActive(on);
+    toggleActive("measureBtn", on);
   });
 
-  byId("clearMeasurementsBtn")?.addEventListener("click", () => {
-    try { dist.clear(); } catch {}
+  // Reset mesures
+  byId("clearMeasures")?.addEventListener("click", () => {
+    try { dist.clear?.(); } catch {}
     state.measurements.forEach((m) => m.destroy?.());
     state.measurements.length = 0;
     renderMeasurements();
   });
 
-  // Coupe 3D: toggle plan avec le bouton
-  byId("crossSectionBtn")?.addEventListener("click", () => {
+  // Coupes (toggle)
+  byId("sectionBtn")?.addEventListener("click", () => {
     if (!state.sectionPlane) {
-      // API v2 : createPlane est OK ; si jamais ta version exige un autre nom, on adaptera
-      state.sectionPlane = sections.createPlane?.({ dir: [0, 1, 0] }) || sections.createSectionPlane?.({ dir: [0, 1, 0] });
+      state.sectionPlane = sections.createPlane?.({ dir: [0, 1, 0] })
+                          || sections.createSectionPlane?.({ dir: [0, 1, 0] });
     }
     const on = !state.sectionPlane.active;
     state.sectionPlane.active = on;
-    toggleActive("crossSectionBtn", on);
+    toggleActive("sectionBtn", on);
   });
 
-  // Sliders de coupe (dans .section-control, mapping Y simple)
+  // Sliders coupes (3 plans UI mappés sur Y)
   document.querySelectorAll(".section-control input")?.forEach((slider) => {
     slider.addEventListener("input", () => {
       if (!state.sectionPlane) {
-        state.sectionPlane = sections.createPlane?.({ dir: [0, 1, 0] }) || sections.createSectionPlane?.({ dir: [0, 1, 0] });
+        state.sectionPlane = sections.createPlane?.({ dir: [0, 1, 0] })
+                            || sections.createSectionPlane?.({ dir: [0, 1, 0] });
         state.sectionPlane.active = true;
-        toggleActive("crossSectionBtn", true);
+        toggleActive("sectionBtn", true);
       }
-      // mappe [-1;1] sur bboxY
       const aabb = viewer.scene.getAABB();
       const minY = aabb[1], maxY = aabb[4];
       const y = minY + ((Number(slider.value) + 1) / 2) * (maxY - minY);
@@ -105,31 +102,42 @@ function bindUI() {
     });
   });
 
-  // Filaire
-  byId("toggleWireframeBtn")?.addEventListener("click", () => {
-    const on = !viewer.scene.objectsWireframe;
-    viewer.scene.setObjectsWireframe(viewer.scene.objects, on);
-    toggleActive("toggleWireframeBtn", on);
-  });
-
-  // Arêtes
-  byId("toggleEdgesBtn")?.addEventListener("click", () => {
-    edges.enabled = !edges.enabled;
-    toggleActive("toggleEdgesBtn", edges.enabled);
-  });
-
-  // Explosion (slider = #explodeRange)
+  // Explosion (slider)
   byId("explodeRange")?.addEventListener("input", (e) => {
     const pct = Number(e.target.value);
     state.exploded = pct / 100;
     viewer.scene.root.explode(state.exploded);
   });
 
-  // Reset
-  byId("resetViewBtn")?.addEventListener("click", resetAll);
+  // Bouton Explosion (toggle 0/30 %)
+  byId("explodeBtn")?.addEventListener("click", () => {
+    const next = state.exploded ? 0 : 0.3;
+    state.exploded = next;
+    viewer.scene.root.explode(next);
+    const r = byId("explodeRange");
+    if (r) r.value = String(next * 100);
+  });
 
-  // Export PNG (si bouton présent)
-  byId("exportPngBtn")?.addEventListener("click", () => {
+  // Isoler (objet sous le centre du canvas)
+  byId("isoBtn")?.addEventListener("click", () => {
+    const rect = viewer.canvas.getBoundingClientRect();
+    const cx = rect.width / 2, cy = rect.height / 2;
+    const hit = viewer.scene.pick({ canvasPos: [cx, cy] });
+    if (hit?.entity?.id) isolate(hit.entity.id);
+  });
+
+  // Arêtes (fallback = filaire, car EdgesPlugin indisponible)
+  byId("edgesBtn")?.addEventListener("click", () => {
+    const on = !viewer.scene.objectsWireframe;
+    viewer.scene.setObjectsWireframe(viewer.scene.objects, on);
+    toggleActive("edgesBtn", on);
+  });
+
+  // Reset complet
+  byId("resetBtn")?.addEventListener("click", resetAll);
+
+  // Export PNG
+  byId("pngBtn")?.addEventListener("click", () => {
     const data = viewer.getSnapshot();
     const a = document.createElement("a");
     a.download = "capture.png";
@@ -174,11 +182,10 @@ function setupContextMenu() {
 
   menu.addEventListener("click", (e) => {
     const id = menu.dataset.id;
-    switch (e.target.dataset.action) {
-      case "isolate": isolate(id); break;
-      case "hide":    hide(id);    break;
-      case "showAll": showAll();   break;
-    }
+    const action = e.target?.dataset?.action;
+    if (action === "isolate") isolate(id);
+    if (action === "hide")    hide(id);
+    if (action === "showAll") showAll();
     menu.classList.remove("show");
   });
 }
@@ -205,7 +212,7 @@ function setupTooltip() {
     const hit = viewer.scene.pick({ canvasPos: [e.offsetX, e.offsetY] });
     if (hit && hit.entity) {
       isolate(hit.entity.id);
-      cameraControl.fit({ aabb: hit.entity.aabb });
+      cameraControl.fit?.({ aabb: hit.entity.aabb });
     }
   });
 }
@@ -214,7 +221,7 @@ function setupTooltip() {
 function fitScene() {
   try {
     const aabb = viewer.scene.getAABB();
-    viewer.cameraFlight.flyTo({ aabb });
+    viewer.cameraFlight.flyTo?.({ aabb });
   } catch {}
 }
 
@@ -237,12 +244,12 @@ function resetAll() {
   state.measurements.length = 0;
   if (state.sectionPlane) state.sectionPlane.active = false;
   viewer.scene.root.explode(0);
-  edges.enabled = false;
+  // edges plugin absent → on s'assure de couper le filaire
   viewer.scene.setObjectsWireframe(viewer.scene.objects, false);
   cameraControl.reset?.();
   renderMeasurements();
-  ["measureBtn","crossSectionBtn","toggleWireframeBtn","toggleEdgesBtn"].forEach((id) => toggleActive(id, false));
-  const ex = byId("explodeRange"); if (ex) ex.value = "0";
+  ["measureBtn","sectionBtn","edgesBtn"].forEach((id) => toggleActive(id, false));
+  const r = byId("explodeRange"); if (r) r.value = "0";
 }
 
 function toggleActive(id, on) {
