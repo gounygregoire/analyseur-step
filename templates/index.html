@@ -1,95 +1,757 @@
 <!DOCTYPE html>
 <html lang="fr">
+    
 <head>
-  <meta charset="utf-8" />
-  <title>CADlytics Viewer</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CADlytitcs - {% if current_language == 'en' %}DFM Analysis Application{% else %}Application d'analyse DFM{% endif %}</title>
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <!-- Custom CSS -->
+    <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+    
+    <!-- Favicon -->
+    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}">
 
-  <!-- (Optionnel) tes CSS -->
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}" />
-  <style>
-    /* mini styles pour que ça rende tout de suite */
-    .viewer-wrapper { position: relative; width: 100%; height: 70vh; background:#111; border-radius:8px; overflow: hidden; }
-    #viewer3d { width: 100%; height: 100%; display:block; }
-    .toolbar { position:absolute; top:10px; left:10px; display:flex; gap:8px; z-index:10; }
-    .toolbar button.active { background:#2e7d32; color:#fff; }
-    .explode-slider { position:absolute; bottom:12px; left:12px; width: 280px; z-index:10; }
-    .panel { position:absolute; top:0; right:0; width:300px; height:100%; background:#fff; color:#222; box-shadow:-2px 0 12px rgba(0,0,0,.25); transform: translateX(0); transition: transform .2s ease; z-index:11; }
-    .panel.collapsed { transform: translateX(100%); }
-    .panel-header { display:flex; align-items:center; justify-content: space-between; padding:10px 12px; border-bottom:1px solid #ddd; font-weight:600; }
-    .panel-section { padding:12px; border-bottom:1px solid #eee; }
-    .context-menu { position:absolute; list-style:none; margin:0; padding:6px 0; background:#fff; border:1px solid #ccc; border-radius:6px; display:none; z-index:100; }
-    .context-menu.show { display:block; }
-    .context-menu li { padding:6px 12px; cursor:pointer; }
-    .context-menu li:hover { background:#f0f0f0; }
-    .tooltip { position:fixed; padding:4px 8px; background:#000; color:#fff; font-size:12px; border-radius:4px; pointer-events:none; opacity:.85; display:none; }
-    .tooltip.show { display:block; }
-  </style>
+    
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css">
+    
+    <script type="module" src="/static/dist/main.js"></script>
+
+    <!-- Plausible Analytics -->
+    <script async defer data-domain="cadlytics.replit.app" src="https://plausible.io/js/script.js"></script>
 </head>
+<body {% if request.args.get('model') %}data-model="{{ request.args.get('model') }}"{% endif %}>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg" style="background: rgba(26, 26, 26, 0.95); border-bottom: 1px solid var(--kaki-dark);">
+        <div class="container">
+            <a class="navbar-brand" href="/" style="color: var(--kaki-light) !important; font-weight: 700;">
+                <i class="bi bi-box me-2"></i>
+                CADlytitcs
+            </a>
+            <div class="navbar-nav ms-auto">
+                {% if current_user.is_authenticated %}
+                    <span class="navbar-text me-3">
+                        {% if current_user.is_premium %}
+                            <span class="badge bg-success"><i class="bi bi-star-fill"></i> Premium</span>
+                        {% else %}
+                            <span class="badge bg-secondary"><i class="bi bi-coin"></i> {{ current_user.credits }} {% if current_language == 'en' %}credits{% else %}crédits{% endif %}</span>
+                        {% endif %}
+                    </span>
+                    <!-- Language selector -->
+                    <div class="dropdown me-2">
+                        <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" id="languageDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                            <i class="bi bi-globe"></i> {{ current_language|upper }}
+                        </button>
+                        <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="languageDropdown">
+                            <li><a class="dropdown-item {% if current_language == 'fr' %}active{% endif %}" href="{{ url_for('change_language', lang='fr') }}">
+                                <img src="https://flagcdn.com/16x12/fr.png" alt="FR" class="me-2"> Français
+                            </a></li>
+                            <li><a class="dropdown-item {% if current_language == 'en' %}active{% endif %}" href="{{ url_for('change_language', lang='en') }}">
+                                <img src="https://flagcdn.com/16x12/gb.png" alt="EN" class="me-2"> English
+                            </a></li>
+                        </ul>
+                    </div>
+                    <a class="nav-link" href="{{ url_for('pricing') }}">{{ t.nav_pricing }}</a>
+                    <a class="nav-link" href="{{ url_for('auth.profile') }}">{{ t.nav_profile }}</a>
+                    <a class="nav-link" href="{{ url_for('auth.logout') }}">{{ t.nav_logout }}</a>
+                {% endif %}
+            </div>
+        </div>
+    </nav>
 
-{# IMPORTANT : data-model doit contenir le nom du .xkt à charger (si présent) #}
-<body {% if model %}data-model="{{ model }}"{% endif %}>
+    <div class="main-container">
+        <!-- Header -->
+        <div class="text-center mb-4 fade-in">
+            <h1 class="display-5 mb-3" style="color: var(--brown-dark); font-weight: 700;">
+                {% if current_language == 'en' %}3D Analysis and Visualization{% else %}Analyse et Visualisation 3D{% endif %}
+            </h1>
+            <p class="lead" style="color: var(--brown-medium);">
+                {% if current_language == 'en' %}Upload your STEP files for complete DFM analysis and advanced 3D visualization{% else %}Téléchargez vos fichiers STEP pour une analyse DFM complète et une visualisation 3D avancée{% endif %}
+            </p>
+        </div>
 
-  <!-- === CONTENEUR VIEWER === -->
-  <div id="viewer" class="viewer-wrapper mt-2">
-    <!-- Canvas -->
-    <canvas id="viewer3d"></canvas>
+        <!-- Layout principal en deux colonnes -->
+        <div class="row">
+            <!-- Colonne gauche : Upload et contrôles -->
+            <div class="col-lg-4 mb-4">
+                <!-- Section d'upload -->
+                <div class="upload-section fade-in">
+                    <h4 class="mb-3" style="color: var(--brown-dark);">
+                        <i class="bi bi-cloud-upload me-2"></i>
+                        {% if current_language == 'en' %}Upload a file{% else %}Télécharger un fichier{% endif %}
+                    </h4>
+                    <form id="uploadForm" enctype="multipart/form-data">
+                                <div id="uploadArea" class="upload-area"> <!-- PAS drop-zone -->
+                                    <div class="upload-content">
+                                <p id="fileNameDisplay" class="text-success mt-3"></p>
+                            <i class="bi bi-file-earmark-arrow-up" style="font-size: 3rem; color: var(--kaki-medium); margin-bottom: 1rem;"></i>
+                            <p class="mb-3" style="color: var(--brown-medium); font-weight: 500;">
+                                {% if current_language == 'en' %}Drag your STEP file here<br>or click to select{% else %}Glissez votre fichier STEP ici<br>ou cliquez pour sélectionner{% endif %}
+                            </p>
+                            <input type="file" class="form-control d-none" id="fileInput" name="file" accept=".step,.stp">
+                            <label for="fileInput" class="btn btn-primary">
+                                <i class="bi bi-folder2-open me-2"></i>{% if current_language == 'en' %}Choose a file{% else %}Choisir un fichier{% endif %}
+                            </label>
+                            <p class="small mt-2 text-muted">{% if current_language == 'en' %}Supported formats: .step, .stp (max 50MB){% else %}Formats supportés: .step, .stp (max 50MB){% endif %}</p>
+                                        </div> <!-- fin de .upload-content -->
+                        </div>
+                        
+                        <!-- Contrôles de tolérance -->
+                        <div class="mt-3">
+                            <label for="toleranceInput" class="form-label" style="color: var(--brown-dark); font-weight: 600;">
+                                {{ t.upload_tolerance }}
+                            </label>
+                            <select class="form-select" id="toleranceInput" name="tolerance">
+                                <option value="0.01">{{ t.upload_high_precision }}</option>
+                                <option value="0.1" selected>{{ t.upload_standard }}</option>
+                                <option value="0.5">{{ t.upload_fast }}</option>
+                            </select>
+                            <div class="form-text" style="color: var(--brown-medium);">
+                                <i class="bi bi-info-circle me-1"></i>
+                                {{ t.upload_info }}
+                            </div>
+                        </div>
+                        
+                        <!-- Bouton principal -->
+                        <div class="text-center mt-4">
+                            <button type="submit" class="btn btn-primary btn-lg" id="uploadBtn">
+                                <i class="bi bi-eye me-2"></i>
+                                {{ t.upload_button }}
+                            </button>
+                        </div>
+                    </form>
+                </div>
 
-    <!-- Barre d’outils -->
-    <div id="toolbar" class="toolbar">
-      <button id="fitBtn"      title="Ajuster (F)">Fit</button>
-      <button id="measureBtn"  title="Mesure (M)">Mesure</button>
-      <button id="sectionBtn"  title="Coupes (X)">Coupes</button>
-      <button id="explodeBtn"  title="Explosion (E)">Explosion</button>
-      <button id="isoBtn"      title="Isoler sélection (I)">Isoler</button>
-      <button id="edgesBtn"    title="Arêtes / Filaire">Arêtes</button>
-      <button id="resetBtn"    title="Réinitialiser (R)">Reset</button>
-      <button id="pngBtn"      title="Exporter PNG">PNG</button>
+
+
+
+
+                <!-- Section de progression -->
+                <div id="progressSection" class="mt-4" style="display: none;">
+                    <div class="card">
+                        <div class="card-body text-center">
+                            <div class="spinner-border text-primary mb-3" role="status">
+                                <span class="visually-hidden">Chargement...</span>
+                            </div>
+                            <h6 style="color: var(--brown-dark);">Conversion en cours...</h6>
+                            <p class="small" style="color: var(--brown-medium);">
+                                La conversion peut prendre jusqu'à 30 secondes pour les fichiers complexes.
+                            </p>
+                            <div class="progress">
+                                <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                                     role="progressbar" style="width: 100%">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Résultats d'upload -->
+                <div id="uploadResults" class="alert alert-success mt-4" style="display: none;">
+                    <h6><i class="bi bi-check-circle me-2"></i>Succès</h6>
+                    <p class="mb-0">Fichier converti avec succès</p>
+                </div>
+
+                <!-- Alertes d'erreur -->
+                <div id="errorAlert" class="alert alert-danger mt-4" style="display: none;">
+                    <h6><i class="bi bi-exclamation-triangle me-2"></i>Erreur</h6>
+                    <p id="errorMessage" class="mb-0"></p>
+                </div>
+            </div>
+
+            <!-- Colonne droite : Visualisateur 3D -->
+<div class="col-lg-8">
+  <div class="viewer-container fade-in">
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h4 style="color: var(--brown-dark); margin: 0;">
+        <i class="bi bi-cube me-2"></i>
+        Visualisateur 3D
+      </h4>
+      <div class="viewer-controls">
+        <button type="button" class="btn btn-secondary btn-sm" id="homeBtn" title="Retour à l'accueil">
+          <i class="bi bi-house"></i>
+        </button>
+      </div>
     </div>
 
-    <!-- Slider explosion -->
-    <input id="explodeRange" type="range" min="0" max="100" value="0" class="explode-slider" />
+    <!-- === CONTENEUR VIEWER NOUVEAU (overlay) === -->
+    <div id="viewer" class="viewer-wrapper position-relative" style="height: 600px; border-radius:10px; background:#e8e9ea; overflow:hidden;">
+      <!-- Canvas -->
+      <canvas id="viewer3d" style="width:100%;height:100%;display:block;"></canvas>
 
-    <!-- Panneau latéral -->
-    <aside id="sidePanel" class="panel collapsed">
-      <div class="panel-header">
-        <span>Outils</span>
-        <button id="panelToggle" class="chevron" onclick="document.getElementById('sidePanel').classList.toggle('collapsed')">›</button>
+      <!-- Barre d’outils overlay : IDs attendus par main.js -->
+      <div id="toolbar" class="toolbar position-absolute" style="top:10px; left:10px; z-index:10; display:flex; gap:8px;">
+        <button id="fitBtn"     class="btn btn-sm btn-light"  title="Ajuster (F)">Fit</button>
+        <button id="measureBtn" class="btn btn-sm btn-light"  title="Mesure (M)">Mesure</button>
+        <button id="sectionBtn" class="btn btn-sm btn-light"  title="Coupes (X)">Coupes</button>
+        <button id="explodeBtn" class="btn btn-sm btn-light"  title="Explosion (E)">Explosion</button>
+        <button id="isoBtn"     class="btn btn-sm btn-light"  title="Isoler sélection (I)">Isoler</button>
+        <!-- Bouton "Arêtes" pilote le mode filaire (fallback) dans main.js -->
+        <button id="edgesBtn"   class="btn btn-sm btn-light"  title="Arêtes / Filaire">Arêtes</button>
+        <button id="resetBtn"   class="btn btn-sm btn-light"  title="Réinitialiser (R)">Reset</button>
+        <button id="pngBtn"     class="btn btn-sm btn-light"  title="Exporter PNG">PNG</button>
       </div>
 
-      <section class="panel-section">
-        <h5>Mesures</h5>
-        <ul id="measureList"></ul>
-        <button id="clearMeasures" class="btn btn-sm btn-outline-danger">Reset mesures</button>
-      </section>
+      <!-- Slider explosion -->
+      <input id="explodeRange" type="range" min="0" max="100" value="0"
+             class="form-range position-absolute"
+             style="bottom:12px; left:12px; width:280px; z-index:10;" />
 
-      <section class="panel-section">
-        <h5>Coupes</h5>
-        <div class="section-control" data-plane="0">
-          <label>Plan 1</label>
-          <input type="range" min="-1" max="1" step="0.01" value="0" />
+      <!-- Panneau latéral compact (mesures + coupes) exploité par main.js -->
+      <aside id="sidePanel" class="panel collapsed position-absolute"
+             style="top:0; right:0; width:300px; height:100%; background:#fff; color:#222;
+                    box-shadow:-2px 0 12px rgba(0,0,0,.25); transform:translateX(100%); transition:transform .2s ease; z-index:11;">
+        <div class="panel-header d-flex align-items-center justify-content-between p-2 border-bottom">
+          <span>Outils</span>
+          <button id="panelToggle" class="btn btn-sm btn-outline-secondary">&gt;</button>
         </div>
-        <div class="section-control" data-plane="1">
-          <label>Plan 2</label>
-          <input type="range" min="-1" max="1" step="0.01" value="0" />
-        </div>
-        <div class="section-control" data-plane="2">
-          <label>Plan 3</label>
-          <input type="range" min="-1" max="1" step="0.01" value="0" />
-        </div>
-      </section>
-    </aside>
 
-    <!-- Menu contextuel -->
-    <ul id="contextMenu" class="context-menu">
-      <li data-action="isolate">Isoler</li>
-      <li data-action="hide">Masquer</li>
-      <li data-action="showAll">Tout afficher</li>
-    </ul>
+        <section class="panel-section p-2 border-bottom">
+          <h6 class="mb-2">Mesures</h6>
+          <ul id="measureList" class="list-unstyled small mb-2"></ul>
+          <button id="clearMeasures" class="btn btn-sm btn-outline-danger">Reset mesures</button>
+        </section>
+
+        <section class="panel-section p-2">
+          <h6 class="mb-2">Coupes</h6>
+          <div class="section-control mb-2" data-plane="0">
+            <label class="form-label small">Plan 1</label>
+            <input type="range" min="-1" max="1" step="0.01" value="0" class="form-range">
+          </div>
+          <div class="section-control mb-2" data-plane="1">
+            <label class="form-label small">Plan 2</label>
+            <input type="range" min="-1" max="1" step="0.01" value="0" class="form-range">
+          </div>
+          <div class="section-control" data-plane="2">
+            <label class="form-label small">Plan 3</label>
+            <input type="range" min="-1" max="1" step="0.01" value="0" class="form-range">
+          </div>
+        </section>
+      </aside>
+
+      <!-- Menu contextuel utilisé par main.js -->
+      <ul id="contextMenu" class="context-menu"
+          style="position:absolute; list-style:none; margin:0; padding:6px 0; background:#fff; border:1px solid #ccc; border-radius:6px; display:none; z-index:100;">
+        <li data-action="isolate" style="padding:6px 12px; cursor:pointer;">Isoler</li>
+        <li data-action="hide"    style="padding:6px 12px; cursor:pointer;">Masquer</li>
+        <li data-action="showAll" style="padding:6px 12px; cursor:pointer;">Tout afficher</li>
+      </ul>
+    </div>
+    <!-- === FIN CONTENEUR VIEWER === -->
+
+    <!-- ✅ Outils DFM existants (inchangés) -->
+    <div id="dfmControls" class="d-flex gap-3 mt-4">
+      <button type="button" class="btn btn-primary" id="dfmAnalyzeBtn">
+        <i class="bi bi-search me-2"></i>Analyser
+      </button>
+
+      <select id="demoldingAxisSelect" class="form-select d-none" style="max-width: 200px;">
+        <option value="x">Axe X (horizontal)</option>
+        <option value="y">Axe Y (avant/arrière)</option>
+        <option value="z" selected>Axe Z (haut/bas)</option>
+      </select>
+
+      <button id="startDFMAnalysis" class="btn btn-success d-none">
+        <i class="bi bi-rocket-takeoff me-2"></i>Lancer analyse DFM
+      </button>
+    </div>
+
+    <!-- Outils 3D intégrés à ton UI (conservés, ids différents => main.js ne les utilise pas) -->
+    <div class="mt-3" id="viewerToolsPanel" style="display: none;">
+      <div class="card">
+        <div class="card-body">
+          <div class="row align-items-center">
+            <div class="col-md-6">
+              <h6 class="mb-3" style="color: var(--brown-dark);">
+                <i class="bi bi-tools me-2"></i>{% if current_language == 'en' %}3D Tools{% else %}Outils 3D{% endif %}
+              </h6>
+              <div class="d-flex flex-wrap gap-2">
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="measureBtn"><i class="bi bi-rulers me-1"></i>{{ t.viewer_measure }}</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="clearMeasurementsBtn"><i class="bi bi-trash me-1"></i>{% if current_language == 'en' %}Clear{% else %}Effacer{% endif %}</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="crossSectionBtn" title="{% if current_language == 'en' %}Enable cross-section to see inside the part{% else %}Activer la coupe transversale pour voir l'intérieur de la pièce{% endif %}">
+                  <i class="bi bi-scissors me-1"></i>{{ t.viewer_section }}
+                </button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="toggleWireframeBtn"><i class="bi bi-grid-3x3 me-1"></i>{% if current_language == 'en' %}Wireframe{% else %}Filaire{% endif %}</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="toggleEdgesBtn"><i class="bi bi-bounding-box me-1"></i>{% if current_language == 'en' %}Edges{% else %}Arêtes{% endif %}</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="toggleAxesBtn"><i class="bi bi-compass me-1"></i>Axes</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="themeToggleBtn"><i class="bi bi-moon me-1"></i>Thème</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="resetViewBtn"><i class="bi bi-arrow-clockwise me-1"></i>Reset</button>
+              </div>
+            </div>
+            <!-- (zone erreurs / infos optionnelle) -->
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sélection de l’axe de démoulage (inchangé) -->
+    <div id="axisSelectionContainer"></div>
+
+    <!-- Infos modèle (inchangé) -->
+    <div class="mt-3">
+      <div class="row">
+        <div class="col-md-6">
+          <div id="modelInfo" class="card" style="display: none;">
+            <div class="card-body">
+              <h6 style="color: var(--brown-dark);"><i class="bi bi-info-circle me-2"></i>Informations du modèle</h6>
+              <div id="modelDetails"></div>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div id="volumeDisplay" class="card" style="display: none;">
+            <div class="card-body">
+              <h6 style="color: var(--brown-dark);"><i class="bi bi-box me-2"></i>Volume</h6>
+              <div id="volumeValue" style="font-size: 1.2rem; font-weight: 600; color: var(--kaki-dark);"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </div>
-  <!-- === FIN VIEWER === -->
+</div>
 
-  <!-- Charge le JS (VERSION SANS EdgesPlugin !) depuis /static/js/main.js -->
-  <script type="module" src="{{ url_for('static', filename='js/main.js') }}"></script>
+        
+        <!-- Section d'analyse DFM (affiché après analyse) - Juste sous le visualisateur -->
+        <div class="mt-4" id="dfmResultsSection" style="display: none;">
+            <div class="dfm-modern-container">
+                <!-- En-tête moderne avec gradient -->
+                <div class="dfm-header mb-4">
+                    <div class="row align-items-center">
+                        <div class="col-md-8">
+                            <div class="dfm-title-section">
+                                <div class="dfm-icon-badge mb-2">
+                                    <i class="bi bi-gear-fill"></i>
+                                </div>
+                                <h3 class="dfm-main-title mb-1">{% if current_language == 'en' %}Advanced DFM Analysis{% else %}Analyse DFM Avancée{% endif %}</h3>
+                                <p class="dfm-subtitle mb-0">{% if current_language == 'en' %}Manufacturability Assessment • Plastic Injection{% else %}Évaluation manufacturabilité • Injection plastique{% endif %}</p>
+                            </div>
+                        </div>
+                        <div class="col-md-4 text-end">
+                            <div class="dfm-action-buttons">
+                                <!-- Indicateur Prêt pour injection -->
+                                <div id="injectionReadyIndicator" class="d-inline-block me-3" style="display: none;">
+                                    <span class="badge fs-5" id="injectionReadyBadge">
+                                        <i class="bi bi-circle-fill me-1" id="injectionReadyIcon"></i>
+                                        <span id="injectionReadyText">En analyse...</span>
+                                    </span>
+                                </div>
+                                <button id="changeDemoldingAxisBtn" class="btn btn-dfm-secondary me-2" style="display: none;">
+                                    <i class="bi bi-arrow-repeat me-2"></i>{% if current_language == 'en' %}Change axis{% else %}Changer axe{% endif %}
+                                </button>
+                                <button id="generatePdfBtn" class="btn btn-dfm-primary me-2" style="display: none;">
+                                    <i class="bi bi-file-earmark-pdf me-2"></i>{% if current_language == 'en' %}PDF Report{% else %}Rapport PDF{% endif %}
+                                </button>
+                                <button id="downloadZipBtn" class="btn btn-dfm-primary" style="display: none;">
+                                    <i class="bi bi-download me-2"></i>{% if current_language == 'en' %}Download all{% else %}Télécharger tout{% endif %}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Check-list interactive de préparation au moulage -->
+                <div id="moldingChecklist" class="mb-4" style="display: none;">
+                    <div class="card">
+                        <div class="card-header bg-light">
+                            <h6 class="mb-0"><i class="bi bi-check2-square me-2"></i>Check-list de préparation au moulage</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="list-group" id="checklistItems">
+                                <!-- Les items seront ajoutés dynamiquement -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Panneau d'analyse principal -->
+                <div id="dfmAnalysisPanel" class="dfm-analysis-grid"></div>
+            </div>
+        </div>
+
+        <!-- Section historique -->
+        <div class="history-section mt-4">
+            <h4 style="color: var(--brown-dark);">
+                <i class="bi bi-clock-history me-2"></i>
+                Historique
+            </h4>
+            <div class="table-responsive">
+                <div id="historyLoading" class="text-center p-3">
+                    <div class="spinner-border spinner-border-sm" role="status">
+                        <span class="visually-hidden">Chargement...</span>
+                    </div>
+                </div>
+                <table class="table table-hover">
+                    <thead>
+                        <tr>
+                            <th>Fichier</th>
+                            <th>Date</th>
+                            <th>Statut</th>
+                            <th>Score DFM</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="historyTableBody">
+                        <tr>
+                            <td colspan="5" class="text-center text-muted py-4">
+                                Aucun historique de conversion disponible
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal questionnaire matériaux -->
+    <div class="modal fade" id="materialQuestionnaireModal" tabindex="-1" aria-labelledby="materialQuestionnaireModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="materialQuestionnaireModalLabel">
+                        <i class="bi bi-clipboard-check me-2"></i>Questionnaire de sélection matériaux
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="materialQuestionnaireForm">
+                        <!-- Application -->
+                        <div class="mb-4">
+                            <label class="form-label fw-bold">
+                                <i class="bi bi-gear-fill me-2"></i>Domaine d'application
+                            </label>
+                            <select class="form-select" name="application" required>
+                                <option value="">Sélectionnez...</option>
+                                <option value="automotive">Automobile</option>
+                                <option value="electronics">Électronique/High-tech</option>
+                                <option value="medical">Médical/Pharmaceutique</option>
+                                <option value="packaging">Emballage</option>
+                                <option value="consumer">Biens de consommation</option>
+                                <option value="industrial">Industriel</option>
+                                <option value="aerospace">Aéronautique/Spatial</option>
+                                <option value="toys">Jouets/Loisirs</option>
+                            </select>
+                        </div>
+                        <!-- Contraintes mécaniques -->
+                        <div class="mb-4">
+                          <label class="form-label fw-bold">
+                            <i class="bi bi-tools me-2"></i>Contraintes mécaniques principales
+                          </label>
+                          <div class="row">
+                            <div class="col-md-6">
+                              <div class="form-check d-flex align-items-center justify-content-between">
+                                <div>
+                                  <input class="form-check-input" type="checkbox" name="mechanical[]" value="impact" id="impact">
+                                  <label class="form-check-label" for="impact">Résistance aux chocs</label>
+                                </div>
+                                <i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Supporte les impacts et contraintes soudaines."></i>
+                              </div>
+                              <div class="form-check d-flex align-items-center justify-content-between">
+                                <div>
+                                  <input class="form-check-input" type="checkbox" name="mechanical[]" value="flexural" id="flexural">
+                                  <label class="form-check-label" for="flexural">Résistance à la flexion</label>
+                                </div>
+                                <i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Capacité à plier sans casser."></i>
+                              </div>
+                              <div class="form-check d-flex align-items-center justify-content-between">
+                                <div>
+                                  <input class="form-check-input" type="checkbox" name="mechanical[]" value="tensile" id="tensile">
+                                  <label class="form-check-label" for="tensile">Résistance à la traction</label>
+                                </div>
+                                <i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Capacité à résister à un allongement."></i>
+                              </div>
+                              <div class="form-check d-flex align-items-center justify-content-between">
+                                <div>
+                                  <input class="form-check-input" type="checkbox" name="mechanical[]" value="fatigue" id="fatigue">
+                                  <label class="form-check-label" for="fatigue">Résistance à la fatigue</label>
+                                </div>
+                                <i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Capacité à endurer des charges répétées."></i>
+                              </div>
+                            </div>
+                            <div class="col-md-6">
+                              <div class="form-check d-flex align-items-center justify-content-between">
+                                <div>
+                                  <input class="form-check-input" type="checkbox" name="mechanical[]" value="stiffness" id="stiffness">
+                                  <label class="form-check-label" for="stiffness">Rigidité élevée</label>
+                                </div>
+                                <i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Matériau peu flexible, déformable difficilement."></i>
+                              </div>
+                              <div class="form-check d-flex align-items-center justify-content-between">
+                                <div>
+                                  <input class="form-check-input" type="checkbox" name="mechanical[]" value="flexibility" id="flexibility">
+                                  <label class="form-check-label" for="flexibility">Flexibilité</label>
+                                </div>
+                                <i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Capacité à se plier sans se casser."></i>
+                              </div>
+                              <div class="form-check d-flex align-items-center justify-content-between">
+                                <div>
+                                  <input class="form-check-input" type="checkbox" name="mechanical[]" value="wear" id="wear">
+                                  <label class="form-check-label" for="wear">Résistance à l'usure</label>
+                                </div>
+                                <i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Durabilité face aux frottements et abrasions."></i>
+                              </div>
+                              <div class="form-check d-flex align-items-center justify-content-between">
+                                <div>
+                                  <input class="form-check-input" type="checkbox" name="mechanical[]" value="creep" id="creep">
+                                  <label class="form-check-label" for="creep">Résistance au fluage</label>
+                                </div>
+                                <i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Résiste à la déformation lente sous charge prolongée."></i>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                        <div id="mechanicalWarning" class="warning-message" style="display: none;">
+                            <i class="bi bi-exclamation-triangle me-2"></i>
+                            <span id="mechanicalWarningText"></span>
+                        </div>
+                        <div id="applicationWarning" class="warning-message" style="display: none;">
+                            <i class="bi bi-diagram-3 me-2"></i>
+                            <span id="applicationWarningText"></span>
+                        </div>
+                        <div id="temperatureWarning" class="warning-message" style="display: none;">
+                            <i class="bi bi-thermometer-half me-2"></i>
+                            <span id="temperatureWarningText"></span>
+                        </div>
+
+                        <!-- Zone globale d'infos -->
+                        <div id="compatibilityInfo" class="compatibility-info" style="display: none;">
+                            <h6><i class="bi bi-info-circle me-2"></i>Informations de compatibilité</h6>
+                            <div id="compatibilityText"></div>
+                        </div>
+
+
+                        <!-- Environnement d'usage -->
+                        <div class="mb-4">
+                          <label class="form-label fw-bold">
+                            <i class="bi bi-thermometer-half me-2"></i>Environnement d'usage
+                          </label>
+                          <div class="row">
+                            <div class="col-md-6">
+                              <label class="form-label">
+                                Température de service
+                                <i class="bi bi-info-circle text-muted ms-1" data-bs-toggle="tooltip" title="Température normale d'utilisation du produit."></i>
+                              </label>
+                              <select class="form-select" name="temperature" id="temperature">
+                                <option value="low">Basse (-40°C à 0°C)</option>
+                                <option value="ambient" selected>Ambiante (0°C à 40°C)</option>
+                                <option value="elevated">Élevée (40°C à 80°C)</option>
+                                <option value="high">Haute (80°C à 150°C)</option>
+                                <option value="extreme">Extrême (>150°C)</option>
+                              </select>
+                            </div>
+                            <div class="col-md-6">
+                              <label class="form-label">
+                                Exposition
+                                <i class="bi bi-info-circle text-muted ms-1" data-bs-toggle="tooltip" title="Conditions environnementales auxquelles le matériau sera soumis."></i>
+                              </label>
+                              <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="exposure[]" value="uv" id="uv">
+                                <label class="form-check-label" for="uv">UV/Soleil</label>
+                              </div>
+                              <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="exposure[]" value="humidity" id="humidity">
+                                <label class="form-check-label" for="humidity">Humidité élevée</label>
+                              </div>
+                              <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="exposure[]" value="chemicals" id="chemicals">
+                                <label class="form-check-label" for="chemicals">Produits chimiques</label>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <!-- Exigences esthétiques -->
+                        <div class="mb-4">
+                            <label class="form-label fw-bold">
+                                <i class="bi bi-palette me-2"></i>Exigences esthétiques et fonctionnelles
+                            </label>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="aesthetic[]" value="transparent" id="transparent">
+                                        <label class="form-check-label" for="transparent">Transparence<i class="bi bi-info-circle text-muted ms-1" data-bs-toggle="tooltip" title="Matériau laissant passer la lumière (ex : PMMA)."></i></label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="aesthetic[]" value="gloss" id="gloss">
+                                        <label class="form-check-label" for="gloss">Finition brillante<i class="bi bi-info-circle text-muted ms-1" data-bs-toggle="tooltip" title="Aspect visuel lisse et brillant, souvent recherché pour des produits haut de gamme."></i></label>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="aesthetic[]" value="surface" id="surface">
+                                        <label class="form-check-label" for="surface">Qualité de surface<i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Niveau de finition perçu au toucher et à l’œil (absence de défauts, uniformité, douceur)."></i>
+</label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="aesthetic[]" value="texture" id="texture">
+                                        <label class="form-check-label" for="texture">Texturation possible<i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Le matériau accepte bien les textures (grain, motif) appliquées dans le moule ou en post-traitement."></i>
+</label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="aesthetic[]" value="printing" id="printing">
+                                        <label class="form-check-label" for="printing">Aptitude marquage/impression<i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Le matériau peut recevoir facilement un marquage (laser, tampo, impression, etc.)."></i>
+</label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="aestheticWarning" class="warning-message" style="display: none;">
+                            <i class="bi bi-palette me-2"></i>
+                            <span id="aestheticWarningText"></span>
+                        </div>
+                        
+                        <!-- Contraintes réglementaires -->
+                        <div class="mb-4">
+                            <label class="form-label fw-bold">
+                                <i class="bi bi-shield-check me-2"></i>Contraintes réglementaires
+                            </label>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="regulatory[]" value="food_contact" id="food_contact">
+                                <label class="form-check-label" for="food_contact">Contact alimentaire<i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Compatible avec un usage en contact direct avec les aliments (certifications FDA, UE, etc.)."></i>
+</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="regulatory[]" value="medical_grade" id="medical_grade">
+                                <label class="form-check-label" for="medical_grade">Qualité médicale (USP VI)<i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Matériau conforme à des standards médicaux stricts (ex. USP Class VI)."></i>
+</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="regulatory[]" value="flame_retardant" id="flame_retardant">
+                                <label class="form-check-label" for="flame_retardant">Retardateur de flamme<i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Comporte des additifs limitant la propagation du feu."></i>
+</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="regulatory[]" value="electrical" id="electrical">
+                                <label class="form-check-label" for="electrical">Propriétés électriques<i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Offre une isolation électrique ou des performances diélectriques spécifiques."></i>
+</label>
+                            </div>
+                        </div>
+                        <div id="regulatoryWarning" class="warning-message" style="display: none;">
+                            <i class="bi bi-shield-check me-2"></i>
+                            <span id="regulatoryWarningText"></span>
+                        </div>
+                        
+                        <!-- Volume et coût -->
+                        <div class="row mb-4">
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">
+                                    <i class="bi bi-box-seam me-2"></i>Volume de production annuel
+                                </label>
+                                <select class="form-select" name="volume" id="volume">
+                                    <option value="prototype">Prototype/Très faible (&lt;100)</option>
+                                    <option value="small">Petite série (100-1000)</option>
+                                    <option value="medium" selected>Série moyenne (1000-10000)</option>
+                                    <option value="large">Grande série (10000-100000)</option>
+                                    <option value="mass">Très grande série (&gt;100000)</option>
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">
+                                    <i class="bi bi-currency-euro me-2"></i>Contrainte de coût
+                                </label>
+                                <select class="form-select" name="cost" id="cost">
+                                    <option value="premium">Premium (performance prioritaire)</option>
+                                    <option value="balanced" selected>Équilibré (performance/coût)</option>
+                                    <option value="economy">Économique (coût prioritaire)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Durée de vie -->
+                        <div class="mb-4">
+                            <label class="form-label fw-bold">
+                                <i class="bi bi-clock me-2"></i>Durée de vie attendue
+                            </label>
+                            <select class="form-select" name="lifespan" id="lifespan">
+                                <option value="disposable">Usage unique/jetable</option>
+                                <option value="short">Courte (< 1 an)</option>
+                                <option value="medium" selected>Moyenne (1-5 ans)</option>
+                                <option value="long">Longue (5-15 ans)</option>
+                                <option value="permanent">Très longue (> 15 ans)</option>
+                            </select>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
+                    <button type="button" class="btn btn-primary" id="submitQuestionnaire">
+                        <i class="bi bi-check-circle me-2"></i>Analyser et recommander
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <!-- Footer -->
+    <footer class="mt-5 py-4 text-center" style="background: linear-gradient(135deg, var(--kaki-dark) 0%, var(--brown-dark) 100%); color: var(--cream);">
+        <div class="container">
+            <p class="mb-0">
+                <small>Créé par <strong>Grégoire GOUNY</strong> • CADlytics © 2025</small>
+            </p>
+            <div class="mt-2">
+                <a href="https://fazier.com" target="_blank" rel="noopener noreferrer">
+                    <img src="https://fazier.com/api/v1/public/badges/launch_badges.svg?badge_type=launched&theme=light" 
+                         width="120" 
+                         alt="Fazier badge" 
+                         style="opacity: 0.8; transition: opacity 0.3s ease;"
+                         onmouseover="this.style.opacity='1'"
+                         onmouseout="this.style.opacity='0.8'" />
+                </a>
+            </div>
+        </div>
+    </footer>
+
+
+            <script>
+              document.addEventListener('DOMContentLoaded', () => {
+                const model = document.body.dataset.model;
+
+                const showTools = () => {
+                  const panel = document.getElementById('viewerToolsPanel');
+                  if (panel) panel.style.display = 'block';
+                  const dfm = document.getElementById('dfmControls');
+                  if (dfm) dfm.style.display = 'flex';
+                };
+
+                const loadModel = () => {
+                  if (!model || !window.viewer || typeof window.viewer.loadModel !== 'function') return;
+                  window.viewer.loadModel('/view/' + model);
+                  showTools();
+                };
+
+                const ensureViewer = () => {
+                  if (window.viewer) {
+                    loadModel();
+                    return;
+                  }
+                  if (typeof Viewer === 'undefined') {
+                    setTimeout(ensureViewer, 500);
+                    return;
+                  }
+                  if (typeof initViewer === 'function') {
+                    initViewer();
+                    loadModel();
+                  }
+                };
+
+                ensureViewer();
+              });
+            </script>
+
+                                <script>
+                                  document.addEventListener('DOMContentLoaded', function () {
+                                    const tooltips = Array.from(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+                                    tooltips.forEach(el => new bootstrap.Tooltip(el));
+                                  });
+                                </script>
 </body>
 </html>
