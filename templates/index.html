@@ -1,493 +1,266 @@
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CADlytitcs - {% if current_language == 'en' %}DFM Analysis Application{% else %}Application d'analyse DFM{% endif %}</title>
+// src/main.js
+// Viewer Xeokit + outils, aligné avec ton HTML actuel
 
-    <!-- Bootstrap CSS -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+import {
+  Viewer,
+  XKTLoaderPlugin,
+  DistanceMeasurementsPlugin,
+  SectionPlanesPlugin,
+  EdgesPlugin
+} from "@xeokit/xeokit-sdk";
 
-    <!-- Custom CSS -->
-    <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
-    <!-- NEW: styles spécifiques du viewer -->
-    <link href="{{ url_for('static', filename='css/viewer.css') }}" rel="stylesheet">
+let viewer, cameraControl, xktLoader, dist, sections, edges;
 
-    <!-- Favicon -->
-    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}">
+const state = {
+  measurements: [],
+  sectionPlane: null,
+  exploded: 0
+};
 
-    <!-- Bootstrap Icons -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css">
+// ---------- Initialisation ---------------------------------------------------
+export async function initViewer(modelUrl) {
+  // Canvas ID = viewer3d (comme dans ton HTML)
+  viewer = new Viewer({ canvasId: "viewer3d" });
+  window.viewer = viewer; // compat
 
-    <!-- Ton bundle -->
-    <script type="module" src="/static/dist/main.js"></script>
+  // En v2, le contrôle caméra est fourni par le viewer
+  cameraControl = viewer.cameraControl;
 
-    <!-- Plausible Analytics -->
-    <script async defer data-domain="cadlytics.replit.app" src="https://plausible.io/js/script.js"></script>
-</head>
-<body {% if request.args.get('model') %}data-model="{{ request.args.get('model') }}"{% endif %}>
-    <!-- Navigation -->
-    <nav class="navbar navbar-expand-lg" style="background: rgba(26, 26, 26, 0.95); border-bottom: 1px solid var(--kaki-dark);">
-        <div class="container">
-            <a class="navbar-brand" href="/" style="color: var(--kaki-light) !important; font-weight: 700;">
-                <i class="bi bi-box me-2"></i>
-                CADlytitcs
-            </a>
-            <div class="navbar-nav ms-auto">
-                {% if current_user.is_authenticated %}
-                    <span class="navbar-text me-3">
-                        {% if current_user.is_premium %}
-                            <span class="badge bg-success"><i class="bi bi-star-fill"></i> Premium</span>
-                        {% else %}
-                            <span class="badge bg-secondary"><i class="bi bi-coin"></i> {{ current_user.credits }} {% if current_language == 'en' %}credits{% else %}crédits{% endif %}</span>
-                        {% endif %}
-                    </span>
-                    <!-- Language selector -->
-                    <div class="dropdown me-2">
-                        <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" id="languageDropdown" data-bs-toggle="dropdown" aria-expanded="false">
-                            <i class="bi bi-globe"></i> {{ current_language|upper }}
-                        </button>
-                        <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="languageDropdown">
-                            <li><a class="dropdown-item {% if current_language == 'fr' %}active{% endif %}" href="{{ url_for('change_language', lang='fr') }}">
-                                <img src="https://flagcdn.com/16x12/fr.png" alt="FR" class="me-2"> Français
-                            </a></li>
-                            <li><a class="dropdown-item {% if current_language == 'en' %}active{% endif %}" href="{{ url_for('change_language', lang='en') }}">
-                                <img src="https://flagcdn.com/16x12/gb.png" alt="EN" class="me-2"> English
-                            </a></li>
-                        </ul>
-                    </div>
-                    <a class="nav-link" href="{{ url_for('pricing') }}">{{ t.nav_pricing }}</a>
-                    <a class="nav-link" href="{{ url_for('auth.profile') }}">{{ t.nav_profile }}</a>
-                    <a class="nav-link" href="{{ url_for('auth.logout') }}">{{ t.nav_logout }}</a>
-                {% endif %}
-            </div>
-        </div>
-    </nav>
+  // Plugins
+  xktLoader = new XKTLoaderPlugin(viewer);
+  dist      = new DistanceMeasurementsPlugin(viewer);
+  sections  = new SectionPlanesPlugin(viewer);
+  edges     = new EdgesPlugin(viewer);
 
-    <div class="main-container">
-        <!-- Header -->
-        <div class="text-center mb-4 fade-in">
-            <h1 class="display-5 mb-3" style="color: var(--brown-dark); font-weight: 700;">
-                {% if current_language == 'en' %}3D Analysis and Visualization{% else %}Analyse et Visualisation 3D{% endif %}
-            </h1>
-            <p class="lead" style="color: var(--brown-medium);">
-                {% if current_language == 'en' %}Upload your STEP files for complete DFM analysis and advanced 3D visualization{% else %}Téléchargez vos fichiers STEP pour une analyse DFM complète et une visualisation 3D avancée{% endif %}
-            </p>
-        </div>
+  // Empêcher le scroll page lorsque la molette est sur le canvas
+  viewer.canvas.addEventListener("wheel", (e) => e.preventDefault(), { passive: false });
 
-        <!-- Layout principal en deux colonnes -->
-        <div class="row">
-            <!-- Colonne gauche : Upload et contrôles -->
-            <div class="col-lg-4 mb-4">
-                <!-- Section d'upload -->
-                <div class="upload-section fade-in">
-                    <h4 class="mb-3" style="color: var(--brown-dark);">
-                        <i class="bi bi-cloud-upload me-2"></i>
-                        {% if current_language == 'en' %}Upload a file{% else %}Télécharger un fichier{% endif %}
-                    </h4>
-                    <form id="uploadForm" enctype="multipart/form-data">
-                        <div id="uploadArea" class="upload-area">
-                            <div class="upload-content">
-                                <p id="fileNameDisplay" class="text-success mt-3"></p>
-                                <i class="bi bi-file-earmark-arrow-up" style="font-size: 3rem; color: var(--kaki-medium); margin-bottom: 1rem;"></i>
-                                <p class="mb-3" style="color: var(--brown-medium); font-weight: 500;">
-                                    {% if current_language == 'en' %}Drag your STEP file here<br>or click to select{% else %}Glissez votre fichier STEP ici<br>ou cliquez pour sélectionner{% endif %}
-                                </p>
-                                <input type="file" class="form-control d-none" id="fileInput" name="file" accept=".step,.stp">
-                                <label for="fileInput" class="btn btn-primary">
-                                    <i class="bi bi-folder2-open me-2"></i>{% if current_language == 'en' %}Choose a file{% else %}Choisir un fichier{% endif %}
-                                </label>
-                                <p class="small mt-2 text-muted">{% if current_language == 'en' %}Supported formats: .step, .stp (max 50MB){% else %}Formats supportés: .step, .stp (max 50MB){% endif %}</p>
-                            </div>
-                        </div>
+  // Mesures -> UI
+  dist.on?.("measurementCreated", (m) => {
+    state.measurements.push(m);
+    renderMeasurements();
+  });
 
-                        <!-- Contrôles de tolérance -->
-                        <div class="mt-3">
-                            <label for="toleranceInput" class="form-label" style="color: var(--brown-dark); font-weight: 600;">
-                                {{ t.upload_tolerance }}
-                            </label>
-                            <select class="form-select" id="toleranceInput" name="tolerance">
-                                <option value="0.01">{{ t.upload_high_precision }}</option>
-                                <option value="0.1" selected>{{ t.upload_standard }}</option>
-                                <option value="0.5">{{ t.upload_fast }}</option>
-                            </select>
-                            <div class="form-text" style="color: var(--brown-medium);">
-                                <i class="bi bi-info-circle me-1"></i>
-                                {{ t.upload_info }}
-                            </div>
-                        </div>
+  if (modelUrl) {
+    await xktLoader.load({ src: modelUrl });
+    fitScene();
+  }
 
-                        <!-- Bouton principal -->
-                        <div class="text-center mt-4">
-                            <button type="submit" class="btn btn-primary btn-lg" id="uploadBtn">
-                                <i class="bi bi-eye me-2"></i>
-                                {{ t.upload_button }}
-                            </button>
-                        </div>
-                    </form>
-                </div>
+  bindUI();
+  return viewer;
+}
+window.initViewer = initViewer;
 
-                <!-- Section de progression -->
-                <div id="progressSection" class="mt-4" style="display: none;">
-                    <div class="card">
-                        <div class="card-body text-center">
-                            <div class="spinner-border text-primary mb-3" role="status">
-                                <span class="visually-hidden">Chargement...</span>
-                            </div>
-                            <h6 style="color: var(--brown-dark);">Conversion en cours...</h6>
-                            <p class="small" style="color: var(--brown-medium);">
-                                La conversion peut prendre jusqu'à 30 secondes pour les fichiers complexes.
-                            </p>
-                            <div class="progress">
-                                <div class="progress-bar progress-bar-striped progress-bar-animated" 
-                                     role="progressbar" style="width: 100%"></div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+// --------- Chargement auto via data-model -----------------------------------
+document.addEventListener("DOMContentLoaded", () => {
+  const fname = document.body.dataset.model;
+  // Les XKT sont servis par /uploads/<fname> dans ton backend
+  initViewer(fname ? `/uploads/${fname}` : undefined);
+});
 
-                <!-- Résultats d'upload -->
-                <div id="uploadResults" class="alert alert-success mt-4" style="display: none;">
-                    <h6><i class="bi bi-check-circle me-2"></i>Succès</h6>
-                    <p class="mb-0">Fichier converti avec succès</p>
-                </div>
+// ---------- UI ---------------------------------------------------------------
+function bindUI() {
+  // Fit
+  byId("fitBtn")?.addEventListener("click", () => cameraControl.fit?.());
 
-                <!-- Alertes d'erreur -->
-                <div id="errorAlert" class="alert alert-danger mt-4" style="display: none;">
-                    <h6><i class="bi bi-exclamation-triangle me-2"></i>Erreur</h6>
-                    <p id="errorMessage" class="mb-0"></p>
-                </div>
-            </div>
+  // Mesure (toggle)
+  byId("measureBtn")?.addEventListener("click", () => {
+    const on = !(dist.control?.active || dist.active);
+    if (dist.control?.activate) dist.control.activate(on);
+    else if (typeof dist.setActive === "function") dist.setActive(on);
+    toggleActive("measureBtn", on);
+  });
 
-            <!-- Colonne droite : Visualisateur 3D (NOUVELLE VERSION) -->
-            <div class="col-lg-8">
-                <div class="viewer-container fade-in">
-                    <div class="d-flex justify-content-between align-items-center mb-3">
-                        <h4 style="color: var(--brown-dark); margin: 0;">
-                            <i class="bi bi-cube me-2"></i>
-                            Visualisateur 3D
-                        </h4>
-                        <div class="viewer-controls">
-                            <button type="button" class="btn btn-secondary btn-sm" id="homeBtn" title="Retour à l'accueil">
-                                <i class="bi bi-house"></i>
-                            </button>
-                        </div>
-                    </div>
+  // Reset mesures
+  byId("clearMeasures")?.addEventListener("click", () => {
+    try { dist.clear?.(); } catch {}
+    state.measurements.forEach((m) => m.destroy?.());
+    state.measurements.length = 0;
+    renderMeasurements();
+  });
 
-                    <!-- === CONTENEUR VIEWER NOUVEAU === -->
-                    <div id="viewer" class="viewer-wrapper mt-2">
-                        <!-- Canvas (ID conservé pour compatibilité avec initViewer / main.js) -->
-                        <canvas id="viewer3d"></canvas>
+  // Coupes (toggle)
+  byId("sectionBtn")?.addEventListener("click", () => {
+    if (!state.sectionPlane) {
+      state.sectionPlane = sections.createPlane?.({ dir: [0, 1, 0] }) 
+                        || sections.createSectionPlane?.({ dir: [0, 1, 0] });
+    }
+    const on = !state.sectionPlane.active;
+    state.sectionPlane.active = on;
+    toggleActive("sectionBtn", on);
+  });
 
-                        <!-- Barre d’outils -->
-                        <div id="toolbar" class="toolbar">
-                            <button id="fitBtn" title="Ajuster (F)">Fit</button>
-                            <button id="measureBtn" title="Mesure (M)">Mesure</button>
-                            <button id="sectionBtn" title="Coupes (X)">Coupes</button>
-                            <button id="explodeBtn" title="Explosion (E)">Explosion</button>
-                            <button id="isoBtn" title="Isoler sélection (I)">Isoler</button>
-                            <button id="edgesBtn" title="Arêtes">Arêtes</button>
-                            <button id="resetBtn" title="Réinitialiser (R)">Reset</button>
-                            <button id="pngBtn" title="Exporter PNG">PNG</button>
-                        </div>
+  // Sliders coupes (3 plans UI mappés sur Y)
+  document.querySelectorAll(".section-control input")?.forEach((slider) => {
+    slider.addEventListener("input", () => {
+      if (!state.sectionPlane) {
+        state.sectionPlane = sections.createPlane?.({ dir: [0, 1, 0] }) 
+                          || sections.createSectionPlane?.({ dir: [0, 1, 0] });
+        state.sectionPlane.active = true;
+        toggleActive("sectionBtn", true);
+      }
+      const aabb = viewer.scene.getAABB();
+      const minY = aabb[1], maxY = aabb[4];
+      const y = minY + ((Number(slider.value) + 1) / 2) * (maxY - minY); // [-1;1] -> [minY;maxY]
+      state.sectionPlane.pos = [0, y, 0];
+      viewer.scene.glRedraw?.();
+    });
+  });
 
-                        <!-- Slider explosion -->
-                        <input id="explodeRange" type="range" min="0" max="100" value="0" class="explode-slider">
+  // Explosion (slider)
+  byId("explodeRange")?.addEventListener("input", (e) => {
+    const pct = Number(e.target.value);
+    state.exploded = pct / 100;
+    viewer.scene.root.explode(state.exploded);
+  });
 
-                        <!-- Panneau latéral -->
-                        <aside id="sidePanel" class="panel collapsed">
-                            <div class="panel-header">
-                                <span>Outils</span>
-                                <button id="panelToggle" class="chevron">&gt;</button>
-                            </div>
+  // Bouton Explosion (toggle 0/30%)
+  byId("explodeBtn")?.addEventListener("click", () => {
+    const next = state.exploded ? 0 : 0.3;
+    state.exploded = next;
+    viewer.scene.root.explode(next);
+    const r = byId("explodeRange");
+    if (r) r.value = String(next * 100);
+  });
 
-                            <section class="panel-section">
-                                <h5>Mesures</h5>
-                                <ul id="measureList"></ul>
-                                <button id="clearMeasures" class="btn btn-sm btn-outline-danger">Reset mesures</button>
-                            </section>
+  // Isoler (objet sous le centre du canvas)
+  byId("isoBtn")?.addEventListener("click", () => {
+    const rect = viewer.canvas.getBoundingClientRect();
+    const cx = rect.width / 2, cy = rect.height / 2;
+    const hit = viewer.scene.pick({ canvasPos: [cx, cy] });
+    if (hit?.entity?.id) isolate(hit.entity.id);
+  });
 
-                            <section class="panel-section">
-                                <h5>Coupes</h5>
-                                <div class="section-control" data-plane="0">
-                                    <label>Plan 1</label>
-                                    <input type="range" min="-1" max="1" step="0.01" value="0">
-                                </div>
-                                <div class="section-control" data-plane="1">
-                                    <label>Plan 2</label>
-                                    <input type="range" min="-1" max="1" step="0.01" value="0">
-                                </div>
-                                <div class="section-control" data-plane="2">
-                                    <label>Plan 3</label>
-                                    <input type="range" min="-1" max="1" step="0.01" value="0">
-                                </div>
-                            </section>
-                        </aside>
+  // Arêtes
+  byId("edgesBtn")?.addEventListener("click", () => {
+    edges.enabled = !edges.enabled;
+    toggleActive("edgesBtn", edges.enabled);
+  });
 
-                        <!-- Menu contextuel -->
-                        <ul id="contextMenu" class="context-menu">
-                            <li data-action="isolate">Isoler</li>
-                            <li data-action="hide">Masquer</li>
-                            <li data-action="showAll">Tout afficher</li>
-                        </ul>
-                    </div>
-                    <!-- === FIN CONTENEUR VIEWER NOUVEAU === -->
+  // Reset complet
+  byId("resetBtn")?.addEventListener("click", resetAll);
 
-                    <!-- ✅ Boutons pour analyse DFM (conservés) -->
-                    <div id="dfmControls" class="d-flex gap-3 mt-4">
-                      <button type="button" class="btn btn-primary" id="dfmAnalyzeBtn">
-                        <i class="bi bi-search me-2"></i>Analyser
-                      </button>
+  // Export PNG
+  byId("pngBtn")?.addEventListener("click", () => {
+    const data = viewer.getSnapshot();
+    const a = document.createElement("a");
+    a.download = "capture.png";
+    a.href = data;
+    a.click();
+  });
 
-                      <select id="demoldingAxisSelect" class="form-select d-none" style="max-width: 200px;">
-                        <option value="x">Axe X (horizontal)</option>
-                        <option value="y">Axe Y (avant/arrière)</option>
-                        <option value="z" selected>Axe Z (haut/bas)</option>
-                      </select>
+  setupContextMenu();
+  setupTooltip();
+}
 
-                      <button id="startDFMAnalysis" class="btn btn-success d-none">
-                        <i class="bi bi-rocket-takeoff me-2"></i>Lancer analyse DFM
-                      </button>
-                    </div>
+// ---------- Mesures ---------------------------------------------------------
+function renderMeasurements() {
+  const list = byId("measureList");
+  if (!list) return;
+  list.innerHTML = "";
+  state.measurements.forEach((m, i) => {
+    const len = typeof m.length === "number" ? m.length : (m.getLength?.() ?? 0);
+    const li = document.createElement("li");
+    li.textContent = `Mesure ${i + 1}: ${len.toFixed(2)} mm`;
+    list.appendChild(li);
+  });
+}
 
-                    <!-- (SUPPRIMÉ) Ancien viewerToolsPanel pour éviter les doublons -->
+// ---------- Menu contextuel / Tooltip ---------------------------------------
+function setupContextMenu() {
+  const menu = byId("contextMenu");
+  if (!menu) return;
+  const canvas = viewer.canvas;
 
-                    <!-- Sélection de l’axe de démoulage -->
-                    <div id="axisSelectionContainer"></div>
+  canvas.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    const hit = viewer.scene.pick({ canvasPos: [e.offsetX, e.offsetY] });
+    if (!hit || !hit.entity) return;
+    menu.dataset.id = hit.entity.id;
+    menu.style.left = `${e.clientX}px`;
+    menu.style.top = `${e.clientY}px`;
+    menu.classList.add("show");
+  });
 
-                    <!-- Informations du modèle -->
-                    <div class="mt-3">
-                        <div class="row">
-                            <div class="col-md-6">
-                                <div id="modelInfo" class="card" style="display: none;">
-                                    <div class="card-body">
-                                        <h6 style="color: var(--brown-dark);">
-                                            <i class="bi bi-info-circle me-2"></i>Informations du modèle
-                                        </h6>
-                                        <div id="modelDetails"></div>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="col-md-6">
-                                <div id="volumeDisplay" class="card" style="display: none;">
-                                    <div class="card-body">
-                                        <h6 style="color: var(--brown-dark);">
-                                            <i class="bi bi-box me-2"></i>Volume
-                                        </h6>
-                                        <div id="volumeValue" style="font-size: 1.2rem; font-weight: 600; color: var(--kaki-dark);"></div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+  document.addEventListener("click", () => menu.classList.remove("show"));
 
-                </div><!-- .viewer-container -->
-            </div>
-        </div><!-- .row -->
+  menu.addEventListener("click", (e) => {
+    const id = menu.dataset.id;
+    const action = e.target?.dataset?.action;
+    if (action === "isolate") isolate(id);
+    if (action === "hide")    hide(id);
+    if (action === "showAll") showAll();
+    menu.classList.remove("show");
+  });
+}
 
-        <!-- Section d'analyse DFM -->
-        <div class="mt-4" id="dfmResultsSection" style="display: none;">
-            <div class="dfm-modern-container">
-                <!-- En-tête moderne -->
-                <div class="dfm-header mb-4">
-                    <div class="row align-items-center">
-                        <div class="col-md-8">
-                            <div class="dfm-title-section">
-                                <div class="dfm-icon-badge mb-2">
-                                    <i class="bi bi-gear-fill"></i>
-                                </div>
-                                <h3 class="dfm-main-title mb-1">{% if current_language == 'en' %}Advanced DFM Analysis{% else %}Analyse DFM Avancée{% endif %}</h3>
-                                <p class="dfm-subtitle mb-0">{% if current_language == 'en' %}Manufacturability Assessment • Plastic Injection{% else %}Évaluation manufacturabilité • Injection plastique{% endif %}</p>
-                            </div>
-                        </div>
-                        <div class="col-md-4 text-end">
-                            <div class="dfm-action-buttons">
-                                <div id="injectionReadyIndicator" class="d-inline-block me-3" style="display: none;">
-                                    <span class="badge fs-5" id="injectionReadyBadge">
-                                        <i class="bi bi-circle-fill me-1" id="injectionReadyIcon"></i>
-                                        <span id="injectionReadyText">En analyse...</span>
-                                    </span>
-                                </div>
-                                <button id="changeDemoldingAxisBtn" class="btn btn-dfm-secondary me-2" style="display: none;">
-                                    <i class="bi bi-arrow-repeat me-2"></i>{% if current_language == 'en' %}Change axis{% else %}Changer axe{% endif %}
-                                </button>
-                                <button id="generatePdfBtn" class="btn btn-dfm-primary me-2" style="display: none;">
-                                    <i class="bi bi-file-earmark-pdf me-2"></i>{% if current_language == 'en' %}PDF Report{% else %}Rapport PDF{% endif %}
-                                </button>
-                                <button id="downloadZipBtn" class="btn btn-dfm-primary" style="display: none;">
-                                    <i class="bi bi-download me-2"></i>{% if current_language == 'en' %}Download all{% else %}Télécharger tout{% endif %}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+function setupTooltip() {
+  const canvas = viewer.canvas;
+  const tooltip = document.createElement("div");
+  tooltip.className = "tooltip";
+  document.body.appendChild(tooltip);
 
-                <!-- Check-list de préparation au moulage -->
-                <div id="moldingChecklist" class="mb-4" style="display: none;">
-                    <div class="card">
-                        <div class="card-header bg-light">
-                            <h6 class="mb-0"><i class="bi bi-check2-square me-2"></i>Check-list de préparation au moulage</h6>
-                        </div>
-                        <div class="card-body">
-                            <div class="list-group" id="checklistItems"></div>
-                        </div>
-                    </div>
-                </div>
+  canvas.addEventListener("mousemove", (e) => {
+    const hit = viewer.scene.pick({ canvasPos: [e.offsetX, e.offsetY] });
+    if (hit && hit.entity) {
+      tooltip.textContent = hit.entity.id;
+      tooltip.style.left = `${e.clientX + 10}px`;
+      tooltip.style.top  = `${e.clientY + 10}px`;
+      tooltip.classList.add("show");
+    } else {
+      tooltip.classList.remove("show");
+    }
+  });
 
-                <!-- Panneau d'analyse principal -->
-                <div id="dfmAnalysisPanel" class="dfm-analysis-grid"></div>
-            </div>
-        </div>
+  canvas.addEventListener("dblclick", (e) => {
+    const hit = viewer.scene.pick({ canvasPos: [e.offsetX, e.offsetY] });
+    if (hit && hit.entity) {
+      isolate(hit.entity.id);
+      cameraControl.fit?.({ aabb: hit.entity.aabb });
+    }
+  });
+}
 
-        <!-- Section historique -->
-        <div class="history-section mt-4">
-            <h4 style="color: var(--brown-dark);">
-                <i class="bi bi-clock-history me-2"></i>
-                Historique
-            </h4>
-            <div class="table-responsive">
-                <div id="historyLoading" class="text-center p-3">
-                    <div class="spinner-border spinner-border-sm" role="status">
-                        <span class="visually-hidden">Chargement...</span>
-                    </div>
-                </div>
-                <table class="table table-hover">
-                    <thead>
-                        <tr>
-                            <th>Fichier</th>
-                            <th>Date</th>
-                            <th>Statut</th>
-                            <th>Score DFM</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="historyTableBody">
-                        <tr>
-                            <td colspan="5" class="text-center text-muted py-4">
-                                Aucun historique de conversion disponible
-                            </td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div><!-- .main-container -->
+// ---------- Helpers ---------------------------------------------------------
+function fitScene() {
+  try {
+    const aabb = viewer.scene.getAABB();
+    viewer.cameraFlight.flyTo?.({ aabb });
+  } catch {}
+}
 
-    <!-- Modal questionnaire matériaux -->
-    <div class="modal fade" id="materialQuestionnaireModal" tabindex="-1" aria-labelledby="materialQuestionnaireModalLabel" aria-hidden="true">
-        <div class="modal-dialog modal-lg">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="materialQuestionnaireModalLabel">
-                        <i class="bi bi-clipboard-check me-2"></i>Questionnaire de sélection matériaux
-                    </h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <div class="modal-body">
-                    <!-- (contenu du formulaire conservé tel quel) -->
-                    <form id="materialQuestionnaireForm">
-                        <!-- ... tout ton formulaire inchangé ... -->
-                        <!-- Pour compacité, j’ai gardé exactement tes champs/sections -->
-                        {{- "" -}}
-                        <!-- Application -->
-                        <div class="mb-4">
-                            <label class="form-label fw-bold">
-                                <i class="bi bi-gear-fill me-2"></i>Domaine d'application
-                            </label>
-                            <select class="form-select" name="application" required>
-                                <option value="">Sélectionnez...</option>
-                                <option value="automotive">Automobile</option>
-                                <option value="electronics">Électronique/High-tech</option>
-                                <option value="medical">Médical/Pharmaceutique</option>
-                                <option value="packaging">Emballage</option>
-                                <option value="consumer">Biens de consommation</option>
-                                <option value="industrial">Industriel</option>
-                                <option value="aerospace">Aéronautique/Spatial</option>
-                                <option value="toys">Jouets/Loisirs</option>
-                            </select>
-                        </div>
-                        <!-- Contraintes mécaniques + warnings + infos de compatibilité, etc. -->
-                        <!-- (tout le bloc que tu as envoyé reste identique) -->
-                        {{- "" -}}
-                        <!-- Environnement d'usage, Esthétique, Réglementaire, Volume/Coût, Durée de vie -->
-                        <!-- (inchangés) -->
-                        {{- "" -}}
-                    </form>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
-                    <button type="button" class="btn btn-primary" id="submitQuestionnaire">
-                        <i class="bi bi-check-circle me-2"></i>Analyser et recommander
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
+function isolate(id) {
+  viewer.scene.setObjectsVisible(viewer.scene.visibleObjects, false);
+  viewer.scene.setObjectVisible(id, true);
+}
 
-    <!-- Bootstrap JS -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+function hide(id) {
+  viewer.scene.setObjectVisible(id, false);
+}
 
-    <!-- Footer -->
-    <footer class="mt-5 py-4 text-center" style="background: linear-gradient(135deg, var(--kaki-dark) 0%, var(--brown-dark) 100%); color: var(--cream);">
-        <div class="container">
-            <p class="mb-0">
-                <small>Créé par <strong>Grégoire GOUNY</strong> • CADlytics © 2025</small>
-            </p>
-            <div class="mt-2">
-                <a href="https://fazier.com" target="_blank" rel="noopener noreferrer">
-                    <img src="https://fazier.com/api/v1/public/badges/launch_badges.svg?badge_type=launched&theme=light" 
-                         width="120" 
-                         alt="Fazier badge" 
-                         style="opacity: 0.8; transition: opacity 0.3s ease;"
-                         onmouseover="this.style.opacity='1'"
-                         onmouseout="this.style.opacity='0.8'" />
-                </a>
-            </div>
-        </div>
-    </footer>
+function showAll() {
+  viewer.scene.setObjectsVisible(viewer.scene.objects, true);
+}
 
-    <!-- Auto-chargement du modèle si fourni dans l’URL -->
-    <script>
-      document.addEventListener('DOMContentLoaded', () => {
-        const model = document.body.dataset.model;
+function resetAll() {
+  showAll();
+  try { dist.clear?.(); } catch {}
+  state.measurements.length = 0;
+  if (state.sectionPlane) state.sectionPlane.active = false;
+  viewer.scene.root.explode(0);
+  edges.enabled = false;
+  viewer.scene.setObjectsWireframe(viewer.scene.objects, false);
+  cameraControl.reset?.();
+  renderMeasurements();
+  ["measureBtn","sectionBtn","edgesBtn"].forEach((id) => toggleActive(id, false));
+  const r = byId("explodeRange"); if (r) r.value = "0";
+}
 
-        const showTools = () => {
-          // Si tu veux afficher un panneau spécifique, tu peux le faire ici
-          const dfm = document.getElementById('dfmControls');
-          if (dfm) dfm.style.display = 'flex';
-        };
+function toggleActive(id, on) {
+  const btn = document.getElementById(id);
+  btn?.classList.toggle("active", on);
+}
 
-        const loadModel = () => {
-          if (!model || !window.viewer || typeof window.viewer.loadModel !== 'function') return;
-          window.viewer.loadModel('/view/' + model);
-          showTools();
-        };
-
-        const ensureViewer = () => {
-          if (window.viewer) {
-            loadModel();
-            return;
-          }
-          if (typeof Viewer === 'undefined') {
-            setTimeout(ensureViewer, 500);
-            return;
-          }
-          if (typeof initViewer === 'function') {
-            initViewer(); // doit cibler #viewer3d
-            loadModel();
-          }
-        };
-
-        ensureViewer();
-      });
-    </script>
-
-    <!-- Initialisation tooltips Bootstrap -->
-    <script>
-      document.addEventListener('DOMContentLoaded', function () {
-        const tooltips = Array.from(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-        tooltips.forEach(el => new bootstrap.Tooltip(el));
-      });
-    </script>
-</body>
-</html>
+function byId(name) {
+  return document.getElementById(name);
+}

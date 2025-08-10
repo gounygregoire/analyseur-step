@@ -1,17 +1,15 @@
 // src/main.js
-// Xeokit + outils barre + contexte, aligné avec ton HTML fusionné
+// Xeokit + outils barre + contexte, aligné avec ton HTML
 
 import {
   Viewer,
-  CameraControl,
   XKTLoaderPlugin,
   DistanceMeasurementsPlugin,
   SectionPlanesPlugin,
-  EdgesPlugin,
-  GizmoPlugin
+  EdgesPlugin
 } from "@xeokit/xeokit-sdk";
 
-let viewer, cameraControl, xktLoader, dist, sections, edges, gizmo;
+let viewer, cameraControl, xktLoader, dist, sections, edges;
 
 const state = {
   measurements: [],
@@ -21,22 +19,23 @@ const state = {
 
 // ---------- Initialisation ---------------------------------------------------
 export async function initViewer(modelUrl) {
-  viewer = new Viewer({ canvasId: "viewer3d" });
-  window.viewer = viewer; // compat
+  // IMPORTANT : assure-toi que le canvas dans ton HTML a bien id="viewerCanvas"
+  viewer = new Viewer({ canvasId: "viewerCanvas" });
+  window.viewer = viewer; // compat éventuelle
 
-  cameraControl = new CameraControl(viewer);
+  // En v2, pas d'import CameraControl : on le lit depuis le viewer
+  cameraControl = viewer.cameraControl;
+
   xktLoader = new XKTLoaderPlugin(viewer);
-  dist = new DistanceMeasurementsPlugin(viewer);
-  sections = new SectionPlanesPlugin(viewer);
-  edges = new EdgesPlugin(viewer);
-  gizmo = new GizmoPlugin(viewer);
-  gizmo.setVisible(false);
+  dist      = new DistanceMeasurementsPlugin(viewer);
+  sections  = new SectionPlanesPlugin(viewer);
+  edges     = new EdgesPlugin(viewer);
 
-  // Empêche le scroll de la page quand on zoome à la molette
-  viewer.canvas.addEventListener("wheel", e => e.preventDefault(), { passive: false });
+  // Empêche le scroll de la page quand on zoome à la molette (SEULEMENT sur le canvas)
+  viewer.canvas.addEventListener("wheel", (e) => e.preventDefault(), { passive: false });
 
   // Mesures créées -> UI
-  dist.on("measurementCreated", m => {
+  dist.on("measurementCreated", (m) => {
     state.measurements.push(m);
     renderMeasurements();
   });
@@ -53,29 +52,36 @@ window.initViewer = initViewer;
 
 // --------- Chargement auto via data-model -----------------------------------
 document.addEventListener("DOMContentLoaded", () => {
-  const url = document.body.dataset.model;
-  initViewer(url ? `/view/${url}` : undefined);
+  const fname = document.body.dataset.model;
+  // Sur ton backend, les XKT sont servis par /uploads/<fname>
+  initViewer(fname ? `/uploads/${fname}` : undefined);
 });
 
 // ---------- UI ---------------------------------------------------------------
 function bindUI() {
   byId("measureBtn")?.addEventListener("click", () => {
-    const on = !dist.control.active;
-    dist.control.activate(on);
-    toggleActive("measureBtn", on);
+    // Certaines versions exposent dist.control, d'autres dist.setActive
+    const currentlyOn = !!(dist.control?.active || dist.active);
+    if (dist.control?.activate) {
+      dist.control.activate(!currentlyOn);
+    } else if (typeof dist.setActive === "function") {
+      dist.setActive(!currentlyOn);
+    }
+    toggleActive("measureBtn", !currentlyOn);
   });
 
   byId("clearMeasurementsBtn")?.addEventListener("click", () => {
-    state.measurements.forEach(m => m.destroy());
+    try { dist.clear(); } catch {}
+    state.measurements.forEach((m) => m.destroy?.());
     state.measurements.length = 0;
-    dist.clear();
     renderMeasurements();
   });
 
   // Coupe 3D: toggle plan avec le bouton
   byId("crossSectionBtn")?.addEventListener("click", () => {
     if (!state.sectionPlane) {
-      state.sectionPlane = sections.createPlane({ dir: [0, 1, 0] });
+      // API v2 : createPlane est OK ; si jamais ta version exige un autre nom, on adaptera
+      state.sectionPlane = sections.createPlane?.({ dir: [0, 1, 0] }) || sections.createSectionPlane?.({ dir: [0, 1, 0] });
     }
     const on = !state.sectionPlane.active;
     state.sectionPlane.active = on;
@@ -83,10 +89,10 @@ function bindUI() {
   });
 
   // Sliders de coupe (dans .section-control, mapping Y simple)
-  document.querySelectorAll(".section-control input").forEach((slider) => {
+  document.querySelectorAll(".section-control input")?.forEach((slider) => {
     slider.addEventListener("input", () => {
       if (!state.sectionPlane) {
-        state.sectionPlane = sections.createPlane({ dir: [0, 1, 0] });
+        state.sectionPlane = sections.createPlane?.({ dir: [0, 1, 0] }) || sections.createSectionPlane?.({ dir: [0, 1, 0] });
         state.sectionPlane.active = true;
         toggleActive("crossSectionBtn", true);
       }
@@ -95,7 +101,7 @@ function bindUI() {
       const minY = aabb[1], maxY = aabb[4];
       const y = minY + ((Number(slider.value) + 1) / 2) * (maxY - minY);
       state.sectionPlane.pos = [0, y, 0];
-      viewer.scene.glRedraw && viewer.scene.glRedraw();
+      viewer.scene.glRedraw?.();
     });
   });
 
@@ -112,13 +118,6 @@ function bindUI() {
     toggleActive("toggleEdgesBtn", edges.enabled);
   });
 
-  // Axes (gizmo)
-  byId("toggleAxesBtn")?.addEventListener("click", () => {
-    const on = !gizmo.visible;
-    gizmo.setVisible(on);
-    toggleActive("toggleAxesBtn", on);
-  });
-
   // Explosion (slider = #explodeRange)
   byId("explodeRange")?.addEventListener("input", (e) => {
     const pct = Number(e.target.value);
@@ -129,18 +128,13 @@ function bindUI() {
   // Reset
   byId("resetViewBtn")?.addEventListener("click", resetAll);
 
-  // Export PNG (si tu as un bouton avec cet id ; sinon retire)
+  // Export PNG (si bouton présent)
   byId("exportPngBtn")?.addEventListener("click", () => {
     const data = viewer.getSnapshot();
     const a = document.createElement("a");
     a.download = "capture.png";
     a.href = data;
     a.click();
-  });
-
-  // Thème (optionnel)
-  byId("themeToggleBtn")?.addEventListener("click", () => {
-    document.body.classList.toggle("dark-theme");
   });
 
   setupContextMenu();
@@ -153,8 +147,9 @@ function renderMeasurements() {
   if (!list) return;
   list.innerHTML = "";
   state.measurements.forEach((m, i) => {
+    const len = typeof m.length === "number" ? m.length : (m.getLength?.() ?? 0);
     const li = document.createElement("li");
-    li.textContent = `Mesure ${i + 1}: ${m.length.toFixed(2)} mm`;
+    li.textContent = `Mesure ${i + 1}: ${len.toFixed(2)} mm`;
     list.appendChild(li);
   });
 }
@@ -165,7 +160,7 @@ function setupContextMenu() {
   if (!menu) return;
   const canvas = viewer.canvas;
 
-  canvas.addEventListener("contextmenu", e => {
+  canvas.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     const hit = viewer.scene.pick({ canvasPos: [e.offsetX, e.offsetY] });
     if (!hit || !hit.entity) return;
@@ -177,7 +172,7 @@ function setupContextMenu() {
 
   document.addEventListener("click", () => menu.classList.remove("show"));
 
-  menu.addEventListener("click", e => {
+  menu.addEventListener("click", (e) => {
     const id = menu.dataset.id;
     switch (e.target.dataset.action) {
       case "isolate": isolate(id); break;
@@ -194,7 +189,7 @@ function setupTooltip() {
   tooltip.className = "tooltip";
   document.body.appendChild(tooltip);
 
-  canvas.addEventListener("mousemove", e => {
+  canvas.addEventListener("mousemove", (e) => {
     const hit = viewer.scene.pick({ canvasPos: [e.offsetX, e.offsetY] });
     if (hit && hit.entity) {
       tooltip.textContent = hit.entity.id;
@@ -206,7 +201,7 @@ function setupTooltip() {
     }
   });
 
-  canvas.addEventListener("dblclick", e => {
+  canvas.addEventListener("dblclick", (e) => {
     const hit = viewer.scene.pick({ canvasPos: [e.offsetX, e.offsetY] });
     if (hit && hit.entity) {
       isolate(hit.entity.id);
@@ -238,17 +233,15 @@ function showAll() {
 
 function resetAll() {
   showAll();
-  try { dist.clear(); } catch {}
+  try { dist.clear?.(); } catch {}
   state.measurements.length = 0;
   if (state.sectionPlane) state.sectionPlane.active = false;
   viewer.scene.root.explode(0);
   edges.enabled = false;
   viewer.scene.setObjectsWireframe(viewer.scene.objects, false);
-  gizmo.setVisible(false);
-  cameraControl.reset();
+  cameraControl.reset?.();
   renderMeasurements();
-  ["measureBtn","crossSectionBtn","toggleWireframeBtn",
-   "toggleEdgesBtn","toggleAxesBtn"].forEach(id => toggleActive(id, false));
+  ["measureBtn","crossSectionBtn","toggleWireframeBtn","toggleEdgesBtn"].forEach((id) => toggleActive(id, false));
   const ex = byId("explodeRange"); if (ex) ex.value = "0";
 }
 
