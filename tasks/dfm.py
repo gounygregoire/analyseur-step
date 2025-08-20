@@ -5,7 +5,6 @@ import shutil
 import logging
 import dataclasses
 
-import boto3
 import cadquery as cq
 import trimesh
 from flask import current_app
@@ -14,18 +13,10 @@ from models import db, ModelJob, advance_model_job_status
 from worker import celery
 from dfm_analyzer import analyze_dfm
 from heatmap import generate_heatmap
+from storage.s3 import put_asset
 
 logger = logging.getLogger(__name__)
-S3_CLIENT = boto3.client("s3")
 MAX_RETRIES = 3
-
-
-def _upload_to_s3(local_path: str, key: str) -> str:
-    bucket = current_app.config.get("S3_BUCKET") or os.getenv("S3_BUCKET")
-    if not bucket:
-        raise RuntimeError("S3_BUCKET not configured")
-    S3_CLIENT.upload_file(local_path, bucket, key)
-    return key
 
 
 def _notify_status(job: ModelJob) -> None:
@@ -59,7 +50,7 @@ def run_dfm(self, job_id: str) -> None:
         with open(out_json, "w") as fh:
             json.dump(report_dict, fh)
         key = f"models/{job.sha256}/dfm.json"
-        _upload_to_s3(out_json, key)
+        put_asset(out_json, key, "application/json")
         job.dfm_json_url = key
         advance_model_job_status(job, "dfm_ready")
         db.session.commit()

@@ -1,31 +1,23 @@
+import logging
 import os
 import tempfile
 import shutil
-import logging
+import io
 
-import boto3
 import cadquery as cq
 import trimesh
+from PIL import Image
 from flask import current_app
 
 from models import db, ModelJob, advance_model_job_status
 from worker import celery
 from tasks.dfm import run_dfm
+from storage.s3 import put_asset
 
 logger = logging.getLogger(__name__)
-S3_CLIENT = boto3.client("s3")
 MAX_RETRIES = 3
 PREVIEW_MAX_FACES = 300_000
 PREVIEW_RATIO = 0.5
-
-
-def _upload_to_s3(local_path: str, key: str) -> str:
-    """Upload a file to S3 and return the key."""
-    bucket = current_app.config.get("S3_BUCKET") or os.getenv("S3_BUCKET")
-    if not bucket:
-        raise RuntimeError("S3_BUCKET not configured")
-    S3_CLIENT.upload_file(local_path, bucket, key)
-    return key
 
 
 def _notify_status(job: ModelJob) -> None:
@@ -58,7 +50,13 @@ def generate_preview(self, job_id: str) -> None:
         out_path = os.path.join(tmp_dir, "preview.glb")
         mesh.export(out_path, file_type="glb")
         key = f"models/{job.sha256}/preview.glb"
-        _upload_to_s3(out_path, key)
+        put_asset(out_path, key, "model/gltf-binary")
+        # thumbnail
+        scene = mesh.scene()
+        img_bytes = scene.save_image(resolution=(1024, 1024))
+        thumb_path = os.path.join(tmp_dir, "thumb.jpg")
+        Image.open(io.BytesIO(img_bytes)).convert("RGB").save(thumb_path, quality=90)
+        put_asset(thumb_path, f"models/{job.sha256}/thumb.jpg", "image/jpeg")
         job.preview_url = key
         advance_model_job_status(job, "preview_ready")
         db.session.commit()
@@ -90,18 +88,19 @@ def generate_final(self, job_id: str) -> None:
         shape = cq.importers.importStep(step_path)
         solids = shape.solids().toList() if hasattr(shape, "solids") else []
         if len(solids) > 1:
-            # Assemblage -> XKT via xeokit-convert CLI
             from xkt_converter import convert_step_to_xkt
             out_path = os.path.join(tmp_dir, "final.xkt")
             convert_step_to_xkt(step_path, out_path)
             key = f"models/{job.sha256}/final.xkt"
+            ctype = "application/octet-stream"
         else:
             vertices, faces = shape.val().tessellate(0.2)
             mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
             out_path = os.path.join(tmp_dir, "final.glb")
             mesh.export(out_path, file_type="glb")
             key = f"models/{job.sha256}/final.glb"
-        _upload_to_s3(out_path, key)
+            ctype = "model/gltf-binary"
+        put_asset(out_path, key, ctype)
         job.final_url = key
         advance_model_job_status(job, "final_ready")
         db.session.commit()

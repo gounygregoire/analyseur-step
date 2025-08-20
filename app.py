@@ -32,6 +32,8 @@ from flask_dance.contrib.google import make_google_blueprint, google
 from dotenv import load_dotenv
 from kombu.exceptions import OperationalError as KombuOperationalError
 from redis.exceptions import ConnectionError as RedisConnectionError
+from storage.s3 import get_signed_url
+
 load_dotenv()
 
 # Create Flask app once
@@ -60,24 +62,6 @@ logger = logging.getLogger(__name__)
 
 # Enable CORS for API endpoints
 CORS(app)
-
-try:
-    import boto3
-    _s3_client = boto3.client('s3')
-except Exception:  # pragma: no cover - boto3 optional
-    _s3_client = None
-
-S3_BUCKET = os.getenv('S3_BUCKET')
-
-def _sign_s3_url(key: str, expires: int = 3600) -> str:
-    if not key:
-        return None
-    if _s3_client and S3_BUCKET:
-        try:
-            return _s3_client.generate_presigned_url('get_object', Params={'Bucket': S3_BUCKET, 'Key': key}, ExpiresIn=expires)
-        except Exception:
-            pass
-    return key
 
 # Session configuration to prevent large cookies
 app.config['SESSION_COOKIE_HTTPONLY'] = True
@@ -681,11 +665,12 @@ def api_model_assets(job_id):
     job = ModelJob.query.get_or_404(job_id)
     assets = {}
     if job.preview_url:
-        assets['preview'] = _sign_s3_url(job.preview_url)
+        assets['preview'] = get_signed_url(job.preview_url)
+        assets['thumbnail'] = get_signed_url(f"models/{job.sha256}/thumb.jpg")
     if job.final_url:
-        assets['final'] = _sign_s3_url(job.final_url)
+        assets['final'] = get_signed_url(job.final_url)
     if job.dfm_json_url:
-        assets['dfm_json'] = _sign_s3_url(job.dfm_json_url)
+        assets['dfm_json'] = get_signed_url(job.dfm_json_url)
     return jsonify({'modelId': job.id, 'assets': assets, 'status': job.status})
 
 @app.route('/api/upload_job', methods=['POST'])
