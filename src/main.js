@@ -9,7 +9,7 @@ import {
   // PAS d'EdgesPlugin dans ta version
 } from "@xeokit/xeokit-sdk";
 
-let viewer, cameraControl, xktLoader, dist, sections;
+let viewer, cameraControl, xktLoader, dist, sections, canvas;
 
 const state = {
   measurements: [],
@@ -19,13 +19,13 @@ const state = {
 
 // ---------- Initialisation ---------------------------------------------------
 export async function initViewer(modelUrl) {
-  const canvas = document.getElementById("viewer3d");
-  if (!canvas) {
+  const canvasEl = document.getElementById("viewer3d");
+  if (!canvasEl) {
     console.warn("viewer3d canvas not found, skipping viewer init");
     return;
   }
 
-  viewer = new Viewer({ canvasElement: canvas });
+  viewer = new Viewer({ canvasElement: canvasEl });
   window.viewer = viewer;
 
   cameraControl = viewer.cameraControl;
@@ -34,8 +34,11 @@ export async function initViewer(modelUrl) {
   dist      = new DistanceMeasurementsPlugin(viewer);
   sections  = new SectionPlanesPlugin(viewer);
 
+  // Référence directe vers l'élément canvas du viewer
+  canvas = viewer.scene.canvas.canvas;
+
   // Empêcher le scroll de page quand la molette est sur le canvas
-  viewer.canvas.addEventListener("wheel", (e) => e.preventDefault(), { passive: false });
+  canvas.addEventListener("wheel", (e) => e.preventDefault(), { passive: false });
 
   // Mesures -> UI
   dist.on?.("measurementCreated", (m) => {
@@ -126,7 +129,7 @@ function bindUI() {
 
   // Isoler (objet sous le centre du canvas)
   byId("isoBtn")?.addEventListener("click", () => {
-    const rect = viewer.canvas.getBoundingClientRect();
+    const rect = canvas.getBoundingClientRect();
     const cx = rect.width / 2, cy = rect.height / 2;
     const hit = viewer.scene.pick({ canvasPos: [cx, cy] });
     if (hit?.entity?.id) isolate(hit.entity.id);
@@ -171,10 +174,10 @@ function renderMeasurements() {
 // ---------- Menu contextuel / Tooltip ---------------------------------------
 function setupContextMenu() {
   const menu = byId("contextMenu");
-  if (!menu) return;
-  const canvas = viewer.canvas;
+  if (!menu || !canvas) return;
+  const canvasEl = canvas;
 
-  canvas.addEventListener("contextmenu", (e) => {
+  canvasEl.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     const hit = viewer.scene.pick({ canvasPos: [e.offsetX, e.offsetY] });
     if (!hit || !hit.entity) return;
@@ -197,12 +200,13 @@ function setupContextMenu() {
 }
 
 function setupTooltip() {
-  const canvas = viewer.canvas;
+  if (!canvas) return;
+  const canvasEl = canvas;
   const tooltip = document.createElement("div");
   tooltip.className = "tooltip";
   document.body.appendChild(tooltip);
 
-  canvas.addEventListener("mousemove", (e) => {
+  canvasEl.addEventListener("mousemove", (e) => {
     const hit = viewer.scene.pick({ canvasPos: [e.offsetX, e.offsetY] });
     if (hit && hit.entity) {
       tooltip.textContent = hit.entity.id;
@@ -214,7 +218,7 @@ function setupTooltip() {
     }
   });
 
-  canvas.addEventListener("dblclick", (e) => {
+  canvasEl.addEventListener("dblclick", (e) => {
     const hit = viewer.scene.pick({ canvasPos: [e.offsetX, e.offsetY] });
     if (hit && hit.entity) {
       isolate(hit.entity.id);
