@@ -19,7 +19,13 @@ const state = {
 
 // ---------- Initialisation ---------------------------------------------------
 export async function initViewer(modelUrl) {
-  viewer = new Viewer({ canvasId: "viewer3d" });
+  const canvas = document.getElementById("viewer3d");
+  if (!canvas) {
+    console.warn("viewer3d canvas not found, skipping viewer init");
+    return;
+  }
+
+  viewer = new Viewer({ canvasElement: canvas });
   window.viewer = viewer;
 
   cameraControl = viewer.cameraControl;
