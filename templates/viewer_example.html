@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8" />
+    <title>Xeokit viewer</title>
+    <style>
+        body,html { margin:0; height:100%; }
+        #toolbar { display:flex; gap:8px; padding:4px; background:#eee; align-items:center; }
+        #progressContainer { flex:1; height:6px; background:#ccc; margin-right:8px; }
+        #progressBar { height:100%; width:0; background:#4caf50; }
+        #viewerCanvas { width:100%; height:calc(100% - 40px); display:block; }
+        #dfmPanel { position:absolute; top:40px; right:0; width:200px; background:rgba(255,255,255,0.9); max-height:50%; overflow:auto; }
+        #dfmPanel ul { list-style:none; padding:0; margin:0; }
+        #dfmPanel li { padding:4px; cursor:pointer; }
+    </style>
+</head>
+<body data-model-id="demo123">
+    <div id="toolbar">
+        <div id="progressContainer"><div id="progressBar"></div></div>
+        <button id="qualityToggle">Qualité : Preview</button>
+        <button id="heatmapBtn">Heatmap</button>
+        <button id="wireframeBtn">Wireframe</button>
+        <button id="snapshotBtn">Snapshot</button>
+    </div>
+    <div id="dfmPanel">
+        <ul id="dfmIssues"></ul>
+    </div>
+    <canvas id="viewerCanvas"></canvas>
+    <script type="module" src="/static/js/modules/main_viewer.js"></script>
+</body>
+</html>
