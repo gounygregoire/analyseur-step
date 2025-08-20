@@ -10,7 +10,7 @@ import trimesh
 from flask import current_app
 
 from models import db, ModelJob, advance_model_job_status
-from worker import celery
+from celery_app import celery
 from dfm_analyzer import analyze_dfm
 from heatmap import generate_heatmap
 from storage.s3 import put_asset
