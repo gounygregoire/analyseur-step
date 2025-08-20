@@ -12,6 +12,37 @@
   const uploadResults = document.getElementById('uploadResults');
   const errorAlert = document.getElementById('errorAlert');
   const errorMessage = document.getElementById('errorMessage');
+  const uploadArea = document.getElementById('uploadArea');
+  const fileNameDisplay = document.getElementById('fileNameDisplay');
+
+  if (uploadArea && fileInput) {
+    uploadArea.addEventListener('click', () => fileInput.click());
+
+    uploadArea.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      uploadArea.classList.add('drag-over');
+    });
+
+    uploadArea.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      uploadArea.classList.remove('drag-over');
+    });
+
+    uploadArea.addEventListener('drop', (e) => {
+      e.preventDefault();
+      uploadArea.classList.remove('drag-over');
+      fileInput.files = e.dataTransfer.files;
+      fileInput.dispatchEvent(new Event('change'));
+      form.dispatchEvent(new Event('submit', { cancelable: true }));
+    });
+  }
+
+  if (fileInput && fileNameDisplay) {
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files[0];
+      fileNameDisplay.textContent = file ? file.name : '';
+    });
+  }
 
   let currentUpload = null;
   let lastTime = 0;
