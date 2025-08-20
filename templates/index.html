@@ -20,6 +20,8 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css">
     
     <script type="module" src="/static/dist/main.js"></script>
+    <script src="https://unpkg.com/tus-js-client@3.1.0/dist/tus.min.js"></script>
+    <script src="{{ url_for('static', filename='js/tus-upload.js') }}"></script>
 
     <!-- Plausible Analytics -->
     <script async defer data-domain="cadlytics.replit.app" src="https://plausible.io/js/script.js"></script>
@@ -134,18 +136,12 @@
                 <div id="progressSection" class="mt-4" style="display: none;">
                     <div class="card">
                         <div class="card-body text-center">
-                            <div class="spinner-border text-primary mb-3" role="status">
-                                <span class="visually-hidden">Chargement...</span>
-                            </div>
-                            <h6 style="color: var(--brown-dark);">Conversion en cours...</h6>
-                            <p class="small" style="color: var(--brown-medium);">
-                                La conversion peut prendre jusqu'à 30 secondes pour les fichiers complexes.
-                            </p>
+                            <h6 id="uploadPercent" style="color: var(--brown-dark);">0%</h6>
+                            <p id="uploadStats" class="small" style="color: var(--brown-medium);"></p>
                             <div class="progress">
-                                <div class="progress-bar progress-bar-striped progress-bar-animated" 
-                                     role="progressbar" style="width: 100%">
-                                </div>
+                                <div id="uploadBar" class="progress-bar progress-bar-striped" role="progressbar" style="width: 0%"></div>
                             </div>
+                            <button type="button" class="btn btn-link mt-2" id="cancelUpload">Annuler</button>
                         </div>
                     </div>
                 </div>
