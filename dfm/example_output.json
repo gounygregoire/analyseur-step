@@ -1,0 +1,22 @@
+{
+  "summary": {"issues_count": 1, "severity_histogram": {"high": 1}},
+  "issues": [
+    {
+      "id": "ISSUE-0001",
+      "type": "thin_wall",
+      "severity": "high",
+      "message": "Épaisseur minimale trop faible",
+      "recommendation": "Augmenter l'épaisseur au-dessus de 1 mm",
+      "locations": [{"xyz": [0, 0, 0]}],
+      "meta": {"threshold": 1.0, "measured": 0.5}
+    }
+  ],
+  "legend": [
+    {"severity": "low", "color": [0.4, 0.8, 0.0]},
+    {"severity": "medium", "color": [1.0, 1.0, 0.0]},
+    {"severity": "high", "color": [1.0, 0.6, 0.0]},
+    {"severity": "critical", "color": [1.0, 0.0, 0.0]}
+  ],
+  "heatmap": {"mode": "faceColors", "data": {"0": [1.0, 0.6, 0.0]}},
+  "face_issue_map": {"0": ["ISSUE-0001"]}
+}
