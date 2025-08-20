@@ -24,6 +24,7 @@ from dfm_analyzer import analyze_dfm, DFMReport
 from heatmap import generate_heatmap
 from material_recommender import recommend_materials_for_questionnaire
 import xkt_converter
+from tasks.conversion import generate_preview, generate_final
 from flask_login import LoginManager, login_required, current_user
 from translations import get_translation, get_all_translations
 from log import log_action
@@ -280,55 +281,6 @@ def process_step_file(job_id, demolding_axis='z'):
     job.viewer_ready = viewer_ready
     job.viewer_error = viewer_error
 
-    db.session.commit()
-
-
-@celery.task()
-def task_generate_preview(job_id):
-    """Generate low resolution preview"""
-    job = ModelJob.query.get(job_id)
-    if not job:
-        return
-    advance_model_job_status(job, 'processing')
-    try:
-        preview_key = f"{job.id}/preview.glb"
-        preview_path = os.path.join(app.config['CONVERTED_FOLDER'], preview_key)
-        os.makedirs(os.path.dirname(preview_path), exist_ok=True)
-        with open(preview_path, 'wb') as fh:
-            fh.write(b'preview')
-        job.preview_url = preview_key
-        advance_model_job_status(job, 'preview_ready')
-    except Exception as exc:
-        job.error_message = str(exc)
-        advance_model_job_status(job, 'error')
-    db.session.commit()
-
-
-@celery.task()
-def task_generate_final(job_id):
-    """Generate final assets and DFM JSON"""
-    job = ModelJob.query.get(job_id)
-    if not job:
-        return
-    advance_model_job_status(job, 'processing')
-    try:
-        final_key = f"{job.id}/final.glb"
-        final_path = os.path.join(app.config['CONVERTED_FOLDER'], final_key)
-        os.makedirs(os.path.dirname(final_path), exist_ok=True)
-        with open(final_path, 'wb') as fh:
-            fh.write(b'final')
-        job.final_url = final_key
-        advance_model_job_status(job, 'final_ready')
-
-        dfm_key = f"{job.id}/dfm.json"
-        dfm_path = os.path.join(app.config['CONVERTED_FOLDER'], dfm_key)
-        with open(dfm_path, 'w') as fh:
-            json.dump({'status': 'ok'}, fh)
-        job.dfm_json_url = dfm_key
-        advance_model_job_status(job, 'dfm_ready')
-    except Exception as exc:
-        job.error_message = str(exc)
-        advance_model_job_status(job, 'error')
     db.session.commit()
 
 
@@ -710,8 +662,8 @@ def api_upload():
     final_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{job.id}.step")
     os.rename(tmp_path, final_path)
 
-    task_generate_preview.delay(job.id)
-    task_generate_final.delay(job.id)
+    generate_preview.delay(job.id)
+    generate_final.delay(job.id)
 
     logger.info(json.dumps({'action': 'upload', 'result': 'queued', 'job_id': job.id}))
 
