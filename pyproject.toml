@@ -28,4 +28,5 @@ dependencies = [
     "stripe>=12.2.0",
     "requests>=2.32.4",
     "networkx>=3.5",
+    "prometheus-client>=0.20.0",
 ]

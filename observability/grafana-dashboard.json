@@ -1,0 +1,39 @@
+{
+  "title": "Cadlytics Metrics",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "TTFV avg",
+      "targets": [
+        {"expr": "rate(ttfv_seconds_sum[5m]) / rate(ttfv_seconds_count[5m])"}
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Preview convert avg",
+      "targets": [
+        {"expr": "rate(convert_preview_seconds_sum[5m]) / rate(convert_preview_seconds_count[5m])"}
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Final convert avg",
+      "targets": [
+        {"expr": "rate(convert_final_seconds_sum[5m]) / rate(convert_final_seconds_count[5m])"}
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "DFM avg",
+      "targets": [
+        {"expr": "rate(dfm_seconds_sum[5m]) / rate(dfm_seconds_count[5m])"}
+      ]
+    }
+  ]
+}

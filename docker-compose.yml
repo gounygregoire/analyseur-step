@@ -4,6 +4,17 @@ services:
     image: redis:7
     ports:
       - "6379:6379"
+  web:
+    build: .
+    command: gunicorn app:app -b 0.0.0.0:8000
+    volumes:
+      - .:/app
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
   worker:
     build: .
     command: ./start_worker.sh
@@ -13,3 +24,15 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
     depends_on:
       - redis
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus

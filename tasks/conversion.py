@@ -1,8 +1,9 @@
-import logging
 import os
 import tempfile
 import shutil
 import io
+import time
+from datetime import datetime
 
 import cadquery as cq
 import trimesh
@@ -13,8 +14,15 @@ from models import db, ModelJob, advance_model_job_status
 from worker import celery
 from tasks.dfm import run_dfm
 from storage.s3 import put_asset
-
-logger = logging.getLogger(__name__)
+from observability.logging import get_logger
+from observability.metrics import (
+    ttfv_seconds,
+    convert_preview_seconds,
+    convert_final_seconds,
+    preview_size_bytes,
+    final_size_bytes,
+)
+logger = get_logger(__name__)
 MAX_RETRIES = 3
 PREVIEW_MAX_FACES = 300_000
 PREVIEW_RATIO = 0.5
@@ -33,7 +41,9 @@ def _notify_status(job: ModelJob) -> None:
 @celery.task(bind=True, max_retries=MAX_RETRIES, name="tasks.generate_preview")
 def generate_preview(self, job_id: str) -> None:
     """Convert STEP to decimated preview GLB."""
+    start = time.time()
     job = ModelJob.query.get(job_id)
+    logger = get_logger(__name__, getattr(job, "id", None), getattr(job, "sha256", None))
     if not job:
         return
     advance_model_job_status(job, "processing")
@@ -61,6 +71,9 @@ def generate_preview(self, job_id: str) -> None:
         advance_model_job_status(job, "preview_ready")
         db.session.commit()
         _notify_status(job)
+        preview_size_bytes.set(os.path.getsize(out_path))
+        ttfv_seconds.observe((datetime.utcnow() - job.created_at).total_seconds())
+        convert_preview_seconds.observe(time.time() - start)
     except Exception as exc:
         db.session.rollback()
         if self.request.retries >= self.max_retries:
@@ -77,7 +90,9 @@ def generate_preview(self, job_id: str) -> None:
 @celery.task(bind=True, max_retries=MAX_RETRIES, name="tasks.generate_final")
 def generate_final(self, job_id: str) -> None:
     """Generate final asset (GLB or XKT) and enqueue DFM."""
+    start = time.time()
     job = ModelJob.query.get(job_id)
+    logger = get_logger(__name__, getattr(job, "id", None), getattr(job, "sha256", None))
     if not job:
         return
     advance_model_job_status(job, "processing")
@@ -105,6 +120,8 @@ def generate_final(self, job_id: str) -> None:
         advance_model_job_status(job, "final_ready")
         db.session.commit()
         _notify_status(job)
+        final_size_bytes.set(os.path.getsize(out_path))
+        convert_final_seconds.observe(time.time() - start)
         run_dfm.delay(job_id)
     except Exception as exc:
         db.session.rollback()
