@@ -11,7 +11,7 @@ from PIL import Image
 from flask import current_app
 
 from models import db, ModelJob, advance_model_job_status
-from worker import celery
+from celery_app import celery
 from tasks.dfm import run_dfm
 from storage.s3 import put_asset
 from observability.logging import get_logger

@@ -24,6 +24,7 @@ from heatmap import generate_heatmap
 from material_recommender import recommend_materials_for_questionnaire
 import xkt_converter
 from tasks.conversion import generate_preview, generate_final
+from celery_app import celery, init_celery
 from flask_login import LoginManager, login_required, current_user
 from translations import get_translation, get_all_translations
 from log import log_action
@@ -101,24 +102,7 @@ app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
 db.init_app(app)
 migrate = Migrate(app, db)
 
-# Celery pour traiter les conversions en arrière-plan
-from celery import Celery
-
-def make_celery(flask_app):
-    broker = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
-    celery = Celery(flask_app.import_name, broker=broker, backend=broker)
-    celery.conf.update(flask_app.config)
-    celery.conf.update(task_always_eager=flask_app.config['CELERY_TASK_ALWAYS_EAGER'])
-
-    class ContextTask(celery.Task):
-        def __call__(self, *args, **kwargs):
-            with flask_app.app_context():
-                return super().__call__(*args, **kwargs)
-
-    celery.Task = ContextTask
-    return celery
-
-celery = make_celery(app)
+init_celery(app)
 from celery.schedules import crontab
 
 celery.conf.beat_schedule = {
