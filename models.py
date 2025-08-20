@@ -11,6 +11,21 @@ class Base(DeclarativeBase):
 
 db = SQLAlchemy(model_class=Base)
 
+MODEL_JOB_STATE_ORDER = [
+    'uploaded',
+    'processing',
+    'preview_ready',
+    'final_ready',
+    'dfm_ready',
+    'error',
+]
+
+
+def advance_model_job_status(job: "ModelJob", new_status: str) -> None:
+    """Advance job status without regression."""
+    if MODEL_JOB_STATE_ORDER.index(new_status) > MODEL_JOB_STATE_ORDER.index(job.status):
+        job.status = new_status
+
 class ConversionJob(db.Model):
     __tablename__ = 'conversion_jobs'
     
@@ -62,6 +77,41 @@ class ConversionJob(db.Model):
             'dfm_overall_rating': self.dfm_overall_rating,
             'viewer_ready': self.viewer_ready,
             'viewer_error': self.viewer_error
+        }
+
+
+class ModelJob(db.Model):
+    __tablename__ = 'model_jobs'
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    sha256 = db.Column(db.String(64), nullable=False, unique=True)
+    original_filename = db.Column(db.String(255), nullable=False)
+    size_bytes = db.Column(db.Integer, nullable=False)
+    mime = db.Column(db.String(50), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    user_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=True)
+    preview_url = db.Column(db.String(255), nullable=True)
+    final_url = db.Column(db.String(255), nullable=True)
+    dfm_json_url = db.Column(db.String(255), nullable=True)
+    status = db.Column(db.String(20), nullable=False, default='uploaded')
+    error_message = db.Column(db.Text, nullable=True)
+
+    user = db.relationship('User')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'sha256': self.sha256,
+            'original_filename': self.original_filename,
+            'size_bytes': self.size_bytes,
+            'mime': self.mime,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'user_id': self.user_id,
+            'preview_url': self.preview_url,
+            'final_url': self.final_url,
+            'dfm_json_url': self.dfm_json_url,
+            'status': self.status,
+            'error_message': self.error_message,
         }
 
 class UserSession(db.Model):

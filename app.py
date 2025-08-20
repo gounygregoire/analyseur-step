@@ -1,5 +1,7 @@
 import os
 import logging
+import hashlib
+import json
 from flask import Flask, render_template, request, jsonify, send_file, send_from_directory, session, Response, redirect, url_for, flash
 from flask_cors import CORS
 from flask_migrate import Migrate
@@ -17,7 +19,7 @@ from OCP.StlAPI import StlAPI_Writer
 from OCP.Interface import Interface_Static
 from pathlib import Path
 from datetime import datetime, timedelta
-from models import db, ConversionJob, UserSession, User, OAuth
+from models import db, ConversionJob, UserSession, User, OAuth, ModelJob, advance_model_job_status
 from dfm_analyzer import analyze_dfm, DFMReport
 from heatmap import generate_heatmap
 from material_recommender import recommend_materials_for_questionnaire
@@ -57,6 +59,24 @@ logger = logging.getLogger(__name__)
 
 # Enable CORS for API endpoints
 CORS(app)
+
+try:
+    import boto3
+    _s3_client = boto3.client('s3')
+except Exception:  # pragma: no cover - boto3 optional
+    _s3_client = None
+
+S3_BUCKET = os.getenv('S3_BUCKET')
+
+def _sign_s3_url(key: str, expires: int = 3600) -> str:
+    if not key:
+        return None
+    if _s3_client and S3_BUCKET:
+        try:
+            return _s3_client.generate_presigned_url('get_object', Params={'Bucket': S3_BUCKET, 'Key': key}, ExpiresIn=expires)
+        except Exception:
+            pass
+    return key
 
 # Session configuration to prevent large cookies
 app.config['SESSION_COOKIE_HTTPONLY'] = True
@@ -260,6 +280,55 @@ def process_step_file(job_id, demolding_axis='z'):
     job.viewer_ready = viewer_ready
     job.viewer_error = viewer_error
 
+    db.session.commit()
+
+
+@celery.task()
+def task_generate_preview(job_id):
+    """Generate low resolution preview"""
+    job = ModelJob.query.get(job_id)
+    if not job:
+        return
+    advance_model_job_status(job, 'processing')
+    try:
+        preview_key = f"{job.id}/preview.glb"
+        preview_path = os.path.join(app.config['CONVERTED_FOLDER'], preview_key)
+        os.makedirs(os.path.dirname(preview_path), exist_ok=True)
+        with open(preview_path, 'wb') as fh:
+            fh.write(b'preview')
+        job.preview_url = preview_key
+        advance_model_job_status(job, 'preview_ready')
+    except Exception as exc:
+        job.error_message = str(exc)
+        advance_model_job_status(job, 'error')
+    db.session.commit()
+
+
+@celery.task()
+def task_generate_final(job_id):
+    """Generate final assets and DFM JSON"""
+    job = ModelJob.query.get(job_id)
+    if not job:
+        return
+    advance_model_job_status(job, 'processing')
+    try:
+        final_key = f"{job.id}/final.glb"
+        final_path = os.path.join(app.config['CONVERTED_FOLDER'], final_key)
+        os.makedirs(os.path.dirname(final_path), exist_ok=True)
+        with open(final_path, 'wb') as fh:
+            fh.write(b'final')
+        job.final_url = final_key
+        advance_model_job_status(job, 'final_ready')
+
+        dfm_key = f"{job.id}/dfm.json"
+        dfm_path = os.path.join(app.config['CONVERTED_FOLDER'], dfm_key)
+        with open(dfm_path, 'w') as fh:
+            json.dump({'status': 'ok'}, fh)
+        job.dfm_json_url = dfm_key
+        advance_model_job_status(job, 'dfm_ready')
+    except Exception as exc:
+        job.error_message = str(exc)
+        advance_model_job_status(job, 'error')
     db.session.commit()
 
 
@@ -594,6 +663,78 @@ def upload():
     shutil.rmtree(temp_dir, ignore_errors=True)
 
     return redirect(url_for('index', model=xkt_name))
+
+
+@app.route('/api/upload', methods=['POST'])
+def api_upload():
+    file = request.files.get('file')
+    if not file:
+        return jsonify({'error': 'missing_file'}), 400
+    filename = secure_filename(file.filename or '')
+    if not filename:
+        return jsonify({'error': 'empty_filename'}), 400
+
+    sha256 = hashlib.sha256()
+    size = 0
+    tmp_path = os.path.join(app.config['UPLOAD_FOLDER'], f"tmp_{uuid.uuid4().hex}")
+    with open(tmp_path, 'wb') as dst:
+        for chunk in iter(lambda: file.stream.read(8192), b''):
+            sha256.update(chunk)
+            size += len(chunk)
+            dst.write(chunk)
+    digest = sha256.hexdigest()
+
+    existing = ModelJob.query.filter_by(sha256=digest).first()
+    if existing:
+        os.remove(tmp_path)
+        logger.info(json.dumps({'action': 'upload', 'result': 'cache_hit', 'job_id': existing.id}))
+        return jsonify({
+            'modelId': existing.id,
+            'status': existing.status,
+            'sha256': existing.sha256,
+            'preview_url': existing.preview_url,
+            'final_url': existing.final_url,
+            'dfm_json_url': existing.dfm_json_url,
+        })
+
+    job = ModelJob(
+        sha256=digest,
+        original_filename=filename,
+        size_bytes=size,
+        mime=file.mimetype or 'application/octet-stream',
+        user_id=current_user.id if current_user.is_authenticated else None,
+    )
+    db.session.add(job)
+    db.session.commit()
+
+    final_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{job.id}.step")
+    os.rename(tmp_path, final_path)
+
+    task_generate_preview.delay(job.id)
+    task_generate_final.delay(job.id)
+
+    logger.info(json.dumps({'action': 'upload', 'result': 'queued', 'job_id': job.id}))
+
+    return jsonify({'modelId': job.id, 'status': job.status, 'sha256': job.sha256}), 201
+
+
+@app.route('/api/models/<job_id>')
+def api_model(job_id):
+    job = ModelJob.query.get_or_404(job_id)
+    return jsonify(job.to_dict())
+
+
+@app.route('/api/models/<job_id>/assets')
+def api_model_assets(job_id):
+    job = ModelJob.query.get_or_404(job_id)
+    assets = {}
+    if job.preview_url:
+        assets['preview'] = _sign_s3_url(job.preview_url)
+    if job.final_url:
+        assets['final'] = _sign_s3_url(job.final_url)
+    if job.dfm_json_url:
+        assets['dfm_json'] = _sign_s3_url(job.dfm_json_url)
+    return jsonify({'modelId': job.id, 'assets': assets, 'status': job.status})
 
 @app.route('/api/upload_job', methods=['POST'])
 @login_required
