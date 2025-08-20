@@ -1,5 +1,4 @@
 import os
-import logging
 import hashlib
 import json
 from flask import Flask, render_template, request, jsonify, send_file, send_from_directory, session, Response, redirect, url_for, flash
@@ -28,6 +27,8 @@ from tasks.conversion import generate_preview, generate_final
 from flask_login import LoginManager, login_required, current_user
 from translations import get_translation, get_all_translations
 from log import log_action
+from observability.logging import setup_logging, get_logger
+from observability.metrics import setup_metrics
 from flask_dance.contrib.google import make_google_blueprint, google
 from dotenv import load_dotenv
 from kombu.exceptions import OperationalError as KombuOperationalError
@@ -56,9 +57,9 @@ google_bp = make_google_blueprint(
 
 app.register_blueprint(google_bp, url_prefix="/auth")
 
-# Configure logging
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
+setup_logging(app)
+setup_metrics(app)
+logger = get_logger(__name__)
 
 # Enable CORS for API endpoints
 CORS(app)

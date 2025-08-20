@@ -85,3 +85,4 @@ flask-sqlalchemy
 celery==5.3.6
 redis==5.0.1
 boto3==1.35.0
+prometheus-client==0.20.0
