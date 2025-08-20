@@ -320,10 +320,12 @@ with app.app_context():
 from auth import auth_bp
 from google_auth import google_auth_bp
 from stripe_payment import stripe_bp
+from tus_upload import tus_bp
 
 app.register_blueprint(auth_bp, url_prefix='/auth')
 app.register_blueprint(google_auth_bp)
 app.register_blueprint(stripe_bp, url_prefix='/stripe')
+app.register_blueprint(tus_bp, url_prefix='/tus')
 
 # Make session permanent
 @app.before_request
@@ -603,26 +605,49 @@ def upload():
 
 @app.route('/api/upload', methods=['POST'])
 def api_upload():
-    file = request.files.get('file')
-    if not file:
-        return jsonify({'error': 'missing_file'}), 400
-    filename = secure_filename(file.filename or '')
-    if not filename:
-        return jsonify({'error': 'empty_filename'}), 400
-
-    sha256 = hashlib.sha256()
-    size = 0
-    tmp_path = os.path.join(app.config['UPLOAD_FOLDER'], f"tmp_{uuid.uuid4().hex}")
-    with open(tmp_path, 'wb') as dst:
-        for chunk in iter(lambda: file.stream.read(8192), b''):
-            sha256.update(chunk)
-            size += len(chunk)
-            dst.write(chunk)
-    digest = sha256.hexdigest()
+    data = request.get_json(silent=True) or {}
+    upload_id = data.get('upload_id') if isinstance(data, dict) else None
+    if upload_id:
+        tus_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'tus')
+        file_path = os.path.join(tus_dir, upload_id)
+        info_path = os.path.join(tus_dir, f"{upload_id}.json")
+        if not os.path.exists(file_path) or not os.path.exists(info_path):
+            return jsonify({'error': 'invalid_handle'}), 400
+        with open(info_path) as f:
+            info = json.load(f)
+        filename = secure_filename(info.get('metadata', {}).get('filename') or '')
+        mime_type = info.get('metadata', {}).get('filetype', 'application/octet-stream')
+        sha256 = hashlib.sha256()
+        size = 0
+        with open(file_path, 'rb') as src:
+            for chunk in iter(lambda: src.read(8192), b''):
+                sha256.update(chunk)
+                size += len(chunk)
+        digest = sha256.hexdigest()
+        tmp_path = file_path
+    else:
+        file = request.files.get('file')
+        if not file:
+            return jsonify({'error': 'missing_file'}), 400
+        filename = secure_filename(file.filename or '')
+        if not filename:
+            return jsonify({'error': 'empty_filename'}), 400
+        mime_type = file.mimetype or 'application/octet-stream'
+        sha256 = hashlib.sha256()
+        size = 0
+        tmp_path = os.path.join(app.config['UPLOAD_FOLDER'], f"tmp_{uuid.uuid4().hex}")
+        with open(tmp_path, 'wb') as dst:
+            for chunk in iter(lambda: file.stream.read(8192), b''):
+                sha256.update(chunk)
+                size += len(chunk)
+                dst.write(chunk)
+        digest = sha256.hexdigest()
 
     existing = ModelJob.query.filter_by(sha256=digest).first()
     if existing:
         os.remove(tmp_path)
+        if upload_id:
+            os.remove(info_path)
         logger.info(json.dumps({'action': 'upload', 'result': 'cache_hit', 'job_id': existing.id}))
         return jsonify({
             'modelId': existing.id,
@@ -637,7 +662,7 @@ def api_upload():
         sha256=digest,
         original_filename=filename,
         size_bytes=size,
-        mime=file.mimetype or 'application/octet-stream',
+        mime=mime_type,
         user_id=current_user.id if current_user.is_authenticated else None,
     )
     db.session.add(job)
@@ -645,6 +670,8 @@ def api_upload():
 
     final_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{job.id}.step")
     os.rename(tmp_path, final_path)
+    if upload_id:
+        os.remove(info_path)
 
     generate_preview.delay(job.id)
     generate_final.delay(job.id)
