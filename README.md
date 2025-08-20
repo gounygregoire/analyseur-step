@@ -25,6 +25,31 @@ CELERY_BROKER_URL=redis://localhost:6379/0 gunicorn app:app --timeout 600
 - `SESSION_SECRET` : clé secrète pour chiffrer les sessions Flask. Obligation
   de définir une valeur aléatoire en production.
 
+## Stockage objet S3
+
+Cadlytics stocke les assets convertis dans un bucket S3 compatible (MinIO, Wasabi...).
+
+Variables d'environnement :
+
+- `S3_ENDPOINT`
+- `S3_ACCESS_KEY`
+- `S3_SECRET_KEY`
+- `S3_REGION`
+- `S3_BUCKET` (défaut : `cadlytics-assets`)
+- `CDN_BASE_URL` *(optionnel)*
+
+### Test manuel
+
+```bash
+python - <<'PY'
+from storage.s3 import put_asset, get_signed_url
+open('demo.txt','w').write('ok')
+put_asset('demo.txt','test/demo.txt','text/plain')
+print(get_signed_url('test/demo.txt'))
+PY
+# puis ouvrir l'URL retournée ou via curl
+```
+
 ## Construction du bundle JavaScript
 
 Exécuter une seule fois :
