@@ -173,7 +173,7 @@ function bindUI() {
   // Arêtes (fallback = filaire, car EdgesPlugin indisponible)
   byId("edgesBtn")?.addEventListener("click", () => {
     const on = !viewer.scene.objectsWireframe;
-    viewer.scene.setObjectsWireframe(viewer.scene.objects, on);
+    setWireframe(on);
     toggleActive("edgesBtn", on);
   });
 
@@ -192,6 +192,10 @@ function bindUI() {
   const analyzeBtn = byId("dfmAnalyzeBtn");
   const materialModal = document.getElementById("materialQuestionnaireModal");
   const materialConfirmBtn = byId("submitQuestionnaire");
+  const stiffnessInput = materialModal?.querySelector("#stiffness");
+  const flexibilityInput = materialModal?.querySelector("#flexibility");
+  const mechWarn = document.getElementById("mechanicalWarning");
+  const mechWarnText = document.getElementById("mechanicalWarningText");
 
   if (analyzeBtn) {
     analyzeBtn.setAttribute("type", "button");
@@ -236,6 +240,27 @@ function bindUI() {
       startDFMProcess(payload);
     });
   }
+
+  function handleMechanicalConflict(e) {
+    if (!stiffnessInput || !flexibilityInput) return;
+    if (stiffnessInput.checked && flexibilityInput.checked) {
+      if (e.target === stiffnessInput) {
+        flexibilityInput.checked = false;
+      } else {
+        stiffnessInput.checked = false;
+      }
+      if (mechWarn && mechWarnText) {
+        mechWarnText.textContent =
+          "Rigidité élevée et Flexibilité ne peuvent pas être sélectionnées ensemble.";
+        mechWarn.style.display = "block";
+      }
+    } else if (mechWarn) {
+      mechWarn.style.display = "none";
+    }
+  }
+
+  stiffnessInput?.addEventListener("change", handleMechanicalConflict);
+  flexibilityInput?.addEventListener("change", handleMechanicalConflict);
 
   setupContextMenu();
   setupTooltip();
@@ -344,13 +369,21 @@ function showAll() {
   viewer.scene.setObjectsVisible(viewer.scene.objects, true);
 }
 
+function setWireframe(on) {
+  const objs = viewer.scene.objects;
+  for (const id in objs) {
+    objs[id].wireframe = on;
+  }
+  viewer.scene.objectsWireframe = on;
+}
+
 function resetAll() {
   showAll();
   try { dist.clear?.(); } catch {}
   state.measurements.length = 0;
   if (state.sectionPlane) state.sectionPlane.active = false;
   // edges plugin absent → on s'assure de couper le filaire
-  viewer.scene.setObjectsWireframe(viewer.scene.objects, false);
+  setWireframe(false);
   cameraControl.reset?.();
   renderMeasurements();
   ["measureBtn","sectionBtn","edgesBtn"].forEach((id) => toggleActive(id, false));
