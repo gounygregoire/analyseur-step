@@ -100,6 +100,12 @@ body {
     transform: scale(1.02);
 }
 
+/* Dropzone par défaut */
+.dropzone { transition: box-shadow .2s ease, border-color .2s ease, background .2s ease; }
+.dropzone.drag-over { border-color: #0a0; box-shadow: 0 0 0 3px rgba(0,160,0,.15); }
+/* État fichier détecté (vert) */
+.dropzone.has-file { border-color: #0a0; background: rgba(0,160,0,.06); }
+
 /* === STYLES DFM MODERNES === */
 
 /* Container principal DFM */

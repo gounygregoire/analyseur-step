@@ -270,3 +270,119 @@ function toggleActive(id, on) {
 function byId(name) {
   return document.getElementById(name);
 }
+
+(function wireUploadAndPreview(){
+  const uploadArea = document.getElementById('uploadArea') || document.querySelector('.upload-area');
+  if (!uploadArea || uploadArea.dataset.previewBound === '1') return;
+  uploadArea.dataset.previewBound = '1';
+
+  const fileInput = document.getElementById('fileInput') || uploadArea.querySelector('input[type="file"]');
+  const dropzone  = document.getElementById('dropzone')  || uploadArea.querySelector('.dropzone');
+  const visualizeBtn = document.getElementById('visualizeBtn');
+
+  // ---- Helpers ----
+  let lastXktUrl = null;
+  function setHasFileUI(has){
+    if (!dropzone) return;
+    dropzone.classList.toggle('has-file', !!has);
+  }
+  function enableVisualizeBtn(enable){
+    if (!visualizeBtn) return;
+    visualizeBtn.disabled = !enable;
+    visualizeBtn.setAttribute('aria-disabled', String(!enable));
+  }
+  function showLoading(state){
+    if (visualizeBtn) visualizeBtn.classList.toggle('is-loading', !!state);
+  }
+
+  async function convertAndGetXKT(files){
+    const fd = new FormData();
+    [...files].forEach(f => fd.append('file', f));
+    const res = await fetch('/convert', { method: 'POST', body: fd });
+    if (!res.ok) throw new Error(`Convert fail HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data || !data.xktUrl) throw new Error('No xktUrl returned');
+    return data.xktUrl;
+  }
+
+  async function visualizeFromFiles(files){
+    if (!files || !files.length) return;
+    try {
+      showLoading(true);
+      setHasFileUI(true);
+      enableVisualizeBtn(false);
+      const xktUrl = await convertAndGetXKT(files);
+      lastXktUrl = xktUrl;
+      if (typeof initViewer === 'function') {
+        await initViewer(xktUrl);
+      } else {
+        console.warn('initViewer(modelUrl) is not available.');
+      }
+      enableVisualizeBtn(true);
+    } catch (err) {
+      console.error('Visualization error:', err);
+      enableVisualizeBtn(false);
+      setHasFileUI(false);
+      alert('Échec de la visualisation. Merci de réessayer.');
+    } finally {
+      showLoading(false);
+    }
+  }
+
+  // ---- Écouteurs fichier ----
+  if (fileInput) {
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files?.length) {
+        setHasFileUI(true);
+        visualizeFromFiles(fileInput.files);
+      } else {
+        setHasFileUI(false);
+      }
+    });
+  }
+
+  if (dropzone) {
+    ['dragenter','dragover'].forEach(ev =>
+      dropzone.addEventListener(ev, (e) => {
+        e.preventDefault(); e.stopPropagation();
+        dropzone.classList.add('drag-over');
+      }, { passive:false })
+    );
+    ['dragleave','drop'].forEach(ev =>
+      dropzone.addEventListener(ev, (e) => {
+        e.preventDefault(); e.stopPropagation();
+        dropzone.classList.remove('drag-over');
+      }, { passive:false })
+    );
+    dropzone.addEventListener('drop', (e) => {
+      const files = e.dataTransfer?.files;
+      if (files && files.length) {
+        setHasFileUI(true);
+        visualizeFromFiles(files);
+      }
+    }, { passive:false });
+  }
+
+  // ---- Bouton “Visualiser” sans reload ----
+  if (visualizeBtn) {
+    visualizeBtn.setAttribute('type', 'button');
+    visualizeBtn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (lastXktUrl) {
+        if (typeof initViewer === 'function') {
+          await initViewer(lastXktUrl);
+        }
+        return;
+      }
+      if (fileInput?.files?.length) {
+        await visualizeFromFiles(fileInput.files);
+      } else {
+        alert('Aucun fichier sélectionné.');
+      }
+    });
+  }
+
+  setHasFileUI(!!(fileInput?.files?.length));
+  enableVisualizeBtn(false);
+})();
