@@ -12,6 +12,45 @@
   const uploadResults = document.getElementById('uploadResults');
   const errorAlert = document.getElementById('errorAlert');
   const errorMessage = document.getElementById('errorMessage');
+  const uploadArea = document.getElementById('uploadArea');
+  const fileNameDisplay = document.getElementById('fileNameDisplay');
+
+  if (uploadArea && fileInput) {
+    uploadArea.addEventListener('click', () => fileInput.click());
+
+    uploadArea.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      uploadArea.classList.add('drag-over');
+    });
+
+    uploadArea.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      uploadArea.classList.remove('drag-over');
+    });
+
+    uploadArea.addEventListener('drop', (e) => {
+      e.preventDefault();
+      uploadArea.classList.remove('drag-over');
+
+      const dt = new DataTransfer();
+      for (const file of e.dataTransfer.files) dt.items.add(file);
+      fileInput.files = dt.files;
+
+      fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+      if (typeof form.requestSubmit === 'function') {
+        form.requestSubmit();
+      } else {
+        form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+      }
+    });
+  }
+
+  if (fileInput && fileNameDisplay) {
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files[0];
+      fileNameDisplay.textContent = file ? file.name : '';
+    });
+  }
 
   let currentUpload = null;
   let lastTime = 0;

@@ -73,9 +73,17 @@ document.addEventListener('DOMContentLoaded', function () {
         uploadArea.addEventListener('drop', (e) => {
             e.preventDefault();
             uploadArea.classList.remove('drag-over');
-            fileInput.files = e.dataTransfer.files;
-            fileInput.dispatchEvent(new Event('change'));
-            form.dispatchEvent(new Event('submit', { cancelable: true }));
+
+            const dt = new DataTransfer();
+            for (const file of e.dataTransfer.files) dt.items.add(file);
+            fileInput.files = dt.files;
+
+            fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+            if (typeof form.requestSubmit === 'function') {
+                form.requestSubmit();
+            } else {
+                form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+            }
         });
     }
 
