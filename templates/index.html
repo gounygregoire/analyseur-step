@@ -185,8 +185,6 @@
         <button id="fitBtn"     class="btn btn-sm btn-light"  title="Ajuster (F)">Fit</button>
         <button id="measureBtn" class="btn btn-sm btn-light"  title="Mesure (M)">Mesure</button>
         <button id="sectionBtn" class="btn btn-sm btn-light"  title="Coupes (X)">Coupes</button>
-        <button id="explodeBtn" class="btn btn-sm btn-light"  title="Explosion (E)">Explosion</button>
-        <button id="isoBtn"     class="btn btn-sm btn-light"  title="Isoler sélection (I)">Isoler</button>
         <!-- Bouton "Arêtes" pilote le mode filaire (fallback) dans main.js -->
         <button id="edgesBtn"   class="btn btn-sm btn-light"  title="Arêtes / Filaire">Arêtes</button>
         <button id="resetBtn"   class="btn btn-sm btn-light"  title="Réinitialiser (R)">Reset</button>
@@ -195,11 +193,6 @@
 
       <canvas id="axisGizmo" class="position-absolute" width="80" height="80" style="bottom:10px; right:10px; z-index:10;">
       </canvas>
-
-      <!-- Slider explosion -->
-      <input id="explodeRange" type="range" min="0" max="100" value="0"
-             class="form-range position-absolute"
-             style="bottom:12px; left:12px; width:280px; z-index:10;" />
 
       <!-- Panneau latéral compact (mesures + coupes) exploité par main.js -->
       <aside id="sidePanel" class="panel collapsed position-absolute"

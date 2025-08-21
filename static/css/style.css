@@ -53,6 +53,11 @@ body {
     transition: transform 0.3s ease, box-shadow 0.3s ease;
 }
 
+/* Style toggle générique pour la barre d'outils du viewer */
+.toolbar .btn.active {
+    box-shadow: 0 0 0 3px rgba(0, 160, 0, 0.15);
+}
+
 .card:hover {
     transform: translateY(-5px);
     box-shadow: 0 12px 35px var(--shadow-dark);

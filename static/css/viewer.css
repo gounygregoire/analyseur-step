@@ -37,14 +37,6 @@
   background: rgba(255, 255, 255, 0.2);
 }
 
-/* NEW: slider explosion */
-.explode-slider {
-  position: absolute;
-  bottom: 8px;
-  left: 8px;
-  width: 120px;
-}
-
 /* NEW: panneau latéral */
 .panel {
   position: absolute;

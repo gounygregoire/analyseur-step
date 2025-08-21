@@ -5,7 +5,8 @@ import {
   Viewer,
   XKTLoaderPlugin,
   DistanceMeasurementsPlugin,
-  SectionPlanesPlugin
+  SectionPlanesPlugin,
+  AxisGizmoPlugin
   // PAS d'EdgesPlugin dans ta version
 } from "@xeokit/xeokit-sdk";
 
@@ -13,8 +14,7 @@ let viewer, cameraControl, xktLoader, dist, sections, canvas;
 
 const state = {
   measurements: [],
-  sectionPlane: null,
-  exploded: 0
+  sectionPlane: null
 };
 
 // ---------- Initialisation ---------------------------------------------------
@@ -34,6 +34,14 @@ export async function initViewer(modelUrl) {
   dist      = new DistanceMeasurementsPlugin(viewer);
   sections  = new SectionPlanesPlugin(viewer);
 
+  try {
+    if (!window.__axes_gizmo__) {
+      window.__axes_gizmo__ = new AxisGizmoPlugin(viewer, { canvasId: "axisGizmo" });
+    }
+  } catch (e) {
+    console.warn("AxisGizmoPlugin indisponible", e);
+  }
+
   // Référence directe vers l'élément canvas du viewer
   canvas = viewer.scene.canvas.canvas;
 
@@ -47,8 +55,12 @@ export async function initViewer(modelUrl) {
   });
 
   if (modelUrl) {
-    await xktLoader.load({ src: modelUrl });
-    fitScene();
+    const model = await xktLoader.load({ id: "current", src: modelUrl });
+    try {
+      viewer.cameraFlight.flyTo(model);
+    } catch (e) {
+      try { viewer.cameraFlight.fit?.(); } catch {}
+    }
   }
 
   bindUI();
@@ -64,42 +76,89 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // ---------- UI ---------------------------------------------------------------
 function bindUI() {
-  // Fit
-  byId("fitBtn")?.addEventListener("click", () => cameraControl.fit?.());
+  const root = document;
+  if (root.__viewer_ui_bound__) return;
+  root.__viewer_ui_bound__ = true;
 
-  // Mesure (toggle)
-  byId("measureBtn")?.addEventListener("click", () => {
-    const on = !(dist.control?.active || dist.active);
-    if (dist.control?.activate) dist.control.activate(on);
-    else if (typeof dist.setActive === "function") dist.setActive(on);
-    toggleActive("measureBtn", on);
+  const uiState = (window.__viewerState__ = window.__viewerState__ || {
+    measuring: false,
+    sectioning: false,
   });
+
+  const btnFit = byId("fitBtn");
+  if (btnFit && window.viewer) {
+    btnFit.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      btnFit.classList.add("active");
+      try {
+        if (viewer.scene?.root) {
+          viewer.cameraFlight.flyTo(viewer.scene.root);
+        } else {
+          viewer.cameraFlight.fit?.();
+        }
+      } catch {
+        try {
+          viewer.cameraFlight.fit?.();
+        } catch {}
+      } finally {
+        setTimeout(() => btnFit.classList.remove("active"), 250);
+      }
+    });
+  }
+
+  const btnMeasure = byId("measureBtn");
+  if (btnMeasure && dist) {
+    btnMeasure.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      uiState.measuring = !uiState.measuring;
+      btnMeasure.classList.toggle("active", uiState.measuring);
+      if (dist.control?.activate) dist.control.activate(uiState.measuring);
+      if (typeof dist.setActive === "function") dist.setActive(uiState.measuring);
+      if (typeof dist.enable === "function") dist.enable(uiState.measuring);
+    });
+  }
 
   // Reset mesures
   byId("clearMeasures")?.addEventListener("click", () => {
-    try { dist.clear?.(); } catch {}
+    try {
+      dist.clear?.();
+    } catch {}
     state.measurements.forEach((m) => m.destroy?.());
     state.measurements.length = 0;
     renderMeasurements();
   });
 
-  // Coupes (toggle)
-  byId("sectionBtn")?.addEventListener("click", () => {
-    if (!state.sectionPlane) {
-      state.sectionPlane = sections.createPlane?.({ dir: [0, 1, 0] })
-                          || sections.createSectionPlane?.({ dir: [0, 1, 0] });
-    }
-    const on = !state.sectionPlane.active;
-    state.sectionPlane.active = on;
-    toggleActive("sectionBtn", on);
-  });
+  const btnSection = byId("sectionBtn");
+  if (btnSection && sections) {
+    btnSection.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      uiState.sectioning = !uiState.sectioning;
+      btnSection.classList.toggle("active", uiState.sectioning);
+      if (uiState.sectioning) {
+        if (!state.sectionPlane) {
+          state.sectionPlane =
+            sections.createPlane?.({ dir: [0, 1, 0] }) ||
+            sections.createSectionPlane?.({ dir: [0, 1, 0] });
+        }
+        sections.setVisible?.(true);
+        if (state.sectionPlane) state.sectionPlane.active = true;
+      } else {
+        sections.setVisible?.(false);
+        if (state.sectionPlane) state.sectionPlane.active = false;
+      }
+    });
+  }
 
   // Sliders coupes (3 plans UI mappés sur Y)
   document.querySelectorAll(".section-control input")?.forEach((slider) => {
     slider.addEventListener("input", () => {
       if (!state.sectionPlane) {
-        state.sectionPlane = sections.createPlane?.({ dir: [0, 1, 0] })
-                            || sections.createSectionPlane?.({ dir: [0, 1, 0] });
+        state.sectionPlane =
+          sections.createPlane?.({ dir: [0, 1, 0] }) ||
+          sections.createSectionPlane?.({ dir: [0, 1, 0] });
         state.sectionPlane.active = true;
         toggleActive("sectionBtn", true);
       }
@@ -109,30 +168,6 @@ function bindUI() {
       state.sectionPlane.pos = [0, y, 0];
       viewer.scene.glRedraw?.();
     });
-  });
-
-  // Explosion (slider)
-  byId("explodeRange")?.addEventListener("input", (e) => {
-    const pct = Number(e.target.value);
-    state.exploded = pct / 100;
-    viewer.scene.root.explode(state.exploded);
-  });
-
-  // Bouton Explosion (toggle 0/30 %)
-  byId("explodeBtn")?.addEventListener("click", () => {
-    const next = state.exploded ? 0 : 0.3;
-    state.exploded = next;
-    viewer.scene.root.explode(next);
-    const r = byId("explodeRange");
-    if (r) r.value = String(next * 100);
-  });
-
-  // Isoler (objet sous le centre du canvas)
-  byId("isoBtn")?.addEventListener("click", () => {
-    const rect = canvas.getBoundingClientRect();
-    const cx = rect.width / 2, cy = rect.height / 2;
-    const hit = viewer.scene.pick({ canvasPos: [cx, cy] });
-    if (hit?.entity?.id) isolate(hit.entity.id);
   });
 
   // Arêtes (fallback = filaire, car EdgesPlugin indisponible)
@@ -154,8 +189,76 @@ function bindUI() {
     a.click();
   });
 
+  const analyzeBtn = byId("dfmAnalyzeBtn");
+  const materialModal = document.getElementById("materialQuestionnaireModal");
+  const materialConfirmBtn = byId("submitQuestionnaire");
+
+  if (analyzeBtn) {
+    analyzeBtn.setAttribute("type", "button");
+    analyzeBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (materialModal) {
+        try {
+          bootstrap.Modal.getOrCreateInstance(materialModal).show();
+        } catch (err) {
+          materialModal.style.display = "block";
+          materialModal.classList.add("show");
+        }
+      } else {
+        console.warn(
+          "materialQuestionnaireModal introuvable — on enchaîne direct sur la DFM"
+        );
+        startDFMProcess();
+      }
+    });
+  }
+
+  if (materialConfirmBtn) {
+    materialConfirmBtn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const materialForm = materialModal?.querySelector("form");
+      const payload = materialForm
+        ? Object.fromEntries(new FormData(materialForm).entries())
+        : {};
+      try {
+        const m =
+          bootstrap.Modal.getInstance(materialModal) ||
+          bootstrap.Modal.getOrCreateInstance(materialModal);
+        m.hide();
+      } catch (e) {
+        if (materialModal) {
+          materialModal.classList.remove("show");
+          materialModal.style.display = "none";
+        }
+      }
+      startDFMProcess(payload);
+    });
+  }
+
   setupContextMenu();
   setupTooltip();
+}
+
+async function startDFMProcess(materialChoices = {}) {
+  try {
+    const res = await fetch("/dfm/analyze", {
+      method: "POST",
+      headers: { Accept: "application/json" },
+      body: (() => {
+        const fd = new FormData();
+        Object.entries(materialChoices).forEach(([k, v]) => fd.append(k, v));
+        return fd;
+      })(),
+    });
+    if (!res.ok) throw new Error("DFM HTTP " + res.status);
+    const data = await res.json();
+    console.log("DFM OK", data);
+  } catch (err) {
+    console.error("DFM failed", err);
+    alert("Analyse DFM échouée. Réessaie.");
+  }
 }
 
 // ---------- Mesures ---------------------------------------------------------
@@ -253,13 +356,11 @@ function resetAll() {
   try { dist.clear?.(); } catch {}
   state.measurements.length = 0;
   if (state.sectionPlane) state.sectionPlane.active = false;
-  viewer.scene.root.explode(0);
   // edges plugin absent → on s'assure de couper le filaire
   viewer.scene.setObjectsWireframe(viewer.scene.objects, false);
   cameraControl.reset?.();
   renderMeasurements();
   ["measureBtn","sectionBtn","edgesBtn"].forEach((id) => toggleActive(id, false));
-  const r = byId("explodeRange"); if (r) r.value = "0";
 }
 
 function toggleActive(id, on) {
