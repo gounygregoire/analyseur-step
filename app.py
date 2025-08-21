@@ -489,7 +489,8 @@ def convert_step():
 
     logger.info("Conversion OK en %.2fs -> %s", time.time() - start, out_path)
     # La route /uploads/<fname> doit servir CONVERTED_FOLDER
-    return jsonify(success=True, url=f"/uploads/{out_name}")
+    xkt_rel_url = f"/uploads/{out_name}"
+    return jsonify(success=True, url=xkt_rel_url, xktUrl=xkt_rel_url)
 
 
 @app.route('/upload_file', methods=['POST'])
