@@ -1228,6 +1228,13 @@ Créé par Grégoire GOUNY
         logger.error(f"Error creating ZIP file: {str(e)}")
         return jsonify({'error': 'Erreur lors de la création du fichier ZIP'}), 500
 
+@app.route('/dfm/analyze', methods=['POST'])
+def analyze_and_recommend():
+    """Simple endpoint to handle DFM analysis and material recommendations"""
+    questionnaire = request.form.to_dict()
+    recos = recommend_materials_for_questionnaire(questionnaire, {})
+    return jsonify({'success': True, 'recommendations': recos})
+
 @app.route('/api/material-recommendations', methods=['POST'])
 def get_material_recommendations():
     """Get material recommendations based on questionnaire and DFM data"""
