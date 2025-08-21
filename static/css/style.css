@@ -1386,7 +1386,8 @@ body {
       z-index: 1;
     }
 
-    #uploadArea.drag-over {
+    #uploadArea.drag-over,
+    .drag-over {
       background-color: #f0fff0 !important;
       border: 3px dashed #28a745 !important;
       box-shadow: 0 0 12px rgba(40, 167, 69, 0.5) !important;

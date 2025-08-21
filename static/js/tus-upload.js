@@ -1,131 +1,109 @@
-// Gestion de l'upload résumable via tus-js-client
+// ==== Uploader init (idempotent) ====
+(function initUploader(){
+  const uploadArea = document.getElementById('uploadArea') || document.querySelector('.upload-area');
+  if (!uploadArea) return;
 
-(function() {
-  const form = document.getElementById('uploadForm');
-  if (!form) return;
-  const fileInput = document.getElementById('fileInput');
-  const progressSection = document.getElementById('progressSection');
-  const uploadPercent = document.getElementById('uploadPercent');
-  const uploadBar = document.getElementById('uploadBar');
-  const uploadStats = document.getElementById('uploadStats');
-  const cancelBtn = document.getElementById('cancelUpload');
-  const uploadResults = document.getElementById('uploadResults');
-  const errorAlert = document.getElementById('errorAlert');
-  const errorMessage = document.getElementById('errorMessage');
-  const uploadArea = document.getElementById('uploadArea');
-  const fileNameDisplay = document.getElementById('fileNameDisplay');
+  // Empêche toute double initialisation
+  if (uploadArea.dataset.bound === '1') return;
+  uploadArea.dataset.bound = '1';
 
+  const fileInput = document.getElementById('fileInput') || uploadArea.querySelector('input[type="file"]');
+  const dropzone  = uploadArea; // notre zone d'upload fait office de dropzone
+  const pickBtn   = document.getElementById('pickBtn') || uploadArea.querySelector('[data-action="pick"]');
+  const fileLabel = uploadArea.querySelector('label[for="fileInput"]');
+  const form      = document.getElementById('uploadForm') || document.querySelector('form#uploadForm');
+
+  // --- Stratégie: contrôle 100% JS (recommandé)
+  // Si un label existe et doit rester visible, on neutralise son comportement par défaut
+  if (fileLabel) {
+    fileLabel.addEventListener('click', (e) => {
+      e.preventDefault();           // bloque l’ouverture implicite du picker par le label
+      e.stopPropagation();
+      if (fileInput) fileInput.click();
+    }, { passive: false });
+  }
+
+  let dialogOpen = false;
+
+  // Bouton "Choisir un fichier"
+  if (pickBtn && fileInput) {
+    pickBtn.addEventListener('click', () => {
+      if (dialogOpen) return;
+      dialogOpen = true;
+      fileInput.click();
+      setTimeout(() => dialogOpen = false, 500);
+    });
+  }
+
+  // Clic dans la zone: ouvre le picker, sauf si clic sur l'input/label
   if (uploadArea && fileInput) {
-    uploadArea.addEventListener('click', () => fileInput.click());
-
-    uploadArea.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      uploadArea.classList.add('drag-over');
-    });
-
-    uploadArea.addEventListener('dragleave', (e) => {
-      e.preventDefault();
-      uploadArea.classList.remove('drag-over');
-    });
-
-    uploadArea.addEventListener('drop', (e) => {
-      e.preventDefault();
-      uploadArea.classList.remove('drag-over');
-      fileInput.files = e.dataTransfer.files;
-      fileInput.dispatchEvent(new Event('change'));
-      form.dispatchEvent(new Event('submit', { cancelable: true }));
+    uploadArea.addEventListener('click', (e) => {
+      const clickedInsideLabel = e.target && e.target.closest && e.target.closest('label[for="fileInput"]');
+      if (e.target === fileInput || clickedInsideLabel) return;
+      if (dialogOpen) return;
+      dialogOpen = true;
+      fileInput.click();
+      setTimeout(() => dialogOpen = false, 500);
     });
   }
 
-  if (fileInput && fileNameDisplay) {
+  // Réception via ouvrir fichier
+  if (fileInput) {
     fileInput.addEventListener('change', () => {
-      const file = fileInput.files[0];
-      fileNameDisplay.textContent = file ? file.name : '';
-    });
-  }
-
-  let currentUpload = null;
-  let lastTime = 0;
-  let lastUploaded = 0;
-
-  function resetProgress() {
-    progressSection.style.display = 'none';
-    uploadBar.style.width = '0%';
-    uploadPercent.textContent = '0%';
-    uploadStats.textContent = '';
-  }
-
-  function showError(msg) {
-    if (errorMessage) errorMessage.textContent = msg;
-    if (errorAlert) errorAlert.style.display = 'block';
-    resetProgress();
-  }
-
-  cancelBtn.addEventListener('click', function() {
-    if (currentUpload) {
-      currentUpload.abort();
-    }
-    resetProgress();
-  });
-
-  form.addEventListener('submit', function(e) {
-    e.preventDefault();
-    const file = fileInput.files[0];
-    if (!file) return;
-    errorAlert.style.display = 'none';
-    uploadResults.style.display = 'none';
-    progressSection.style.display = 'block';
-    lastTime = Date.now();
-    lastUploaded = 0;
-
-    const upload = new tus.Upload(file, {
-      endpoint: '/tus/files',
-      retryDelays: [0, 1000, 3000, 5000],
-      storeFingerprintForResuming: true,
-      removeFingerprintOnSuccess: true,
-      metadata: {
-        filename: file.name,
-        filetype: file.type
-      },
-      onError: function(error) {
-        showError(error.message);
-      },
-      onProgress: function(bytesUploaded, bytesTotal) {
-        const pct = ((bytesUploaded / bytesTotal) * 100).toFixed(1);
-        uploadBar.style.width = pct + '%';
-        uploadPercent.textContent = pct + '%';
-        const now = Date.now();
-        const delta = now - lastTime;
-        if (delta > 0) {
-          const speed = (bytesUploaded - lastUploaded) / (delta / 1000); // B/s
-          const remaining = bytesTotal - bytesUploaded;
-          const eta = speed > 0 ? remaining / speed : 0;
-          uploadStats.textContent = `${(speed / 1024 / 1024).toFixed(2)} MB/s, ETA ${eta.toFixed(1)} s`;
-          lastTime = now;
-          lastUploaded = bytesUploaded;
-        }
-      },
-      onSuccess: function() {
-        const url = upload.url;
-        const id = url.split('/').pop();
-        fetch('/api/upload', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ upload_id: id })
-        })
-          .then(r => r.json())
-          .then(data => {
-            if (data && data.modelId) {
-              uploadResults.style.display = 'block';
-            } else {
-              showError(data.error || 'Erreur serveur');
-            }
-          })
-          .catch(() => showError('Erreur réseau'));
+      if (fileInput.files && fileInput.files.length) {
+        handleFiles(fileInput.files);
       }
     });
+  }
 
-    currentUpload = upload;
-    upload.start();
-  });
+  // Drag & drop robuste
+  if (dropzone) {
+    ['dragenter','dragover'].forEach(ev =>
+      dropzone.addEventListener(ev, (e) => {
+        e.preventDefault(); e.stopPropagation();
+        dropzone.classList.add('drag-over');
+      }, { passive: false })
+    );
+
+    ['dragleave','drop'].forEach(ev =>
+      dropzone.addEventListener(ev, (e) => {
+        e.preventDefault(); e.stopPropagation();
+        dropzone.classList.remove('drag-over');
+      }, { passive: false })
+    );
+
+    dropzone.addEventListener('drop', (e) => {
+      const files = e.dataTransfer && e.dataTransfer.files;
+      if (files && files.length) handleFiles(files);
+    }, { passive: false });
+  }
+
+  // Upload handler — conserve l’endpoint existant si déjà défini côté back
+  async function handleFiles(files){
+    try {
+      const fd = new FormData(form || document.createElement('form'));
+      [...files].forEach(f => fd.append('file', f));
+
+      const res = await fetch('/upload', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const txt = await res.text().catch(()=> '');
+        throw new Error(`HTTP ${res.status}: ${txt}`);
+      }
+      const data = await res.json().catch(()=> ({}));
+      console.log('Upload OK', data);
+      // TODO: déclencher ta suite (affichage, redirection, analyse, etc.)
+    } catch (err) {
+      console.error('Upload failed', err);
+      // TODO: afficher un message propre à l’utilisateur
+    }
+  }
+
+  // Détection visuelle d’overlays bloquants (optionnel : log et suggestion)
+  // NOTE: à activer si suspicion d’overlay
+  // const rect = dropzone?.getBoundingClientRect();
+  // const el = document.elementFromPoint(rect.left + 5, rect.top + 5);
+  // if (el && el !== dropzone && !dropzone.contains(el)) {
+  //   console.warn('Un overlay semble capter les events au-dessus de la dropzone:', el);
+  // }
 })();
+
