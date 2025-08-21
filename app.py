@@ -1,7 +1,19 @@
 import os
 import hashlib
 import json
-from flask import Flask, render_template, request, jsonify, send_file, send_from_directory, session, Response, redirect, url_for, flash
+from flask import (
+    Flask,
+    render_template,
+    request,
+    jsonify,
+    send_file,
+    send_from_directory,
+    session,
+    Response,
+    redirect,
+    url_for,
+    flash,
+)
 from flask_cors import CORS
 from flask_migrate import Migrate
 from werkzeug.utils import secure_filename, safe_join
