@@ -295,7 +295,6 @@ function setupContextMenu() {
   menu.addEventListener("click", (e) => {
     const id = menu.dataset.id;
     const action = e.target?.dataset?.action;
-    if (action === "isolate") isolate(id);
     if (action === "hide")    hide(id);
     if (action === "showAll") showAll();
     menu.classList.remove("show");
@@ -324,7 +323,6 @@ function setupTooltip() {
   canvasEl.addEventListener("dblclick", (e) => {
     const hit = viewer.scene.pick({ canvasPos: [e.offsetX, e.offsetY] });
     if (hit && hit.entity) {
-      isolate(hit.entity.id);
       cameraControl.fit?.({ aabb: hit.entity.aabb });
     }
   });
@@ -336,11 +334,6 @@ function fitScene() {
     const aabb = viewer.scene.getAABB();
     viewer.cameraFlight.flyTo?.({ aabb });
   } catch {}
-}
-
-function isolate(id) {
-  viewer.scene.setObjectsVisible(viewer.scene.visibleObjects, false);
-  viewer.scene.setObjectVisible(id, true);
 }
 
 function hide(id) {
