@@ -4,23 +4,26 @@ import {
   XKTLoaderPlugin,
   DistanceMeasurementsPlugin,
   SectionPlanesPlugin,
-  EdgesPlugin
+  EdgesPlugin,
+  AxisGizmoPlugin
 } from "@xeokit/xeokit-sdk";
 
 // --- initialisation ---------------------------------------------------------
-const canvas = document.getElementById("viewerCanvas");
-const viewer = new Viewer({ canvasId: "viewerCanvas" });
+const canvas = document.getElementById("viewer3d");
+const viewer = new Viewer({ canvasId: "viewer3d" });
 const cameraControl = viewer.cameraControl;
 const xktLoader = new XKTLoaderPlugin(viewer);
 const dist = new DistanceMeasurementsPlugin(viewer);
 const sections = new SectionPlanesPlugin(viewer);
 const edges = new EdgesPlugin(viewer);                           // NEW:
+new AxisGizmoPlugin(viewer, { canvasId: "axisGizmo" });         // NEW:
 
 let loadedModel = null;                                             // NEW:
 const measurements = [];                                           // NEW:
 const sectionPlanes = [null, null, null];                           // NEW:
 let exploded = 0;                                                   // NEW:
 let highlighted = null;                                             // NEW:
+let explodeData = [];                                               // NEW:
 
 // --- molette ---------------------------------------------------------------
 canvas.addEventListener(
@@ -34,8 +37,27 @@ canvas.addEventListener(
 // --- chargement modèle -----------------------------------------------------
 async function load(url) {                                          // NEW:
   clearAll();
-  loadedModel = await xktLoader.load({ src: url });                 // NEW:
-  cameraControl.fit();                                              // NEW:
+  loadedModel = await xktLoader.load({ src: url, id: "model" });   // NEW:
+  viewer.cameraFlight.flyTo(loadedModel);                          // NEW:
+
+  const aabb = loadedModel.aabb;                                   // NEW:
+  const center = [                                                 // NEW:
+    (aabb[0] + aabb[3]) / 2,
+    (aabb[1] + aabb[4]) / 2,
+    (aabb[2] + aabb[5]) / 2,
+  ];
+  explodeData = [];                                                // NEW:
+  viewer.scene.withObjects(loadedModel.objectIds, (entity) => {    // NEW:
+    const eaabb = entity.aabb;
+    if (!eaabb) return;
+    const ec = [
+      (eaabb[0] + eaabb[3]) / 2 - center[0],
+      (eaabb[1] + eaabb[4]) / 2 - center[1],
+      (eaabb[2] + eaabb[5]) / 2 - center[2],
+    ];
+    const len = Math.hypot(...ec) || 1;
+    explodeData.push({ entity, dir: ec.map((v) => v / len) });
+  });
 }
 
 // --- mesures ---------------------------------------------------------------
@@ -75,8 +97,11 @@ document.querySelectorAll(".section-control").forEach((ctrl) => {   // NEW:
 
 // --- explosion -------------------------------------------------------------
 function explodeTo(pct) {                                           // NEW:
-  exploded = pct / 100;
-  viewer.scene.root.explode(exploded);
+  const factor = (pct / 100) * 10;                                 // NEW:
+  exploded = pct / 100;                                            // NEW:
+  explodeData.forEach(({ entity, dir }) => {
+    entity.position = [dir[0] * factor, dir[1] * factor, dir[2] * factor];
+  });
 }
 
 document.getElementById("explodeRange").oninput = (e) =>
@@ -84,16 +109,16 @@ document.getElementById("explodeRange").oninput = (e) =>
 
 // --- isolement/masquage ----------------------------------------------------
 function isolate(nodeId) {                                          // NEW:
-  viewer.scene.setObjectsVisible(viewer.scene.visibleObjects, false);
-  viewer.scene.setObjectVisible(nodeId, true);
+  viewer.scene.setObjectsVisible(viewer.scene.visibleObjectIds, false);
+  viewer.scene.setObjectsVisible([nodeId], true);
 }
 
 function showAll() {                                                // NEW:
-  viewer.scene.setObjectsVisible(viewer.scene.objects, true);
+  viewer.scene.setObjectsVisible(viewer.scene.objectIds, true);
 }
 
 function hide(nodeId) {                                             // NEW:
-  viewer.scene.setObjectVisible(nodeId, false);
+  viewer.scene.setObjectsVisible([nodeId], false);
 }
 
 // --- menu contextuel -------------------------------------------------------
@@ -145,6 +170,15 @@ canvas.addEventListener("dblclick", (e) => {                        // NEW:
 
 // --- vues standard ---------------------------------------------------------
 document.getElementById("fitBtn").onclick = () => cameraControl.fit();    // NEW:
+document.getElementById("measureBtn").onclick = () => enableMeasure(!dist.control.active); // NEW:
+document.getElementById("sectionBtn").onclick = () => toggleSection(0);   // NEW:
+document.getElementById("explodeBtn").onclick = () => {                   // NEW:
+  const val = exploded ? 0 : 30;
+  explodeTo(val);
+  document.getElementById("explodeRange").value = val;
+};
+document.getElementById("isoBtn").onclick = () => highlighted && isolate(highlighted.id); // NEW:
+document.getElementById("resetBtn").onclick = () => resetAll();          // NEW:
 document.getElementById("edgesBtn").onclick = () => edges.enabled = !edges.enabled; // NEW:
 
 // --- raccourcis ------------------------------------------------------------
@@ -264,6 +298,14 @@ canvas.addEventListener("mousemove", (e) => {                       // NEW:
     tooltip.classList.remove("show");
   }
 });
+
+const analyzeBtn = document.getElementById("dfmAnalyzeBtn");       // NEW:
+if (analyzeBtn) {                                                   // NEW:
+  analyzeBtn.addEventListener("click", () => {                      // NEW:
+    const modalEl = document.getElementById("materialQuestionnaireModal");
+    if (modalEl) new bootstrap.Modal(modalEl).show();
+  });
+}                                                                   // NEW:
 
 // --- nettoyage -------------------------------------------------------------
 function clearAll() {                                               // NEW:
