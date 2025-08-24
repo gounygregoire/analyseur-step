@@ -415,6 +415,12 @@ function bindUI() {
 }
 
 async function startDFMProcess(materialFormData = new FormData()) {
+  const fileInput = document.getElementById("fileInput");
+  if (fileInput?.files?.length) {
+    materialFormData.append("file", fileInput.files[0]);
+  }
+  const axis = document.getElementById("demoldingAxisSelect")?.value || "z";
+  materialFormData.append("demolding_axis", axis);
   try {
     const res = await fetch("/dfm/analyze", {
       method: "POST",
