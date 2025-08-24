@@ -32,6 +32,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from models import db, ConversionJob, UserSession, User, OAuth, ModelJob, advance_model_job_status
 from dfm_analyzer import analyze_dfm, DFMReport
+from dataclasses import asdict
 from heatmap import generate_heatmap
 from material_recommender import recommend_materials_for_questionnaire
 import xkt_converter
@@ -1230,7 +1231,7 @@ Créé par Grégoire GOUNY
 
 @app.route('/dfm/analyze', methods=['POST'])
 def analyze_and_recommend():
-    """Simple endpoint to handle DFM analysis and material recommendations"""
+    """Handle DFM analysis and return material recommendations"""
     questionnaire = {
         'application': request.form.get('application', ''),
         'mechanical': request.form.getlist('mechanical[]'),
@@ -1242,8 +1243,24 @@ def analyze_and_recommend():
         'volume': request.form.get('volume'),
         'lifespan': request.form.get('lifespan'),
     }
-    recos = recommend_materials_for_questionnaire(questionnaire, {})
-    return jsonify({'success': True, 'recommendations': recos})
+    step_file = request.files.get('file')
+    if not step_file:
+        return jsonify({'success': False, 'error': 'no_file'}), 400
+    tmp_dir = tempfile.mkdtemp(prefix='dfm_')
+    try:
+        filename = secure_filename(step_file.filename or 'model.step')
+        step_path = os.path.join(tmp_dir, filename)
+        step_file.save(step_path)
+        axis = request.form.get('demolding_axis', 'z')
+        dfm_report = analyze_dfm(step_path, axis)
+        dfm_data = asdict(dfm_report)
+    except Exception as e:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    recos = recommend_materials_for_questionnaire(questionnaire, dfm_data)
+    return jsonify({'success': True, 'dfm': dfm_data, 'recommendations': recos})
 
 @app.route('/api/material-recommendations', methods=['POST'])
 def get_material_recommendations():
