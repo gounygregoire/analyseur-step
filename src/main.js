@@ -196,6 +196,12 @@ function bindUI() {
   const flexibilityInput = materialModal?.querySelector("#flexibility");
   const mechWarn = document.getElementById("mechanicalWarning");
   const mechWarnText = document.getElementById("mechanicalWarningText");
+  const foodInput = materialModal?.querySelector("#food_contact");
+  const medicalInput = materialModal?.querySelector("#medical_grade");
+  const flameInput = materialModal?.querySelector("#flame_retardant");
+  const electricalInput = materialModal?.querySelector("#electrical");
+  const regWarn = document.getElementById("regulatoryWarning");
+  const regWarnText = document.getElementById("regulatoryWarningText");
 
   if (analyzeBtn) {
     analyzeBtn.setAttribute("type", "button");
@@ -257,8 +263,33 @@ function bindUI() {
     }
   }
 
+  function handleRegulatoryConflict(e) {
+    if (!foodInput || !medicalInput || !flameInput || !electricalInput) return;
+    const sensitive = foodInput.checked || medicalInput.checked;
+    const conflict = flameInput.checked || electricalInput.checked;
+    if (sensitive && conflict) {
+      if (e.target === flameInput || e.target === electricalInput) {
+        e.target.checked = false;
+      } else {
+        flameInput.checked = false;
+        electricalInput.checked = false;
+      }
+      if (regWarn && regWarnText) {
+        regWarnText.textContent =
+          "Contact alimentaire ou qualité médicale incompatibles avec retardateur de flamme ou propriétés électriques.";
+        regWarn.style.display = "block";
+      }
+    } else if (regWarn) {
+      regWarn.style.display = "none";
+    }
+  }
+
   stiffnessInput?.addEventListener("change", handleMechanicalConflict);
   flexibilityInput?.addEventListener("change", handleMechanicalConflict);
+  foodInput?.addEventListener("change", handleRegulatoryConflict);
+  medicalInput?.addEventListener("change", handleRegulatoryConflict);
+  flameInput?.addEventListener("change", handleRegulatoryConflict);
+  electricalInput?.addEventListener("change", handleRegulatoryConflict);
 
   setupContextMenu();
   setupTooltip();
