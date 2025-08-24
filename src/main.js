@@ -202,6 +202,20 @@ function bindUI() {
   const electricalInput = materialModal?.querySelector("#electrical");
   const regWarn = document.getElementById("regulatoryWarning");
   const regWarnText = document.getElementById("regulatoryWarningText");
+  const transparentInput = materialModal?.querySelector("#transparent");
+  const textureInput = materialModal?.querySelector("#texture");
+  const aestheticWarn = document.getElementById("aestheticWarning");
+  const aestheticWarnText = document.getElementById("aestheticWarningText");
+
+  const mechInputs = materialModal
+    ? Array.from(materialModal.querySelectorAll("input[name='mechanical[]']"))
+    : [];
+  const aestheticInputs = materialModal
+    ? Array.from(materialModal.querySelectorAll("input[name='aesthetic[]']"))
+    : [];
+  const regInputs = materialModal
+    ? Array.from(materialModal.querySelectorAll("input[name='regulatory[]']"))
+    : [];
 
   if (analyzeBtn) {
     analyzeBtn.setAttribute("type", "button");
@@ -226,6 +240,7 @@ function bindUI() {
 
   if (materialConfirmBtn) {
     materialConfirmBtn.addEventListener("click", async (e) => {
+      if (materialConfirmBtn.disabled) return;
       e.preventDefault();
       e.stopPropagation();
       const materialForm = materialModal?.querySelector("form");
@@ -284,12 +299,116 @@ function bindUI() {
     }
   }
 
-  stiffnessInput?.addEventListener("change", handleMechanicalConflict);
-  flexibilityInput?.addEventListener("change", handleMechanicalConflict);
-  foodInput?.addEventListener("change", handleRegulatoryConflict);
-  medicalInput?.addEventListener("change", handleRegulatoryConflict);
-  flameInput?.addEventListener("change", handleRegulatoryConflict);
-  electricalInput?.addEventListener("change", handleRegulatoryConflict);
+  function validateQuestionnaire(e) {
+    let blocking = false;
+
+    if (mechInputs.filter((i) => i.checked).length > 3) {
+      if (e?.target?.checked) e.target.checked = false;
+      if (mechWarn && mechWarnText) {
+        mechWarnText.textContent = "Maximum 3 contraintes mécaniques.";
+        mechWarn.style.display = "block";
+      }
+    } else if (
+      mechWarn &&
+      mechWarnText &&
+      mechWarnText.textContent === "Maximum 3 contraintes mécaniques."
+    ) {
+      mechWarn.style.display = "none";
+    }
+
+    let aestheticLimit = false;
+    if (aestheticInputs.filter((i) => i.checked).length > 2) {
+      aestheticLimit = true;
+      if (e?.target?.checked) e.target.checked = false;
+      if (aestheticWarn && aestheticWarnText) {
+        aestheticWarnText.textContent = "Maximum 2 exigences esthétiques.";
+        aestheticWarn.style.display = "block";
+      }
+    } else if (
+      aestheticWarn &&
+      aestheticWarnText &&
+      aestheticWarnText.textContent === "Maximum 2 exigences esthétiques."
+    ) {
+      aestheticWarn.style.display = "none";
+    }
+
+    if (
+      regInputs.filter((i) => i.checked && i.dataset.strong === "true").length > 1
+    ) {
+      if (e?.target?.checked && e.target.dataset.strong === "true")
+        e.target.checked = false;
+      if (regWarn && regWarnText) {
+        regWarnText.textContent = "Maximum 1 contrainte réglementaire forte.";
+        regWarn.style.display = "block";
+      }
+    } else if (
+      regWarn &&
+      regWarnText &&
+      regWarnText.textContent === "Maximum 1 contrainte réglementaire forte."
+    ) {
+      regWarn.style.display = "none";
+    }
+
+    if (!aestheticLimit) {
+      const transFlameMsg =
+        "Transparence incompatible avec retardateur de flamme.";
+      const transTextureMsg =
+        "Transparence et texturation : vérifier la faisabilité.";
+      if (transparentInput?.checked && flameInput?.checked) {
+        if (aestheticWarn && aestheticWarnText) {
+          aestheticWarnText.textContent = transFlameMsg;
+          aestheticWarn.style.display = "block";
+        }
+        blocking = true;
+      } else if (transparentInput?.checked && textureInput?.checked) {
+        if (aestheticWarn && aestheticWarnText) {
+          aestheticWarnText.textContent = transTextureMsg;
+          aestheticWarn.style.display = "block";
+        }
+      } else if (
+        aestheticWarn &&
+        aestheticWarnText &&
+        (aestheticWarnText.textContent === transFlameMsg ||
+          aestheticWarnText.textContent === transTextureMsg)
+      ) {
+        aestheticWarn.style.display = "none";
+      }
+    }
+
+    if (materialConfirmBtn) materialConfirmBtn.disabled = blocking;
+  }
+
+  stiffnessInput?.addEventListener("change", (e) => {
+    handleMechanicalConflict(e);
+    validateQuestionnaire(e);
+  });
+  flexibilityInput?.addEventListener("change", (e) => {
+    handleMechanicalConflict(e);
+    validateQuestionnaire(e);
+  });
+  foodInput?.addEventListener("change", (e) => {
+    handleRegulatoryConflict(e);
+    validateQuestionnaire(e);
+  });
+  medicalInput?.addEventListener("change", (e) => {
+    handleRegulatoryConflict(e);
+    validateQuestionnaire(e);
+  });
+  flameInput?.addEventListener("change", (e) => {
+    handleRegulatoryConflict(e);
+    validateQuestionnaire(e);
+  });
+  electricalInput?.addEventListener("change", (e) => {
+    handleRegulatoryConflict(e);
+    validateQuestionnaire(e);
+  });
+  mechInputs.forEach((i) => {
+    if (i !== stiffnessInput && i !== flexibilityInput)
+      i.addEventListener("change", validateQuestionnaire);
+  });
+  aestheticInputs.forEach((i) => i.addEventListener("change", validateQuestionnaire));
+
+  validateQuestionnaire();
 
   setupContextMenu();
   setupTooltip();
