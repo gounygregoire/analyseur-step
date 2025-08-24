@@ -434,8 +434,9 @@
                           <label class="form-label fw-bold">
                             <i class="bi bi-tools me-2"></i>Contraintes mécaniques principales
                           </label>
+                          <div class="form-text text-muted">Maximum 3 contraintes.</div>
                           <div class="row">
-                            <div class="col-md-6">
+                          <div class="col-md-6">
                               <div class="form-check d-flex align-items-center justify-content-between">
                                 <div>
                                   <input class="form-check-input" type="checkbox" name="mechanical[]" value="impact" id="impact">
@@ -562,6 +563,7 @@
                             <label class="form-label fw-bold">
                                 <i class="bi bi-palette me-2"></i>Exigences esthétiques et fonctionnelles
                             </label>
+                            <div class="form-text text-muted">Maximum 2 exigences.</div>
                             <div class="row">
                                 <div class="col-md-6">
                                     <div class="form-check">
@@ -602,25 +604,26 @@
                             <label class="form-label fw-bold">
                                 <i class="bi bi-shield-check me-2"></i>Contraintes réglementaires
                             </label>
+                            <div class="form-text text-muted">Maximum 1 contrainte forte.</div>
                             <div class="form-check">
-                                <input class="form-check-input" type="checkbox" name="regulatory[]" value="food_contact" id="food_contact">
+                                <input class="form-check-input" type="checkbox" name="regulatory[]" value="food_contact" id="food_contact" data-strong="true">
                                 <label class="form-check-label" for="food_contact">Contact alimentaire<i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Compatible avec un usage en contact direct avec les aliments (certifications FDA, UE, etc.)."></i>
-</label>
+                                </label>
                             </div>
                             <div class="form-check">
-                                <input class="form-check-input" type="checkbox" name="regulatory[]" value="medical_grade" id="medical_grade">
+                                <input class="form-check-input" type="checkbox" name="regulatory[]" value="medical_grade" id="medical_grade" data-strong="true">
                                 <label class="form-check-label" for="medical_grade">Qualité médicale (USP VI)<i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Matériau conforme à des standards médicaux stricts (ex. USP Class VI)."></i>
-</label>
+                                </label>
                             </div>
                             <div class="form-check">
-                                <input class="form-check-input" type="checkbox" name="regulatory[]" value="flame_retardant" id="flame_retardant">
+                                <input class="form-check-input" type="checkbox" name="regulatory[]" value="flame_retardant" id="flame_retardant" data-strong="true">
                                 <label class="form-check-label" for="flame_retardant">Retardateur de flamme<i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Comporte des additifs limitant la propagation du feu."></i>
-</label>
+                                </label>
                             </div>
                             <div class="form-check">
                                 <input class="form-check-input" type="checkbox" name="regulatory[]" value="electrical" id="electrical">
                                 <label class="form-check-label" for="electrical">Propriétés électriques<i class="bi bi-info-circle ms-2 text-muted" data-bs-toggle="tooltip" title="Offre une isolation électrique ou des performances diélectriques spécifiques."></i>
-</label>
+                                </label>
                             </div>
                         </div>
                         <div id="regulatoryWarning" class="warning-message" style="display: none;">
