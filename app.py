@@ -1231,7 +1231,17 @@ Créé par Grégoire GOUNY
 @app.route('/dfm/analyze', methods=['POST'])
 def analyze_and_recommend():
     """Simple endpoint to handle DFM analysis and material recommendations"""
-    questionnaire = request.form.to_dict()
+    questionnaire = {
+        'application': request.form.get('application', ''),
+        'mechanical': request.form.getlist('mechanical[]'),
+        'temperature': request.form.get('temperature', ''),
+        'exposure': request.form.getlist('exposure[]'),
+        'aesthetic': request.form.getlist('aesthetic[]'),
+        'regulatory': request.form.getlist('regulatory[]'),
+        'cost': request.form.get('cost', ''),
+        'volume': request.form.get('volume'),
+        'lifespan': request.form.get('lifespan'),
+    }
     recos = recommend_materials_for_questionnaire(questionnaire, {})
     return jsonify({'success': True, 'recommendations': recos})
 

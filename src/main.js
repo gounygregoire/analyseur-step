@@ -223,9 +223,7 @@ function bindUI() {
       e.preventDefault();
       e.stopPropagation();
       const materialForm = materialModal?.querySelector("form");
-      const payload = materialForm
-        ? Object.fromEntries(new FormData(materialForm).entries())
-        : {};
+      const formData = materialForm ? new FormData(materialForm) : new FormData();
       try {
         const m =
           bootstrap.Modal.getInstance(materialModal) ||
@@ -237,7 +235,7 @@ function bindUI() {
           materialModal.style.display = "none";
         }
       }
-      startDFMProcess(payload);
+      startDFMProcess(formData);
     });
   }
 
@@ -266,16 +264,12 @@ function bindUI() {
   setupTooltip();
 }
 
-async function startDFMProcess(materialChoices = {}) {
+async function startDFMProcess(materialFormData = new FormData()) {
   try {
     const res = await fetch("/dfm/analyze", {
       method: "POST",
       headers: { Accept: "application/json" },
-      body: (() => {
-        const fd = new FormData();
-        Object.entries(materialChoices).forEach(([k, v]) => fd.append(k, v));
-        return fd;
-      })(),
+      body: materialFormData,
     });
     if (!res.ok) throw new Error("DFM HTTP " + res.status);
     const data = await res.json();
