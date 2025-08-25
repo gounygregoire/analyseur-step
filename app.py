@@ -1308,16 +1308,42 @@ def get_material_recommendations():
         return jsonify({'error': f'Erreur lors de la génération des recommandations: {str(e)}'}), 500
 
 
+@app.route('/api/dfm/axes/suggest')
+def dfm_axes_suggest():
+    """Suggest a demoulding axis for a given file."""
+    file_id = request.args.get('fileId')
+    if not file_id:
+        return jsonify({'error': 'missing_fileId'}), 400
+    step_path = os.path.join(app.config['UPLOAD_FOLDER'], f'{file_id}.step')
+    if not os.path.exists(step_path):
+        return jsonify({'error': 'not_found'}), 404
+    try:
+        shape = cq.importers.importStep(step_path)
+        bbox = shape.val().BoundingBox()
+        dims = {'X': bbox.xlen, 'Y': bbox.ylen, 'Z': bbox.zlen}
+        axis = max(dims, key=dims.get)
+        logger.info("Axis suggested", extra={"file_id": file_id, "axis": axis})
+        return jsonify({'axis': axis, 'direction': 1})
+    except Exception as e:
+        logger.exception("axis suggestion failed")
+        return jsonify({'error': 'axis_suggestion_failed', 'message': str(e)}), 500
+
 @app.route('/api/dfm/start', methods=['POST'])
 def dfm_start():
     """Start asynchronous DFM analysis."""
-    data = request.get_json(silent=True) or {}
-    file_id = data.get('fileId')
-    material_profile = data.get('materialProfile')
-    if not file_id:
-        return jsonify({'error': 'missing_fileId'}), 400
-    task = dfm_analysis.delay(file_id, material_profile)
-    return jsonify({'jobId': task.id})
+    try:
+        data = request.get_json(silent=True) or {}
+        file_id = data.get('fileId')
+        material_profile = data.get('materialProfile')
+        demould_axis = data.get('demouldAxis')
+        if not file_id:
+            return jsonify({'error': 'missing_fileId'}), 400
+        task = dfm_analysis.delay(file_id, material_profile, demould_axis)
+        logger.info("DFM job queued", extra={"file_id": file_id, "job_id": task.id})
+        return jsonify({'jobId': task.id})
+    except Exception as e:
+        logger.exception("dfm_start failed")
+        return jsonify({'error': 'dfm_start_failed', 'message': str(e)}), 500
 
 
 @app.route('/api/dfm/status')
@@ -1326,19 +1352,23 @@ def dfm_status():
     job_id = request.args.get('jobId')
     if not job_id:
         return jsonify({'error': 'missing_jobId'}), 400
-    res = AsyncResult(job_id, app=celery)
-    state_map = {
-        'PENDING': 'queued',
-        'STARTED': 'in_progress',
-        'PROGRESS': 'in_progress',
-        'SUCCESS': 'completed',
-        'FAILURE': 'failed',
-    }
-    response = {'status': state_map.get(res.state, 'queued')}
-    info = res.info if isinstance(res.info, dict) else {}
-    if 'progress' in info:
-        response['progress'] = info['progress']
-    return jsonify(response)
+    try:
+        res = AsyncResult(job_id, app=celery)
+        state_map = {
+            'PENDING': 'queued',
+            'STARTED': 'in_progress',
+            'PROGRESS': 'in_progress',
+            'SUCCESS': 'completed',
+            'FAILURE': 'failed',
+        }
+        response = {'status': state_map.get(res.state, 'queued')}
+        info = res.info if isinstance(res.info, dict) else {}
+        if 'progress' in info:
+            response['progress'] = info['progress']
+        return jsonify(response)
+    except Exception as e:
+        logger.exception("dfm_status failed")
+        return jsonify({'error': 'dfm_status_failed', 'message': str(e)}), 500
 
 
 @app.route('/api/dfm/results')
@@ -1351,13 +1381,17 @@ def dfm_results():
     json_path = os.path.join(reports_dir, f'dfm_result_{job_id}.json')
     if not os.path.exists(json_path):
         return jsonify({'error': 'not_found'}), 404
-    with open(json_path) as fh:
-        data = json.load(fh)
-    data['reportUrls'] = {
-        'pdf': url_for('download_pdf', filename=f'dfm_report_{job_id}.pdf'),
-        'csv': url_for('download_csv', filename=f'dfm_report_{job_id}.csv'),
-    }
-    return jsonify(data)
+    try:
+        with open(json_path) as fh:
+            data = json.load(fh)
+        data['reportUrls'] = {
+            'pdf': url_for('download_pdf', filename=f'dfm_report_{job_id}.pdf'),
+            'csv': url_for('download_csv', filename=f'dfm_report_{job_id}.csv'),
+        }
+        return jsonify(data)
+    except Exception as e:
+        logger.exception("dfm_results failed")
+        return jsonify({'error': 'dfm_results_failed', 'message': str(e)}), 500
 
 @app.route('/api/dfm-summary')
 def dfm_summary():
