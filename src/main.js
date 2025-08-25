@@ -9,6 +9,7 @@ import {
   AxisGizmoPlugin
   // PAS d'EdgesPlugin dans ta version
 } from "@xeokit/xeokit-sdk";
+import DFMOrchestrator from "./DFMOrchestrator.js";
 
 let viewer, cameraControl, xktLoader, dist, sections, canvas;
 
@@ -216,10 +217,11 @@ function bindUI() {
   const regInputs = materialModal
     ? Array.from(materialModal.querySelectorAll("input[name='regulatory[]']"))
     : [];
+  const fileId = document.body.dataset.fileId;
 
   if (analyzeBtn) {
     analyzeBtn.setAttribute("type", "button");
-    analyzeBtn.addEventListener("click", (e) => {
+    analyzeBtn.addEventListener("click", async (e) => {
       e.preventDefault();
       e.stopPropagation();
       if (materialModal) {
@@ -233,7 +235,11 @@ function bindUI() {
         console.warn(
           "materialQuestionnaireModal introuvable — on enchaîne direct sur la DFM"
         );
-        startDFMProcess();
+        try {
+          await DFMOrchestrator.run({ fileId });
+        } catch (err) {
+          DFMOrchestrator.handleError(err);
+        }
       }
     });
   }
@@ -243,20 +249,22 @@ function bindUI() {
       if (materialConfirmBtn.disabled) return;
       e.preventDefault();
       e.stopPropagation();
-      const materialForm = materialModal?.querySelector("form");
-      const formData = materialForm ? new FormData(materialForm) : new FormData();
       try {
         const m =
           bootstrap.Modal.getInstance(materialModal) ||
           bootstrap.Modal.getOrCreateInstance(materialModal);
         m.hide();
-      } catch (e) {
+      } catch (err) {
         if (materialModal) {
           materialModal.classList.remove("show");
           materialModal.style.display = "none";
         }
       }
-      startDFMProcess(formData);
+      try {
+        await DFMOrchestrator.run({ fileId });
+      } catch (err) {
+        DFMOrchestrator.handleError(err);
+      }
     });
   }
 
@@ -412,28 +420,6 @@ function bindUI() {
 
   setupContextMenu();
   setupTooltip();
-}
-
-async function startDFMProcess(materialFormData = new FormData()) {
-  const fileInput = document.getElementById("fileInput");
-  if (fileInput?.files?.length) {
-    materialFormData.append("file", fileInput.files[0]);
-  }
-  const axis = document.getElementById("demoldingAxisSelect")?.value || "z";
-  materialFormData.append("demolding_axis", axis);
-  try {
-    const res = await fetch("/dfm/analyze", {
-      method: "POST",
-      headers: { Accept: "application/json" },
-      body: materialFormData,
-    });
-    if (!res.ok) throw new Error("DFM HTTP " + res.status);
-    const data = await res.json();
-    console.log("DFM OK", data);
-  } catch (err) {
-    console.error("DFM failed", err);
-    alert("Analyse DFM échouée. Réessaie.");
-  }
 }
 
 // ---------- Mesures ---------------------------------------------------------
