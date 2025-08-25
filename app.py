@@ -1338,6 +1338,10 @@ def dfm_start():
         demould_axis = data.get('demouldAxis')
         if not file_id:
             return jsonify({'error': 'missing_fileId'}), 400
+        if not material_profile:
+            return jsonify({'error': 'missing_materialProfile'}), 400
+        if not demould_axis:
+            return jsonify({'error': 'missing_demouldAxis'}), 400
         task = dfm_analysis.delay(file_id, material_profile, demould_axis)
         logger.info("DFM job queued", extra={"file_id": file_id, "job_id": task.id})
         return jsonify({'jobId': task.id})

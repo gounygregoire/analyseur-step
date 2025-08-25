@@ -12,7 +12,6 @@ from flask import current_app
 
 from models import db, ModelJob, advance_model_job_status
 from celery_app import celery
-from tasks.dfm import run_dfm
 from storage.s3 import put_asset
 from observability.logging import get_logger
 from observability.metrics import (
@@ -122,7 +121,6 @@ def generate_final(self, job_id: str) -> None:
         _notify_status(job)
         final_size_bytes.set(os.path.getsize(out_path))
         convert_final_seconds.observe(time.time() - start)
-        run_dfm.delay(job_id)
     except Exception as exc:
         db.session.rollback()
         if self.request.retries >= self.max_retries:
