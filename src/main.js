@@ -9,6 +9,7 @@ import {
   AxisGizmoPlugin
   // PAS d'EdgesPlugin dans ta version
 } from "@xeokit/xeokit-sdk";
+import DFMViewerAdapter from "../static/js/modules/DFMViewerAdapter.js";
 
 let viewer, cameraControl, xktLoader, dist, sections, canvas;
 
@@ -34,6 +35,10 @@ export async function initViewer(modelUrl) {
   dist      = new DistanceMeasurementsPlugin(viewer);
   sections  = new SectionPlanesPlugin(viewer);
 
+  // Adapte l'app Xeokit pour l'Orchestrateur DFM (aperçu axe, heatmap...)
+  viewer.measure = dist;
+  window.viewerAdapter = new DFMViewerAdapter(viewer);
+
   try {
     if (!window.__axes_gizmo__) {
       window.__axes_gizmo__ = new AxisGizmoPlugin(viewer, { canvasId: "axisGizmo" });
@@ -56,6 +61,7 @@ export async function initViewer(modelUrl) {
 
   if (modelUrl) {
     const model = await xktLoader.load({ id: "current", src: modelUrl });
+    viewer.model = model;
     try {
       viewer.cameraFlight.flyTo(model);
     } catch (e) {
