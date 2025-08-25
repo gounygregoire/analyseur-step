@@ -9,7 +9,7 @@ export class AxisPicker extends EventTarget {
 
   _render() {
     this.el.innerHTML = `
-      <div class="btn-group" role="group">
+      <div class="btn-group flex-wrap" role="group">
         <input type="radio" class="btn-check" name="axis" id="axisX" value="X" autocomplete="off" checked>
         <label class="btn btn-outline-secondary" for="axisX">X</label>
         <input type="radio" class="btn-check" name="axis" id="axisY" value="Y" autocomplete="off">
@@ -47,7 +47,10 @@ export class AxisPicker extends EventTarget {
     this.el.querySelector('#axisClearBtn').addEventListener('click', () => {
       this.dispatchEvent(new Event('clear'));
     });
-    this.el.querySelector('#axisConfirmBtn').addEventListener('click', () => {
+    const confirmBtn = this.el.querySelector('#axisConfirmBtn');
+    confirmBtn.addEventListener('click', () => {
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = "Axe validé";
       this.dispatchEvent(new CustomEvent('confirm', { detail: this.getValue() }));
     });
   }

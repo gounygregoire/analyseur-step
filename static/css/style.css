@@ -1420,3 +1420,15 @@ body {
     }
 
 }
+
+/* Panneau sélection axe sous le viewer */
+#dfmAxisPanel {
+  position: relative;
+  z-index: 20;
+}
+
+@media (max-width: 768px) {
+  #dfmAxisPanel .btn-group {
+    flex-wrap: wrap;
+  }
+}

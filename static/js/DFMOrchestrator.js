@@ -6,6 +6,9 @@
 
 import AxisPicker from "./modules/AxisPicker.js";
 
+const DEBUG_DFM = window.DEBUG_DFM === true;
+const dbg = (...args) => { if (DEBUG_DFM) console.debug('[DFM]', ...args); };
+
 export const DFM_STATES = {
   IDLE: 'IDLE',
   MATERIAL_CONFIRMED: 'MATERIAL_CONFIRMED',
@@ -27,7 +30,7 @@ class DFMOrchestrator {
 
   setState(next) {
     this.state = next;
-    console.debug('[DFM] state →', next);
+    dbg('state →', next);
     if (next === DFM_STATES.AXIS_PICK) {
       this.renderAxisPanel();
     }
@@ -56,6 +59,7 @@ class DFMOrchestrator {
   }
 
   async previewAxis(sel) {
+    dbg('previewAxis', sel);
     if (sel.axis === 'AUTO') {
       try {
         const res = await fetch(`/api/dfm/axes/suggest?fileId=${this.fileId}`);
@@ -79,13 +83,25 @@ class DFMOrchestrator {
   confirmAxis(sel) {
     const chosen = sel.axis === 'AUTO' && this._autoSuggestion ? this._autoSuggestion : sel;
     this.setDemouldAxis(chosen);
+    dbg('confirmAxis', chosen);
     document.getElementById('dfmAxisPanel')?.remove();
+    this.axisPicker = null;
     this.startAnalysis();
   }
 
   // --- 1) startAnalysis -----------------------------------------------------
   async startAnalysis({ fileId = this.fileId, materialProfile = this.materialProfile, demouldAxis = this.demouldAxis } = {}) {
-    if (!fileId) return;
+    if (!fileId || !materialProfile) {
+      alert('Fichier ou profil matière manquant');
+      this.handleError('Paramètres manquants');
+      return;
+    }
+    if (!demouldAxis) {
+      alert("Veuillez valider l'axe de démoulage");
+      this.handleError('Axe de démoulage manquant');
+      return;
+    }
+    dbg('startAnalysis', { fileId, materialProfile, demouldAxis });
     this.setState(DFM_STATES.RUNNING);
     this._renderLoading();
     try {
@@ -105,6 +121,7 @@ class DFMOrchestrator {
 
   // --- 2) pollStatus -------------------------------------------------------
   async pollStatus(jobId) {
+    dbg('pollStatus', jobId);
     try {
       const res = await fetch(`/api/dfm/status?jobId=${jobId}`);
       if (!res.ok) throw new Error('status_failed');
@@ -128,6 +145,7 @@ class DFMOrchestrator {
 
   // --- 3) fetchResults -----------------------------------------------------
   async fetchResults(jobId) {
+    dbg('fetchResults', jobId);
     try {
       const res = await fetch(`/api/dfm/results?jobId=${jobId}`);
       if (!res.ok) throw new Error('results_failed');
