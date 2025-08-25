@@ -37,7 +37,9 @@ from heatmap import generate_heatmap
 from material_recommender import recommend_materials_for_questionnaire
 import xkt_converter
 from tasks.conversion import generate_preview, generate_final
+from tasks.dfm import dfm_analysis
 from celery_app import celery, init_celery
+from celery.result import AsyncResult
 from flask_login import LoginManager, login_required, current_user
 from translations import get_translation, get_all_translations
 from log import log_action
@@ -1133,6 +1135,19 @@ def download_pdf(filename):
         logger.error(f"PDF download error: {str(e)}")
         return jsonify({'error': 'Erreur lors du téléchargement'}), 500
 
+
+@app.route('/download-csv/<filename>')
+def download_csv(filename):
+    """Download generated CSV report"""
+    try:
+        csv_path = os.path.join('reports', filename)
+        if not os.path.exists(csv_path):
+            return jsonify({'error': 'Fichier CSV non trouvé'}), 404
+        return send_file(csv_path, as_attachment=True, download_name=filename, mimetype='text/csv')
+    except Exception as e:
+        logger.error(f"CSV download error: {str(e)}")
+        return jsonify({'error': 'Erreur lors du téléchargement'}), 500
+
 @app.route('/download/zip/<conversion_id>')
 @login_required
 def download_zip(conversion_id):
@@ -1291,6 +1306,58 @@ def get_material_recommendations():
     except Exception as e:
         logger.error(f"Material recommendations error: {str(e)}")
         return jsonify({'error': f'Erreur lors de la génération des recommandations: {str(e)}'}), 500
+
+
+@app.route('/api/dfm/start', methods=['POST'])
+def dfm_start():
+    """Start asynchronous DFM analysis."""
+    data = request.get_json(silent=True) or {}
+    file_id = data.get('fileId')
+    material_profile = data.get('materialProfile')
+    if not file_id:
+        return jsonify({'error': 'missing_fileId'}), 400
+    task = dfm_analysis.delay(file_id, material_profile)
+    return jsonify({'jobId': task.id})
+
+
+@app.route('/api/dfm/status')
+def dfm_status():
+    """Return status of a DFM job."""
+    job_id = request.args.get('jobId')
+    if not job_id:
+        return jsonify({'error': 'missing_jobId'}), 400
+    res = AsyncResult(job_id, app=celery)
+    state_map = {
+        'PENDING': 'queued',
+        'STARTED': 'in_progress',
+        'PROGRESS': 'in_progress',
+        'SUCCESS': 'completed',
+        'FAILURE': 'failed',
+    }
+    response = {'status': state_map.get(res.state, 'queued')}
+    info = res.info if isinstance(res.info, dict) else {}
+    if 'progress' in info:
+        response['progress'] = info['progress']
+    return jsonify(response)
+
+
+@app.route('/api/dfm/results')
+def dfm_results():
+    """Fetch final DFM results."""
+    job_id = request.args.get('jobId')
+    if not job_id:
+        return jsonify({'error': 'missing_jobId'}), 400
+    reports_dir = app.config.get('REPORTS_FOLDER', 'reports')
+    json_path = os.path.join(reports_dir, f'dfm_result_{job_id}.json')
+    if not os.path.exists(json_path):
+        return jsonify({'error': 'not_found'}), 404
+    with open(json_path) as fh:
+        data = json.load(fh)
+    data['reportUrls'] = {
+        'pdf': url_for('download_pdf', filename=f'dfm_report_{job_id}.pdf'),
+        'csv': url_for('download_csv', filename=f'dfm_report_{job_id}.csv'),
+    }
+    return jsonify(data)
 
 @app.route('/api/dfm-summary')
 def dfm_summary():
