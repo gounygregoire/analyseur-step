@@ -328,8 +328,17 @@ export function collectMaterialForm() {
   return data;
 }
 
-// --- Handler bouton "Analyser & Recommander" -------------------------------
+// --- Handler boutons "Analyser" et "Analyser & Recommander" ---------------
 document.addEventListener('DOMContentLoaded', () => {
+  const modalEl = document.getElementById('materialQuestionnaireModal');
+  const modal = modalEl ? new bootstrap.Modal(modalEl) : null;
+
+  // Bouton principal d'analyse : ouvre le modal
+  document.getElementById('dfmAnalyzeBtn')?.addEventListener('click', () => {
+    modal?.show();
+  });
+
+  // Bouton de soumission du questionnaire
   const btn = document.getElementById('submitQuestionnaire');
   if (!btn) return;
 
@@ -339,9 +348,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const profile = collectMaterialForm();
       dfmOrchestrator.setFileId(document.body.dataset.model || document.body.dataset.fileId || null);
       dfmOrchestrator.setMaterialProfile(profile);
-      const modalEl = document.getElementById('materialQuestionnaireModal');
-      const modal = bootstrap.Modal.getInstance(modalEl) || new bootstrap.Modal(modalEl);
-      modal.hide();
+      modal?.hide();
       dfmOrchestrator.setState(DFM_STATES.MATERIAL_CONFIRMED);
       dfmOrchestrator.setState(DFM_STATES.AXIS_PICK);
     } catch (err) {
