@@ -4,6 +4,8 @@
  * Stocke fileId, materialProfile, demouldAxis
  */
 
+import AxisPicker from "./modules/AxisPicker.js";
+
 export const DFM_STATES = {
   IDLE: 'IDLE',
   MATERIAL_CONFIRMED: 'MATERIAL_CONFIRMED',
@@ -19,6 +21,8 @@ class DFMOrchestrator {
     this.fileId = null;
     this.materialProfile = null;
     this.demouldAxis = null;
+    this.axisPicker = null;
+    this._autoSuggestion = null;
   }
 
   setState(next) {
@@ -39,13 +43,61 @@ class DFMOrchestrator {
     panel = document.createElement('div');
     panel.id = 'dfmAxisPanel';
     panel.className = 'card mt-3';
-    panel.innerHTML = `
-      <div class="card-body d-flex justify-content-between align-items-center">
-        <div id="axisPreview" class="flex-grow-1">Prévisualisation axe (placeholder)</div>
-        <button id="confirmAxisBtn" class="btn btn-primary ms-3">Valider l'axe de démoulage</button>
-      </div>`;
+    panel.innerHTML = `<div class="card-body" id="axisPickerContainer"></div>`;
     const viewer = document.getElementById('viewer');
     viewer?.insertAdjacentElement('afterend', panel);
+
+    const container = panel.querySelector('#axisPickerContainer');
+    this.axisPicker = new AxisPicker(container);
+
+    this.axisPicker.addEventListener('preview', (e) => this.previewAxis(e.detail));
+    this.axisPicker.addEventListener('clear', () => window.viewerAdapter?.clearAxisPreview());
+    this.axisPicker.addEventListener('confirm', (e) => this.confirmAxis(e.detail));
+  }
+
+  async previewAxis(sel) {
+    if (sel.axis === 'AUTO') {
+      try {
+        const res = await fetch(`/api/dfm/axes/suggest?fileId=${this.fileId}`);
+        if (res.ok) {
+          const data = await res.json();
+          this._autoSuggestion = data;
+          window.viewerAdapter?.previewDemouldAxis(data);
+          if (data.axis && data.axis !== 'VECTOR') {
+            this.axisPicker.setValue({ axis: data.axis, direction: data.direction });
+          }
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    } else {
+      this._autoSuggestion = sel;
+      window.viewerAdapter?.previewDemouldAxis(sel);
+    }
+  }
+
+  confirmAxis(sel) {
+    const chosen = sel.axis === 'AUTO' && this._autoSuggestion ? this._autoSuggestion : sel;
+    this.setDemouldAxis(chosen);
+    document.getElementById('dfmAxisPanel')?.remove();
+    this.setState(DFM_STATES.RUNNING);
+    this.startDFM();
+  }
+
+  async startDFM() {
+    if (!this.fileId) return;
+    try {
+      await fetch(`/api/dfm/start?fileId=${this.fileId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          material: this.materialProfile,
+          demouldAxis: this.demouldAxis
+        })
+      });
+    } catch (e) {
+      console.error(e);
+    }
   }
 }
 
