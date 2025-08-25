@@ -72,6 +72,41 @@ export class DFMViewerAdapter {
     this._annotIds.forEach(id => this.annotations.removeAnnotation(id));
     this._annotIds = [];
   }
+
+  // Affiche une flèche simple représentant l'axe de démoulage
+  previewDemouldAxis({ axis = "X", direction = 1, vector = null } = {}) {
+    if (!this.viewer || !this.app.measure) return;
+    this.clearAxisPreview();
+
+    const aabb = this.viewer.scene.getAABB();
+    const cx = (aabb[0] + aabb[3]) / 2;
+    const cy = (aabb[1] + aabb[4]) / 2;
+    const cz = (aabb[2] + aabb[5]) / 2;
+    const size = Math.max(aabb[3] - aabb[0], aabb[4] - aabb[1], aabb[5] - aabb[2]);
+
+    let dir;
+    if (vector) {
+      const len = Math.hypot(vector[0], vector[1], vector[2]) || 1;
+      dir = [vector[0] / len, vector[1] / len, vector[2] / len];
+    } else {
+      dir = axis === "Y" ? [0, 1, 0] : axis === "Z" ? [0, 0, 1] : [1, 0, 0];
+    }
+    dir = dir.map((v) => v * (direction >= 0 ? 1 : -1));
+    const end = [cx + dir[0] * size, cy + dir[1] * size, cz + dir[2] * size];
+
+    this._axisMeasurement = this.app.measure.createMeasurement({
+      positions: [cx, cy, cz, ...end],
+      labelsShown: false
+    });
+  }
+
+  // Efface la prévisualisation d'axe
+  clearAxisPreview() {
+    if (this._axisMeasurement) {
+      this._axisMeasurement.destroy?.();
+      this._axisMeasurement = null;
+    }
+  }
 }
 
 export default DFMViewerAdapter;
