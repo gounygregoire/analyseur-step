@@ -16,7 +16,7 @@ export class XeokitModelViewer extends EventTarget {
         this.edges = new EdgesPlugin(this.viewer);
         this.sections = new SectionPlanesPlugin(this.viewer);
         this.measure = new DistanceMeasurementsPlugin(this.viewer);
-        this.annotations = new AnnotationsPlugin(this.viewer);
+        this.annotations = new AnnotationsPlugin(this.viewer, {});
         this.modelId = "model"; // identifiant constant pour swap
         this.previewUrl = null;
         this.finalUrl = null;

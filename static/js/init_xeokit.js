@@ -19,7 +19,7 @@ function initXeokit(stlUrl) {
         measurements: distancePlugin
     });
 
-    const annotations = new AnnotationsPlugin(viewer);
+    const annotations = new AnnotationsPlugin(viewer, {});
 
     loader.load({
         src: stlUrl,
