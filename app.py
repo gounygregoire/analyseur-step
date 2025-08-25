@@ -37,6 +37,7 @@ from heatmap import generate_heatmap
 from material_recommender import recommend_materials_for_questionnaire
 import xkt_converter
 from tasks.conversion import generate_preview, generate_final
+from tasks.dfm import run_dfm
 from celery_app import celery, init_celery
 from flask_login import LoginManager, login_required, current_user
 from translations import get_translation, get_all_translations
@@ -48,6 +49,7 @@ from dotenv import load_dotenv
 from kombu.exceptions import OperationalError as KombuOperationalError
 from redis.exceptions import ConnectionError as RedisConnectionError
 from storage.s3 import get_signed_url
+import requests
 
 load_dotenv()
 
@@ -698,6 +700,80 @@ def api_model_assets(job_id):
     if job.dfm_json_url:
         assets['dfm_json'] = get_signed_url(job.dfm_json_url)
     return jsonify({'modelId': job.id, 'assets': assets, 'status': job.status})
+
+
+@app.route('/api/dfm/start', methods=['POST'])
+def dfm_start():
+    """Enfile une analyse DFM asynchrone pour un modèle."""
+    data = request.get_json() or {}
+    file_id = data.get('fileId')
+    if not file_id:
+        return jsonify({'error': 'missing_fileId'}), 400
+    job = ModelJob.query.get(file_id)
+    if not job:
+        return jsonify({'error': 'not_found'}), 404
+    run_dfm.apply_async(args=[job.id], task_id=file_id)
+    return jsonify({'jobId': file_id}), 202
+
+
+@app.route('/api/dfm/status')
+def dfm_status():
+    """Retourne l'état d'une analyse DFM."""
+    job_id = request.args.get('jobId')
+    if not job_id:
+        return jsonify({'error': 'missing_jobId'}), 400
+    job = ModelJob.query.get(job_id)
+    if not job:
+        return jsonify({'error': 'not_found'}), 404
+    if job.error_message:
+        status = 'failed'
+    elif job.dfm_json_url:
+        status = 'completed'
+    elif job.status in ('processing', 'final_ready'):
+        status = 'in_progress'
+    else:
+        status = 'queued'
+    return jsonify({'status': status})
+
+
+@app.route('/api/dfm/results')
+def dfm_results():
+    """Renvoie les résultats d'analyse DFM."""
+    job_id = request.args.get('jobId')
+    if not job_id:
+        return jsonify({'error': 'missing_jobId'}), 400
+    job = ModelJob.query.get(job_id)
+    if not job or not job.dfm_json_url:
+        return jsonify({'error': 'not_found'}), 404
+    url = get_signed_url(job.dfm_json_url)
+    try:
+        dfm_data = requests.get(url, timeout=10).json()
+    except Exception:
+        return jsonify({'error': 'fetch_failed'}), 500
+    heatmap_raw = dfm_data.get('heatmap', [])
+    values = [v.get('severity', 0.0) for v in heatmap_raw] if isinstance(heatmap_raw, list) else []
+    heatmap = {
+        'type': 'per-face',
+        'values': heatmap_raw,
+        'range': [min(values), max(values)] if values else [0, 0],
+        'legend': []
+    }
+    issues = dfm_data.get('wall_thickness_issues', []) + dfm_data.get('geometry_issues', [])
+    result = {
+        'issues': issues,
+        'heatmap': heatmap,
+        'annotations': dfm_data.get('annotations', []),
+        'checklist': dfm_data.get('checklist', []),
+        'recommendations': {
+            'materials': dfm_data.get('material_recommendations', []),
+            'process_notes': dfm_data.get('recommendations', []),
+        },
+        'reportUrls': {
+            'pdf': get_signed_url(f"models/{job.sha256}/dfm.pdf"),
+            'csv': get_signed_url(f"models/{job.sha256}/dfm.csv"),
+        },
+    }
+    return jsonify(result)
 
 @app.route('/api/upload_job', methods=['POST'])
 @login_required
