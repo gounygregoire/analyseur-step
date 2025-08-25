@@ -5,7 +5,7 @@ export class DFMViewerAdapter {
   constructor(viewerApp) {
     this.app = viewerApp;
     this.viewer = viewerApp.viewer || viewerApp;
-    this.annotations = viewerApp.annotations || new AnnotationsPlugin(this.viewer);
+    this.annotations = viewerApp.annotations || new AnnotationsPlugin(this.viewer, {});
     this._annotIds = [];
     this._coloredMeshes = [];
   }
