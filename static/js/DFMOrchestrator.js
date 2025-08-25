@@ -86,34 +86,67 @@ export function renderResults(results) {
   const issuesEl = document.getElementById('dfmAnalysisPanel');
   if (issuesEl && Array.isArray(results.issues)) {
     issuesEl.innerHTML = '';
+    const table = document.createElement('table');
+    table.className = 'table table-sm table-hover';
+    const tbody = document.createElement('tbody');
     results.issues.forEach((iss) => {
-      const div = document.createElement('div');
-      div.className = `dfm-issue-item severity-${iss.severity || 'info'}`;
-      div.innerHTML = `<div class="dfm-issue-header">${iss.title || 'Issue'}</div>
-                       <div class="dfm-issue-description">${iss.description || ''}</div>
-                       <div class="dfm-issue-recommendation">${iss.recommendation || ''}</div>`;
-      issuesEl.appendChild(div);
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${iss.title || ''}</td>` +
+                     `<td>${iss.severity || ''}</td>` +
+                     `<td>${iss.recommendation || ''}</td>`;
+      if (iss.annotationId) {
+        tr.style.cursor = 'pointer';
+        tr.addEventListener('click', () => {
+          const v = window.viewerAdapter;
+          v?.focusAnnotation?.(iss.annotationId);
+        });
+      }
+      tbody.appendChild(tr);
     });
+    table.appendChild(tbody);
+    issuesEl.appendChild(table);
   }
 
   const checklistEl = document.getElementById('checklistItems');
   if (checklistEl && Array.isArray(results.checklist)) {
     checklistEl.innerHTML = '';
-    results.checklist.forEach((item, i) => {
-      const id = `check_${i}`;
-      const label = document.createElement('label');
-      label.className = 'list-group-item';
-      label.innerHTML = `<input class="form-check-input me-1" type="checkbox" id="${id}"> ${item}`;
-      checklistEl.appendChild(label);
+    results.checklist.forEach((item) => {
+      const li = document.createElement('li');
+      li.className = 'list-group-item d-flex align-items-center';
+      let badge = 'bg-secondary';
+      if (item.status === 'pass') badge = 'bg-success';
+      else if (item.status === 'warn') badge = 'bg-warning';
+      else if (item.status === 'fail') badge = 'bg-danger';
+      li.innerHTML = `<span class="badge ${badge} me-2">&nbsp;</span>${item.label || item}`;
+      checklistEl.appendChild(li);
     });
     const container = document.getElementById('moldingChecklist');
     if (container) container.style.display = 'block';
+  }
+
+  const recEl = document.getElementById('recommendationItems');
+  const recContainer = document.getElementById('materialRecommendations');
+  if (recEl && Array.isArray(results.recommendations)) {
+    recEl.innerHTML = '';
+    results.recommendations.forEach((rec) => {
+      const li = document.createElement('li');
+      li.className = 'list-group-item';
+      li.textContent = rec;
+      recEl.appendChild(li);
+    });
+    if (recContainer) recContainer.style.display = 'block';
   }
 
   const pdfBtn = document.getElementById('generatePdfBtn');
   if (pdfBtn && results.pdfUrl) {
     pdfBtn.style.display = 'inline-block';
     pdfBtn.onclick = () => window.open(results.pdfUrl, '_blank');
+  }
+
+  const csvBtn = document.getElementById('downloadCsvBtn');
+  if (csvBtn && results.csvUrl) {
+    csvBtn.style.display = 'inline-block';
+    csvBtn.onclick = () => window.open(results.csvUrl, '_blank');
   }
 
   const viewer = window.viewerAdapter;
@@ -177,26 +210,40 @@ function hideSpinner() {
 }
 
 async function runDFM(materialProfile) {
-  const analyseBtn = document.getElementById('analyserBtn') || document.getElementById('dfmAnalyzeBtn');
   const fileId = document.body.dataset.model || document.body.dataset.fileId;
   try {
-    if (analyseBtn) analyseBtn.disabled = true;
-    showSpinner('Démarrage analyse...');
+    showSpinner('Analyse en cours');
     const jobId = await startAnalysis({ fileId, materialProfile });
-    showSpinner('Analyse en cours...');
     await pollStatus(jobId);
-    showSpinner('Récupération des résultats...');
+    showSpinner('Résultats prêts');
     const results = await fetchResults(jobId);
     hideSpinner();
     renderResults(results);
   } catch (err) {
+    console.error(err);
     hideSpinner();
-    handleError(err);
-  } finally {
-    if (analyseBtn) analyseBtn.disabled = false;
+    handleError(new Error('Analyse échouée'));
   }
 }
 
-document.addEventListener('start-dfm', (e) => runDFM(e.detail));
-window.startDFM = runDFM;
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('dfmAnalyzeBtn');
+  if (btn) {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      showSpinner('Validation matière');
+      try {
+        const materialProfile = collectMaterialForm();
+        await runDFM(materialProfile);
+      } catch (err) {
+        console.error(err);
+        handleError(new Error('Analyse échouée'));
+      } finally {
+        hideSpinner();
+        btn.disabled = false;
+      }
+    });
+  }
+});
 
+window.startDFM = runDFM;

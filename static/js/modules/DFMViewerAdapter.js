@@ -53,6 +53,18 @@ export class DFMViewerAdapter {
     });
   }
 
+  // Centre la caméra sur une annotation existante.
+  focusAnnotation(id) {
+    const ann = this.annotations.getAnnotation?.(id);
+    if (!ann) return;
+    const aabb = ann.aabb;
+    if (aabb) {
+      this.viewer.cameraFlight.flyTo({ aabb });
+    } else if (ann.worldPos) {
+      this.viewer.cameraFlight.flyTo({ look: ann.worldPos });
+    }
+  }
+
   // Supprime heatmap + annotations
   clearDFMOverlays() {
     this._coloredMeshes.forEach(m => m.geometry.setColors(null));
