@@ -118,8 +118,8 @@ export function renderResults(results) {
 
   const viewer = window.viewerAdapter;
   if (viewer) {
-    if (results.heatmap) viewer.loadHeatmap?.(results.heatmap);
-    if (results.annotations) viewer.loadAnnotations?.(results.annotations);
+    if (results.heatmap) viewer.applyHeatmap?.(results.heatmap);
+    if (results.annotations) viewer.addAnnotations?.(results.annotations);
   }
 }
 

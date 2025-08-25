@@ -1,7 +1,10 @@
 import { XeokitModelViewer } from "./viewer.js";
+import DFMViewerAdapter from "./DFMViewerAdapter.js";
 
 const modelId = document.body.dataset.modelId;
 const app = new XeokitModelViewer("viewerCanvas");
+const viewerAdapter = new DFMViewerAdapter(app);
+window.viewerAdapter = viewerAdapter;
 if (modelId) {
     app.startPolling(modelId);
 }
