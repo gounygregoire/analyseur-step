@@ -76,7 +76,7 @@ def run_dfm(self, job_id: str) -> None:
 
 
 @celery.task(bind=True, name="tasks.dfm_analysis")
-def dfm_analysis(self, file_id: str, material_profile: dict | None = None) -> None:
+def dfm_analysis(self, file_id: str, material_profile: dict | None = None, demould_axis: dict | None = None) -> None:
     """Run DFM analysis and persist artifacts for API consumption."""
     step_path = os.path.join(current_app.config["UPLOAD_FOLDER"], f"{file_id}.step")
     reports_dir = current_app.config.get("REPORTS_FOLDER", "reports")
@@ -84,7 +84,8 @@ def dfm_analysis(self, file_id: str, material_profile: dict | None = None) -> No
     job_id = self.request.id
     tmp_dir = tempfile.mkdtemp(prefix="dfm_api_")
     try:
-        report = analyze_dfm(step_path, material_profile.get("code") if isinstance(material_profile, dict) else "GENERIC")
+        material_code = material_profile.get("code") if isinstance(material_profile, dict) else "GENERIC"
+        report = analyze_dfm(step_path, demould_axis or 'z', material_code)
         report_dict = dataclasses.asdict(report)
         issues = []
         for wi in report_dict.get("wall_thickness_issues", []):
@@ -128,6 +129,7 @@ def dfm_analysis(self, file_id: str, material_profile: dict | None = None) -> No
                 "process_notes": report_dict.get("recommendations", []),
             },
             "reportUrls": {},
+            "demouldAxis": demould_axis,
         }
 
         json_path = os.path.join(reports_dir, f"dfm_result_{job_id}.json")

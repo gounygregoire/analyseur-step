@@ -88,29 +88,24 @@ class DFMAnalyzer:
         self.thickness_tolerance_percentage = 0.15  # 15% de tolérance pour zones isolées
         self.minimum_significant_area = 10.0  # mm² - aire minimale pour considérer un défaut
         
-    def analyze_step_file(self, step_file_path: str, demolding_axis: str = 'z', material_type: str = None) -> DFMReport:
-        """
-        Complete DFM analysis of a STEP file
-        """
+    def analyze_step_file(self, step_file_path: str, demould_axis: dict | str = 'z', material_type: str = None) -> DFMReport:
+        """Complete DFM analysis of a STEP file."""
         try:
-            # Import the STEP file
+            axis_info = self._normalize_axis(demould_axis)
             workplane = cq.importers.importStep(step_file_path)
-            
-            # Perform all analyses
-            dimensions = self._analyze_dimensions(workplane)
+
+            dimensions = self._analyze_dimensions(workplane, axis_info['axis'])
             wall_issues = self._analyze_wall_thickness(workplane)
-            geometry_issues = self._analyze_geometry_issues(workplane)
-            
-            # Calculate overall rating
+            geometry_issues = self._analyze_geometry_issues(workplane, axis_info)
+
             overall_score, moldability_rating = self._calculate_overall_rating(
                 dimensions, wall_issues, geometry_issues
             )
-            
-            # Generate recommendations
+
             recommendations = self._generate_recommendations(
                 dimensions, wall_issues, geometry_issues
             )
-            
+
             return DFMReport(
                 dimensions=dimensions,
                 wall_thickness_issues=wall_issues,
@@ -119,12 +114,25 @@ class DFMAnalyzer:
                 moldability_rating=moldability_rating,
                 recommendations=recommendations
             )
-            
+
         except Exception as e:
             print(f"Error analyzing STEP file: {e}")
             import traceback
             print(f"Traceback: {traceback.format_exc()}")
             return self._create_error_report()
+
+    def _normalize_axis(self, demould_axis):
+        axis = 'z'
+        direction = 1
+        vec = None
+        if isinstance(demould_axis, dict):
+            axis = demould_axis.get('axis', 'Z').lower()
+            direction = demould_axis.get('direction', 1) or 1
+            if axis == 'vector':
+                vec = demould_axis.get('vector') or [0, 0, 1]
+        elif isinstance(demould_axis, str):
+            axis = demould_axis.lower()
+        return {'axis': axis, 'direction': direction, 'vector': vec}
     
     def _analyze_dimensions(self, workplane, demolding_axis: str = 'z') -> DimensionAnalysis:
         """Analyze global dimensions and calculate maximum wall thickness"""
@@ -490,24 +498,23 @@ class DFMAnalyzer:
         
         return issues
     
-    def _analyze_geometry_issues(self, workplane, demolding_axis: str = 'z') -> List[GeometryIssue]:
+    def _analyze_geometry_issues(self, workplane, axis_info: dict | str = 'z') -> List[GeometryIssue]:
         """Analyze various geometry issues for injection molding"""
         issues = []
-        
+
         try:
+            if isinstance(axis_info, str):
+                axis_info = self._normalize_axis(axis_info)
             # Quick check if this is a very large model - use simplified analysis
             try:
                 faces = workplane.faces().vals()
-                if len(faces) > 1000:  # Large model - use simplified analysis
+                if len(faces) > 1000:
                     print(f"Large model detected ({len(faces)} faces), using simplified geometry analysis")
-                    return self._analyze_geometry_issues_simplified(workplane, demolding_axis)
+                    return self._analyze_geometry_issues_simplified(workplane, axis_info)
             except:
-                # If we can't count faces, assume it's complex and use simplified method
                 print("Could not count faces, using simplified geometry analysis")
-                return self._analyze_geometry_issues_simplified(workplane, demolding_axis)
-            
-            # Standard analysis for smaller models
-            # Check overall height
+                return self._analyze_geometry_issues_simplified(workplane, axis_info)
+
             bbox = workplane.val().BoundingBox()
             if bbox.zlen > self.max_height:
                 issues.append(GeometryIssue(
@@ -530,9 +537,8 @@ class DFMAnalyzer:
                 ))
             
             # Check for draft angles
-            perpendicular_faces = self._find_perpendicular_faces(workplane, demolding_axis)
+            perpendicular_faces = self._find_perpendicular_faces(workplane, axis_info)
             for face_center in perpendicular_faces:
-                axis_name = {'x': 'X', 'y': 'Y', 'z': 'Z'}[demolding_axis]
                 issues.append(GeometryIssue(
                     location=face_center,
                     issue_type="missing_draft",
@@ -557,16 +563,18 @@ class DFMAnalyzer:
         
         return issues
     
-    def _analyze_geometry_issues_simplified(self, workplane, demolding_axis: str = 'z') -> List[GeometryIssue]:
+    def _analyze_geometry_issues_simplified(self, workplane, axis_info: dict | str = 'z') -> List[GeometryIssue]:
         """Simplified geometry analysis for large models to avoid timeouts"""
         issues = []
-        
+
         try:
-            # Only check basic overall dimensions (fast operation)
+            if isinstance(axis_info, str):
+                axis_info = self._normalize_axis(axis_info)
             bbox = workplane.val().BoundingBox()
-            
-            # Check overall height based on demolding axis
-            axis_length = bbox.zlen if demolding_axis == 'z' else (bbox.ylen if demolding_axis == 'y' else bbox.xlen)
+
+            axis_length = bbox.zlen if axis_info['axis'] == 'z' else (
+                bbox.ylen if axis_info['axis'] == 'y' else bbox.xlen
+            )
             
             if axis_length > self.max_height:
                 center_location = (bbox.center.x, bbox.center.y, bbox.center.z)
@@ -779,16 +787,22 @@ class DFMAnalyzer:
 
         return sharp_edges
     
-    def _find_perpendicular_faces(self, workplane, demolding_axis: str) -> List[Tuple[float, float, float]]:
+    def _find_perpendicular_faces(self, workplane, axis_info: dict | str) -> List[Tuple[float, float, float]]:
         """Find planar faces nearly parallel to the demolding direction"""
         perpendicular_faces = []
 
         try:
-            axis_vec = {
-                'x': cq.Vector(1, 0, 0),
-                'y': cq.Vector(0, 1, 0),
-                'z': cq.Vector(0, 0, 1)
-            }[demolding_axis]
+            if isinstance(axis_info, str):
+                axis_info = self._normalize_axis(axis_info)
+            if axis_info['vector']:
+                v = axis_info['vector']
+                axis_vec = cq.Vector(v[0], v[1], v[2]).normalized()
+            else:
+                axis_vec = {
+                    'x': cq.Vector(1, 0, 0),
+                    'y': cq.Vector(0, 1, 0),
+                    'z': cq.Vector(0, 0, 1)
+                }[axis_info['axis']] * axis_info['direction']
 
             for face in workplane.val().Faces():
                 try:
@@ -1130,17 +1144,10 @@ class DFMAnalyzer:
             recommendations=["Impossible d'analyser le fichier - vérifier le format STEP"]
         )
 
-def analyze_dfm(step_file_path: str, demolding_axis: str = 'z', material_type: str = 'GENERIC') -> DFMReport:
-    """
-    Convenience function to analyze a STEP file with intelligent material-aware analysis
-    
-    Args:
-        step_file_path: Path to the STEP file
-        demolding_axis: Axis of demolding ('x', 'y', or 'z')
-        material_type: Type of plastic material (PP, PE, ABS, PC, PA66, POM, PS, GENERIC)
-    """
+def analyze_dfm(step_file_path: str, demould_axis: dict | str = 'z', material_type: str = 'GENERIC') -> DFMReport:
+    """Convenience function to analyze a STEP file."""
     analyzer = DFMAnalyzer(material_type=material_type)
-    return analyzer.analyze_step_file(step_file_path, demolding_axis, material_type)
+    return analyzer.analyze_step_file(step_file_path, demould_axis, material_type)
 
 
 def compute_projected_area(mesh, axis='z'):
