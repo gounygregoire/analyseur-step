@@ -13,10 +13,11 @@ import DFMViewerAdapter from "../static/js/modules/DFMViewerAdapter.js";
 
 let viewer, cameraControl, xktLoader, dist, sections, canvas;
 
-const state = {
-  measurements: [],
-  sectionPlane: null
-};
+// État global partagé (accessible via window.state)
+const state = (window.state = window.state || {});
+state.measurements = [];
+state.sectionPlane = null;
+state.fileLoaded = false;
 
 // ---------- Initialisation ---------------------------------------------------
 export async function initViewer(modelUrl) {
@@ -34,6 +35,12 @@ export async function initViewer(modelUrl) {
   xktLoader = new XKTLoaderPlugin(viewer);
   dist      = new DistanceMeasurementsPlugin(viewer);
   sections  = new SectionPlanesPlugin(viewer);
+
+  // Le fichier n'est considéré comme chargé qu'après l'évènement 'loaded'
+  state.fileLoaded = false;
+  xktLoader.on?.("loaded", () => {
+    state.fileLoaded = true;
+  });
 
   // Adapte l'app Xeokit pour l'Orchestrateur DFM (aperçu axe, heatmap...)
   viewer.measure = dist;
@@ -346,6 +353,7 @@ function byId(name) {
 
   async function visualizeFromFiles(files){
     if (!files || !files.length) return;
+    state.fileLoaded = false;
     try {
       showLoading(true);
       setHasFileUI(true);

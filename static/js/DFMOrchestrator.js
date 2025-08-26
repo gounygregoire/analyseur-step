@@ -92,6 +92,8 @@ class DFMOrchestrator {
   // --- 1) startAnalysis -----------------------------------------------------
   async startAnalysis({ fileId = this.fileId, materialProfile = this.materialProfile, demouldAxis = this.demouldAxis } = {}) {
     if (!fileId || !materialProfile) {
+      console.log({ fileLoaded: state.fileLoaded, materialProfile: state.materialProfile });
+      console.trace('DFM blocked here');
       alert('Fichier ou profil matière manquant');
       this.handleError('Paramètres manquants');
       return;
