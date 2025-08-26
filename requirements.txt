@@ -84,5 +84,7 @@ flask-cors
 flask-sqlalchemy
 celery==5.3.6
 redis==5.0.1
+rq==1.15.1
+Flask-Compress
 boto3==1.35.0
 prometheus-client==0.20.0

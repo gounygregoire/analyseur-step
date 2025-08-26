@@ -1,22 +1,37 @@
 services:
-- type: web
-  name: cadlytics
-  env: python
-  envVars:
-    - key: CONVERTED_FOLDER
-      value: /tmp/converted
-    - key: XEOKIT_CONVERT
-      value: /usr/local/bin/xeokit-convert
-  buildCommand: |
-    npm install -g @xeokit/xeokit-convert
-    ln -sf $(npm config get prefix | tail -n 1)/bin/xeokit-convert /usr/local/bin/xeokit-convert
-    echo ">>> npm prefix -g: $(npm config get prefix | tail -n 1)"
-    echo ">>> which xeokit-convert (build): $(which xeokit-convert)"
-    pip install -r requirements.txt
-  startCommand: |
-    export PATH="/usr/local/bin:/root/.nvm/versions/node/v22.18.0/bin:$PATH"
-    echo ">>> PATH at start: $PATH"
-    echo ">>> which xeokit-convert (start): $(which xeokit-convert)"
-    gunicorn app:app --workers=2 --timeout=300
-  pythonVersion: 3.10
-  plan: free
+  - type: web
+    name: cadlytics-web
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn app:app -w 2 -k gthread --threads 4 --timeout 120"
+    envVars:
+      - key: REDIS_URL
+        sync: false
+      - key: UPLOAD_FOLDER
+        value: /tmp/uploads
+      - key: OUTPUT_FOLDER
+        value: /tmp/converted
+      - key: MAX_UPLOAD_MB
+        value: "300"
+      - key: OMP_NUM_THREADS
+        value: "1"
+    plan: starter
+  - type: worker
+    name: cadlytics-worker
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python worker.py"
+    envVars:
+      - key: REDIS_URL
+        sync: false
+      - key: UPLOAD_FOLDER
+        value: /tmp/uploads
+      - key: OUTPUT_FOLDER
+        value: /tmp/converted
+      - key: OMP_NUM_THREADS
+        value: "1"
+
+databases:
+  - name: cadlytics-redis
+    plan: free
+    ipAllowList: []
