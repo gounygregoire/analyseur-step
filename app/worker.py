@@ -1,14 +1,14 @@
-import os
-from redis import Redis
-from rq import Worker, Queue, Connection
+import logging
+from rq import Worker, Connection
+from rq.logutils import setup_loghandlers
+from .queue import q, conn
 
-listen = ["dfm"]
-redis_conn = Redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+setup_loghandlers(logging.INFO)
 
 
 def run():
-    with Connection(redis_conn):
-        worker = Worker(list(map(Queue, listen)))
+    with Connection(conn):
+        worker = Worker([q])
         worker.work()
 
 

@@ -2,12 +2,14 @@ import os
 import uuid
 import shutil
 import time
+import logging
 from flask import Flask, request, send_from_directory, url_for, render_template
-from redis import Redis
-from rq import Queue, Job
+from rq.job import Job
 from werkzeug.utils import secure_filename
 from flask_compress import Compress
 from .jobs import generate_low_preview, generate_full_model
+from .queue import q, conn
+from .tasks import heavy_compute
 
 app = Flask(__name__)
 app.config["UPLOAD_FOLDER"] = os.getenv("UPLOAD_FOLDER", "/tmp/uploads")
@@ -44,8 +46,26 @@ def cleanup_output_folder(max_age_hours: int = 72) -> None:
 
 cleanup_output_folder()
 
-redis_conn = Redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
-queue = Queue("dfm", connection=redis_conn)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+if os.getenv("ENABLE_RQ_TEST_ROUTES") == "1" or os.getenv("FLASK_ENV") != "production":
+    @app.route("/enqueue-test")
+    def enqueue_test():
+        x = request.args.get("x", default=0, type=int)
+        fail = request.args.get("fail", default=0, type=int)
+        job = q.enqueue(heavy_compute, x, bool(fail))
+        return {"job_id": job.id}
+
+    @app.route("/job-status/<job_id>")
+    def job_status_simple(job_id: str):
+        try:
+            job = Job.fetch(job_id, connection=conn)
+        except Exception:
+            return {"error": "Job not found"}, 404
+        result = job.result if job.is_finished else None
+        return {"id": job.id, "status": job.get_status(), "result": result}
 
 def _exc_message(exc):
     if not exc:
@@ -64,13 +84,13 @@ def upload():
     with open(step_path, "wb") as dst:
         shutil.copyfileobj(file.stream, dst, length=1024 * 1024)
 
-    low_job = queue.enqueue(
+    low_job = q.enqueue(
         generate_low_preview,
         step_path,
         job_id=job_id,
         job_timeout=300,
     )
-    full_job = queue.enqueue(
+    full_job = q.enqueue(
         generate_full_model,
         step_path,
         depends_on=low_job,
@@ -84,14 +104,14 @@ def upload():
 @app.route("/jobs/<job_id>/status")
 def job_status(job_id: str):
     try:
-        low_job = Job.fetch(job_id, connection=redis_conn)
+        low_job = Job.fetch(job_id, connection=conn)
     except Exception:
         return {"error": "Job not found"}, 404
 
     full_job = None
     if "full_job_id" in low_job.meta:
         try:
-            full_job = Job.fetch(low_job.meta["full_job_id"], connection=redis_conn)
+            full_job = Job.fetch(low_job.meta["full_job_id"], connection=conn)
         except Exception:
             full_job = None
 
@@ -118,8 +138,10 @@ def job_status(job_id: str):
 
     message = None
     if low_job.is_failed:
+        logger.error("Job %s failed: %s", low_job.id, low_job.exc_info)
         message = _exc_message(low_job.exc_info)
     elif full_job and full_job.is_failed:
+        logger.error("Job %s failed: %s", full_job.id, full_job.exc_info)
         message = _exc_message(full_job.exc_info)
 
     return {"status": status, "low_url": low_url, "full_url": full_url, "message": message}
@@ -127,14 +149,14 @@ def job_status(job_id: str):
 @app.route("/jobs/<job_id>/result")
 def job_result(job_id: str):
     try:
-        low_job = Job.fetch(job_id, connection=redis_conn)
+        low_job = Job.fetch(job_id, connection=conn)
     except Exception:
         return {"error": "Job not found"}, 404
 
     full_job = None
     if "full_job_id" in low_job.meta:
         try:
-            full_job = Job.fetch(low_job.meta["full_job_id"], connection=redis_conn)
+            full_job = Job.fetch(low_job.meta["full_job_id"], connection=conn)
         except Exception:
             full_job = None
 
