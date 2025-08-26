@@ -94,7 +94,8 @@ class DFMOrchestrator {
     if (!fileId || !materialProfile) {
       console.log({ fileLoaded: state.fileLoaded, materialProfile: state.materialProfile });
       console.trace('DFM blocked here');
-      alert('Fichier ou profil matière manquant');
+      console.error("DFM blocked", { fileLoaded: state?.fileLoaded, materialProfile: !!state?.materialProfile });
+      if (window.showToast) showToast("Veuillez charger un fichier et sélectionner un profil matière avant d’analyser.");
       this.handleError('Paramètres manquants');
       return;
     }
