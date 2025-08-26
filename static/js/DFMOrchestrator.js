@@ -333,6 +333,20 @@ document.addEventListener('DOMContentLoaded', () => {
   const modalEl = document.getElementById('materialQuestionnaireModal');
   const modal = modalEl ? new bootstrap.Modal(modalEl) : null;
 
+  // exclusivité des cases à cocher (flexibilité vs rigidité, etc.)
+  EXCLUSIVE_GROUPS.forEach(group => {
+    const inputs = group.map(id => document.getElementById(id)).filter(Boolean);
+    inputs.forEach(input => {
+      input.addEventListener('change', () => {
+        if (input.checked) {
+          inputs.forEach(other => {
+            if (other !== input) other.checked = false;
+          });
+        }
+      });
+    });
+  });
+
   // Bouton principal d'analyse : ouvre le modal
   document.getElementById('dfmAnalyzeBtn')?.addEventListener('click', () => {
     modal?.show();
@@ -346,7 +360,12 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.disabled = true;
     try {
       const profile = collectMaterialForm();
-      dfmOrchestrator.setFileId(document.body.dataset.model || document.body.dataset.fileId || null);
+      dfmOrchestrator.setFileId(
+        document.body.dataset.model ||
+        document.body.dataset.fileId ||
+        document.body.dataset.modelId ||
+        null
+      );
       dfmOrchestrator.setMaterialProfile(profile);
       modal?.hide();
       dfmOrchestrator.setState(DFM_STATES.MATERIAL_CONFIRMED);
