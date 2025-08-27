@@ -7,11 +7,26 @@ import {
   DistanceMeasurementsPlugin,
   SectionPlanesPlugin,
   AxisGizmoPlugin
-  // PAS d'EdgesPlugin dans ta version
 } from "@xeokit/xeokit-sdk";
 import DFMViewerAdapter from "../static/js/modules/DFMViewerAdapter.js";
 
 let viewer, cameraControl, xktLoader, dist, sections, canvas;
+
+function hideViewerUI() {
+  document.querySelectorAll("[data-viewer-required]").forEach((el) => {
+    el.classList.add("d-none");
+  });
+}
+
+function reportViewerError(err) {
+  console.error("initViewer failed", err);
+  const banner = document.getElementById("viewerError");
+  if (banner) {
+    banner.textContent = "Le visualiseur 3D n'a pas pu démarrer.";
+    banner.classList.remove("d-none");
+  }
+  hideViewerUI();
+}
 
 // État global partagé (accessible via window.state)
 const state = (window.state = window.state || {});
@@ -23,61 +38,67 @@ state.fileLoaded = false;
 export async function initViewer(modelUrl) {
   const canvasEl = document.getElementById("viewer3d");
   if (!canvasEl) {
-    console.warn("viewer3d canvas not found, skipping viewer init");
-    return;
+    reportViewerError("canvas introuvable");
+    return null;
   }
-
-  viewer = new Viewer({ canvasElement: canvasEl });
-  window.viewer = viewer;
-
-  cameraControl = viewer.cameraControl;
-
-  xktLoader = new XKTLoaderPlugin(viewer);
-  dist      = new DistanceMeasurementsPlugin(viewer);
-  sections  = new SectionPlanesPlugin(viewer);
-
-  // Le fichier n'est considéré comme chargé qu'après l'évènement 'loaded'
-  state.fileLoaded = false;
-  xktLoader.on?.("loaded", () => {
-    state.fileLoaded = true;
-  });
-
-  // Adapte l'app Xeokit pour l'Orchestrateur DFM (aperçu axe, heatmap...)
-  viewer.measure = dist;
-  window.viewerAdapter = new DFMViewerAdapter(viewer);
-
   try {
-    if (!window.__axes_gizmo__) {
-      window.__axes_gizmo__ = new AxisGizmoPlugin(viewer, { canvasId: "axisGizmo" });
-    }
-  } catch (e) {
-    console.warn("AxisGizmoPlugin indisponible", e);
-  }
+    viewer = new Viewer({ canvasElement: canvasEl });
+    window.viewer = viewer;
 
-  // Référence directe vers l'élément canvas du viewer
-  canvas = viewer.scene.canvas.canvas;
+    cameraControl = viewer.cameraControl;
 
-  // Empêcher le scroll de page quand la molette est sur le canvas
-  canvas.addEventListener("wheel", (e) => e.preventDefault(), { passive: false });
+    xktLoader = new XKTLoaderPlugin(viewer);
+    dist = new DistanceMeasurementsPlugin(viewer);
+    sections = new SectionPlanesPlugin(viewer);
 
-  // Mesures -> UI
-  dist.on?.("measurementCreated", (m) => {
-    state.measurements.push(m);
-    renderMeasurements();
-  });
+    // Le fichier n'est considéré comme chargé qu'après l'évènement 'loaded'
+    state.fileLoaded = false;
+    xktLoader.on?.("loaded", () => {
+      state.fileLoaded = true;
+    });
 
-  if (modelUrl) {
-    const model = await xktLoader.load({ id: "current", src: modelUrl });
-    viewer.model = model;
+    // Adapte l'app Xeokit pour l'Orchestrateur DFM
+    viewer.measure = dist;
+    window.viewerAdapter = new DFMViewerAdapter(viewer);
+
     try {
-      viewer.cameraFlight.flyTo(model);
+      if (!window.__axes_gizmo__) {
+        window.__axes_gizmo__ = new AxisGizmoPlugin(viewer, { canvasId: "axisGizmo" });
+      }
     } catch (e) {
-      try { viewer.cameraFlight.fit?.(); } catch {}
+      console.warn("AxisGizmoPlugin indisponible", e);
     }
-  }
 
-  bindUI();
-  return viewer;
+    // Référence directe vers l'élément canvas du viewer
+    canvas = viewer.scene.canvas.canvas;
+
+    // Empêcher le scroll de page quand la molette est sur le canvas
+    canvas.addEventListener("wheel", (e) => e.preventDefault(), { passive: false });
+
+    // Mesures -> UI
+    dist.on?.("measurementCreated", (m) => {
+      state.measurements.push(m);
+      renderMeasurements();
+    });
+
+    if (modelUrl) {
+      const model = await xktLoader.load({ id: "current", src: modelUrl });
+      viewer.model = model;
+      try {
+        viewer.cameraFlight.flyTo(model);
+      } catch (e) {
+        try {
+          viewer.cameraFlight.fit?.();
+        } catch {}
+      }
+    }
+
+    bindUI();
+    return viewer;
+  } catch (e) {
+    reportViewerError(e);
+    return null;
+  }
 }
 window.initViewer = initViewer;
 
