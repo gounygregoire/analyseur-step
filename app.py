@@ -54,8 +54,7 @@ from storage.s3 import get_signed_url
 load_dotenv()
 
 # ========= FLASK APP (corrigé) =========
-# On indique explicitement à Flask où se trouve 'static' et son URL publique,
-# et on fixe aussi 'templates' par sécurité.
+# Une seule création d'app, avec static+templates configurés
 app = Flask(
     __name__,
     static_folder="static",
@@ -69,14 +68,13 @@ if not secret:
     raise RuntimeError("SESSION_SECRET environment variable is required")
 app.secret_key = secret
 
-# Cookies de session
+# Cookies et taille max
 app.config["SESSION_COOKIE_SECURE"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024  # 200MB
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200MB
 
-# Routes statiques explicites (ceinture + bretelles)
-# /favicon.ico direct, et /static/<...> renvoyé par Flask si jamais un catch-all existait.
+# Routes statiques explicites (sécurité)
 @app.route('/favicon.ico')
 def favicon():
     return send_from_directory(app.static_folder, 'favicon.ico', mimetype='image/x-icon')
@@ -84,7 +82,8 @@ def favicon():
 @app.route('/static/<path:filename>')
 def static_files(filename):
     return send_from_directory(app.static_folder, filename)
-# ========= FIN DU PATCH D'INITIALISATION =========
+# ========= FIN PATCH =========
+
 
 
 def _resolve_xeokit():
