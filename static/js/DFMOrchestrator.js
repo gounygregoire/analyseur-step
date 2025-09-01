@@ -9,6 +9,17 @@ import AxisPicker from "./modules/AxisPicker.js";
 const DEBUG_DFM = window.DEBUG_DFM === true;
 const dbg = (...args) => { if (DEBUG_DFM) console.debug('[DFM]', ...args); };
 
+// ------------ Helpers UI ------------
+const UI = {
+  toastInfo(msg)  { if (window.showToast) showToast(msg, {type:'info'});  else alert(msg); },
+  toastWarn(msg)  { if (window.showToast) showToast(msg, {type:'warn'});  else alert(msg); },
+  toastError(msg) { if (window.showToast) showToast(msg, {type:'error'}); else alert(msg); },
+  setLoading(on)  {
+    const btn = document.getElementById('submitQuestionnaire');
+    if (btn) btn.disabled = !!on;
+  }
+};
+
 export const DFM_STATES = {
   IDLE: 'IDLE',
   MATERIAL_CONFIRMED: 'MATERIAL_CONFIRMED',
@@ -36,11 +47,17 @@ class DFMOrchestrator {
     }
   }
 
-  setFileId(id) { this.fileId = id; }
-  setMaterialProfile(profile) { this.materialProfile = profile; }
-  setDemouldAxis(axis) { this.demouldAxis = axis; }
+  setFileId(id) { this.fileId = id || null; }
+  setMaterialProfile(profile) { this.materialProfile = profile || null; }
+  setDemouldAxis(axis) { this.demouldAxis = axis || null; }
 
   renderAxisPanel() {
+    // Ne rend l’UI d’axe que si les prérequis sont OK
+    if (!this.fileId || !this.materialProfile) {
+      UI.toastInfo("Veuillez d’abord choisir un matériau et charger un fichier.");
+      return;
+    }
+
     let panel = document.getElementById('dfmAxisPanel');
     if (panel) return;
     panel = document.createElement('div');
@@ -68,7 +85,7 @@ class DFMOrchestrator {
           this._autoSuggestion = data;
           window.viewerAdapter?.previewDemouldAxis(data);
           if (data.axis && data.axis !== 'VECTOR') {
-            this.axisPicker.setValue({ axis: data.axis, direction: data.direction });
+            this.axisPicker?.setValue({ axis: data.axis, direction: data.direction });
           }
         }
       } catch (e) {
@@ -91,22 +108,27 @@ class DFMOrchestrator {
 
   // --- 1) startAnalysis -----------------------------------------------------
   async startAnalysis({ fileId = this.fileId, materialProfile = this.materialProfile, demouldAxis = this.demouldAxis } = {}) {
-    if (!fileId || !materialProfile) {
-      console.log({ fileLoaded: state.fileLoaded, materialProfile: state.materialProfile });
-      console.trace('DFM blocked here');
-      console.error("DFM blocked", { fileLoaded: state?.fileLoaded, materialProfile: !!state?.materialProfile });
-      if (window.showToast) showToast("Veuillez charger un fichier et sélectionner un profil matière avant d’analyser.");
-      this.handleError('Paramètres manquants');
+    // Garde-fous sans dépendre d’un "state" global
+    if (!fileId) {
+      UI.toastInfo("Aucun fichier chargé/converti. Importez et visualisez une pièce 3D avant d’analyser.");
+      this.handleError('Fichier manquant');
+      return;
+    }
+    if (!materialProfile) {
+      UI.toastInfo("Sélectionnez un matériau (questionnaire) avant d’analyser.");
+      this.handleError('Profil matière manquant');
       return;
     }
     if (!demouldAxis) {
-      alert("Veuillez valider l'axe de démoulage");
+      UI.toastInfo("Veuillez valider l’axe de démoulage.");
       this.handleError('Axe de démoulage manquant');
       return;
     }
+
     dbg('startAnalysis', { fileId, materialProfile, demouldAxis });
     this.setState(DFM_STATES.RUNNING);
     this._renderLoading();
+
     try {
       const res = await fetch('/api/dfm/start', {
         method: 'POST',
@@ -164,8 +186,9 @@ class DFMOrchestrator {
   renderResults(results = {}) {
     this.setState(DFM_STATES.RESULTS);
     const section = document.getElementById('dfmResultsSection');
-    section.style.display = 'block';
+    if (section) section.style.display = 'block';
     const panel = document.getElementById('dfmAnalysisPanel');
+    if (!panel) return;
     panel.innerHTML = '';
 
     // Table des issues ------------------------------------------------------
@@ -194,8 +217,8 @@ class DFMOrchestrator {
     // Checklist -------------------------------------------------------------
     const checklistWrap = document.getElementById('moldingChecklist');
     const checklistItems = document.getElementById('checklistItems');
-    checklistItems.innerHTML = '';
-    if (Array.isArray(results.checklist) && results.checklist.length) {
+    if (checklistItems) checklistItems.innerHTML = '';
+    if (checklistWrap && Array.isArray(results.checklist) && results.checklist.length) {
       checklistWrap.style.display = 'block';
       results.checklist.forEach(it => {
         const div = document.createElement('div');
@@ -206,11 +229,11 @@ class DFMOrchestrator {
       });
     }
 
-    // Recommandations matiere ----------------------------------------------
+    // Recommandations matière ----------------------------------------------
     const recWrap = document.getElementById('materialRecommendations');
     const recList = document.getElementById('recommendationItems');
-    recList.innerHTML = '';
-    if (Array.isArray(results.materialRecommendations) && results.materialRecommendations.length) {
+    if (recList) recList.innerHTML = '';
+    if (recWrap && Array.isArray(results.materialRecommendations) && results.materialRecommendations.length) {
       recWrap.style.display = 'block';
       results.materialRecommendations.forEach(r => {
         const li = document.createElement('li');
@@ -224,10 +247,12 @@ class DFMOrchestrator {
     if (results.reportUrls) {
       const pdf = document.getElementById('generatePdfBtn');
       const csv = document.getElementById('downloadCsvBtn');
-      pdf.style.display = 'inline-block';
-      csv.style.display = 'inline-block';
-      pdf.href = results.reportUrls.pdf;
-      csv.href = results.reportUrls.csv;
+      if (pdf && csv) {
+        pdf.style.display = 'inline-block';
+        csv.style.display = 'inline-block';
+        pdf.href = results.reportUrls.pdf;
+        csv.href = results.reportUrls.csv;
+      }
     }
 
     // Heatmap / annotations -------------------------------------------------
@@ -239,8 +264,9 @@ class DFMOrchestrator {
   handleError(message) {
     this.setState(DFM_STATES.ERROR);
     const section = document.getElementById('dfmResultsSection');
-    section.style.display = 'block';
+    if (section) section.style.display = 'block';
     const panel = document.getElementById('dfmAnalysisPanel');
+    if (!panel) return;
     panel.innerHTML = `<div class="alert alert-danger">${message} <a href="#" id="retryDFM" class="alert-link">Relancer</a></div>`;
     document.getElementById('retryDFM')?.addEventListener('click', (e) => {
       e.preventDefault();
@@ -251,8 +277,9 @@ class DFMOrchestrator {
   // Utilitaires -------------------------------------------------------------
   _renderLoading() {
     const section = document.getElementById('dfmResultsSection');
-    section.style.display = 'block';
+    if (section) section.style.display = 'block';
     const panel = document.getElementById('dfmAnalysisPanel');
+    if (!panel) return;
     panel.innerHTML = `<div id="dfmLoading" class="text-center my-3">
       <div class="spinner-border" role="status"></div>
       <div id="dfmProgressText" class="mt-2">Analyse DFM en cours...</div>
@@ -291,6 +318,9 @@ const EXCLUSIVE_GROUPS = [
 ];
 const SECTION_LIMITS = { mechanical: 3, aesthetic: 2, regulatoryStrong: 1 };
 
+// Normalise une valeur (string ou array) vers array
+function arr(v) { return Array.isArray(v) ? v : (v ? [v] : []); }
+
 export function collectMaterialForm() {
   const form = document.getElementById('materialQuestionnaireForm');
   const fd = new FormData(form);
@@ -305,30 +335,63 @@ export function collectMaterialForm() {
     }
   }
 
-  const mech = Array.isArray(data.mechanical) ? data.mechanical : data.mechanical ? [data.mechanical] : [];
-  const aest = Array.isArray(data.aesthetic) ? data.aesthetic : data.aesthetic ? [data.aesthetic] : [];
-  const reg  = Array.isArray(data.regulatory) ? data.regulatory : data.regulatory ? [data.regulatory] : [];
+  const mech = arr(data.mechanical);
+  const aest = arr(data.aesthetic);
+  const reg  = arr(data.regulatory);
+  const warnings = [];
 
+  // Capper au lieu de jeter des erreurs
   if (mech.length > SECTION_LIMITS.mechanical) {
-    throw new Error('Maximum 3 contraintes mécaniques');
+    warnings.push('Maximum 3 contraintes mécaniques. Les 3 premières ont été conservées.');
+    mech.length = SECTION_LIMITS.mechanical;
   }
   if (aest.length > SECTION_LIMITS.aesthetic) {
-    throw new Error('Maximum 2 exigences esthétiques');
+    warnings.push('Maximum 2 exigences esthétiques. Les 2 premières ont été conservées.');
+    aest.length = SECTION_LIMITS.aesthetic;
   }
   const strongCount = reg.filter(id => document.getElementById(id)?.dataset.strong === 'true').length;
   if (strongCount > SECTION_LIMITS.regulatoryStrong) {
-    throw new Error('Maximum 1 contrainte réglementaire forte');
+    // garde la première "forte", supprime les autres
+    let kept = false;
+    data.regulatory = reg.filter(id => {
+      const strong = document.getElementById(id)?.dataset.strong === 'true';
+      if (strong) {
+        if (!kept) { kept = true; return true; }
+        return false;
+      }
+      return true;
+    });
+    warnings.push('Maximum 1 contrainte réglementaire forte. Seule la première a été conservée.');
   }
 
-  const ids = [...mech, ...aest, ...reg];
+  // Exclusivités (rigidité vs flexibilité…)
+  const ids = [...mech, ...aest, ...(data.regulatory || reg)];
   for (const group of EXCLUSIVE_GROUPS) {
     const selected = group.filter(id => ids.includes(id));
     if (selected.length > 1) {
-      throw new Error(`Critères exclusifs : ${selected.join(', ')}`);
+      // on garde la première sélectionnée
+      const keep = selected[0];
+      const drop = selected.slice(1);
+      warnings.push(`Critères exclusifs : ${selected.join(', ')}. Seul « ${keep} » a été conservé.`);
+      drop.forEach(x => {
+        const ixM = mech.indexOf(x); if (ixM >= 0) mech.splice(ixM, 1);
+        const ixA = aest.indexOf(x); if (ixA >= 0) aest.splice(ixA, 1);
+        if (Array.isArray(data.regulatory)) {
+          const ixR = data.regulatory.indexOf(x); if (ixR >= 0) data.regulatory.splice(ixR, 1);
+        }
+      });
     }
   }
 
-  return data;
+  // Reconstruire data propre
+  const profile = {
+    ...data,
+    mechanical: mech,
+    aesthetic: aest,
+    regulatory: Array.isArray(data.regulatory) ? data.regulatory : reg
+  };
+
+  return { ok: true, data: profile, warnings };
 }
 
 // --- Handler boutons "Analyser" et "Analyser & Recommander" ---------------
@@ -360,9 +423,17 @@ document.addEventListener('DOMContentLoaded', () => {
   if (!btn) return;
 
   btn.addEventListener('click', () => {
-    btn.disabled = true;
+    UI.setLoading(true);
     try {
-      const profile = collectMaterialForm();
+      const result = collectMaterialForm();
+      const profile = result.data;
+
+      // Avertissements éventuels
+      if (result.warnings && result.warnings.length) {
+        UI.toastWarn(result.warnings.join('\n'));
+      }
+
+      // FileId depuis des data-* posées côté serveur
       dfmOrchestrator.setFileId(
         document.body.dataset.model ||
         document.body.dataset.fileId ||
@@ -370,14 +441,20 @@ document.addEventListener('DOMContentLoaded', () => {
         null
       );
       dfmOrchestrator.setMaterialProfile(profile);
+
+      if (!dfmOrchestrator.fileId) {
+        UI.toastInfo("Aucun fichier à analyser. Importez/convertissez une pièce puis recommencez.");
+        return;
+      }
+
       modal?.hide();
       dfmOrchestrator.setState(DFM_STATES.MATERIAL_CONFIRMED);
       dfmOrchestrator.setState(DFM_STATES.AXIS_PICK);
     } catch (err) {
       console.error(err);
-      alert(err.message || 'Formulaire invalide');
+      UI.toastError(err?.message || 'Formulaire invalide');
     } finally {
-      btn.disabled = false;
+      UI.setLoading(false);
     }
   });
 });
