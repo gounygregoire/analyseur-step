@@ -62,24 +62,40 @@ app = Flask(
     static_url_path="/static",
     template_folder="templates"
 )
-setup_logging()
-logger = get_logger(__name__)
-# --- DEBUG au démarrage : log de la config statique et des routes ---
-# --- DEBUG compatible Flask 3.x : log une seule fois au 1er hit ---
+# --- LOGGING (observability) ---
+# Essaie d'initialiser le logging applicatif avec l'app Flask.
+# Si indisponible / erreur de signature, on bascule sur le logging standard.
+
+try:
+    from observability.logging import setup_logging, get_logger
+    # setup_logging attend l'app en paramètre dans ta lib
+    setup_logging(app)                          # <-- IMPORTANT : on passe app
+    logger = get_logger(__name__)               # ou get_logger("web")
+except Exception as e:
+    # Fallback simple et robuste
+    import logging, sys
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+        stream=sys.stdout,
+    )
+    logger = logging.getLogger("web")
+    logger.warning("Observability logging init failed (%s) -> basic logging enabled", e)
+
 @app.before_request
 def _debug_static_and_routes_once():
     if getattr(app, "_debug_dumped", False):
         return
     app._debug_dumped = True
     try:
-        logger.info("[BOOT] static_folder:", app.static_folder)
-        logger.info("[BOOT] static_url_path:", app.static_url_path)
-        logger.info("[BOOT] template_folder:", app.template_folder)
-        logger.info("[BOOT] routes:")
+        logger.info("[BOOT] static_folder: %s", app.static_folder)
+        logger.info("[BOOT] static_url_path: %s", app.static_url_path)
+        logger.info("[BOOT] template_folder: %s", app.template_folder)
         for r in sorted(app.url_map.iter_rules(), key=lambda x: str(x)):
-            logger.info("   ", r)
-    except Exception as e:
-        logger.info("[BOOT] debug failed:", e)
+            logger.info("   %s", r)
+    except Exception:
+        logger.exception("[BOOT] debug failed")
+
 
 
 # Clé de session
