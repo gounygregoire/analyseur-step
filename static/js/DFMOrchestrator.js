@@ -1,36 +1,32 @@
 /*
- * Orchestrateur DFM : gère le flux d'analyse coté front
+ * Orchestrateur DFM – version robuste (résout fileId depuis DOM/URL/Viewer)
  * États : IDLE → MATERIAL_CONFIRMED → AXIS_PICK → RUNNING → RESULTS → ERROR
- * Stocke fileId, materialProfile, demouldAxis
  */
 
 import AxisPicker from "./modules/AxisPicker.js";
 
 const DEBUG_DFM = window.DEBUG_DFM === true;
-const dbg = (...args) => { if (DEBUG_DFM) console.debug('[DFM]', ...args); };
+const dbg = (...a) => { if (DEBUG_DFM) console.debug("[DFM]", ...a); };
 
-// ------------ Helpers UI ------------
+// ---------------------- UI helpers ----------------------
 const UI = {
-  toastInfo(msg)  { if (window.showToast) showToast(msg, {type:'info'});  else alert(msg); },
-  toastWarn(msg)  { if (window.showToast) showToast(msg, {type:'warn'});  else alert(msg); },
-  toastError(msg) { if (window.showToast) showToast(msg, {type:'error'}); else alert(msg); },
-  setLoading(on)  {
-    const btn = document.getElementById('submitQuestionnaire');
-    if (btn) btn.disabled = !!on;
+  info(m){ if (window.showToast) showToast(m,{type:"info"}); else alert(m); },
+  warn(m){ if (window.showToast) showToast(m,{type:"warn"}); else alert(m); },
+  err(m){  if (window.showToast) showToast(m,{type:"error"}); else alert(m); },
+  setLoading(on){
+    const b = document.getElementById("submitQuestionnaire");
+    if (b) b.disabled = !!on;
   }
 };
 
+// ---------------------- États ----------------------
 export const DFM_STATES = {
-  IDLE: 'IDLE',
-  MATERIAL_CONFIRMED: 'MATERIAL_CONFIRMED',
-  AXIS_PICK: 'AXIS_PICK',
-  RUNNING: 'RUNNING',
-  RESULTS: 'RESULTS',
-  ERROR: 'ERROR'
+  IDLE:"IDLE", MATERIAL_CONFIRMED:"MATERIAL_CONFIRMED", AXIS_PICK:"AXIS_PICK",
+  RUNNING:"RUNNING", RESULTS:"RESULTS", ERROR:"ERROR"
 };
 
 class DFMOrchestrator {
-  constructor() {
+  constructor(){
     this.state = DFM_STATES.IDLE;
     this.fileId = null;
     this.materialProfile = null;
@@ -39,246 +35,282 @@ class DFMOrchestrator {
     this._autoSuggestion = null;
   }
 
-  setState(next) {
-    this.state = next;
-    dbg('state →', next);
-    if (next === DFM_STATES.AXIS_PICK) {
-      this.renderAxisPanel();
-    }
+  setState(next){
+    this.state = next; dbg("state →", next);
+    if (next === DFM_STATES.AXIS_PICK) this.renderAxisPanel();
   }
 
-  setFileId(id) { this.fileId = id || null; }
-  setMaterialProfile(profile) { this.materialProfile = profile || null; }
-  setDemouldAxis(axis) { this.demouldAxis = axis || null; }
+  setFileId(id){ this.fileId = id || null; }
+  setMaterialProfile(p){ this.materialProfile = p || null; }
+  setDemouldAxis(a){ this.demouldAxis = a || null; }
 
-  renderAxisPanel() {
-    // Ne rend l’UI d’axe que si les prérequis sont OK
-    if (!this.fileId || !this.materialProfile) {
-      UI.toastInfo("Veuillez d’abord choisir un matériau et charger un fichier.");
+  // ---------------------- Résolution robuste de fileId ----------------------
+  resolveFileId(){
+    // 1) si déjà présent
+    if (this.fileId) return this.fileId;
+
+    // 2) data-* sur <body> / #viewer
+    const pickData = (el)=> el && (el.dataset.fileid || el.dataset.model || el.dataset.modelid || el.dataset.jobId || el.dataset.jobid);
+    let id = pickData(document.body) || pickData(document.getElementById("viewer"));
+    if (id) return id;
+
+    // 3) viewer/globales
+    try {
+      id = window.viewerAdapter?.current?.jobId || window.viewerAdapter?.current?.modelId;
+      if (id) return id;
+    } catch {}
+    try {
+      id = window.CADLYTICS?.current?.jobId || window.CADLYTICS?.current?.modelId;
+      if (id) return id;
+    } catch {}
+
+    // 4) attributs data-* ailleurs dans la page
+    const any = document.querySelector("[data-fileid],[data-model],[data-modelid],[data-jobid]");
+    id = any && pickData(any);
+    if (id) return id;
+
+    // 5) URL : /view/<id> ou /result/<id> ou ?fileId=…&jobId=…
+    const path = location.pathname;
+    let m = path.match(/\/(view|result)\/([^/?#]+)/i);
+    if (m && m[2]) return m[2];
+
+    const params = new URLSearchParams(location.search);
+    id = params.get("fileId") || params.get("jobId") || params.get("model") || params.get("modelId");
+    if (id) return id;
+
+    return null;
+  }
+
+  setFileIdFromPage(){
+    const id = this.resolveFileId();
+    if (id) this.setFileId(id);
+    dbg("resolveFileId →", id);
+    return id;
+  }
+
+  // ---------------------- Axis panel ----------------------
+  renderAxisPanel(){
+    if (!this.fileId && !this.setFileIdFromPage()){
+      UI.info("Aucun fichier à analyser. Importez/convertissez une pièce puis recommencez.");
+      return;
+    }
+    if (!this.materialProfile){
+      UI.info("Sélectionnez un matériau (questionnaire) avant d’analyser.");
       return;
     }
 
-    let panel = document.getElementById('dfmAxisPanel');
+    let panel = document.getElementById("dfmAxisPanel");
     if (panel) return;
-    panel = document.createElement('div');
-    panel.id = 'dfmAxisPanel';
-    panel.className = 'card mt-3';
+    panel = document.createElement("div");
+    panel.id = "dfmAxisPanel";
+    panel.className = "card mt-3";
     panel.innerHTML = `<div class="card-body" id="axisPickerContainer"></div>`;
-    const viewer = document.getElementById('viewer');
-    viewer?.insertAdjacentElement('afterend', panel);
+    document.getElementById("viewer")?.insertAdjacentElement("afterend", panel);
 
-    const container = panel.querySelector('#axisPickerContainer');
+    const container = panel.querySelector("#axisPickerContainer");
     this.axisPicker = new AxisPicker(container);
-
-    this.axisPicker.addEventListener('preview', (e) => this.previewAxis(e.detail));
-    this.axisPicker.addEventListener('clear', () => window.viewerAdapter?.clearAxisPreview());
-    this.axisPicker.addEventListener('confirm', (e) => this.confirmAxis(e.detail));
+    this.axisPicker.addEventListener("preview", e => this.previewAxis(e.detail));
+    this.axisPicker.addEventListener("clear", () => window.viewerAdapter?.clearAxisPreview());
+    this.axisPicker.addEventListener("confirm", e => this.confirmAxis(e.detail));
   }
 
-  async previewAxis(sel) {
-    dbg('previewAxis', sel);
-    if (sel.axis === 'AUTO') {
-      try {
-        const res = await fetch(`/api/dfm/axes/suggest?fileId=${this.fileId}`);
-        if (res.ok) {
+  async previewAxis(sel){
+    dbg("previewAxis", sel);
+    if (sel.axis === "AUTO"){
+      try{
+        const res = await fetch(`/api/dfm/axes/suggest?fileId=${encodeURIComponent(this.fileId)}`);
+        if (res.ok){
           const data = await res.json();
           this._autoSuggestion = data;
           window.viewerAdapter?.previewDemouldAxis(data);
-          if (data.axis && data.axis !== 'VECTOR') {
-            this.axisPicker?.setValue({ axis: data.axis, direction: data.direction });
+          if (data.axis && data.axis !== "VECTOR"){
+            this.axisPicker?.setValue({ axis:data.axis, direction:data.direction });
           }
         }
-      } catch (e) {
-        console.error(e);
-      }
-    } else {
+      }catch(e){ console.error(e); }
+    }else{
       this._autoSuggestion = sel;
       window.viewerAdapter?.previewDemouldAxis(sel);
     }
   }
 
-  confirmAxis(sel) {
-    const chosen = sel.axis === 'AUTO' && this._autoSuggestion ? this._autoSuggestion : sel;
+  confirmAxis(sel){
+    const chosen = sel.axis === "AUTO" && this._autoSuggestion ? this._autoSuggestion : sel;
     this.setDemouldAxis(chosen);
-    dbg('confirmAxis', chosen);
-    document.getElementById('dfmAxisPanel')?.remove();
+    dbg("confirmAxis", chosen);
+    document.getElementById("dfmAxisPanel")?.remove();
     this.axisPicker = null;
     this.startAnalysis();
   }
 
-  // --- 1) startAnalysis -----------------------------------------------------
-  async startAnalysis({ fileId = this.fileId, materialProfile = this.materialProfile, demouldAxis = this.demouldAxis } = {}) {
-    // Garde-fous sans dépendre d’un "state" global
-    if (!fileId) {
-      UI.toastInfo("Aucun fichier chargé/converti. Importez et visualisez une pièce 3D avant d’analyser.");
-      this.handleError('Fichier manquant');
+  // ---------------------- Analyse ----------------------
+  async startAnalysis({ fileId=this.fileId, materialProfile=this.materialProfile, demouldAxis=this.demouldAxis } = {}){
+    if (!fileId){
+      fileId = this.setFileIdFromPage();
+      if (!fileId){
+        UI.info("Aucun fichier à analyser. Importez/convertissez une pièce puis recommencez.");
+        this.handleError("Fichier manquant");
+        return;
+      }
+    }
+    if (!materialProfile){
+      UI.info("Sélectionnez un matériau pour l’analyse.");
+      this.handleError("Profil matière manquant");
       return;
     }
-    if (!materialProfile) {
-      UI.toastInfo("Sélectionnez un matériau (questionnaire) avant d’analyser.");
-      this.handleError('Profil matière manquant');
-      return;
-    }
-    if (!demouldAxis) {
-      UI.toastInfo("Veuillez valider l’axe de démoulage.");
-      this.handleError('Axe de démoulage manquant');
+    if (!demouldAxis){
+      UI.info("Veuillez valider l’axe de démoulage.");
+      this.handleError("Axe de démoulage manquant");
       return;
     }
 
-    dbg('startAnalysis', { fileId, materialProfile, demouldAxis });
+    dbg("startAnalysis", { fileId, materialProfile, demouldAxis });
     this.setState(DFM_STATES.RUNNING);
     this._renderLoading();
 
-    try {
-      const res = await fetch('/api/dfm/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+    try{
+      const res = await fetch("/api/dfm/start", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
         body: JSON.stringify({ fileId, materialProfile, demouldAxis })
       });
-      if (!res.ok) throw new Error('start_failed');
-      const data = await res.json();
-      this.pollStatus(data.jobId);
-    } catch (e) {
+      if (!res.ok) throw new Error("start_failed");
+      const { jobId } = await res.json();
+      this.pollStatus(jobId);
+    }catch(e){
       console.error(e);
-      this.handleError('Démarrage analyse impossible');
+      this.handleError("Démarrage analyse impossible");
     }
   }
 
-  // --- 2) pollStatus -------------------------------------------------------
-  async pollStatus(jobId) {
-    dbg('pollStatus', jobId);
-    try {
-      const res = await fetch(`/api/dfm/status?jobId=${jobId}`);
-      if (!res.ok) throw new Error('status_failed');
+  async pollStatus(jobId){
+    dbg("pollStatus", jobId);
+    try{
+      const res = await fetch(`/api/dfm/status?jobId=${encodeURIComponent(jobId)}`);
+      if (!res.ok) throw new Error("status_failed");
       const data = await res.json();
-      if (data.progress !== undefined) {
-        const bar = document.getElementById('dfmProgressBar');
+
+      if (typeof data.progress === "number"){
+        const bar = document.getElementById("dfmProgressBar");
         if (bar) bar.style.width = `${data.progress}%`;
       }
-      if (data.status === 'completed') {
-        this.fetchResults(jobId);
-      } else if (data.status === 'failed') {
-        this.handleError('Analyse échouée');
-      } else {
-        setTimeout(() => this.pollStatus(jobId), 2500);
-      }
-    } catch (e) {
+      if (data.status === "completed") this.fetchResults(jobId);
+      else if (data.status === "failed") this.handleError("Analyse échouée");
+      else setTimeout(() => this.pollStatus(jobId), 2500);
+    }catch(e){
       console.error(e);
-      this.handleError('Erreur de suivi d’analyse');
+      this.handleError("Erreur de suivi d’analyse");
     }
   }
 
-  // --- 3) fetchResults -----------------------------------------------------
-  async fetchResults(jobId) {
-    dbg('fetchResults', jobId);
-    try {
-      const res = await fetch(`/api/dfm/results?jobId=${jobId}`);
-      if (!res.ok) throw new Error('results_failed');
+  async fetchResults(jobId){
+    dbg("fetchResults", jobId);
+    try{
+      const res = await fetch(`/api/dfm/results?jobId=${encodeURIComponent(jobId)}`);
+      if (!res.ok) throw new Error("results_failed");
       const data = await res.json();
       this.renderResults(data);
-    } catch (e) {
+    }catch(e){
       console.error(e);
-      this.handleError('Récupération résultats impossible');
+      this.handleError("Récupération résultats impossible");
     }
   }
 
-  // --- 4) renderResults ----------------------------------------------------
-  renderResults(results = {}) {
+  renderResults(results = {}){
     this.setState(DFM_STATES.RESULTS);
-    const section = document.getElementById('dfmResultsSection');
-    if (section) section.style.display = 'block';
-    const panel = document.getElementById('dfmAnalysisPanel');
+    const section = document.getElementById("dfmResultsSection");
+    if (section) section.style.display = "block";
+    const panel = document.getElementById("dfmAnalysisPanel");
     if (!panel) return;
-    panel.innerHTML = '';
+    panel.innerHTML = "";
 
-    // Table des issues ------------------------------------------------------
-    if (Array.isArray(results.issues) && results.issues.length) {
-      const table = document.createElement('table');
-      table.className = 'table table-sm';
+    // Issues
+    if (Array.isArray(results.issues) && results.issues.length){
+      const table = document.createElement("table");
+      table.className = "table table-sm";
       table.innerHTML = `<thead><tr>
         <th data-sort="severity">Severité</th>
         <th data-sort="type">Type</th>
         <th>Description</th></tr></thead>`;
-      const tbody = document.createElement('tbody');
+      const tbody = document.createElement("tbody");
       results.issues.forEach(issue => {
-        const tr = document.createElement('tr');
-        tr.dataset.severity = issue.severity || '';
-        tr.dataset.type = issue.type || '';
-        tr.innerHTML = `<td>${issue.severity || ''}</td><td>${issue.type || ''}</td><td>${issue.message || ''}</td>`;
+        const tr = document.createElement("tr");
+        tr.dataset.severity = issue.severity || "";
+        tr.dataset.type = issue.type || "";
+        tr.innerHTML = `<td>${issue.severity||""}</td><td>${issue.type||""}</td><td>${issue.message||""}</td>`;
         tbody.appendChild(tr);
       });
       table.appendChild(tbody);
       this._makeSortable(table);
       panel.appendChild(table);
     } else {
-      panel.textContent = 'Aucune anomalie détectée';
+      panel.textContent = "Aucune anomalie détectée";
     }
 
-    // Checklist -------------------------------------------------------------
-    const checklistWrap = document.getElementById('moldingChecklist');
-    const checklistItems = document.getElementById('checklistItems');
-    if (checklistItems) checklistItems.innerHTML = '';
-    if (checklistWrap && Array.isArray(results.checklist) && results.checklist.length) {
-      checklistWrap.style.display = 'block';
+    // Checklist
+    const checklistWrap = document.getElementById("moldingChecklist");
+    const checklistItems = document.getElementById("checklistItems");
+    if (checklistItems) checklistItems.innerHTML = "";
+    if (checklistWrap && Array.isArray(results.checklist) && results.checklist.length){
+      checklistWrap.style.display = "block";
       results.checklist.forEach(it => {
-        const div = document.createElement('div');
-        const cls = it.status === 'pass' ? 'success' : it.status === 'warn' ? 'warning' : 'danger';
-        div.className = `list-group-item list-group-item-${cls}`;
-        div.textContent = it.label || '';
+        const cl = it.status === "pass" ? "success" : it.status === "warn" ? "warning" : "danger";
+        const div = document.createElement("div");
+        div.className = `list-group-item list-group-item-${cl}`;
+        div.textContent = it.label || "";
         checklistItems.appendChild(div);
       });
     }
 
-    // Recommandations matière ----------------------------------------------
-    const recWrap = document.getElementById('materialRecommendations');
-    const recList = document.getElementById('recommendationItems');
-    if (recList) recList.innerHTML = '';
-    if (recWrap && Array.isArray(results.materialRecommendations) && results.materialRecommendations.length) {
-      recWrap.style.display = 'block';
+    // Reco matière
+    const recWrap = document.getElementById("materialRecommendations");
+    const recList = document.getElementById("recommendationItems");
+    if (recList) recList.innerHTML = "";
+    if (recWrap && Array.isArray(results.materialRecommendations) && results.materialRecommendations.length){
+      recWrap.style.display = "block";
       results.materialRecommendations.forEach(r => {
-        const li = document.createElement('li');
-        li.className = 'list-group-item';
+        const li = document.createElement("li");
+        li.className = "list-group-item";
         li.textContent = r;
         recList.appendChild(li);
       });
     }
 
-    // Liens rapports -------------------------------------------------------
-    if (results.reportUrls) {
-      const pdf = document.getElementById('generatePdfBtn');
-      const csv = document.getElementById('downloadCsvBtn');
-      if (pdf && csv) {
-        pdf.style.display = 'inline-block';
-        csv.style.display = 'inline-block';
+    // Rapports
+    if (results.reportUrls){
+      const pdf = document.getElementById("generatePdfBtn");
+      const csv = document.getElementById("downloadCsvBtn");
+      if (pdf && csv){
+        pdf.style.display = "inline-block";
+        csv.style.display = "inline-block";
         pdf.href = results.reportUrls.pdf;
         csv.href = results.reportUrls.csv;
       }
     }
 
-    // Heatmap / annotations -------------------------------------------------
+    // Heatmap / annotations
     window.viewerAdapter?.applyHeatmap(results.heatmap);
     window.viewerAdapter?.addAnnotations(results.annotations);
   }
 
-  // --- 5) Error management -------------------------------------------------
-  handleError(message) {
+  handleError(message){
     this.setState(DFM_STATES.ERROR);
-    const section = document.getElementById('dfmResultsSection');
-    if (section) section.style.display = 'block';
-    const panel = document.getElementById('dfmAnalysisPanel');
+    const section = document.getElementById("dfmResultsSection");
+    if (section) section.style.display = "block";
+    const panel = document.getElementById("dfmAnalysisPanel");
     if (!panel) return;
-    panel.innerHTML = `<div class="alert alert-danger">${message} <a href="#" id="retryDFM" class="alert-link">Relancer</a></div>`;
-    document.getElementById('retryDFM')?.addEventListener('click', (e) => {
+    panel.innerHTML = `<div class="alert alert-danger">${message}
+      <a href="#" id="retryDFM" class="alert-link">Relancer</a></div>`;
+    document.getElementById("retryDFM")?.addEventListener("click", e => {
       e.preventDefault();
       this.setState(DFM_STATES.AXIS_PICK);
     });
   }
 
-  // Utilitaires -------------------------------------------------------------
-  _renderLoading() {
-    const section = document.getElementById('dfmResultsSection');
-    if (section) section.style.display = 'block';
-    const panel = document.getElementById('dfmAnalysisPanel');
+  _renderLoading(){
+    const section = document.getElementById("dfmResultsSection");
+    if (section) section.style.display = "block";
+    const panel = document.getElementById("dfmAnalysisPanel");
     if (!panel) return;
     panel.innerHTML = `<div id="dfmLoading" class="text-center my-3">
       <div class="spinner-border" role="status"></div>
@@ -289,21 +321,20 @@ class DFMOrchestrator {
     </div>`;
   }
 
-  _makeSortable(table) {
-    const headers = table.querySelectorAll('th[data-sort]');
-    headers.forEach(h => {
-      h.style.cursor = 'pointer';
-      h.addEventListener('click', () => {
+  _makeSortable(table){
+    const headers = table.querySelectorAll("th[data-sort]");
+    headers.forEach(h=>{
+      h.style.cursor = "pointer";
+      h.addEventListener("click", ()=>{
         const key = h.dataset.sort;
         const tbody = table.tBodies[0];
-        const rows = Array.from(tbody.querySelectorAll('tr'));
-        const asc = h.classList.toggle('asc');
-        rows.sort((a, b) => {
-          const av = a.dataset[key] || '';
-          const bv = b.dataset[key] || '';
+        const rows = Array.from(tbody.querySelectorAll("tr"));
+        const asc = h.classList.toggle("asc");
+        rows.sort((a,b)=>{
+          const av = a.dataset[key] || ""; const bv = b.dataset[key] || "";
           return asc ? av.localeCompare(bv) : bv.localeCompare(av);
         });
-        rows.forEach(r => tbody.appendChild(r));
+        rows.forEach(r=>tbody.appendChild(r));
       });
     });
   }
@@ -311,28 +342,26 @@ class DFMOrchestrator {
 
 export const dfmOrchestrator = new DFMOrchestrator();
 
-// --- Validation formulaire matière -----------------------------------------
+// ---------------------- Formulaire matière ----------------------
 const EXCLUSIVE_GROUPS = [
-  ['stiffness', 'flexibility'],
-  ['transparent', 'flame_retardant']
+  ["stiffness","flexibility"],           // exemple : exclusifs
+  ["transparent","flame_retardant"]
 ];
-const SECTION_LIMITS = { mechanical: 3, aesthetic: 2, regulatoryStrong: 1 };
+const SECTION_LIMITS = { mechanical:3, aesthetic:2, regulatoryStrong:1 };
 
-// Normalise une valeur (string ou array) vers array
-function arr(v) { return Array.isArray(v) ? v : (v ? [v] : []); }
+// util
+const arr = v => Array.isArray(v) ? v : (v ? [v] : []);
 
-export function collectMaterialForm() {
-  const form = document.getElementById('materialQuestionnaireForm');
+export function collectMaterialForm(){
+  const form = document.getElementById("materialQuestionnaireForm");
   const fd = new FormData(form);
   const data = {};
-  for (const [key, value] of fd.entries()) {
-    const clean = key.replace('[]', '');
-    if (data[clean]) {
-      if (Array.isArray(data[clean])) data[clean].push(value);
-      else data[clean] = [data[clean], value];
-    } else {
-      data[clean] = value;
-    }
+  for (const [k,v] of fd.entries()){
+    const key = k.replace("[]","");
+    if (data[key]) {
+      if (Array.isArray(data[key])) data[key].push(v);
+      else data[key] = [data[key], v];
+    } else data[key] = v;
   }
 
   const mech = arr(data.mechanical);
@@ -340,50 +369,46 @@ export function collectMaterialForm() {
   const reg  = arr(data.regulatory);
   const warnings = [];
 
-  // Capper au lieu de jeter des erreurs
-  if (mech.length > SECTION_LIMITS.mechanical) {
-    warnings.push('Maximum 3 contraintes mécaniques. Les 3 premières ont été conservées.');
+  // Cap au lieu de throw
+  if (mech.length > SECTION_LIMITS.mechanical){
+    warnings.push("Maximum 3 contraintes mécaniques. Les 3 premières ont été conservées.");
     mech.length = SECTION_LIMITS.mechanical;
   }
-  if (aest.length > SECTION_LIMITS.aesthetic) {
-    warnings.push('Maximum 2 exigences esthétiques. Les 2 premières ont été conservées.');
+  if (aest.length > SECTION_LIMITS.aesthetic){
+    warnings.push("Maximum 2 exigences esthétiques. Les 2 premières ont été conservées.");
     aest.length = SECTION_LIMITS.aesthetic;
   }
-  const strongCount = reg.filter(id => document.getElementById(id)?.dataset.strong === 'true').length;
-  if (strongCount > SECTION_LIMITS.regulatoryStrong) {
-    // garde la première "forte", supprime les autres
-    let kept = false;
-    data.regulatory = reg.filter(id => {
-      const strong = document.getElementById(id)?.dataset.strong === 'true';
-      if (strong) {
-        if (!kept) { kept = true; return true; }
-        return false;
-      }
-      return true;
-    });
-    warnings.push('Maximum 1 contrainte réglementaire forte. Seule la première a été conservée.');
+  const strongCount = reg.filter(id => document.getElementById(id)?.dataset.strong === "true").length;
+  if (strongCount > SECTION_LIMITS.regulatoryStrong){
+    let kept=false;
+    const filtered = [];
+    for (const id of reg){
+      const strong = document.getElementById(id)?.dataset.strong === "true";
+      if (strong && kept) continue;
+      if (strong) kept = true;
+      filtered.push(id);
+    }
+    data.regulatory = filtered;
+    warnings.push("Maximum 1 contrainte réglementaire forte. Seule la première a été conservée.");
   }
 
   // Exclusivités (rigidité vs flexibilité…)
   const ids = [...mech, ...aest, ...(data.regulatory || reg)];
-  for (const group of EXCLUSIVE_GROUPS) {
+  for (const group of EXCLUSIVE_GROUPS){
     const selected = group.filter(id => ids.includes(id));
-    if (selected.length > 1) {
-      // on garde la première sélectionnée
-      const keep = selected[0];
-      const drop = selected.slice(1);
-      warnings.push(`Critères exclusifs : ${selected.join(', ')}. Seul « ${keep} » a été conservé.`);
-      drop.forEach(x => {
-        const ixM = mech.indexOf(x); if (ixM >= 0) mech.splice(ixM, 1);
-        const ixA = aest.indexOf(x); if (ixA >= 0) aest.splice(ixA, 1);
-        if (Array.isArray(data.regulatory)) {
-          const ixR = data.regulatory.indexOf(x); if (ixR >= 0) data.regulatory.splice(ixR, 1);
+    if (selected.length > 1){
+      const keep = selected[0], drop = selected.slice(1);
+      warnings.push(`Critères exclusifs : ${selected.join(", ")}. Seul « ${keep} » a été conservé.`);
+      drop.forEach(x=>{
+        const iM = mech.indexOf(x); if (iM>=0) mech.splice(iM,1);
+        const iA = aest.indexOf(x); if (iA>=0) aest.splice(iA,1);
+        if (Array.isArray(data.regulatory)){
+          const iR = data.regulatory.indexOf(x); if (iR>=0) data.regulatory.splice(iR,1);
         }
       });
     }
   }
 
-  // Reconstruire data propre
   const profile = {
     ...data,
     mechanical: mech,
@@ -391,68 +416,50 @@ export function collectMaterialForm() {
     regulatory: Array.isArray(data.regulatory) ? data.regulatory : reg
   };
 
-  return { ok: true, data: profile, warnings };
+  return { ok:true, data:profile, warnings };
 }
 
-// --- Handler boutons "Analyser" et "Analyser & Recommander" ---------------
-document.addEventListener('DOMContentLoaded', () => {
-  const modalEl = document.getElementById('materialQuestionnaireModal');
+// ---------------------- Wiring des boutons ----------------------
+document.addEventListener("DOMContentLoaded", ()=>{
+  const modalEl = document.getElementById("materialQuestionnaireModal");
   const modal = modalEl ? new bootstrap.Modal(modalEl) : null;
 
-  // exclusivité des cases à cocher (flexibilité vs rigidité, etc.)
-  EXCLUSIVE_GROUPS.forEach(group => {
-    const inputs = group.map(id => document.getElementById(id)).filter(Boolean);
-    inputs.forEach(input => {
-      input.addEventListener('change', () => {
-        if (input.checked) {
-          inputs.forEach(other => {
-            if (other !== input) other.checked = false;
-          });
-        }
+  // exclusivités en live
+  EXCLUSIVE_GROUPS.forEach(group=>{
+    const inputs = group.map(id=>document.getElementById(id)).filter(Boolean);
+    inputs.forEach(input=>{
+      input.addEventListener("change", ()=>{
+        if (input.checked) inputs.forEach(o=>{ if (o!==input) o.checked=false; });
       });
     });
   });
 
-  // Bouton principal d'analyse : ouvre le modal
-  document.getElementById('dfmAnalyzeBtn')?.addEventListener('click', () => {
-    modal?.show();
-  });
+  document.getElementById("dfmAnalyzeBtn")?.addEventListener("click", ()=> modal?.show());
 
-  // Bouton de soumission du questionnaire
-  const btn = document.getElementById('submitQuestionnaire');
+  const btn = document.getElementById("submitQuestionnaire");
   if (!btn) return;
 
-  btn.addEventListener('click', () => {
+  btn.addEventListener("click", ()=>{
     UI.setLoading(true);
-    try {
+    try{
       const result = collectMaterialForm();
-      const profile = result.data;
+      if (result.warnings?.length) UI.warn(result.warnings.join("\n"));
 
-      // Avertissements éventuels
-      if (result.warnings && result.warnings.length) {
-        UI.toastWarn(result.warnings.join('\n'));
-      }
+      // Détermine fileId maintenant
+      dfmOrchestrator.setFileIdFromPage();
+      dfmOrchestrator.setMaterialProfile(result.data);
 
-      // FileId depuis des data-* posées côté serveur
-      dfmOrchestrator.setFileId(
-        document.body.dataset.model ||
-        document.body.dataset.fileId ||
-        document.body.dataset.modelId ||
-        null
-      );
-      dfmOrchestrator.setMaterialProfile(profile);
-
-      if (!dfmOrchestrator.fileId) {
-        UI.toastInfo("Aucun fichier à analyser. Importez/convertissez une pièce puis recommencez.");
+      if (!dfmOrchestrator.fileId){
+        UI.info("Aucun fichier à analyser. Importez/convertissez une pièce puis recommencez.");
         return;
       }
 
       modal?.hide();
       dfmOrchestrator.setState(DFM_STATES.MATERIAL_CONFIRMED);
       dfmOrchestrator.setState(DFM_STATES.AXIS_PICK);
-    } catch (err) {
-      console.error(err);
-      UI.toastError(err?.message || 'Formulaire invalide');
+    } catch (e){
+      console.error(e);
+      UI.err(e?.message || "Formulaire invalide");
     } finally {
       UI.setLoading(false);
     }
