@@ -78,12 +78,29 @@
     }, { passive: false });
   }
 
+  // === Mini-patch : exposition de l’ID côté front ===
+  function onModelReady(id) {
+    if (!id) return;
+    // 1) place l’ID dans le DOM
+    document.body.dataset.fileid = id;
+    // 2) expose en global
+    window.CADLYTICS = window.CADLYTICS || {};
+    window.CADLYTICS.current = { jobId: id, modelId: id };
+    // 3) notifie l’orchestrateur
+    window.dispatchEvent(new CustomEvent('dfm:fileReady', { detail: { fileId: id }}));
+    // 4) optionnel : accessible pour d’autres modules
+    window.viewerAdapter = window.viewerAdapter || {};
+    window.viewerAdapter.current = { jobId: id, modelId: id };
+    console.debug('[UPLOAD] fileId exposé:', id);
+  }
+
   // Upload handler — conserve l’endpoint existant si déjà défini côté back
   async function handleFiles(files){
     try {
       const fd = new FormData(form || document.createElement('form'));
       [...files].forEach(f => fd.append('file', f));
 
+      // NOTE: adapte /upload si ton endpoint diffère
       const res = await fetch('/upload', { method: 'POST', body: fd });
       if (!res.ok) {
         const txt = await res.text().catch(()=> '');
@@ -91,19 +108,32 @@
       }
       const data = await res.json().catch(()=> ({}));
       console.log('Upload OK', data);
-      // TODO: déclencher ta suite (affichage, redirection, analyse, etc.)
+
+      // Récupère l’ID quel que soit le nom renvoyé par l’API
+      const id =
+        data?.jobId ||
+        data?.modelId ||
+        data?.id ||
+        data?.conversion_id ||
+        data?.result?.id;
+
+      // === appel du mini-patch
+      onModelReady(id);
+
+      // (optionnel) démarrer un polling viewer si tu l’utilises :
+      // window.viewer?.startPolling(id);
+
+      // TODO: suite UI (afficher miniature, activer boutons, etc.)
     } catch (err) {
       console.error('Upload failed', err);
-      // TODO: afficher un message propre à l’utilisateur
+      if (window.showToast) showToast("Échec de l’upload. Réessaie avec un STEP/STL valide.", { type:'error' });
     }
   }
 
   // Détection visuelle d’overlays bloquants (optionnel : log et suggestion)
-  // NOTE: à activer si suspicion d’overlay
   // const rect = dropzone?.getBoundingClientRect();
   // const el = document.elementFromPoint(rect.left + 5, rect.top + 5);
   // if (el && el !== dropzone && !dropzone.contains(el)) {
   //   console.warn('Un overlay semble capter les events au-dessus de la dropzone:', el);
   // }
 })();
-
