@@ -62,8 +62,12 @@ app = Flask(
     template_folder="templates"
 )
 # --- DEBUG au démarrage : log de la config statique et des routes ---
-@app.before_first_request
-def _debug_static_and_routes():
+# --- DEBUG compatible Flask 3.x : log une seule fois au 1er hit ---
+@app.before_request
+def _debug_static_and_routes_once():
+    if getattr(app, "_debug_dumped", False):
+        return
+    app._debug_dumped = True
     try:
         print("[BOOT] static_folder:", app.static_folder)
         print("[BOOT] static_url_path:", app.static_url_path)
@@ -73,6 +77,7 @@ def _debug_static_and_routes():
             print("   ", r)
     except Exception as e:
         print("[BOOT] debug failed:", e)
+
 
 # Clé de session
 secret = os.environ.get("SESSION_SECRET") or os.getenv("SECRET_KEY")
