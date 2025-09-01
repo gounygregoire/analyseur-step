@@ -50,6 +50,7 @@ from dotenv import load_dotenv
 from kombu.exceptions import OperationalError as KombuOperationalError
 from redis.exceptions import ConnectionError as RedisConnectionError
 from storage.s3 import get_signed_url
+from observability.logging import setup_logging, get_logger
 
 load_dotenv()
 
@@ -61,6 +62,8 @@ app = Flask(
     static_url_path="/static",
     template_folder="templates"
 )
+setup_logging()
+logger = get_logger(__name__)
 # --- DEBUG au démarrage : log de la config statique et des routes ---
 # --- DEBUG compatible Flask 3.x : log une seule fois au 1er hit ---
 @app.before_request
@@ -69,14 +72,14 @@ def _debug_static_and_routes_once():
         return
     app._debug_dumped = True
     try:
-        print("[BOOT] static_folder:", app.static_folder)
-        print("[BOOT] static_url_path:", app.static_url_path)
-        print("[BOOT] template_folder:", app.template_folder)
-        print("[BOOT] routes:")
+        logger.info("[BOOT] static_folder:", app.static_folder)
+        logger.info("[BOOT] static_url_path:", app.static_url_path)
+        logger.info("[BOOT] template_folder:", app.template_folder)
+        logger.info("[BOOT] routes:")
         for r in sorted(app.url_map.iter_rules(), key=lambda x: str(x)):
-            print("   ", r)
+            logger.info("   ", r)
     except Exception as e:
-        print("[BOOT] debug failed:", e)
+        logger.info("[BOOT] debug failed:", e)
 
 
 # Clé de session
