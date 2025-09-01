@@ -12,6 +12,6 @@ export default defineConfig({
         chunkFileNames: '[name].js'
       }
     }
-  }
-base: '/'                  // simple et sûr à la racine
+  },
+base: '/',                  // simple et sûr à la racine
 })
