@@ -53,38 +53,39 @@ from storage.s3 import get_signed_url
 
 load_dotenv()
 
-# Create Flask app once
-app = Flask(__name__)
+# ========= FLASK APP (corrigé) =========
+# On indique explicitement à Flask où se trouve 'static' et son URL publique,
+# et on fixe aussi 'templates' par sécurité.
+app = Flask(
+    __name__,
+    static_folder="static",
+    static_url_path="/static",
+    template_folder="templates"
+)
+
+# Clé de session
 secret = os.environ.get("SESSION_SECRET") or os.getenv("SECRET_KEY")
 if not secret:
     raise RuntimeError("SESSION_SECRET environment variable is required")
 app.secret_key = secret
 
+# Cookies de session
 app.config["SESSION_COOKIE_SECURE"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-
-# OAuth Blueprint - CONFIGURATION CORRIGÉE
-google_bp = make_google_blueprint(
-    client_id=os.getenv("GOOGLE_OAUTH_CLIENT_ID"),
-    client_secret=os.getenv("GOOGLE_OAUTH_CLIENT_SECRET"),
-    scope=["profile", "email"],
-    redirect_url="https://cadlytics.app/google_login/authorized"  # 👈 explicit
-)
-
-app.register_blueprint(google_bp, url_prefix="/auth")
-
-setup_logging(app)
-setup_metrics(app)
-logger = get_logger(__name__)
-
-# Enable CORS for API endpoints
-CORS(app)
-
-# Session configuration to prevent large cookies
 app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SECURE'] = True
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024  # 200MB max file size
+app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024  # 200MB
+
+# Routes statiques explicites (ceinture + bretelles)
+# /favicon.ico direct, et /static/<...> renvoyé par Flask si jamais un catch-all existait.
+@app.route('/favicon.ico')
+def favicon():
+    return send_from_directory(app.static_folder, 'favicon.ico', mimetype='image/x-icon')
+
+@app.route('/static/<path:filename>')
+def static_files(filename):
+    return send_from_directory(app.static_folder, filename)
+# ========= FIN DU PATCH D'INITIALISATION =========
+
 
 def _resolve_xeokit():
     """Résout le binaire xeokit-convert ou renvoie 'npx'."""
@@ -406,11 +407,6 @@ def change_language(lang):
     
     # Rediriger vers la page précédente ou l'accueil
     return redirect(request.referrer or url_for('landing'))
-
-@app.route('/static/<path:filename>')
-def serve_static(filename):
-    """Serve static files"""
-    return send_from_directory('static', filename)
 
 
 @app.route("/uploads/<path:fname>")

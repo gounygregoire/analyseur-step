@@ -13,4 +13,5 @@ export default defineConfig({
       }
     }
   }
+base: '/'                  // simple et sûr à la racine
 })
