@@ -61,6 +61,18 @@ app = Flask(
     static_url_path="/static",
     template_folder="templates"
 )
+# --- DEBUG au démarrage : log de la config statique et des routes ---
+@app.before_first_request
+def _debug_static_and_routes():
+    try:
+        print("[BOOT] static_folder:", app.static_folder)
+        print("[BOOT] static_url_path:", app.static_url_path)
+        print("[BOOT] template_folder:", app.template_folder)
+        print("[BOOT] routes:")
+        for r in sorted(app.url_map.iter_rules(), key=lambda x: str(x)):
+            print("   ", r)
+    except Exception as e:
+        print("[BOOT] debug failed:", e)
 
 # Clé de session
 secret = os.environ.get("SESSION_SECRET") or os.getenv("SECRET_KEY")
@@ -82,6 +94,11 @@ def favicon():
 @app.route('/static/<path:filename>')
 def static_files(filename):
     return send_from_directory(app.static_folder, filename)
+
+@app.route('/__routes')
+def __routes():
+    return "<pre>" + "\n".join(sorted(map(str, app.url_map.iter_rules()))) + "</pre>"
+
 # ========= FIN PATCH =========
 
 
