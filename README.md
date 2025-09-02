@@ -13,12 +13,28 @@ Les fichiers téléchargés (`uploads/`) et convertis (`converted/`) sont conser
 
 ## Lancer les services
 
+Définir les variables d'environnement suivantes **à l'identique** pour le web
+et pour le worker :
+
 ```
-redis-server --daemonize yes
-CELERY_BROKER_URL=redis://localhost:6379/0 ./start_worker.sh
-CELERY_BROKER_URL=redis://localhost:6379/0 ./start_beat.sh
-CELERY_BROKER_URL=redis://localhost:6379/0 gunicorn app:app --timeout 600
+export REDIS_URL="redis://:PASSWORD@HOST:PORT/0"  # ou CELERY_BROKER_URL
+export CELERY_RESULT_BACKEND="$REDIS_URL"
 ```
+
+Lancer l'application Flask :
+
+```
+gunicorn web:app --timeout 600
+```
+
+Lancer le worker Celery :
+
+```
+celery -A celery_app.celery worker -l info -P solo
+```
+
+Sans URLs fournies, l'application bascule en mode dégradé (`memory://` +
+`rpc://`).
 
 ## Variables d'environnement importantes
 

@@ -13,6 +13,7 @@ from flask import (
     redirect,
     url_for,
     flash,
+    current_app,
 )
 from flask_cors import CORS
 from flask_migrate import Migrate
@@ -25,6 +26,7 @@ import time
 import shutil
 import tempfile
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from OCP.STEPControl import STEPControl_Reader
 from OCP.StlAPI import StlAPI_Writer
 from OCP.Interface import Interface_Static
@@ -38,7 +40,7 @@ from material_recommender import recommend_materials_for_questionnaire
 import xkt_converter
 from tasks.conversion import generate_preview, generate_final
 from tasks.dfm import dfm_analysis
-from celery_app import celery, init_celery
+from celery_app import celery, init_celery, is_celery_ready
 from celery.result import AsyncResult
 from flask_login import LoginManager, login_required, current_user
 from translations import get_translation, get_all_translations
@@ -142,6 +144,8 @@ def handle_file_too_large(e):
 
 # Execute Celery tasks synchronously when no worker is running
 app.config['CELERY_TASK_ALWAYS_EAGER'] = os.getenv('CELERY_TASK_ALWAYS_EAGER', 'False').lower() == 'true'
+app.config['DFM_SYNC_FALLBACK'] = os.getenv('DFM_SYNC_FALLBACK', 'False').lower() == 'true'
+app.config['DFM_SYNC_TIMEOUT'] = int(os.getenv('DFM_SYNC_TIMEOUT', '30'))
 
 # Database configuration
 database_url = os.environ.get("DATABASE_URL")
@@ -1370,7 +1374,7 @@ def dfm_axes_suggest():
 
 @app.route('/api/dfm/start', methods=['POST'])
 def dfm_start():
-    """Start asynchronous DFM analysis."""
+    """Start DFM analysis with Celery if available, fallback otherwise."""
     try:
         data = request.get_json(silent=True) or {}
         file_id = data.get('fileId')
@@ -1382,9 +1386,66 @@ def dfm_start():
             return jsonify({'error': 'missing_materialProfile'}), 400
         if not demould_axis:
             return jsonify({'error': 'missing_demouldAxis'}), 400
-        task = dfm_analysis.delay(file_id, material_profile, demould_axis)
-        logger.info("DFM job queued", extra={"file_id": file_id, "job_id": task.id})
-        return jsonify({'jobId': task.id})
+
+        if current_app.config.get("CELERY_ENABLED") and is_celery_ready():
+            for attempt in range(2):
+                try:
+                    task = dfm_analysis.apply_async((file_id, material_profile, demould_axis))
+                    logger.info(
+                        "DFM job queued",
+                        extra={"file_id": file_id, "job_id": task.id},
+                    )
+                    return jsonify({'jobId': task.id, 'status': 'queued'})
+                except (
+                    RedisConnectionError,
+                    KombuOperationalError,
+                    ConnectionError,
+                ) as exc:
+                    logger.warning(
+                        "Celery queue unreachable (attempt %s)",
+                        attempt + 1,
+                        exc_info=exc,
+                    )
+                    if attempt == 0:
+                        time.sleep(0.3)
+
+        if current_app.config.get("DFM_SYNC_FALLBACK"):
+            timeout = current_app.config.get("DFM_SYNC_TIMEOUT", 30)
+
+            def run_task():
+                async_result = dfm_analysis.apply(args=(file_id, material_profile, demould_axis))
+                async_result.get()
+                return async_result.id
+
+            try:
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    job_id = executor.submit(run_task).result(timeout=timeout)
+                reports_dir = current_app.config.get("REPORTS_FOLDER", "reports")
+                json_path = os.path.join(reports_dir, f"dfm_result_{job_id}.json")
+                result = {}
+                try:
+                    with open(json_path) as fh:
+                        result = json.load(fh)
+                except FileNotFoundError:
+                    logger.warning("DFM result file missing", extra={"job_id": job_id})
+                return jsonify({'jobId': job_id, 'status': 'completed', 'result': result})
+            except TimeoutError:
+                logger.exception("DFM sync fallback timeout")
+                return jsonify({'error': 'dfm_timeout', 'message': 'Analyse trop longue'}), 504
+            except Exception as e:
+                logger.exception("DFM sync fallback failed")
+                return jsonify({'error': 'dfm_failed', 'message': str(e)}), 500
+
+        retry_after = current_app.config.get("DFM_RETRY_AFTER", 30)
+        payload = {
+            'error': 'dfm_unavailable',
+            'message': "Le service d'analyse est temporairement indisponible. Réessayez dans quelques instants.",
+            'retryAfter': retry_after,
+        }
+        response = jsonify(payload)
+        response.status_code = 503
+        response.headers['Retry-After'] = str(retry_after)
+        return response
     except Exception as e:
         logger.exception("dfm_start failed")
         return jsonify({'error': 'dfm_start_failed', 'message': str(e)}), 500
@@ -1485,6 +1546,19 @@ def health_check():
         'upload_folder': os.path.exists(UPLOAD_FOLDER),
         'converted_folder': os.path.exists(CONVERTED_FOLDER)
     })
+
+
+@app.route('/health/celery')
+def health_celery():
+    ready = is_celery_ready()
+    payload = {
+        'celery_enabled': current_app.config.get('CELERY_ENABLED', False),
+        'broker': current_app.config.get('CELERY_BROKER_URL'),
+        'backend': current_app.config.get('CELERY_RESULT_BACKEND'),
+        'ready': ready,
+    }
+    status = 200 if payload['celery_enabled'] and ready else 503
+    return jsonify(payload), status
 
 @app.route('/admin')
 def admin():
