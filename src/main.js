@@ -362,6 +362,21 @@ function byId(name) {
     if (visualizeBtn) visualizeBtn.classList.toggle('is-loading', !!state);
   }
 
+  function exposeFileId(id){
+    if (!id) return;
+    document.body.dataset.fileid = id;
+    window.CADLYTICS = window.CADLYTICS || {};
+    window.CADLYTICS.current = { jobId: id, modelId: id };
+    window.viewerAdapter = window.viewerAdapter || {};
+    window.viewerAdapter.current = { jobId: id, modelId: id };
+    const hidden = document.getElementById('fileId');
+    if (hidden && hidden.type === 'hidden') hidden.value = id;
+    window.state = window.state || {};
+    window.state.fileLoaded = true;
+    window.dispatchEvent(new CustomEvent('dfm:fileReady', { detail: { fileId: id }}));
+    console.debug('[UPLOAD] fileId exposé:', id);
+  }
+
   async function convertAndGetXKT(files){
     const fd = new FormData();
     [...files].forEach(f => fd.append('file', f));
@@ -369,6 +384,7 @@ function byId(name) {
     if (!res.ok) throw new Error(`Convert fail HTTP ${res.status}`);
     const data = await res.json();
     if (!data || !data.xktUrl) throw new Error('No xktUrl returned');
+    if (data.fileId) exposeFileId(data.fileId);
     return data.xktUrl;
   }
 
