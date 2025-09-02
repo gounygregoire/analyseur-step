@@ -135,14 +135,7 @@ class DFMOrchestrator {
 
   // ---------------------- Analyse ----------------------
   async startAnalysis({ fileId=this.fileId, materialProfile=this.materialProfile, demouldAxis=this.demouldAxis } = {}){
-    if (!fileId){
-      fileId = this.setFileIdFromPage();
-      if (!fileId){
-        UI.info("Aucun fichier à analyser. Merci d’importer une pièce.");
-        this.handleError("Fichier manquant");
-        return;
-      }
-    }
+    if (!fileId) fileId = this.setFileIdFromPage();
     if (!materialProfile){
       UI.info("Sélectionnez un matériau pour l’analyse.");
       this.handleError("Profil matière manquant");
@@ -157,18 +150,24 @@ class DFMOrchestrator {
     dbg("startAnalysis", { fileId, materialProfile, demouldAxis });
     this.setState(DFM_STATES.RUNNING);
     this._renderLoading();
+    UI.setLoading(true);
+
+    const payload = { material_profile: materialProfile, demould_axis: demouldAxis };
+    if (fileId) payload.file_id = fileId;
 
     try{
       const res = await fetch("/api/dfm/start", {
         method: "POST",
         headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({ fileId, materialProfile, demouldAxis })
+        body: JSON.stringify(payload)
       });
+      let data = {};
+      try{ data = await res.json(); }catch{}
+      console.log("POST /api/dfm/start", res.status, data);
 
       if (res.status === 200 || res.status === 202){
         UI.info("Analyse en cours…");
-        const data = await res.json();
-        const jobId = data.jobId || data.task_id || data.taskId;
+        const jobId = data.jobId || data.job_id || data.task_id || data.taskId;
         if (data.result){
           this.renderResults(data.result);
         } else if (jobId){
@@ -181,16 +180,16 @@ class DFMOrchestrator {
 
       switch(res.status){
         case 400:
-          UI.err("Les données envoyées sont invalides. Merci de reconvertir le fichier.");
+          UI.err("Aucun fichier: importez/convertez une pièce puis recommencez.");
           break;
         case 404:
-          UI.err("Fichier introuvable ou expiré. Merci de le réimporter.");
+          UI.err("Endpoint introuvable");
           break;
         case 409:
           UI.err("Analyse déjà en cours pour ce fichier.");
           break;
         case 503:
-          UI.err("Le service est momentanément indisponible, réessayez plus tard.");
+          UI.err("Service indisponible (worker/broker). Réessayez.");
           break;
         default:
           UI.err("Démarrage analyse impossible");
@@ -200,6 +199,8 @@ class DFMOrchestrator {
       console.error(e);
       UI.err("Démarrage analyse impossible");
       this.handleError("start_failed");
+    }finally{
+      UI.setLoading(false);
     }
   }
 
