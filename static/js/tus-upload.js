@@ -85,12 +85,14 @@
     document.body.dataset.fileid = id;
     // 2) expose en global
     window.CADLYTICS = window.CADLYTICS || {};
-    window.CADLYTICS.current = { jobId: id, modelId: id };
+    window.CADLYTICS.current = window.CADLYTICS.current || {};
+    window.CADLYTICS.current.fileId = id;
     // 3) notifie l’orchestrateur
     window.dispatchEvent(new CustomEvent('dfm:fileReady', { detail: { fileId: id }}));
     // 4) optionnel : accessible pour d’autres modules
     window.viewerAdapter = window.viewerAdapter || {};
-    window.viewerAdapter.current = { jobId: id, modelId: id };
+    window.viewerAdapter.current = window.viewerAdapter.current || {};
+    window.viewerAdapter.current.fileId = id;
     // 5) remplit un champ caché si présent
     const hidden = document.getElementById('fileId');
     if (hidden && hidden.type === 'hidden') hidden.value = id;
@@ -105,8 +107,8 @@
       const fd = new FormData(form || document.createElement('form'));
       [...files].forEach(f => fd.append('file', f));
 
-      // NOTE: adapte /upload si ton endpoint diffère
-      const res = await fetch('/upload', { method: 'POST', body: fd });
+      // NOTE: endpoint API d'upload
+      const res = await fetch('/api/models', { method: 'POST', body: fd });
       if (!res.ok) {
         const txt = await res.text().catch(()=> '');
         throw new Error(`HTTP ${res.status}: ${txt}`);
