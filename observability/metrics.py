@@ -1,4 +1,3 @@
-import time
 from flask import Response
 from prometheus_client import (
     Histogram,
@@ -20,6 +19,8 @@ ttfv_seconds = Histogram("ttfv_seconds", "Time from upload to preview ready")
 # Size gauges
 preview_size_bytes = Gauge("preview_size_bytes", "Preview file size in bytes")
 final_size_bytes = Gauge("final_size_bytes", "Final file size in bytes")
+# Celery readiness
+celery_ready = Gauge("celery_ready", "Celery availability (1=up,0=down)")
 # Cache ratio
 cache_hit_ratio = Gauge("cache_hit_ratio", "Cache hit ratio")
 _hits = 0
