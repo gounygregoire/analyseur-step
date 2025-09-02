@@ -33,12 +33,16 @@ export class XeokitModelViewer extends EventTarget {
     window.CADLYTICS.current = { jobId: id, modelId: id };
     window.viewerAdapter = window.viewerAdapter || {};
     window.viewerAdapter.current = { jobId: id, modelId: id };
+    const hidden = document.getElementById('fileId');
+    if (hidden && hidden.type === 'hidden') hidden.value = id;
     window.dispatchEvent(new CustomEvent('dfm:fileReady', { detail: { fileId: id }}));
+    window.state = window.state || {};
+    window.state.fileLoaded = true;
     console.debug('[VIEWER] fileId exposé:', id);
   }
 
   // --- chargement ---------------------------------------------------------
-  async load(url, { quality = "preview" } = {}) {
+  async load(url, { quality = "preview", apiId } = {}) {
     const cam = this.viewer.camera.getState();
     if (this.model) {
       this.model.destroy();
@@ -56,6 +60,10 @@ export class XeokitModelViewer extends EventTarget {
       }
     }
     this.currentQuality = quality;
+    if (apiId) {
+      this.apiId = apiId;
+      this._exposeFileId(apiId);
+    }
     if (this.heatmapActive && this.colorBuffer) {
       this._applyColors(this.colorBuffer);
     }
