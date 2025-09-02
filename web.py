@@ -483,7 +483,8 @@ def convert_step():
 
     dest_dir = app.config.get("CONVERTED_FOLDER", "/tmp/converted")
     os.makedirs(dest_dir, exist_ok=True)
-    out_name = f"{uuid.uuid4()}.xkt"
+    file_id = str(uuid.uuid4())
+    out_name = f"{file_id}.xkt"
     out_path = os.path.join(dest_dir, out_name)
 
     start = time.time()
@@ -494,6 +495,9 @@ def convert_step():
             try:
                 # tolérance STL un peu large pour rester rapide/sobre en mémoire
                 xkt_converter.convert_step_to_xkt(in_path, out_path, stl_tolerance=0.6, timeout=600)
+                uploads_dir = app.config.get("UPLOAD_FOLDER", os.path.join(app.root_path, "uploads"))
+                os.makedirs(uploads_dir, exist_ok=True)
+                shutil.copy(in_path, os.path.join(uploads_dir, f"{file_id}.step"))
             except Exception as e:
                 logger.exception("convert_step_to_xkt a échoué")
                 shutil.rmtree(temp_dir, ignore_errors=True)
@@ -541,7 +545,7 @@ def convert_step():
     logger.info("Conversion OK en %.2fs -> %s", time.time() - start, out_path)
     # La route /uploads/<fname> doit servir CONVERTED_FOLDER
     xkt_rel_url = f"/uploads/{out_name}"
-    return jsonify(success=True, url=xkt_rel_url, xktUrl=xkt_rel_url)
+    return jsonify(success=True, url=xkt_rel_url, xktUrl=xkt_rel_url, fileId=file_id)
 
 
 @app.route('/upload_file', methods=['POST'])
