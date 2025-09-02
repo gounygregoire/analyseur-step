@@ -48,43 +48,25 @@ class DFMOrchestrator {
   setMaterialProfile(p){ this.materialProfile = p || null; }
   setDemouldAxis(a){ this.demouldAxis = a || null; }
 
-  // ---------------------- Résolution robuste de fileId ----------------------
+  // ---------------------- Résolution de fileId ----------------------
   resolveFileId(){
-    // 1) si déjà présent
     if (this.fileId) return this.fileId;
 
-    // 2) data-* sur <body> / #viewer
-    const pickData = (el)=> el && (el.dataset.fileid || el.dataset.model || el.dataset.modelid || el.dataset.jobId || el.dataset.jobid);
-    let id = pickData(document.body) || pickData(document.getElementById("viewer"));
+    let id = document.body?.dataset?.fileid;
     if (id) return id;
 
-    // 3) viewer/globales
     try {
-      id = window.viewerAdapter?.current?.jobId || window.viewerAdapter?.current?.modelId;
-      if (id) return id;
-    } catch {}
-    try {
-      id = window.CADLYTICS?.current?.jobId || window.CADLYTICS?.current?.modelId;
+      id = window.CADLYTICS?.current?.fileId;
       if (id) return id;
     } catch {}
 
-    // 4) attributs data-* ailleurs dans la page
-    const any = document.querySelector("[data-fileid],[data-model],[data-modelid],[data-jobid]");
-    id = any && pickData(any);
-    if (id) return id;
+    try {
+      id = window.viewerAdapter?.current?.fileId;
+      if (id) return id;
+    } catch {}
 
-    // 5) champ caché #fileId
     const hidden = document.getElementById('fileId');
     if (hidden && hidden.type === 'hidden' && hidden.value) return hidden.value;
-
-    // 6) URL : /view/<id> ou /result/<id> ou ?fileId=…&jobId=…
-    const path = location.pathname;
-    let m = path.match(/\/(view|result)\/([^/?#]+)/i);
-    if (m && m[2]) return m[2];
-
-    const params = new URLSearchParams(location.search);
-    id = params.get("fileId") || params.get("jobId") || params.get("model") || params.get("modelId");
-    if (id) return id;
 
     return null;
   }
@@ -99,7 +81,7 @@ class DFMOrchestrator {
   // ---------------------- Axis panel ----------------------
   renderAxisPanel(){
     if (!this.fileId && !this.setFileIdFromPage()){
-      UI.info("Aucun fichier à analyser. Importez/convertissez une pièce puis recommencez.");
+      UI.info("Aucun fichier à analyser. Merci d’importer une pièce.");
       return;
     }
     if (!this.materialProfile){
@@ -156,7 +138,7 @@ class DFMOrchestrator {
     if (!fileId){
       fileId = this.setFileIdFromPage();
       if (!fileId){
-        UI.info("Aucun fichier à analyser. Importez/convertissez une pièce puis recommencez.");
+        UI.info("Aucun fichier à analyser. Merci d’importer une pièce.");
         this.handleError("Fichier manquant");
         return;
       }
@@ -182,12 +164,42 @@ class DFMOrchestrator {
         headers: {"Content-Type":"application/json"},
         body: JSON.stringify({ fileId, materialProfile, demouldAxis })
       });
-      if (!res.ok) throw new Error("start_failed");
-      const { jobId } = await res.json();
-      this.pollStatus(jobId);
+
+      if (res.status === 200 || res.status === 202){
+        UI.info("Analyse en cours…");
+        const data = await res.json();
+        const jobId = data.jobId || data.task_id || data.taskId;
+        if (data.result){
+          this.renderResults(data.result);
+        } else if (jobId){
+          this.pollStatus(jobId);
+        } else {
+          this.handleError("missing_jobId");
+        }
+        return;
+      }
+
+      switch(res.status){
+        case 400:
+          UI.err("Les données envoyées sont invalides. Merci de reconvertir le fichier.");
+          break;
+        case 404:
+          UI.err("Fichier introuvable ou expiré. Merci de le réimporter.");
+          break;
+        case 409:
+          UI.err("Analyse déjà en cours pour ce fichier.");
+          break;
+        case 503:
+          UI.err("Le service est momentanément indisponible, réessayez plus tard.");
+          break;
+        default:
+          UI.err("Démarrage analyse impossible");
+      }
+      this.handleError("start_failed");
     }catch(e){
       console.error(e);
-      this.handleError("Démarrage analyse impossible");
+      UI.err("Démarrage analyse impossible");
+      this.handleError("start_failed");
     }
   }
 
@@ -442,7 +454,13 @@ document.addEventListener("DOMContentLoaded", ()=>{
     });
   });
 
-  document.getElementById("dfmAnalyzeBtn")?.addEventListener("click", ()=> modal?.show());
+  document.getElementById("dfmAnalyzeBtn")?.addEventListener("click", ()=>{
+    if (!dfmOrchestrator.setFileIdFromPage()){
+      UI.info("Aucun fichier à analyser. Merci d’importer une pièce.");
+      return;
+    }
+    modal?.show();
+  });
 
   const btn = document.getElementById("submitQuestionnaire");
   if (!btn) return;
@@ -458,7 +476,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
       dfmOrchestrator.setMaterialProfile(result.data);
 
       if (!dfmOrchestrator.fileId){
-        UI.info("Aucun fichier à analyser. Importez/convertissez une pièce puis recommencez.");
+        UI.info("Aucun fichier à analyser. Merci d’importer une pièce.");
         return;
       }
 

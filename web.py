@@ -348,6 +348,9 @@ logger.info("CONVERTED_FOLDER=%s", CONVERTED_FOLDER)
 
 logger.info("PATH at runtime=%s", os.getenv("PATH"))
 
+# In-memory registry for uploaded models
+MODEL_REGISTRY = {}
+
 # Initialize Flask-Login
 login_manager = LoginManager(app)
 login_manager.login_view = 'auth.login'
@@ -646,6 +649,59 @@ def upload():
     shutil.rmtree(temp_dir, ignore_errors=True)
 
     return redirect(url_for('index', model=xkt_name))
+
+
+@app.route('/api/models', methods=['POST'])
+def api_create_model():
+    """Upload a STEP file, convert to XKT/STL and register it."""
+    file = request.files.get('file')
+    if not file:
+        return jsonify({'error': 'missing_file'}), 400
+    filename = secure_filename(file.filename or '')
+    if not filename.lower().endswith(('.step', '.stp')):
+        return jsonify({'error': 'invalid_format'}), 400
+
+    file_id = uuid.uuid4().hex
+    step_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{file_id}.step")
+    file.save(step_path)
+
+    stl_path = os.path.join(app.config['CONVERTED_FOLDER'], f"{file_id}.stl")
+    xkt_path = os.path.join(app.config['CONVERTED_FOLDER'], f"{file_id}.xkt")
+
+    try:
+        shape = cq.importers.importStep(step_path)
+        cq.exporters.export(shape, stl_path, 'STL')
+        xkt_converter.convert_step_to_xkt(step_path, xkt_path)
+    except Exception as exc:
+        logger.exception("conversion failed", exc_info=exc)
+        return jsonify({'error': 'conversion_failed'}), 500
+
+    created_at = datetime.utcnow().isoformat()
+    MODEL_REGISTRY[file_id] = {
+        'file_id': file_id,
+        'step_path': step_path,
+        'xkt_path': xkt_path,
+        'stl_path': stl_path,
+        'status': 'ready',
+        'created_at': created_at,
+    }
+
+    return jsonify({
+        'file_id': file_id,
+        'step_path': step_path,
+        'xkt_url': f"/uploads/{file_id}.xkt",
+        'created_at': created_at,
+    }), 201
+
+
+@app.route('/api/models/<file_id>')
+def api_get_model(file_id: str):
+    rec = MODEL_REGISTRY.get(file_id)
+    if not rec:
+        return jsonify({'error': 'not_found'}), 404
+    data = rec.copy()
+    data['xkt_url'] = f"/uploads/{file_id}.xkt"
+    return jsonify(data)
 
 
 @app.route('/api/upload', methods=['POST'])
@@ -1377,11 +1433,22 @@ def dfm_start():
     """Start DFM analysis with Celery if available, fallback otherwise."""
     try:
         data = request.get_json(silent=True) or {}
-        file_id = data.get('fileId')
+        file_id = data.get('file_id') or data.get('fileId')
         material_profile = data.get('materialProfile')
         demould_axis = data.get('demouldAxis')
         if not file_id:
             return jsonify({'error': 'missing_fileId'}), 400
+
+        rec = MODEL_REGISTRY.get(file_id)
+        if not rec:
+            return jsonify({'error': 'file_not_found'}), 404
+        if rec.get('status') != 'ready':
+            return jsonify({'error': 'file_not_ready'}), 409
+
+        step_path = rec.get('step_path')
+        if not step_path or not os.path.exists(step_path):
+            return jsonify({'error': 'file_not_found'}), 404
+
         if not material_profile:
             return jsonify({'error': 'missing_materialProfile'}), 400
         if not demould_axis:
@@ -1391,11 +1458,14 @@ def dfm_start():
             for attempt in range(2):
                 try:
                     task = dfm_analysis.apply_async((file_id, material_profile, demould_axis))
+                    rec['status'] = 'processing'
                     logger.info(
                         "DFM job queued",
-                        extra={"file_id": file_id, "job_id": task.id},
+                        extra={"file_id": file_id, "task_id": task.id},
                     )
-                    return jsonify({'jobId': task.id, 'status': 'queued'})
+                    response = jsonify({'task_id': task.id})
+                    response.status_code = 202
+                    return response
                 except (
                     RedisConnectionError,
                     KombuOperationalError,
@@ -1420,6 +1490,7 @@ def dfm_start():
             try:
                 with ThreadPoolExecutor(max_workers=1) as executor:
                     job_id = executor.submit(run_task).result(timeout=timeout)
+                rec['status'] = 'completed'
                 reports_dir = current_app.config.get("REPORTS_FOLDER", "reports")
                 json_path = os.path.join(reports_dir, f"dfm_result_{job_id}.json")
                 result = {}
@@ -1428,7 +1499,7 @@ def dfm_start():
                         result = json.load(fh)
                 except FileNotFoundError:
                     logger.warning("DFM result file missing", extra={"job_id": job_id})
-                return jsonify({'jobId': job_id, 'status': 'completed', 'result': result})
+                return jsonify({'task_id': job_id, 'result': result})
             except TimeoutError:
                 logger.exception("DFM sync fallback timeout")
                 return jsonify({'error': 'dfm_timeout', 'message': 'Analyse trop longue'}), 504
