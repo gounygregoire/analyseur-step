@@ -91,6 +91,11 @@
     // 4) optionnel : accessible pour d’autres modules
     window.viewerAdapter = window.viewerAdapter || {};
     window.viewerAdapter.current = { jobId: id, modelId: id };
+    // 5) remplit un champ caché si présent
+    const hidden = document.getElementById('fileId');
+    if (hidden && hidden.type === 'hidden') hidden.value = id;
+    window.state = window.state || {};
+    window.state.fileLoaded = true;
     console.debug('[UPLOAD] fileId exposé:', id);
   }
 
@@ -112,7 +117,9 @@
       // Récupère l’ID quel que soit le nom renvoyé par l’API
       const id =
         data?.jobId ||
+        data?.job_id ||
         data?.modelId ||
+        data?.model_id ||
         data?.id ||
         data?.conversion_id ||
         data?.result?.id;

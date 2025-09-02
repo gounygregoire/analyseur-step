@@ -40,7 +40,11 @@ class DFMOrchestrator {
     if (next === DFM_STATES.AXIS_PICK) this.renderAxisPanel();
   }
 
-  setFileId(id){ this.fileId = id || null; }
+  setFileId(id){
+    this.fileId = id || null;
+    const hidden = document.getElementById('fileId');
+    if (hidden && hidden.type === 'hidden') hidden.value = this.fileId || '';
+  }
   setMaterialProfile(p){ this.materialProfile = p || null; }
   setDemouldAxis(a){ this.demouldAxis = a || null; }
 
@@ -69,7 +73,11 @@ class DFMOrchestrator {
     id = any && pickData(any);
     if (id) return id;
 
-    // 5) URL : /view/<id> ou /result/<id> ou ?fileId=…&jobId=…
+    // 5) champ caché #fileId
+    const hidden = document.getElementById('fileId');
+    if (hidden && hidden.type === 'hidden' && hidden.value) return hidden.value;
+
+    // 6) URL : /view/<id> ou /result/<id> ou ?fileId=…&jobId=…
     const path = location.pathname;
     let m = path.match(/\/(view|result)\/([^/?#]+)/i);
     if (m && m[2]) return m[2];
