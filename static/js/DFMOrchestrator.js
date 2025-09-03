@@ -190,10 +190,14 @@ class DFMOrchestrator {
     UI.setLoading(true);
 
     const payload = {
-      file_id: fileId,                     // ← on force l’inclusion s’il existe
-      material_profile: materialProfile,
-      demould_axis: demouldAxis
-    };
+  // double-clé pour compat avec les deux conventions
+  fileId,                  // camelCase – beaucoup de backends le lisent
+  file_id: fileId,         // snake_case – si ton backend regarde ça, il l’a aussi
+  material_profile: materialProfile,
+  demould_axis: demouldAxis
+};
+console.debug("[DFM] start payload", payload);
+
 
     try {
       const res = await fetch("/api/dfm/start", {
