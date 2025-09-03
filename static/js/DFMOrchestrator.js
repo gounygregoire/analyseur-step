@@ -49,33 +49,34 @@ class DFMOrchestrator {
   setDemouldAxis(a){ this.demouldAxis = a || null; }
 
   // ---------------------- Résolution de fileId ----------------------
-  // ---------------------- Résolution de fileId ----------------------
-resolveFileId(){
-  // 1) fileId déjà connu en mémoire ?
-  if (this.fileId) return this.fileId;
+  resolveFileId(){
+    // 1) fileId déjà en mémoire ?
+    if (this.fileId) return this.fileId;
 
-  // 2) dataset du <body>
-  let id = document.body?.dataset?.fileid;
-  if (id) return id;
+    // 2) dataset du <body>
+    let id = document.body?.dataset?.fileid;
+    if (id) return id;
 
-  // 3) global (fallback)
-  id = window.CADLYTICS?.current?.fileId;
-  if (id) return id;
+    // 3) global (fallback)
+    id = window.CADLYTICS?.current?.fileId;
+    if (id) return id;
 
-  // 4) input hidden
-  const hidden = document.getElementById('fileId');
-  if (hidden && hidden.type === 'hidden' && hidden.value) return hidden.value;
+    // 4) input hidden
+    const hidden = document.getElementById('fileId');
+    if (hidden && hidden.type === 'hidden' && hidden.value) return hidden.value;
 
-  return null;
-}
+    // 5) viewerAdapter éventuel
+    id = window.viewerAdapter?.current?.fileId;
+    if (id) return id;
 
+    return null;
+  }
 
-setFileIdFromPage(){
-  const id = this.resolveFileId();
-  if (id) this.setFileId(id);
-  return id;
-}
-
+  setFileIdFromPage(){
+    const id = this.resolveFileId();
+    if (id) this.setFileId(id);
+    return id;
+  }
 
   // ---------------------- Axis panel ----------------------
   renderAxisPanel(){
@@ -99,7 +100,7 @@ setFileIdFromPage(){
     const container = panel.querySelector("#axisPickerContainer");
     this.axisPicker = new AxisPicker(container);
     this.axisPicker.addEventListener("preview", e => this.previewAxis(e.detail));
-    this.axisPicker.addEventListener("clear", () => window.viewerAdapter?.clearAxisPreview());
+    this.axisPicker.addEventListener("clear", () => window.viewerAdapter?.clearAxisPreview?.());
     this.axisPicker.addEventListener("confirm", e => this.confirmAxis(e.detail));
   }
 
@@ -111,7 +112,7 @@ setFileIdFromPage(){
         if (res.ok){
           const data = await res.json();
           this._autoSuggestion = data;
-          window.viewerAdapter?.previewDemouldAxis(data);
+          window.viewerAdapter?.previewDemouldAxis?.(data);
           if (data.axis && data.axis !== "VECTOR"){
             this.axisPicker?.setValue({ axis:data.axis, direction:data.direction });
           }
@@ -119,7 +120,7 @@ setFileIdFromPage(){
       }catch(e){ console.error(e); }
     }else{
       this._autoSuggestion = sel;
-      window.viewerAdapter?.previewDemouldAxis(sel);
+      window.viewerAdapter?.previewDemouldAxis?.(sel);
     }
   }
 
@@ -129,120 +130,116 @@ setFileIdFromPage(){
     dbg("confirmAxis", chosen);
     document.getElementById("dfmAxisPanel")?.remove();
     this.axisPicker = null;
-    this.startAnalysis();
+    this.startAnalysis(); // ← lance l’analyse
   }
 
   // ---------------------- Analyse ----------------------
-  // ---------------------- Analyse ----------------------
-async function startAnalysis({
-  fileId = this.fileId,
-  materialProfile = this.materialProfile,
-  demouldAxis = this.demouldAxis
-} = {}) {
-  // ➊ Résolution robuste du fileId au tout début
-  if (!fileId) {
-    // a) champ caché
-    const hid = document.getElementById('fileId');
-    if (hid && hid.value) fileId = hid.value;
+  async startAnalysis({
+    fileId = this.fileId,
+    materialProfile = this.materialProfile,
+    demouldAxis = this.demouldAxis
+  } = {}) {
+    // ➊ Résolution robuste du fileId au tout début
+    if (!fileId) {
+      // a) champ caché
+      const hid = document.getElementById('fileId');
+      if (hid && hid.value) fileId = hid.value;
 
-    // b) data-fileid sur <body>
-    if (!fileId && document?.body?.dataset?.fileid) {
-      fileId = document.body.dataset.fileid;
-    }
-
-    // c) global simple exposé par l’uploader
-    if (!fileId && window?.CADLYTICS?.current?.fileId) {
-      fileId = window.CADLYTICS.current.fileId;
-    }
-
-    // d) (facultatif) le viewer peut l’exposer
-    if (!fileId && window?.viewerAdapter?.current?.fileId) {
-      fileId = window.viewerAdapter.current.fileId;
-    }
-
-    // e) dernier fallback : méthode util de l’orchestrateur
-    if (!fileId && typeof this.setFileIdFromPage === "function") {
-      fileId = this.setFileIdFromPage();
-    }
-
-    // On mémorise si trouvé
-    if (fileId) this.setFileId?.(fileId);
-  }
-
-  // ➋ Garde-fous côté UI
-  if (!fileId) {
-    UI.info("Aucun fichier à analyser. Merci d’importer une pièce.");
-    this.handleError?.("file_missing");
-    return;
-  }
-  if (!materialProfile) {
-    UI.info("Sélectionnez un matériau pour l’analyse.");
-    this.handleError?.("profil_matiere_manquant");
-    return;
-  }
-  if (!demouldAxis) {
-    UI.info("Veuillez valider l’axe de démoulage.");
-    this.handleError?.("axe_manquant");
-    return;
-  }
-
-  dbg("startAnalysis", { fileId, materialProfile, demouldAxis });
-  this.setState?.(DFM_STATES.RUNNING);
-  this._renderLoading?.();
-  UI.setLoading(true);
-
-  const payload = {
-    file_id: fileId,                     // ← on force l’inclusion s’il existe
-    material_profile: materialProfile,
-    demould_axis: demouldAxis
-  };
-
-  try {
-    const res = await fetch("/api/dfm/start", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-
-    let data = {};
-    try { data = await res.json(); } catch {}
-
-    console.log("POST /api/dfm/start", res.status, data);
-
-    if (res.status === 200 || res.status === 202) {
-      UI.info("Analyse en cours…");
-      const jobId = data.jobId || data.job_id || data.task_id || data.taskId;
-
-      if (data.result) {
-        this.renderResults?.(data.result);
-      } else if (jobId) {
-        this.pollStatus?.(jobId);
-      } else {
-        this.handleError?.("missing_jobId");
+      // b) data-fileid sur <body>
+      if (!fileId && document?.body?.dataset?.fileid) {
+        fileId = document.body.dataset.fileid;
       }
+
+      // c) global exposé par l’uploader
+      if (!fileId && window?.CADLYTICS?.current?.fileId) {
+        fileId = window.CADLYTICS.current.fileId;
+      }
+
+      // d) viewer éventuel
+      if (!fileId && window?.viewerAdapter?.current?.fileId) {
+        fileId = window.viewerAdapter.current.fileId;
+      }
+
+      // e) fallback orchestrateur
+      if (!fileId) fileId = this.setFileIdFromPage();
+
+      // On mémorise si trouvé
+      if (fileId) this.setFileId(fileId);
+    }
+
+    // ➋ Garde-fous côté UI
+    if (!fileId) {
+      UI.info("Aucun fichier à analyser. Merci d’importer une pièce.");
+      this.handleError?.("file_missing");
+      return;
+    }
+    if (!materialProfile) {
+      UI.info("Sélectionnez un matériau pour l’analyse.");
+      this.handleError?.("profil_matiere_manquant");
+      return;
+    }
+    if (!demouldAxis) {
+      UI.info("Veuillez valider l’axe de démoulage.");
+      this.handleError?.("axe_manquant");
       return;
     }
 
-    // Messages dédiés selon code HTTP
-    switch (res.status) {
-      case 400: UI.err("Aucun fichier: importez/convertez une pièce puis recommencez."); break;
-      case 404: UI.err("Endpoint introuvable"); break;
-      case 409: UI.err("Analyse déjà en cours pour ce fichier."); break;
-      case 503: UI.err("Service indisponible (worker/broker). Réessayez."); break;
-      default:  UI.err("Démarrage analyse impossible");
+    dbg("startAnalysis", { fileId, materialProfile, demouldAxis });
+    this.setState(DFM_STATES.RUNNING);
+    this._renderLoading();
+    UI.setLoading(true);
+
+    const payload = {
+      file_id: fileId,                     // ← on force l’inclusion s’il existe
+      material_profile: materialProfile,
+      demould_axis: demouldAxis
+    };
+
+    try {
+      const res = await fetch("/api/dfm/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      let data = {};
+      try { data = await res.json(); } catch {}
+
+      console.log("POST /api/dfm/start", res.status, data);
+
+      if (res.status === 200 || res.status === 202) {
+        UI.info("Analyse en cours…");
+        const jobId = data.jobId || data.job_id || data.task_id || data.taskId;
+
+        if (data.result) {
+          this.renderResults(data.result);
+        } else if (jobId) {
+          this.pollStatus(jobId);
+        } else {
+          this.handleError("missing_jobId");
+        }
+        return;
+      }
+
+      // Messages dédiés selon code HTTP
+      switch (res.status) {
+        case 400: UI.err("Aucun fichier: importez/convertez une pièce puis recommencez."); break;
+        case 404: UI.err("Endpoint introuvable"); break;
+        case 409: UI.err("Analyse déjà en cours pour ce fichier."); break;
+        case 503: UI.err("Service indisponible (worker/broker). Réessayez."); break;
+        default:  UI.err("Démarrage analyse impossible");
+      }
+      this.handleError("start_failed");
+
+    } catch (e) {
+      console.error(e);
+      UI.err("Démarrage analyse impossible");
+      this.handleError("start_failed");
+
+    } finally {
+      UI.setLoading(false);
     }
-    this.handleError?.("start_failed");
-
-  } catch (e) {
-    console.error(e);
-    UI.err("Démarrage analyse impossible");
-    this.handleError?.("start_failed");
-
-  } finally {
-    UI.setLoading(false);
   }
-}
-
 
   async pollStatus(jobId){
     dbg("pollStatus", jobId);
@@ -350,8 +347,8 @@ async function startAnalysis({
     }
 
     // Heatmap / annotations
-    window.viewerAdapter?.applyHeatmap(results.heatmap);
-    window.viewerAdapter?.addAnnotations(results.annotations);
+    window.viewerAdapter?.applyHeatmap?.(results.heatmap);
+    window.viewerAdapter?.addAnnotations?.(results.annotations);
   }
 
   handleError(message){

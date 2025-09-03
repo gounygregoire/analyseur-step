@@ -348,53 +348,54 @@ function byId(name) {
   const visualizeBtn = document.getElementById('visualizeBtn');
 
   // ---- Helpers ----
-  let lastXktUrl = null;
-  function setHasFileUI(has){
-    if (!dropzone) return;
-    dropzone.classList.toggle('has-file', !!has);
-  }
-  function enableVisualizeBtn(enable){
-    if (!visualizeBtn) return;
-    visualizeBtn.disabled = !enable;
-    visualizeBtn.setAttribute('aria-disabled', String(!enable));
-  }
-  function showLoading(state){
-    if (visualizeBtn) visualizeBtn.classList.toggle('is-loading', !!state);
-  }
+let lastXktUrl = null;
 
-  function exposeFileId(id){
-    if (!id) return;
-    document.body.dataset.fileid = id;
-    window.CADLYTICS = window.CADLYTICS || {};
-    window.CADLYTICS.current = { jobId: id, modelId: id };
-    window.viewerAdapter = window.viewerAdapter || {};
-    window.viewerAdapter.current = { jobId: id, modelId: id };
-    const hidden = document.getElementById('fileId');
-    if (hidden && hidden.type === 'hidden') hidden.value = id;
-    window.state = window.state || {};
-    window.state.fileLoaded = true;
-    window.dispatchEvent(new CustomEvent('dfm:fileReady', { detail: { fileId: id }}));
-    console.debug('[UPLOAD] fileId exposé:', id);
-  }
+function setHasFileUI(has){
+  if (!dropzone) return;
+  dropzone.classList.toggle('has-file', !!has);
+}
+function enableVisualizeBtn(enable){
+  if (!visualizeBtn) return;
+  visualizeBtn.disabled = !enable;
+  visualizeBtn.setAttribute('aria-disabled', String(!enable));
+}
+function showLoading(state){
+  if (visualizeBtn) visualizeBtn.classList.toggle('is-loading', !!state);
+}
 
- // Petite utilitaire pour exposer l'ID partout
+/** Expose un fileId dans tous les points d’accès attendus par l’app */
 function exposeFileId(fileId) {
   if (!fileId) return;
 
   // 1) champ caché
   const h = document.getElementById('fileId');
-  if (h) h.value = fileId;
+  if (h && h.type === 'hidden') h.value = fileId;
 
   // 2) dataset du <body>
   document.body.dataset.fileid = fileId;
 
-  // 3) global simple (fallback)
+  // 3) globaux simples pour l’orchestrateur / viewer
   window.CADLYTICS = window.CADLYTICS || {};
   window.CADLYTICS.current = { fileId };
 
-  console.info("[convert] file_id =", fileId);
+  window.viewerAdapter = window.viewerAdapter || {};
+  window.viewerAdapter.current = { fileId };
+
+  // 4) petit état UI
+  window.state = window.state || {};
+  window.state.fileLoaded = true;
+
+  window.dispatchEvent(new CustomEvent('dfm:fileReady', { detail: { fileId } }));
+  console.info('[UPLOAD] fileId exposé :', fileId);
 }
 
+/** Essaie d’extraire l’UUID depuis une URL /uploads/<uuid>.(step|stp|xkt|stl) */
+function deriveIdFromUrl(u) {
+  const m = String(u||"").match(/\/uploads\/([a-f0-9-]+)\.(?:step|stp|xkt|stl)$/i);
+  return m ? m[1] : null;
+}
+
+/** Appelle /convert, récupère xktUrl et expose fileId même si le back ne le renvoie pas */
 async function convertAndGetXKT(files) {
   const fd = new FormData();
   [...files].forEach(f => fd.append('file', f));
@@ -403,98 +404,106 @@ async function convertAndGetXKT(files) {
   if (!res.ok) throw new Error(`Convert fail HTTP ${res.status}`);
 
   const data = await res.json();
-  // Le back renvoie { xktUrl, file_id, ... }
-  if (!data || !data.xktUrl) throw new Error('No xktUrl returned');
+  // Formats attendus côté back :
+  // { success:true, url:"/uploads/<id>.step", xktUrl:"/uploads/<id>.xkt", file_id?: "<id>" }
 
-  if (data.file_id) {
-    exposeFileId(data.file_id);     // 👈 on expose l’ID ici
+  const xktUrl = data?.xktUrl;
+  if (!xktUrl) throw new Error('No xktUrl returned');
+
+  // 1) On tente d’obtenir un fileId
+  let fileId = data.file_id
+            || deriveIdFromUrl(data.url)
+            || deriveIdFromUrl(data.xktUrl);
+
+  if (!fileId) {
+    console.warn("[convert] pas de file_id ni dérivable", data);
   } else {
-    console.warn("[convert] pas de file_id dans la réponse");
+    exposeFileId(fileId);
   }
 
-  return data.xktUrl;
+  return xktUrl;
 }
 
+async function visualizeFromFiles(files){
+  if (!files || !files.length) return;
+  state.fileLoaded = false;
+  try {
+    showLoading(true);
+    setHasFileUI(true);
+    enableVisualizeBtn(false);
 
-  async function visualizeFromFiles(files){
-    if (!files || !files.length) return;
-    state.fileLoaded = false;
-    try {
-      showLoading(true);
-      setHasFileUI(true);
-      enableVisualizeBtn(false);
-      const xktUrl = await convertAndGetXKT(files);
-      lastXktUrl = xktUrl;
-      if (typeof initViewer === 'function') {
-        await initViewer(xktUrl);
-      } else {
-        console.warn('initViewer(modelUrl) is not available.');
-      }
-      enableVisualizeBtn(true);
-    } catch (err) {
-      console.error('Visualization error:', err);
-      enableVisualizeBtn(false);
-      setHasFileUI(false);
-      alert('Échec de la visualisation. Merci de réessayer.');
-    } finally {
-      showLoading(false);
+    const xktUrl = await convertAndGetXKT(files);
+    lastXktUrl = xktUrl;
+
+    if (typeof initViewer === 'function') {
+      await initViewer(xktUrl);
+    } else {
+      console.warn('initViewer(modelUrl) is not available.');
     }
+    enableVisualizeBtn(true);
+  } catch (err) {
+    console.error('Visualization error:', err);
+    enableVisualizeBtn(false);
+    setHasFileUI(false);
+    alert('Échec de la visualisation. Merci de réessayer.');
+  } finally {
+    showLoading(false);
   }
+}
 
-  // ---- Écouteurs fichier ----
-  if (fileInput) {
-    fileInput.addEventListener('change', () => {
-      if (fileInput.files?.length) {
-        setHasFileUI(true);
-        visualizeFromFiles(fileInput.files);
-      } else {
-        setHasFileUI(false);
-      }
-    });
-  }
+// ---- Écouteurs fichier ----
+if (fileInput) {
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files?.length) {
+      setHasFileUI(true);
+      visualizeFromFiles(fileInput.files);
+    } else {
+      setHasFileUI(false);
+    }
+  });
+}
 
-  if (dropzone) {
-    ['dragenter','dragover'].forEach(ev =>
-      dropzone.addEventListener(ev, (e) => {
-        e.preventDefault(); e.stopPropagation();
-        dropzone.classList.add('drag-over');
-      }, { passive:false })
-    );
-    ['dragleave','drop'].forEach(ev =>
-      dropzone.addEventListener(ev, (e) => {
-        e.preventDefault(); e.stopPropagation();
-        dropzone.classList.remove('drag-over');
-      }, { passive:false })
-    );
-    dropzone.addEventListener('drop', (e) => {
-      const files = e.dataTransfer?.files;
-      if (files && files.length) {
-        setHasFileUI(true);
-        visualizeFromFiles(files);
-      }
-    }, { passive:false });
-  }
+if (dropzone) {
+  ['dragenter','dragover'].forEach(ev =>
+    dropzone.addEventListener(ev, (e) => {
+      e.preventDefault(); e.stopPropagation();
+      dropzone.classList.add('drag-over');
+    }, { passive:false })
+  );
+  ['dragleave','drop'].forEach(ev =>
+    dropzone.addEventListener(ev, (e) => {
+      e.preventDefault(); e.stopPropagation();
+      dropzone.classList.remove('drag-over');
+    }, { passive:false })
+  );
+  dropzone.addEventListener('drop', (e) => {
+    const files = e.dataTransfer?.files;
+    if (files && files.length) {
+      setHasFileUI(true);
+      visualizeFromFiles(files);
+    }
+  }, { passive:false });
+}
 
-  // ---- Bouton “Visualiser” sans reload ----
-  if (visualizeBtn) {
-    visualizeBtn.setAttribute('type', 'button');
-    visualizeBtn.addEventListener('click', async (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (lastXktUrl) {
-        if (typeof initViewer === 'function') {
-          await initViewer(lastXktUrl);
-        }
-        return;
+// ---- Bouton “Visualiser” sans reload ----
+if (visualizeBtn) {
+  visualizeBtn.setAttribute('type', 'button');
+  visualizeBtn.addEventListener('click', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (lastXktUrl) {
+      if (typeof initViewer === 'function') {
+        await initViewer(lastXktUrl);
       }
-      if (fileInput?.files?.length) {
-        await visualizeFromFiles(fileInput.files);
-      } else {
-        alert('Aucun fichier sélectionné.');
-      }
-    });
-  }
+      return;
+    }
+    if (fileInput?.files?.length) {
+      await visualizeFromFiles(fileInput.files);
+    } else {
+      alert('Aucun fichier sélectionné.');
+    }
+  });
+}
 
-  setHasFileUI(!!(fileInput?.files?.length));
-  enableVisualizeBtn(false);
-})();
+setHasFileUI(!!(fileInput?.files?.length));
+enableVisualizeBtn(false);
