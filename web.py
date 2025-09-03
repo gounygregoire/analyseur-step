@@ -37,7 +37,7 @@ from heatmap import generate_heatmap
 from material_recommender import recommend_materials_for_questionnaire
 import xkt_converter
 from tasks.conversion import generate_preview, generate_final
-from tasks.dfm import dfm_analysis
+from tasks.dfm import dfm_run
 from celery_app import celery, init_celery
 from celery.result import AsyncResult
 from flask_login import LoginManager, login_required, current_user
@@ -1378,9 +1378,12 @@ def dfm_start():
             return jsonify({"error": "missing_materialProfile"}), 400
         if not demould_axis:
             return jsonify({"error": "missing_demouldAxis"}), 400
-        task = dfm_analysis.delay(file_id, material_profile, demould_axis)
+        task = dfm_run.apply_async(
+            args=[file_id, material_profile, demould_axis],
+            queue=os.getenv("CELERY_DEFAULT_QUEUE", "dfm"),
+        )
         logger.info("DFM job queued", extra={"file_id": file_id, "job_id": task.id})
-        return jsonify({'jobId': task.id})
+        return jsonify({"jobId": task.id}), 200
     except Exception as e:
         logger.exception("dfm_start failed")
         return jsonify({'error': 'dfm_start_failed', 'message': str(e)}), 500
@@ -1393,22 +1396,26 @@ def dfm_status():
     if not job_id:
         return jsonify({'error': 'missing_jobId'}), 400
     try:
-        res = AsyncResult(job_id, app=celery)
-        state_map = {
-            'PENDING': 'queued',
-            'STARTED': 'in_progress',
-            'PROGRESS': 'in_progress',
-            'SUCCESS': 'completed',
-            'FAILURE': 'failed',
-        }
-        response = {'status': state_map.get(res.state, 'queued')}
-        info = res.info if isinstance(res.info, dict) else {}
-        if 'progress' in info:
-            response['progress'] = info['progress']
-        return jsonify(response)
+        ar = AsyncResult(job_id, app=celery)
+        if ar.state == "PENDING":
+            return jsonify({"status": "queued"})
+        if ar.state == "PROGRESS":
+            meta = ar.info or {}
+            return jsonify(
+                {
+                    "status": "running",
+                    "step": meta.get("step"),
+                    "progress": meta.get("progress"),
+                }
+            )
+        if ar.state == "SUCCESS":
+            return jsonify({"status": "done", "result": ar.result})
+        if ar.state in ("FAILURE", "REVOKED"):
+            return jsonify({"status": "error", "error": str(ar.info)}), 500
+        return jsonify({"status": ar.state.lower()})
     except Exception as e:
         logger.exception("dfm_status failed")
-        return jsonify({'error': 'dfm_status_failed', 'message': str(e)}), 500
+        return jsonify({"error": "dfm_status_failed", "message": str(e)}), 500
 
 
 @app.route('/api/dfm/results')
