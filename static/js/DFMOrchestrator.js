@@ -10,14 +10,55 @@ const dbg = (...a) => { if (DEBUG_DFM) console.debug("[DFM]", ...a); };
 
 // ---------------------- UI helpers ----------------------
 const UI = {
-  info(m){ if (window.showToast) showToast(m,{type:"info"}); else alert(m); },
-  warn(m){ if (window.showToast) showToast(m,{type:"warn"}); else alert(m); },
-  err(m){  if (window.showToast) showToast(m,{type:"error"}); else alert(m); },
+  info(m){ if (window.showToast) showToast(m,{type:"info"}); },
+  warn(m){ if (window.showToast) showToast(m,{type:"warn"}); },
+  err(m){  if (window.showToast) showToast(m,{type:"error"}); },
   setLoading(on){
     const b = document.getElementById("submitQuestionnaire");
     if (b) b.disabled = !!on;
+  },
+  progress(pct){
+    const bar = document.getElementById("dfmProgressBar");
+    if (bar) bar.style.width = `${pct}%`;
   }
 };
+
+const StatusUI = {
+  set(text){
+    const el = document.querySelector('#dfmStatusText');
+    if (el) el.textContent = text || '';
+  }
+};
+
+async function pollJobStatus(jobId, onUpdate, onDone, onError) {
+  let attempts = 0;
+  let queuedSince = Date.now();
+
+  async function step() {
+    try {
+      const res = await fetch(`/api/dfm/status?jobId=${encodeURIComponent(jobId)}`);
+      const data = await res.json(); // {status:'queued'|'running'|'done'|'error', step?, progress?}
+
+      onUpdate?.(data);
+
+      if (data.status === "done") { onDone?.(data); return; }
+      if (data.status === "error") { onError?.(data); return; }
+
+      attempts++;
+      const delay = Math.min(1000 * Math.pow(1.5, attempts), 10000);
+
+      if (data.status === "queued" && Date.now() - queuedSince > 90_000) {
+        StatusUI.set("Toujours en file d’attente… un worker va démarrer dès que possible.");
+        queuedSince = Date.now();
+      }
+      setTimeout(step, delay);
+    } catch (e) {
+      console.error("poll error", e);
+      setTimeout(step, 5000);
+    }
+  }
+  step();
+}
 
 // ---------------------- États ----------------------
 export const DFM_STATES = {
@@ -33,6 +74,7 @@ class DFMOrchestrator {
     this.demouldAxis = null;
     this.axisPicker = null;
     this._autoSuggestion = null;
+    this.onAnalysisDone = null;
   }
 
   setState(next){
@@ -207,19 +249,31 @@ class DFMOrchestrator {
         body: JSON.stringify(payload)
       });
 
-      let data = {};
-      try { data = await res.json(); } catch {}
+      let startResp = {};
+      try { startResp = await res.json(); } catch {}
 
-      console.log("POST /api/dfm/start", res.status, data);
+      console.log("POST /api/dfm/start", res.status, startResp);
 
       if (res.status === 200 || res.status === 202) {
-        UI.info("Analyse en cours…");
-        const jobId = data.jobId || data.job_id || data.task_id || data.taskId;
+        const { jobId } = startResp;
 
-        if (data.result) {
-          this.renderResults(data.result);
+        if (startResp.result) {
+          this.renderResults(startResp.result);
         } else if (jobId) {
-          this.pollStatus(jobId);
+          StatusUI.set("Analyse en cours…");
+          this.onAnalysisDone = () => this.fetchResults(jobId);
+          pollJobStatus(
+            jobId,
+            (s) => {
+              if (s.status === "running") {
+                const label = s.step ? `Analyse en cours… (${s.step})` : "Analyse en cours…";
+                StatusUI.set(label);
+                if (typeof s.progress === "number" && UI.progress) UI.progress(s.progress);
+              }
+            },
+            (s) => { StatusUI.set("Analyse terminée"); this.onAnalysisDone?.(s); },
+            (s) => { StatusUI.set("Échec de l’analyse"); UI.err("Échec de l’analyse"); }
+          );
         } else {
           this.handleError("missing_jobId");
         }
@@ -246,25 +300,6 @@ class DFMOrchestrator {
     }
   }
 
-  async pollStatus(jobId){
-    dbg("pollStatus", jobId);
-    try{
-      const res = await fetch(`/api/dfm/status?jobId=${encodeURIComponent(jobId)}`);
-      if (!res.ok) throw new Error("status_failed");
-      const data = await res.json();
-
-      if (typeof data.progress === "number"){
-        const bar = document.getElementById("dfmProgressBar");
-        if (bar) bar.style.width = `${data.progress}%`;
-      }
-      if (data.status === "completed") this.fetchResults(jobId);
-      else if (data.status === "failed") this.handleError("Analyse échouée");
-      else setTimeout(() => this.pollStatus(jobId), 2500);
-    }catch(e){
-      console.error(e);
-      this.handleError("Erreur de suivi d’analyse");
-    }
-  }
 
   async fetchResults(jobId){
     dbg("fetchResults", jobId);
@@ -280,6 +315,7 @@ class DFMOrchestrator {
   }
 
   renderResults(results = {}){
+    StatusUI.set("Analyse terminée");
     this.setState(DFM_STATES.RESULTS);
     const section = document.getElementById("dfmResultsSection");
     if (section) section.style.display = "block";
@@ -357,6 +393,7 @@ class DFMOrchestrator {
   }
 
   handleError(message){
+    StatusUI.set("Échec de l’analyse");
     this.setState(DFM_STATES.ERROR);
     const section = document.getElementById("dfmResultsSection");
     if (section) section.style.display = "block";
