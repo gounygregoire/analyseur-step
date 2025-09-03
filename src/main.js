@@ -377,16 +377,44 @@ function byId(name) {
     console.debug('[UPLOAD] fileId exposé:', id);
   }
 
-  async function convertAndGetXKT(files){
-    const fd = new FormData();
-    [...files].forEach(f => fd.append('file', f));
-    const res = await fetch('/convert', { method: 'POST', body: fd });
-    if (!res.ok) throw new Error(`Convert fail HTTP ${res.status}`);
-    const data = await res.json();
-    if (!data || !data.xktUrl) throw new Error('No xktUrl returned');
-    if (data.fileId) exposeFileId(data.fileId);
-    return data.xktUrl;
+ // Petite utilitaire pour exposer l'ID partout
+function exposeFileId(fileId) {
+  if (!fileId) return;
+
+  // 1) champ caché
+  const h = document.getElementById('fileId');
+  if (h) h.value = fileId;
+
+  // 2) dataset du <body>
+  document.body.dataset.fileid = fileId;
+
+  // 3) global simple (fallback)
+  window.CADLYTICS = window.CADLYTICS || {};
+  window.CADLYTICS.current = { fileId };
+
+  console.info("[convert] file_id =", fileId);
+}
+
+async function convertAndGetXKT(files) {
+  const fd = new FormData();
+  [...files].forEach(f => fd.append('file', f));
+
+  const res = await fetch('/convert', { method: 'POST', body: fd });
+  if (!res.ok) throw new Error(`Convert fail HTTP ${res.status}`);
+
+  const data = await res.json();
+  // Le back renvoie { xktUrl, file_id, ... }
+  if (!data || !data.xktUrl) throw new Error('No xktUrl returned');
+
+  if (data.file_id) {
+    exposeFileId(data.file_id);     // 👈 on expose l’ID ici
+  } else {
+    console.warn("[convert] pas de file_id dans la réponse");
   }
+
+  return data.xktUrl;
+}
+
 
   async function visualizeFromFiles(files){
     if (!files || !files.length) return;
