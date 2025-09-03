@@ -1369,15 +1369,15 @@ def dfm_start():
     """Start asynchronous DFM analysis."""
     try:
         data = request.get_json(silent=True) or {}
-        file_id = data.get('fileId')
-        material_profile = data.get('materialProfile')
-        demould_axis = data.get('demouldAxis')
+        file_id = data.get("file_id") or data.get("fileId")
+        material_profile = data.get("material_profile") or data.get("materialProfile")
+        demould_axis = data.get("demould_axis") or data.get("demouldAxis")
         if not file_id:
-            return jsonify({'error': 'missing_fileId'}), 400
+            return jsonify({"error": "missing_fileId"}), 400
         if not material_profile:
-            return jsonify({'error': 'missing_materialProfile'}), 400
+            return jsonify({"error": "missing_materialProfile"}), 400
         if not demould_axis:
-            return jsonify({'error': 'missing_demouldAxis'}), 400
+            return jsonify({"error": "missing_demouldAxis"}), 400
         task = dfm_analysis.delay(file_id, material_profile, demould_axis)
         logger.info("DFM job queued", extra={"file_id": file_id, "job_id": task.id})
         return jsonify({'jobId': task.id})
