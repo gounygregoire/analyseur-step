@@ -484,10 +484,25 @@ export function collectMaterialForm(){
 // ---------------------- Wiring des boutons ----------------------
 document.addEventListener("DOMContentLoaded", ()=>{
   const modalEl = document.getElementById("materialQuestionnaireModal");
-  const modal = modalEl ? new bootstrap.Modal(modalEl) : null;
+  let modal = null;
+
+  if (modalEl) {
+    if (window.bootstrap?.Modal) {
+      modal = new bootstrap.Modal(modalEl);
+    } else {
+      // Fallback ultra simple si Bootstrap n'est pas dispo
+      modal = {
+        show(){ modalEl.classList.add("show"); modalEl.style.display = "block"; modalEl.removeAttribute("aria-hidden"); },
+        hide(){ modalEl.classList.remove("show"); modalEl.style.display = "none"; modalEl.setAttribute("aria-hidden","true"); }
+      };
+    }
+  }
 
   const btn = document.getElementById("submitQuestionnaire");
   if (!btn) return;
+
+  // ... (le reste de ton listener 'click' inchangé)
+});
 
   function normalizeProfile(raw){
     const arr = v => Array.isArray(v) ? v : (v ? [v] : []);
@@ -542,5 +557,4 @@ document.addEventListener("DOMContentLoaded", ()=>{
     } finally {
       UI.setLoading(false);
     }
-  });
 });
