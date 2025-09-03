@@ -507,3 +507,4 @@ if (visualizeBtn) {
 
 setHasFileUI(!!(fileInput?.files?.length));
 enableVisualizeBtn(false);
+})();
