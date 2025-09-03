@@ -486,42 +486,53 @@ document.addEventListener("DOMContentLoaded", ()=>{
   const modalEl = document.getElementById("materialQuestionnaireModal");
   const modal = modalEl ? new bootstrap.Modal(modalEl) : null;
 
-  // exclusivités en live
-  EXCLUSIVE_GROUPS.forEach(group=>{
-    const inputs = group.map(id=>document.getElementById(id)).filter(Boolean);
-    inputs.forEach(input=>{
-      input.addEventListener("change", ()=>{
-        if (input.checked) inputs.forEach(o=>{ if (o!==input) o.checked=false; });
-      });
-    });
-  });
-
-  document.getElementById("dfmAnalyzeBtn")?.addEventListener("click", ()=>{
-    if (!dfmOrchestrator.setFileIdFromPage()){
-      UI.info("Aucun fichier à analyser. Merci d’importer une pièce.");
-      return;
-    }
-    modal?.show();
-  });
-
   const btn = document.getElementById("submitQuestionnaire");
   if (!btn) return;
+
+  function normalizeProfile(raw){
+    const arr = v => Array.isArray(v) ? v : (v ? [v] : []);
+    const prof = raw && typeof raw === "object" ? raw : {};
+    return {
+      mechanical: arr(prof.mechanical),
+      aesthetic:  arr(prof.aesthetic),
+      regulatory: arr(prof.regulatory),
+      resin:      prof.resin || null,
+      notes:      prof.notes || ""
+    };
+  }
+  function isProfileEmpty(p){
+    return (!p) ||
+           ((!p.resin || p.resin === "") &&
+            (!p.notes || p.notes === "") &&
+            (!Array.isArray(p.mechanical) || p.mechanical.length===0) &&
+            (!Array.isArray(p.aesthetic)  || p.aesthetic.length===0) &&
+            (!Array.isArray(p.regulatory) || p.regulatory.length===0));
+  }
 
   btn.addEventListener("click", ()=>{
     UI.setLoading(true);
     try{
-      const result = collectMaterialForm();
-      if (result.warnings?.length) UI.warn(result.warnings.join("\n"));
+      // 1) collecte
+      let result = collectMaterialForm?.();
+      let profile = normalizeProfile(result?.data);
 
-      // Détermine fileId maintenant
+      // 2) si vide, on met un profil minimal (au moins un champ présent)
+      if (isProfileEmpty(profile)) {
+        profile = { mechanical: [], aesthetic: [], regulatory: [], resin: "generic", notes: "" };
+        console.warn("[DFM] materialProfile vide -> usage d’un profil minimal:", profile);
+      }
+
+      // 3) mémorise + logs
+      dfmOrchestrator.setMaterialProfile(profile);
       dfmOrchestrator.setFileIdFromPage();
-      dfmOrchestrator.setMaterialProfile(result.data);
+      console.debug("[DFM] materialProfile:", profile, "fileId:", dfmOrchestrator.fileId);
 
       if (!dfmOrchestrator.fileId){
         UI.info("Aucun fichier à analyser. Merci d’importer une pièce.");
         return;
       }
 
+      // 4) ferme le modal et passe à l’axe
       modal?.hide();
       dfmOrchestrator.setState(DFM_STATES.MATERIAL_CONFIRMED);
       dfmOrchestrator.setState(DFM_STATES.AXIS_PICK);
