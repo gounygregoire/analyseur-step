@@ -30,7 +30,7 @@ gunicorn web:app --timeout 600
 Lancer le worker Celery :
 
 ```
-celery -A celery_app.celery worker -l info -P solo
+celery -A celery_app.celery worker -l INFO -Q dfm -c 2
 ```
 
 Sans URLs fournies, l'application bascule en mode dégradé (`memory://` +
