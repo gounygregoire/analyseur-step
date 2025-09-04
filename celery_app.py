@@ -1,22 +1,25 @@
-# celery_app.py
 import os, ssl
 from celery import Celery
 
 def make_celery():
     broker = os.getenv("CELERY_BROKER_URL")
     backend = os.getenv("CELERY_RESULT_BACKEND")
+
     app = Celery(__name__, broker=broker, backend=backend)
     app.conf.task_default_queue = os.getenv("CELERY_DEFAULT_QUEUE", "dfm")
     app.conf.broker_connection_retry_on_startup = True
 
+    ssl_opts = {"ssl_cert_reqs": ssl.CERT_NONE}
     if broker and broker.startswith("rediss://"):
-        app.conf.broker_use_ssl = {"ssl_cert_reqs": ssl.CERT_NONE}
+        app.conf.broker_use_ssl = ssl_opts
     if backend and backend.startswith("rediss://"):
-        app.conf.redis_backend_use_ssl = {"ssl_cert_reqs": ssl.CERT_NONE}
+        app.conf.redis_backend_use_ssl = ssl_opts
+
     return app
 
-
 celery = make_celery()
+
+
 
 
 def init_celery(flask_app):
