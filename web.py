@@ -157,8 +157,9 @@ app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
 # Initialize database
 db.init_app(app)
 migrate = Migrate(app, db)
-
-init_celery(app)
+if not app.config['CELERY_TASK_ALWAYS_EAGER']:
+    # Optionnel : attache le contexte Flask aux tâches Celery
+    init_celery(app)
 from celery.schedules import crontab
 
 celery.conf.beat_schedule = {
