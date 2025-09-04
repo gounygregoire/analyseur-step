@@ -1364,58 +1364,43 @@ def dfm_axes_suggest():
         logger.exception("axis suggestion failed")
         return jsonify({'error': 'axis_suggestion_failed', 'message': str(e)}), 500
 
-@app.route('/api/dfm/start', methods=['POST'])
+@app.post("/api/dfm/start")
 def dfm_start():
-    """Start asynchronous DFM analysis."""
-    try:
-        data = request.get_json(silent=True) or {}
-        file_id = data.get("file_id") or data.get("fileId")
-        material_profile = data.get("material_profile") or data.get("materialProfile")
-        demould_axis = data.get("demould_axis") or data.get("demouldAxis")
-        if not file_id:
-            return jsonify({"error": "missing_fileId"}), 400
-        if not material_profile:
-            return jsonify({"error": "missing_materialProfile"}), 400
-        if not demould_axis:
-            return jsonify({"error": "missing_demouldAxis"}), 400
-        task = dfm_run.apply_async(
-            args=[file_id, material_profile, demould_axis],
-            queue=os.getenv("CELERY_DEFAULT_QUEUE", "dfm"),
-        )
-        logger.info("DFM job queued", extra={"file_id": file_id, "job_id": task.id})
-        return jsonify({"jobId": task.id}), 200
-    except Exception as e:
-        logger.exception("dfm_start failed")
-        return jsonify({'error': 'dfm_start_failed', 'message': str(e)}), 500
+    data = request.get_json(silent=True) or {}
+    file_id = data.get("file_id") or data.get("fileId")
+    material_profile = data.get("material_profile") or data.get("materialProfile")
+    demould_axis = data.get("demould_axis") or data.get("demouldAxis")
+    if not file_id:
+        return jsonify({"error": "missing_fileId"}), 400
+    if not material_profile:
+        return jsonify({"error": "missing_materialProfile"}), 400
+    queue = os.getenv("CELERY_DEFAULT_QUEUE", "dfm")
+    job = dfm_run.apply_async(args=[file_id, material_profile, demould_axis], queue=queue)
+    return jsonify({"jobId": job.id}), 200
 
 
-@app.route('/api/dfm/status')
+@app.get("/api/dfm/status")
 def dfm_status():
-    """Return status of a DFM job."""
-    job_id = request.args.get('jobId')
+    job_id = request.args.get("jobId")
     if not job_id:
-        return jsonify({'error': 'missing_jobId'}), 400
-    try:
-        ar = AsyncResult(job_id, app=celery)
-        if ar.state == "PENDING":
-            return jsonify({"status": "queued"})
-        if ar.state == "PROGRESS":
-            meta = ar.info or {}
-            return jsonify(
-                {
-                    "status": "running",
-                    "step": meta.get("step"),
-                    "progress": meta.get("progress"),
-                }
-            )
-        if ar.state == "SUCCESS":
-            return jsonify({"status": "done", "result": ar.result})
-        if ar.state in ("FAILURE", "REVOKED"):
-            return jsonify({"status": "error", "error": str(ar.info)}), 500
-        return jsonify({"status": ar.state.lower()})
-    except Exception as e:
-        logger.exception("dfm_status failed")
-        return jsonify({"error": "dfm_status_failed", "message": str(e)}), 500
+        return jsonify({"error": "missing_jobId"}), 400
+    ar = AsyncResult(job_id, app=celery)
+    if ar.state == "PENDING":
+        return jsonify({"status": "queued"})
+    if ar.state == "PROGRESS":
+        meta = ar.info or {}
+        return jsonify(
+            {
+                "status": "running",
+                "step": meta.get("step"),
+                "progress": meta.get("progress"),
+            }
+        )
+    if ar.state == "SUCCESS":
+        return jsonify({"status": "done", "result": ar.result})
+    if ar.state in ("FAILURE", "REVOKED"):
+        return jsonify({"status": "error", "error": str(ar.info)}), 500
+    return jsonify({"status": ar.state.lower()})
 
 
 @app.route('/api/dfm/results')
