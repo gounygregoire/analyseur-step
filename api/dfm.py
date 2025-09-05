@@ -2,6 +2,7 @@
 from flask import Blueprint, request, jsonify
 from tasks.dfm import dfm_run
 from celery.result import AsyncResult
+from celery_app import celery   # réutilise ton instance globale
 
 dfm_bp = Blueprint("dfm", __name__, url_prefix="/api/dfm")
 
@@ -23,37 +24,12 @@ def start_dfm():
 
 @dfm_bp.get("/status")
 def status_dfm():
-    from celery.result import AsyncResult
-
     job_id = request.args.get("jobId")
-    if not job_id:
-        return jsonify({"status": "error", "error": "missing_jobId"}), 400
-
-    r = AsyncResult(job_id)
-
-    # Map Celery -> front-end
-    celery_state = r.state or "PENDING"
-    meta = r.info if isinstance(r.info, dict) else {}
-
-    if celery_state in ("PENDING", "RECEIVED"):
-        payload = {"status": "queued"}
-        return jsonify(payload), 200
-
-    if celery_state in ("STARTED", "PROGRESS"):
-        # PROGRESS meta may carry step/progress from update_state(...)
-        payload = {
-            "status": "running",
-            "step": meta.get("step"),
-            "progress": meta.get("progress"),
-        }
-        return jsonify(payload), 200
-
-    if celery_state == "SUCCESS":
-        return jsonify({"status": "done"}), 200
-
-    # FAILURE, REVOKED, RETRY, etc.
-    return jsonify({"status": "error", "error": str(meta) or celery_state}), 200
-
+    r = AsyncResult(job_id, app=celery)   # 👉 lie à l'instance existante
+    return jsonify({
+        "state": r.state,
+        "meta": r.info if isinstance(r.info, dict) else None
+    }), 200
 
 @dfm_bp.get("/results")
 def results_dfm():
