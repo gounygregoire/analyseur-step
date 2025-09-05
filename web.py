@@ -103,26 +103,26 @@ def _debug_static_and_routes_once():
 
 def create_app():
     app = Flask(__name__)
-
-    # Config éventuelle (secret, CORS, etc.)
     app.config["JSON_SORT_KEYS"] = False
 
-    # Enregistre les blueprints — NE PAS répéter url_prefix ici
+    # Enregistre le blueprint de l’API DFM (URL telles que /api/dfm/...)
     app.register_blueprint(dfm_bp)
 
-    # Santé / app
     @app.get("/health")
     def health():
         return {"ok": True}, 200
 
     return app
 
-# crée et expose l’app pour gunicorn:   web:app
+# <-- web:app pour gunicorn
 app = create_app()
 
-# branche Celery sur le contexte Flask
-init_celery(app)           # important : donne le contexte app aux tasks
-celery = _celery           # optionnel : alias si tu en as besoin ailleurs
+# Lie Celery au contexte Flask (pas d’alias inutile)
+init_celery(app)
+
+# IMPORTANT : ne mets PAS "celery = _celery" ici
+# (si tu veux exposer l'instance, elle s'appelle déjà "celery" car importée depuis celery_app)
+
 
 
 
