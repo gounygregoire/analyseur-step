@@ -52,9 +52,9 @@ from kombu.exceptions import OperationalError as KombuOperationalError
 from redis.exceptions import ConnectionError as RedisConnectionError
 from storage.s3 import get_signed_url
 from observability.logging import setup_logging, get_logger
-from api.dfm import bp as dfm_bp
+from api.dfm import dfm_bp
 
-app.register_blueprint(dfm_bp)
+
 bp = Blueprint("dfm_api", __name__)
 
 load_dotenv()
@@ -100,6 +100,29 @@ def _debug_static_and_routes_once():
             logger.info("   %s", r)
     except Exception:
         logger.exception("[BOOT] debug failed")
+
+        def create_app():
+    app = Flask(__name__)
+
+    # Config éventuelle (secret, CORS, etc.)
+    app.config["JSON_SORT_KEYS"] = False
+
+    # Enregistre les blueprints — NE PAS répéter url_prefix ici
+    app.register_blueprint(dfm_bp)
+
+    # Santé / app
+    @app.get("/health")
+    def health():
+        return {"ok": True}, 200
+
+    return app
+
+# crée et expose l’app pour gunicorn:   web:app
+app = create_app()
+
+# branche Celery sur le contexte Flask
+init_celery(app)           # important : donne le contexte app aux tasks
+celery = _celery           # optionnel : alias si tu en as besoin ailleurs
 
 
 
