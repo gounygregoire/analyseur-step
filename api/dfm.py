@@ -1,45 +1,47 @@
-# api/dfm.py
+from __future__ import annotations
+
+import logging
 from flask import Blueprint, request, jsonify
-from tasks.dfm import dfm_run
-from celery.result import AsyncResult
-from celery_app import celery   # réutilise ton instance globale
+
+from jobs.dfm_runner import start_job, get_job
+
+logger = logging.getLogger(__name__)
+
 
 dfm_bp = Blueprint("dfm", __name__, url_prefix="/api/dfm")
 
+
 @dfm_bp.post("/start")
 def start_dfm():
-    payload = request.get_json(force=True) or {}
-
-    # Accepter camelCase et snake_case
-    file_id = payload.get("file_id") or payload.get("fileId")
-    material = payload.get("material_profile") or payload.get("materialProfile") or {"resin": "generic"}
-    axis = payload.get("demould_axis") or payload.get("demouldAxis") or {"axis": "Y", "direction": 1}
-
+    data = request.get_json(force=True) or {}
+    file_id = data.get("file_id")
+    demold_axis = data.get("demold_axis") or [0, 0, 1]
+    material_profile = data.get("material_profile") or {}
     if not file_id:
-        return jsonify({"error": "file_missing"}), 400
-
-    job = dfm_run.apply_async(args=[file_id, material, axis], queue="dfm")
-    return jsonify({"jobId": job.id}), 202
+        return jsonify({"error": "file_id_missing"}), 400
+    try:
+        job_id = start_job(file_id, demold_axis, material_profile)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("failed to queue dfm job")
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"job_id": job_id, "status": "queued"}), 202
 
 
 @dfm_bp.get("/status")
 def status_dfm():
-    job_id = request.args.get("jobId")
-    r = AsyncResult(job_id, app=celery)   # 👉 lie à l'instance existante
-    return jsonify({
-        "state": r.state,
-        "meta": r.info if isinstance(r.info, dict) else None
-    }), 200
+    job_id = request.args.get("job_id")
+    job = get_job(job_id) if job_id else None
+    if not job:
+        return jsonify({"error": "not_found"}), 404
+    payload = {"status": job["status"], "progress": job.get("progress", 0)}
+    if job["status"] == "done":
+        payload["result"] = job["result"]
+    if job["status"] == "error":
+        payload["error_code"] = job.get("error_code")
+        payload["message"] = job.get("message")
+    return jsonify(payload), 200
 
-@dfm_bp.get("/results")
-def results_dfm():
-    job_id = request.get_args().get("jobId") if hasattr(request, "get_args") else request.args.get("jobId")
-    r = AsyncResult(job_id)
-    if r.successful():
-        return jsonify(r.result), 200
-    return jsonify({"error": "not_ready"}), 404
 
-# Désactive le cache sur toutes les routes /api/dfm/* pour éviter les 200 “stales”
 @dfm_bp.after_request
 def no_cache(resp):
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"

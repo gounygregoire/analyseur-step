@@ -1,17 +1,109 @@
+
 """
 DFM (Design for Manufacturing) Analyzer for Plastic Injection Molding
 Analyzes STEP files for manufacturability issues and generates comprehensive reports.
 """
 
-import cadquery as cq
-import numpy as np
+import os
+import time
+import resource
+import logging
+from typing import TYPE_CHECKING, Callable
+
+if TYPE_CHECKING:  # pragma: no cover
+    from app.dfm.interfaces import DFMInput, DFMResult
+
+
+def run_dfm(
+    input: "DFMInput",
+    progress_cb: Callable[[int], None] | None = None,
+    fast_mode: bool = False,
+) -> "DFMResult":
+    """Analyse DFM minimale sans effets de bord."""
+
+    logger = logging.getLogger(__name__)
+
+    def _log(step: str, start_t: float) -> None:
+        mem = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+        logger.info("dfm %s dt=%.2fs rss=%.1fMB", step, time.perf_counter() - start_t, mem)
+
+    t = time.perf_counter()
+    if not os.path.exists(input.step_path):
+        raise ValueError("STEP file not found")
+    with open(input.step_path, "r", errors="ignore") as fh:
+        head = fh.read(64)
+        if "ISO-10303" not in head and "STEP" not in head:
+            raise ValueError("invalid_step")
+    if progress_cb:
+        progress_cb(10)
+    _log("load_step", t)
+
+    import tempfile
+
+    t = time.perf_counter()
+    metrics = {
+        "bounding_box": {"x": 0.0, "y": 0.0, "z": 0.0},
+        "volume": 0.0,
+        "surface_area": 0.0,
+    }
+    stl_path = None
+    try:  # optional CadQuery usage
+        import cadquery as cq  # lazy import
+        workplane = cq.importers.importStep(input.step_path)
+        shape = workplane.val()
+        bbox = shape.BoundingBox()
+        metrics = {
+            "bounding_box": {"x": bbox.xlen, "y": bbox.ylen, "z": bbox.zlen},
+            "volume": shape.Volume(),
+            "surface_area": shape.Area(),
+        }
+        stl_fd, stl_path = tempfile.mkstemp(suffix=".stl")
+        os.close(stl_fd)
+        cq.exporters.export(workplane, stl_path)
+    except Exception:
+        pass
+    if progress_cb:
+        progress_cb(40)
+    _log("metrics", t)
+
+    from generate_3d_view import generate_view_data
+    out_dir = os.path.join("static", "dfm", input.file_id)
+    t = time.perf_counter()
+    camera_states, heatmap_faces = generate_view_data(
+        stl_path, input.file_id, progress_cb, fast_mode=fast_mode
+    )
+    _log("views_heatmap", t)
+
+    from generate_thumbnails import generate_thumbnails
+    t = time.perf_counter()
+    thumbnails = generate_thumbnails(input.step_path, out_dir)
+    _log("thumbnails", t)
+
+    if stl_path and os.path.exists(stl_path):
+        os.remove(stl_path)
+
+    views = {"camera_states": camera_states, "thumbnails": thumbnails}
+    heatmaps = {"faces": heatmap_faces} if heatmap_faces else {}
+
+    import importlib.util, pathlib
+    interfaces_path = pathlib.Path(__file__).resolve().parent / "app" / "dfm" / "interfaces.py"
+    spec = importlib.util.spec_from_file_location("dfm_interfaces", interfaces_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    DFMResult = module.DFMResult
+
+    flags = {"partial": True} if fast_mode else {}
+    return DFMResult(
+        metrics=metrics,
+        issues=[],
+        heatmaps=heatmaps,
+        views=views,
+        report_paths={},
+        flags=flags,
+    )
+
 from dataclasses import dataclass
 from typing import List, Dict, Tuple, Optional
-import math
-import trimesh
-import tempfile
-import os
-
 @dataclass
 class DimensionAnalysis:
     """Global dimensions and volume analysis"""
@@ -655,7 +747,6 @@ class DFMAnalyzer:
     def _calculate_projected_area_robust(self, mesh, axis: str) -> float:
         """Calculate projected area using fast approximation to avoid timeouts"""
         try:
-            import numpy as np
             faces = mesh.faces
             num_faces = len(faces)
             
@@ -689,7 +780,6 @@ class DFMAnalyzer:
                 
                 # Sample vertices for convex hull to speed up calculation
                 try:
-                    import numpy as np
                     if len(projected) > 5000:
                         sample_indices = np.random.choice(len(projected), 5000, replace=False)
                         sampled_projected = projected[sample_indices]
@@ -704,7 +794,6 @@ class DFMAnalyzer:
                     print(f"Convex hull failed: {e}")
                 
                 # Fallback to bounding box for large meshes
-                import numpy as np
                 min_coords = np.min(projected, axis=0)
                 max_coords = np.max(projected, axis=0)
                 return (max_coords[0] - min_coords[0]) * (max_coords[1] - min_coords[1])
@@ -729,7 +818,6 @@ class DFMAnalyzer:
                 pass
             
             # Final fallback: bounding box
-            import numpy as np
             min_coords = np.min(projected, axis=0)
             max_coords = np.max(projected, axis=0)
             return (max_coords[0] - min_coords[0]) * (max_coords[1] - min_coords[1])

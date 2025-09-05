@@ -4,6 +4,8 @@ Ce dépôt contient le code du MVP de Cadlytics, SaaS d'analyse DFM et de visual
 Le viewer 3D fonctionne avec **Xeokit** et attend des modèles au format **XKT**.
 La conversion des fichiers STEP s'appuie sur l'outil `xeokit-convert` via le script `xkt_converter.py`.
 
+DFM lit les fichiers STEP tandis que le viewer charge les XKT. Le module `app.storage` centralise ces chemins. Les schémas JSON des endpoints DFM sont décrits dans `docs/api_dfm.md`.
+
 ## Nettoyage automatique des fichiers
 
 Les fichiers téléchargés (`uploads/`) et convertis (`converted/`) sont conservés pendant **7 jours** par défaut. La tâche Celery `cleanup_old_files` supprime quotidiennement les fichiers plus anciens.
