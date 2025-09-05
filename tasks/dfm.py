@@ -17,7 +17,7 @@ safe_url = redis_url.replace(redis_url.split('@')[0], 'rediss://***:***@') if '@
 print(f"[dfm] Redis connecté sur {safe_url}")
 
 # --- Tâche Celery ---
-@shared_task(bind=True)
+@shared_task(bind=True, name="tasks.dfm.dfm_run")
 def dfm_run(self, file_id, material_profile, demould_axis):
     """
     Exemple simplifié d’analyse DFM avec suivi de progression.
