@@ -13,6 +13,7 @@ from flask import (
     redirect,
     url_for,
     flash,
+    Blueprint
 )
 from flask_cors import CORS
 from flask_migrate import Migrate
@@ -51,6 +52,8 @@ from kombu.exceptions import OperationalError as KombuOperationalError
 from redis.exceptions import ConnectionError as RedisConnectionError
 from storage.s3 import get_signed_url
 from observability.logging import setup_logging, get_logger
+
+bp = Blueprint("dfm_api", __name__)
 
 load_dotenv()
 
@@ -1365,66 +1368,47 @@ def dfm_axes_suggest():
         logger.exception("axis suggestion failed")
         return jsonify({'error': 'axis_suggestion_failed', 'message': str(e)}), 500
 
-@app.post("/api/dfm/start")
+@bp.post("/api/dfm/start")
 def dfm_start():
-    data = request.get_json(silent=True) or {}
-    file_id = data.get("file_id") or data.get("fileId")
-    material_profile = data.get("material_profile") or data.get("materialProfile")
-    demould_axis = data.get("demould_axis") or data.get("demouldAxis")
-    if not file_id:
-        return jsonify({"error": "missing_fileId"}), 400
-    if not material_profile:
-        return jsonify({"error": "missing_materialProfile"}), 400
-    queue = os.getenv("CELERY_DEFAULT_QUEUE", "dfm")
-    job = dfm_run.apply_async(args=[file_id, material_profile, demould_axis], queue=queue)
+    data = request.get_json(force=True) or {}
+    file_id = data.get("fileId")
+    material_profile = data.get("materialProfile", {"resin": "generic", "mechanical": [], "aesthetic": [], "regulatory": [], "notes": ""})
+    demould_axis = data.get("demouldAxis", {"axis": "Y", "direction": 1})
+
+    job = dfm_run.apply_async(args=[file_id, material_profile, demould_axis], queue="dfm")
     return jsonify({"jobId": job.id}), 200
 
 
-@app.get("/api/dfm/status")
+@bp.get("/api/dfm/status")
 def dfm_status():
     job_id = request.args.get("jobId")
     if not job_id:
-        return jsonify({"error": "missing_jobId"}), 400
-    ar = AsyncResult(job_id, app=celery)
-    if ar.state == "PENDING":
-        return jsonify({"status": "queued"})
-    if ar.state == "PROGRESS":
-        meta = ar.info or {}
-        return jsonify(
-            {
-                "status": "running",
-                "step": meta.get("step"),
-                "progress": meta.get("progress"),
-            }
-        )
-    if ar.state == "SUCCESS":
-        return jsonify({"status": "done", "result": ar.result})
-    if ar.state in ("FAILURE", "REVOKED"):
-        return jsonify({"status": "error", "error": str(ar.info)}), 500
-    return jsonify({"status": ar.state.lower()})
+        return jsonify({"error": "jobId manquant"}), 400
+
+    res = AsyncResult(job_id, app=celery)
+    # res.info contient meta si PROGRESS/SUCCESS, sinon None
+    return jsonify({
+        "jobId": job_id,
+        "state": res.state,
+        "meta": res.info if isinstance(res.info, dict) else None
+    }), 200
 
 
-@app.route('/api/dfm/results')
+@bp.get("/api/dfm/results")
 def dfm_results():
-    """Fetch final DFM results."""
-    job_id = request.args.get('jobId')
+    job_id = request.args.get("jobId")
     if not job_id:
-        return jsonify({'error': 'missing_jobId'}), 400
-    reports_dir = app.config.get('REPORTS_FOLDER', 'reports')
-    json_path = os.path.join(reports_dir, f'dfm_result_{job_id}.json')
-    if not os.path.exists(json_path):
-        return jsonify({'error': 'not_found'}), 404
-    try:
-        with open(json_path) as fh:
-            data = json.load(fh)
-        data['reportUrls'] = {
-            'pdf': url_for('download_pdf', filename=f'dfm_report_{job_id}.pdf'),
-            'csv': url_for('download_csv', filename=f'dfm_report_{job_id}.csv'),
-        }
-        return jsonify(data)
-    except Exception as e:
-        logger.exception("dfm_results failed")
-        return jsonify({'error': 'dfm_results_failed', 'message': str(e)}), 500
+        return jsonify({"error": "jobId manquant"}), 400
+
+    res = AsyncResult(job_id, app=celery)
+
+    if res.successful():
+        return jsonify(res.result), 200
+    if res.failed():
+        return jsonify({"jobId": job_id, "state": res.state, "error": str(res.result)}), 500
+
+    # Pas prêt : renvoyer 202 pour indiquer au front de réessayer
+    return jsonify({"jobId": job_id, "state": res.state}), 202
 
 @app.route('/api/dfm-summary')
 def dfm_summary():

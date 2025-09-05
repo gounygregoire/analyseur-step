@@ -17,6 +17,10 @@ def make_celery():
     app.conf.update(
         task_default_queue=os.getenv("CELERY_DEFAULT_QUEUE", "dfm"),
         broker_connection_retry_on_startup=True,
+        task_serializer="json",
+        result_serializer="json",
+        accept_content=["json"],
+        result_expires=3600,  # 1h (ajuste au besoin)
     )
 
     # TLS (Render/Redis Cloud)
