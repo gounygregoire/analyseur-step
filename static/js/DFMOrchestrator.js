@@ -4,6 +4,7 @@
  */
 
 import AxisPicker from "./modules/AxisPicker.js";
+import HeatmapLayer from "./modules/HeatmapLayer.js";
 
 const DEBUG_DFM = window.DEBUG_DFM === true;
 const dbg = (...a) => { if (DEBUG_DFM) console.debug("[DFM]", ...a); };
@@ -36,12 +37,12 @@ async function pollJobStatus(jobId, onUpdate, onDone, onError) {
 
   async function step() {
     try {
-      const res = await fetch(`/api/dfm/status?jobId=${encodeURIComponent(jobId)}`);
+      const res = await fetch(`/api/dfm/status?job_id=${encodeURIComponent(jobId)}`);
       const data = await res.json(); // {status:'queued'|'running'|'done'|'error', step?, progress?}
 
       onUpdate?.(data);
 
-      if (data.status === "done") { onDone?.(data); return; }
+      if (data.status === "done") { await onDone?.(data); return; }
       if (data.status === "error") { onError?.(data); return; }
 
       attempts++;
@@ -75,6 +76,12 @@ class DFMOrchestrator {
     this.axisPicker = null;
     this._autoSuggestion = null;
     this.onAnalysisDone = null;
+    window.addEventListener("axisPicker:validated", (e) => {
+      const detail = e.detail || {};
+      this.setMaterialProfile(detail.materialProfile);
+      this.setDemouldAxis(detail.axis);
+      this.startAnalysis({ demouldAxis: detail.axis, materialProfile: detail.materialProfile });
+    });
   }
 
   setState(next){
@@ -255,13 +262,13 @@ class DFMOrchestrator {
       console.log("POST /api/dfm/start", res.status, startResp);
 
       if (res.status === 200 || res.status === 202) {
-        const { jobId } = startResp;
+        const { job_id: jobId } = startResp;
 
         if (startResp.result) {
-          this.renderResults(startResp.result);
+          await this.renderResults(startResp.result);
         } else if (jobId) {
           StatusUI.set("Analyse en cours…");
-          this.onAnalysisDone = () => this.fetchResults(jobId);
+          this.onAnalysisDone = (s) => this.renderResults(s.result);
           pollJobStatus(
             jobId,
             (s) => {
@@ -271,8 +278,8 @@ class DFMOrchestrator {
                 if (typeof s.progress === "number" && UI.progress) UI.progress(s.progress);
               }
             },
-            (s) => { StatusUI.set("Analyse terminée"); this.onAnalysisDone?.(s); },
-            (s) => { StatusUI.set("Échec de l’analyse"); UI.err("Échec de l’analyse"); }
+            async (s) => { StatusUI.set("Analyse terminée"); await this.onAnalysisDone?.(s); },
+            () => { StatusUI.set("Échec de l’analyse"); UI.err("Échec de l’analyse"); }
           );
         } else {
           this.handleError("missing_jobId");
@@ -299,22 +306,7 @@ class DFMOrchestrator {
       UI.setLoading(false);
     }
   }
-
-
-  async fetchResults(jobId){
-    dbg("fetchResults", jobId);
-    try{
-      const res = await fetch(`/api/dfm/results?jobId=${encodeURIComponent(jobId)}`);
-      if (!res.ok) throw new Error("results_failed");
-      const data = await res.json();
-      this.renderResults(data);
-    }catch(e){
-      console.error(e);
-      this.handleError("Récupération résultats impossible");
-    }
-  }
-
-  renderResults(results = {}){
+  async renderResults(results = {}){
     StatusUI.set("Analyse terminée");
     this.setState(DFM_STATES.RESULTS);
     const section = document.getElementById("dfmResultsSection");
@@ -323,73 +315,72 @@ class DFMOrchestrator {
     if (!panel) return;
     panel.innerHTML = "";
 
-    // Issues
-    if (Array.isArray(results.issues) && results.issues.length){
+    if (results.metrics){
       const table = document.createElement("table");
       table.className = "table table-sm";
-      table.innerHTML = `<thead><tr>
-        <th data-sort="severity">Severité</th>
-        <th data-sort="type">Type</th>
-        <th>Description</th></tr></thead>`;
       const tbody = document.createElement("tbody");
-      results.issues.forEach(issue => {
+      Object.entries(results.metrics).forEach(([k,v])=>{
         const tr = document.createElement("tr");
-        tr.dataset.severity = issue.severity || "";
-        tr.dataset.type = issue.type || "";
-        tr.innerHTML = `<td>${issue.severity||""}</td><td>${issue.type||""}</td><td>${issue.message||""}</td>`;
+        tr.innerHTML = `<th>${k}</th><td>${typeof v === 'object' ? JSON.stringify(v) : v}</td>`;
         tbody.appendChild(tr);
       });
       table.appendChild(tbody);
-      this._makeSortable(table);
       panel.appendChild(table);
-    } else {
-      panel.textContent = "Aucune anomalie détectée";
     }
 
-    // Checklist
-    const checklistWrap = document.getElementById("moldingChecklist");
-    const checklistItems = document.getElementById("checklistItems");
-    if (checklistItems) checklistItems.innerHTML = "";
-    if (checklistWrap && Array.isArray(results.checklist) && results.checklist.length){
-      checklistWrap.style.display = "block";
-      results.checklist.forEach(it => {
-        const cl = it.status === "pass" ? "success" : it.status === "warn" ? "warning" : "danger";
-        const div = document.createElement("div");
-        div.className = `list-group-item list-group-item-${cl}`;
-        div.textContent = it.label || "";
-        checklistItems.appendChild(div);
-      });
+    const thumbs = results.views?.thumbnails || {};
+    const thumbsDiv = document.createElement("div");
+    Object.entries(thumbs).forEach(([name,url])=>{
+      const a = document.createElement("a");
+      a.href = url;
+      a.target = "_blank";
+      const img = document.createElement("img");
+      img.src = url;
+      img.alt = name;
+      img.style.maxWidth = "100px";
+      img.className = "img-thumbnail me-2";
+      a.appendChild(img);
+      thumbsDiv.appendChild(a);
+    });
+    if (thumbsDiv.childNodes.length) panel.appendChild(thumbsDiv);
+
+    if (results.report_paths?.pdf){
+      const link = document.createElement("a");
+      link.href = results.report_paths.pdf;
+      link.textContent = "Télécharger le rapport";
+      link.className = "btn btn-sm btn-outline-secondary mt-2";
+      panel.appendChild(link);
     }
 
-    // Reco matière
-    const recWrap = document.getElementById("materialRecommendations");
-    const recList = document.getElementById("recommendationItems");
-    if (recList) recList.innerHTML = "";
-    if (recWrap && Array.isArray(results.materialRecommendations) && results.materialRecommendations.length){
-      recWrap.style.display = "block";
-      results.materialRecommendations.forEach(r => {
-        const li = document.createElement("li");
-        li.className = "list-group-item";
-        li.textContent = r;
-        recList.appendChild(li);
-      });
-    }
+    await this._applyViewData();
+  }
 
-    // Rapports
-    if (results.reportUrls){
-      const pdf = document.getElementById("generatePdfBtn");
-      const csv = document.getElementById("downloadCsvBtn");
-      if (pdf && csv){
-        pdf.style.display = "inline-block";
-        csv.style.display = "inline-block";
-        pdf.href = results.reportUrls.pdf;
-        csv.href = results.reportUrls.csv;
+  async _applyViewData(){
+    const fileId = this.fileId;
+    if (!fileId) return;
+    try{
+      const camRes = await fetch(`/static/dfm/${fileId}/camera_states.json`);
+      if (camRes.ok){
+        const cams = await camRes.json();
+        const iso = cams.iso;
+        const cam = window.viewerAdapter?.viewer?.camera;
+        if (iso && cam){
+          cam.eye = iso.eye;
+          cam.look = iso.look;
+          cam.up = iso.up;
+        }
       }
-    }
-
-    // Heatmap / annotations
-    window.viewerAdapter?.applyHeatmap?.(results.heatmap);
-    window.viewerAdapter?.addAnnotations?.(results.annotations);
+    }catch(e){ console.error("camera_states", e); }
+    try{
+      const heatRes = await fetch(`/static/dfm/${fileId}/heatmap_faces.json`);
+      if (heatRes.ok){
+        const mapping = await heatRes.json();
+        if (mapping && Object.keys(mapping).length){
+          const layer = new HeatmapLayer(window.viewerAdapter);
+          layer.apply(mapping);
+        }
+      }
+    }catch(e){ console.error("heatmap_faces", e); }
   }
 
   handleError(message){
