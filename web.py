@@ -101,7 +101,7 @@ def _debug_static_and_routes_once():
     except Exception:
         logger.exception("[BOOT] debug failed")
 
-        def create_app():
+def create_app():
     app = Flask(__name__)
 
     # Config éventuelle (secret, CORS, etc.)
