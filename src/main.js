@@ -56,11 +56,8 @@ export async function initViewer(modelUrl) {
     xktLoader.on?.("loaded", () => {
       state.fileLoaded = true;
       try {
-        if (viewer.scene?.root) {
-          viewer.cameraFlight.flyTo(viewer.scene.root);
-        } else {
-          viewer.cameraFlight.fit?.();
-        }
+        const aabb = viewer.scene.getAABB();
+        cameraControl.fit?.({ aabb });
       } catch {
         try {
           viewer.cameraFlight.fit?.();
@@ -301,7 +298,7 @@ function setupTooltip() {
 function fitScene() {
   try {
     const aabb = viewer.scene.getAABB();
-    viewer.cameraFlight.flyTo?.({ aabb });
+    cameraControl.fit?.({ aabb });
   } catch {}
 }
 
