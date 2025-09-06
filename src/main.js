@@ -55,6 +55,17 @@ export async function initViewer(modelUrl) {
     state.fileLoaded = false;
     xktLoader.on?.("loaded", () => {
       state.fileLoaded = true;
+      try {
+        if (viewer.scene?.root) {
+          viewer.cameraFlight.flyTo(viewer.scene.root);
+        } else {
+          viewer.cameraFlight.fit?.();
+        }
+      } catch {
+        try {
+          viewer.cameraFlight.fit?.();
+        } catch {}
+      }
     });
 
     // Adapte l'app Xeokit pour l'Orchestrateur DFM
@@ -84,13 +95,6 @@ export async function initViewer(modelUrl) {
     if (modelUrl) {
       const model = await xktLoader.load({ id: "current", src: modelUrl });
       viewer.model = model;
-      try {
-        viewer.cameraFlight.flyTo(model);
-      } catch (e) {
-        try {
-          viewer.cameraFlight.fit?.();
-        } catch {}
-      }
     }
 
     bindUI();
