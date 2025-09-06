@@ -7,6 +7,31 @@ import {
   AnnotationsPlugin
 } from "@xeokit/xeokit-sdk";
 
+export function flyToAABB(viewer, aabb, duration = 0.8, padding = 1.15) {
+  if (!viewer || !aabb) return;
+  const [minX, minY, minZ, maxX, maxY, maxZ] = aabb;
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const cz = (minZ + maxZ) / 2;
+  const dx = ((maxX - minX) * padding) / 2;
+  const dy = ((maxY - minY) * padding) / 2;
+  const dz = ((maxZ - minZ) * padding) / 2;
+  viewer.cameraFlight.flyTo({
+    aabb: [cx - dx, cy - dy, cz - dz, cx + dx, cy + dy, cz + dz],
+    duration,
+  });
+}
+
+export function centerPivotOnAABB(viewer, aabb) {
+  if (!viewer || !aabb) return;
+  const [minX, minY, minZ, maxX, maxY, maxZ] = aabb;
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const cz = (minZ + maxZ) / 2;
+  viewer.cameraControl.pivotPoint = [cx, cy, cz];
+  viewer.cameraControl.followPointer = true;
+}
+
 // Gestionnaire de visualisation avec swap preview/final + overlay DFM
 export class XeokitModelViewer extends EventTarget {
   constructor(canvasId) {
@@ -14,8 +39,8 @@ export class XeokitModelViewer extends EventTarget {
     this.viewer = new Viewer({
       canvasId,
       transparent: false,
-      backgroundColor: [0.9, 0.9, 0.9],
     });
+    this.viewer.scene.clearColor = [0.06, 0.07, 0.09];
     this.viewer.cameraFlight.fitFOV = 20;
     this.loader = new XKTLoaderPlugin(this.viewer);
     this.edges = new EdgesPlugin(this.viewer);
@@ -28,6 +53,12 @@ export class XeokitModelViewer extends EventTarget {
     this.currentQuality = null; // 'preview' | 'final'
     this.heatmapActive = false;
     this.colorBuffer = null; // stocke vertex/face colors
+    this.lastAABB = null;
+    window.addEventListener("resize", () => {
+      if (this.lastAABB) {
+        flyToAABB(this.viewer, this.lastAABB);
+      }
+    });
   }
 
   // === Mini-patch : expose l’ID côté front (DOM + global + event)
@@ -53,10 +84,19 @@ export class XeokitModelViewer extends EventTarget {
       this.model.destroy();
     }
     this.model = await this.loader.load({ id: this.modelId, src: url });
+    this.lastAABB = [...this.model.aabb];
     if (this.currentQuality === null) {
-      // première fois -> cadrage automatique et dézoom
-      const aabb = this.viewer.scene.getAABB();
-      this.viewer.cameraFlight.flyTo({ aabb, fitFOV: 20 });
+      const fit = () => {
+        const aabb = this.model.aabb;
+        this.lastAABB = [...aabb];
+        flyToAABB(this.viewer, aabb);
+        centerPivotOnAABB(this.viewer, aabb);
+      };
+      if (this.model.built) {
+        fit();
+      } else {
+        this.model.on("built", fit);
+      }
       this.dispatchEvent(new CustomEvent("onAssetLoaded", { detail: { url } }));
     } else {
       // upgrade/downgrade -> restituer caméra
