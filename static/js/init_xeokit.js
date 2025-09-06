@@ -5,8 +5,11 @@ function initXeokit(stlUrl) {
     }
 
     const viewer = new Viewer({
-        canvasId: 'myCanvas'
+        canvasId: 'myCanvas',
+        transparent: false,
+        backgroundColor: [0.9, 0.9, 0.9]
     });
+    viewer.cameraFlight.fitFOV = 20;
 
     const loader = new STLLoaderPlugin(viewer);
 

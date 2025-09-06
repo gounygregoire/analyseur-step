@@ -11,7 +11,12 @@ import {
 export class XeokitModelViewer extends EventTarget {
   constructor(canvasId) {
     super();
-    this.viewer = new Viewer({ canvasId });
+    this.viewer = new Viewer({
+      canvasId,
+      transparent: false,
+      backgroundColor: [0.9, 0.9, 0.9],
+    });
+    this.viewer.cameraFlight.fitFOV = 20;
     this.loader = new XKTLoaderPlugin(this.viewer);
     this.edges = new EdgesPlugin(this.viewer);
     this.sections = new SectionPlanesPlugin(this.viewer);
@@ -49,8 +54,9 @@ export class XeokitModelViewer extends EventTarget {
     }
     this.model = await this.loader.load({ id: this.modelId, src: url });
     if (this.currentQuality === null) {
-      // première fois -> cadrage automatique
-      this.viewer.cameraFlight.flyTo(this.model);
+      // première fois -> cadrage automatique et dézoom
+      const aabb = this.viewer.scene.getAABB();
+      this.viewer.cameraFlight.flyTo({ aabb, fitFOV: 20 });
       this.dispatchEvent(new CustomEvent("onAssetLoaded", { detail: { url } }));
     } else {
       // upgrade/downgrade -> restituer caméra
