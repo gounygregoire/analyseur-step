@@ -12,10 +12,11 @@ from typing import Any, Dict
 import numpy as np
 
 from app.storage import files
+from app.storage.files import DATA_DIR
 from .dfm_analyzer import analyze_dfm
 from .interfaces import Axis, DFMResult, Heatmap, HeatmapEntry, MaterialProfile, Summary
 
-RESULTS_DIR = Path(os.getenv("RESULTS_DIR", "/data/results"))
+RESULTS_DIR = Path(os.getenv("RESULTS_DIR", DATA_DIR / "results"))
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 LOG_PATH = Path(os.getenv("DFM_LOG", "logs/dfm.log"))
