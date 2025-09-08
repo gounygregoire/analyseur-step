@@ -185,6 +185,10 @@ class DFMOrchestrator {
     const chosen = sel.axis === "AUTO" && this._autoSuggestion ? this._autoSuggestion : sel;
     this.setDemouldAxis(chosen);
     dbg("confirmAxis", chosen);
+    if (!this.fileId) this.setFileIdFromPage();
+    if (!this.fileId){ UI.err("Aucun fichier à analyser"); return; }
+    if (!this.materialProfile){ UI.err("Profil matière manquant"); return; }
+    this.startAnalysis();
   }
 
   // ---------------------- Analyse ----------------------
