@@ -1,0 +1,130 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DFM Result",
+  "type": "object",
+  "required": [
+    "job_id",
+    "file_id",
+    "summary",
+    "issues",
+    "heatmap",
+    "axis",
+    "material_profile"
+  ],
+  "properties": {
+    "job_id": {"type": "string"},
+    "file_id": {"type": "string"},
+    "summary": {
+      "type": "object",
+      "required": [
+        "mass_g",
+        "bbox_mm",
+        "projected_area_mm2",
+        "avg_thickness_mm",
+        "min_thickness_mm",
+        "wall_thickness_histogram",
+        "min_radius_mm",
+        "draft_ok_ratio",
+        "low_res"
+      ],
+      "properties": {
+        "mass_g": {"type": "number"},
+        "bbox_mm": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {"type": "number"}
+        },
+        "projected_area_mm2": {"type": "number"},
+        "avg_thickness_mm": {"type": "number"},
+        "min_thickness_mm": {"type": "number"},
+        "wall_thickness_histogram": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": [
+              {"type": "number"},
+              {"type": "number"},
+              {"type": "integer"}
+            ]
+          }
+        },
+        "min_radius_mm": {"type": "number"},
+        "draft_ok_ratio": {"type": "number"},
+        "low_res": {"type": "boolean"}
+      }
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "severity", "message", "locations"],
+        "properties": {
+          "type": {"type": "string"},
+          "severity": {"type": "string"},
+          "message": {"type": "string"},
+          "locations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["face_id", "point", "value"],
+              "properties": {
+                "face_id": {"type": "integer"},
+                "point": {
+                  "type": "array",
+                  "minItems": 3,
+                  "maxItems": 3,
+                  "items": {"type": "number"}
+                },
+                "value": {"type": "number"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "heatmap": {
+      "type": "object",
+      "required": ["metric", "range", "per_face"],
+      "properties": {
+        "metric": {"type": "string"},
+        "range": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {"type": "number"}
+        },
+        "per_face": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["face_id", "value"],
+            "properties": {
+              "face_id": {"type": "integer"},
+              "value": {"type": "number"}
+            }
+          }
+        }
+      }
+    },
+    "axis": {
+      "type": "object",
+      "required": ["x", "y", "z"],
+      "properties": {
+        "x": {"type": "number"},
+        "y": {"type": "number"},
+        "z": {"type": "number"}
+      }
+    },
+    "material_profile": {
+      "type": "object",
+      "required": ["id", "draft_min_deg"],
+      "properties": {
+        "id": {"type": "string"},
+        "draft_min_deg": {"type": "number"}
+      }
+    }
+  }
+}

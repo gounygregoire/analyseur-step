@@ -1,38 +1,32 @@
-import os
-import pathlib
-import sys
-import pytest
-
-root = pathlib.Path(__file__).resolve().parents[1]
-sys.path.append(str(root))
-from app.storage import Storage
+from app.dfm import services
+from app.dfm.dfm_analyzer import DFMReport, DimensionAnalysis
+from app.storage import files
 
 
-def test_get_step_and_xkt_paths(tmp_path, monkeypatch):
-    uploads = tmp_path / "uploads"
-    uploads.mkdir()
-    step = uploads / "abc.step"
-    step.write_text("STEP")
-    converted = tmp_path / "converted"
-    converted.mkdir()
-    xkt = converted / "abc.xkt"
-    xkt.write_text("XKT")
-
-    monkeypatch.setattr(Storage, "UPLOADS_DIR", str(uploads))
-    monkeypatch.setattr(Storage, "CONVERTED_DIR", str(converted))
-
-    assert Storage.get_step_path("abc") == str(step)
-    assert Storage.get_xkt_path("abc") == str(xkt)
-
-    with pytest.raises(FileNotFoundError):
-        Storage.get_step_path("missing")
-    with pytest.raises(FileNotFoundError):
-        Storage.get_xkt_path("missing")
+def _fake_report():
+    return DFMReport(
+        dimensions=DimensionAnalysis(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 10.0),
+        wall_thickness_issues=[],
+        geometry_issues=[],
+        overall_score="good",
+        moldability_rating=8,
+        recommendations=[],
+    )
 
 
-def test_ensure_dfm_dir(tmp_path, monkeypatch):
-    base = tmp_path / "static" / "dfm"
-    monkeypatch.setattr(Storage, "DFM_ROOT", str(base))
-    path = Storage.ensure_dfm_dir("foo")
-    assert path == os.path.join(str(base), "foo")
-    assert pathlib.Path(path).exists()
+def test_storage_paths(client, sample_step_path, monkeypatch):
+    monkeypatch.setattr(services, "analyze_dfm", lambda *a, **k: _fake_report())
+    with open(sample_step_path("cube_small.step"), "rb") as fh:
+        file_id = client.post(
+            "/api/upload",
+            data={"file": (fh, "cube.step")},
+            content_type="multipart/form-data",
+        ).get_json()["file_id"]
+    upload_path = files.UPLOAD_DIR / f"{file_id}.step"
+    assert upload_path.exists()
+    job_id = client.post(
+        "/api/dfm/start",
+        json={"file_id": file_id, "material_profile": "ABS", "axis": {"x": 0, "y": 0, "z": 1}},
+    ).get_json()["job_id"]
+    result_path = services.RESULTS_DIR / f"{job_id}.json"
+    assert result_path.exists()

@@ -11,14 +11,26 @@ import numpy as np
 import trimesh
 
 
-def load_mesh(step_path: str, max_bytes: int = 100 * 1024 * 1024) -> Tuple[trimesh.Trimesh, bool]:
+def load_mesh(step_path: str, max_bytes: int | None = None) -> Tuple[trimesh.Trimesh, bool]:
     """Charge un STEP et retourne un mesh Trimesh.
 
-    Si le fichier dépasse ``max_bytes`` alors une décimation contrôlée est
-    appliquée et le booléen ``low_res`` est positionné à ``True``.
+    ``max_bytes`` peut être défini via l'argument ou la variable
+    d'environnement ``STEP_LOADER_MAX_BYTES``. Si la taille du fichier
+    dépasse cette valeur, une décimation est appliquée et ``low_res`` vaut
+    ``True``.
     """
 
-    workplane = cq.importers.importStep(step_path)
+    limit = (
+        max_bytes
+        if max_bytes is not None
+        else int(os.getenv("STEP_LOADER_MAX_BYTES", 100 * 1024 * 1024))
+    )
+
+    try:
+        workplane = cq.importers.importStep(step_path)
+    except Exception as exc:  # pragma: no cover - robustesse
+        raise ValueError(f"Failed to load STEP: {exc}") from exc
+
     with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as tmp:
         cq.exporters.export(workplane, tmp.name)
         stl_path = tmp.name
@@ -30,7 +42,7 @@ def load_mesh(step_path: str, max_bytes: int = 100 * 1024 * 1024) -> Tuple[trime
             else:  # pragma: no cover - STEP vide
                 raise ValueError("No geometry in STEP file")
         low_res = False
-        if os.path.getsize(step_path) > max_bytes:
+        if os.path.getsize(step_path) > limit:
             target = int(mesh.faces.shape[0] * 0.2)
             if target > 0:
                 mesh = mesh.simplify_quadratic_decimation(target)
@@ -55,11 +67,14 @@ def compute_thickness(mesh: trimesh.Trimesh, samples: int = 1000) -> Tuple[float
         return 0.0, 0.0, [], []
     avg = float(thickness.mean())
     min_th = float(thickness.min())
-    hist, edges = np.histogram(thickness, bins=10)
-    histogram = [
-        (float(edges[i]), float(edges[i + 1]), int(hist[i]))
-        for i in range(len(hist))
-    ]
+    if np.ptp(thickness) < 1e-9:
+        histogram = [(float(thickness.min()), float(thickness.max()), len(thickness))]
+    else:
+        hist, edges = np.histogram(thickness, bins=10)
+        histogram = [
+            (float(edges[i]), float(edges[i + 1]), int(hist[i]))
+            for i in range(len(hist))
+        ]
     per_face: dict[int, list[float]] = {}
     for f, t in zip(faces[: len(thickness)], thickness):
         per_face.setdefault(int(f), []).append(float(t))
