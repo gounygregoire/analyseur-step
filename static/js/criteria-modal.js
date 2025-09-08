@@ -128,7 +128,7 @@ function updateSummary() {
   if (summary) {
     summary.textContent = `✅ Valides: ${valids.length} | ⚠️ Avertissements: ${state.warnings.size} | ⛔ Blocants: ${state.blockers.size}`;
   }
-  const btn = document.getElementById("analyserBtn");
+  const btn = document.getElementById("submitQuestionnaire");
   if (btn) btn.disabled = state.blockers.size > 0;
 }
 
@@ -245,12 +245,13 @@ function onAnalyseClick(e) {
     first?.focus();
     return;
   }
-  if (typeof startDFM === "function") {
-    startDFM(res.payload);
-  } else {
-    document.dispatchEvent(
-      new CustomEvent("start-dfm", { detail: res.payload })
-    );
+  document.dispatchEvent(
+    new CustomEvent("material:confirmed", { detail: res.payload })
+  );
+  const modalEl = document.getElementById("materialQuestionnaireModal");
+  if (modalEl) {
+    const instance = bootstrap.Modal.getInstance(modalEl) || new bootstrap.Modal(modalEl);
+    instance.hide();
   }
 }
 
@@ -271,7 +272,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   document
-    .getElementById("analyserBtn")
+    .getElementById("submitQuestionnaire")
     ?.addEventListener("click", onAnalyseClick);
 
   evaluate();
