@@ -54,9 +54,6 @@ from storage.s3 import get_signed_url
 from observability.logging import setup_logging, get_logger
 from api.dfm import dfm_bp
 
-
-bp = Blueprint("dfm_api", __name__)
-
 load_dotenv()
 
 # ========= FLASK APP (corrigé) =========

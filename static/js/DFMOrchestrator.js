@@ -6,6 +6,14 @@
 import AxisPicker from "./modules/AxisPicker.js";
 import HeatmapLayer from "./modules/HeatmapLayer.js";
 
+// État global minimal pour la DFM
+window.CAD = {
+  fileIdStep: window.CAD?.fileIdStep ?? null,
+  materialProfile: window.CAD?.materialProfile ?? null,
+  axis: window.CAD?.axis ?? { x: 0, y: 0, z: 1 },
+  currentJobId: window.CAD?.currentJobId ?? null,
+};
+
 const DEBUG_DFM = window.DEBUG_DFM === true;
 const dbg = (...a) => { if (DEBUG_DFM) console.debug("[DFM]", ...a); };
 
@@ -15,7 +23,7 @@ const UI = {
   warn(m){ if (window.showToast) showToast(m,{type:"warn"}); },
   err(m){  if (window.showToast) showToast(m,{type:"error"}); },
   setLoading(on){
-    const b = document.getElementById("submitQuestionnaire");
+    const b = document.getElementById("dfmAnalyzeBtn");
     if (b) b.disabled = !!on;
   },
   progress(pct){
@@ -31,6 +39,17 @@ const StatusUI = {
   }
 };
 
+function axisToVector(ax){
+  if (!ax) return null;
+  if (ax.axis === "X") return {x: ax.direction, y:0, z:0};
+  if (ax.axis === "Y") return {x:0, y: ax.direction, z:0};
+  if (ax.axis === "Z") return {x:0, y:0, z: ax.direction};
+  if (ax.axis === "VECTOR" && Array.isArray(ax.vector)){
+    const [x=0,y=0,z=1] = ax.vector;
+    return {x,y,z};
+  }
+  return null;
+}
 async function pollJobStatus(jobId, onUpdate, onDone, onError) {
   let attempts = 0;
   let queuedSince = Date.now();
@@ -75,13 +94,6 @@ class DFMOrchestrator {
     this.demouldAxis = null;
     this.axisPicker = null;
     this._autoSuggestion = null;
-    this.onAnalysisDone = null;
-    window.addEventListener("axisPicker:validated", (e) => {
-      const detail = e.detail || {};
-      this.setMaterialProfile(detail.materialProfile);
-      this.setDemouldAxis(detail.axis);
-      this.startAnalysis({ demouldAxis: detail.axis, materialProfile: detail.materialProfile });
-    });
   }
 
   setState(next){
@@ -94,8 +106,14 @@ class DFMOrchestrator {
     const hidden = document.getElementById('fileId');
     if (hidden && hidden.type === 'hidden') hidden.value = this.fileId || '';
   }
-  setMaterialProfile(p){ this.materialProfile = p || null; }
-  setDemouldAxis(a){ this.demouldAxis = a || null; }
+  setMaterialProfile(p){
+    this.materialProfile = p || null;
+  }
+  setDemouldAxis(a){
+    const vec = axisToVector(a);
+    this.demouldAxis = vec || null;
+    window.CAD.axis = vec;
+  }
 
   // ---------------------- Résolution de fileId ----------------------
   resolveFileId(){
@@ -107,7 +125,7 @@ class DFMOrchestrator {
     if (id) return id;
 
     // 3) global (fallback)
-    id = window.CADLYTICS?.current?.fileId;
+    id = window.CAD?.fileIdStep || window.CADLYTICS?.current?.fileId;
     if (id) return id;
 
     // 4) input hidden
@@ -129,28 +147,18 @@ class DFMOrchestrator {
 
   // ---------------------- Axis panel ----------------------
   renderAxisPanel(){
-    if (!this.fileId && !this.setFileIdFromPage()){
-      UI.info("Aucun fichier à analyser. Merci d’importer une pièce.");
-      return;
-    }
     if (!this.materialProfile){
-      UI.info("Sélectionnez un matériau (questionnaire) avant d’analyser.");
+      UI.info("Compléter le questionnaire.");
       return;
     }
-
-    let panel = document.getElementById("dfmAxisPanel");
-    if (panel) return;
-    panel = document.createElement("div");
-    panel.id = "dfmAxisPanel";
-    panel.className = "card mt-3";
-    panel.innerHTML = `<div class="card-body" id="axisPickerContainer"></div>`;
-    document.getElementById("viewer")?.insertAdjacentElement("afterend", panel);
-
-    const container = panel.querySelector("#axisPickerContainer");
-    this.axisPicker = new AxisPicker(container);
-    this.axisPicker.addEventListener("preview", e => this.previewAxis(e.detail));
-    this.axisPicker.addEventListener("clear", () => window.viewerAdapter?.clearAxisPreview?.());
-    this.axisPicker.addEventListener("confirm", e => this.confirmAxis(e.detail));
+    const wrap = document.getElementById('axisPickerInline');
+    if (!wrap) return;
+    wrap.classList.remove('d-none');
+    if (this.axisPicker) return;
+    this.axisPicker = new AxisPicker(wrap);
+    this.axisPicker.addEventListener('preview', e=>this.previewAxis(e.detail));
+    this.axisPicker.addEventListener('clear', ()=>window.viewerAdapter?.clearAxisPreview?.());
+    this.axisPicker.addEventListener('confirm', e=>this.confirmAxis(e.detail));
   }
 
   async previewAxis(sel){
@@ -177,9 +185,6 @@ class DFMOrchestrator {
     const chosen = sel.axis === "AUTO" && this._autoSuggestion ? this._autoSuggestion : sel;
     this.setDemouldAxis(chosen);
     dbg("confirmAxis", chosen);
-    document.getElementById("dfmAxisPanel")?.remove();
-    this.axisPicker = null;
-    this.startAnalysis(); // ← lance l’analyse
   }
 
   // ---------------------- Analyse ----------------------
@@ -222,11 +227,6 @@ class DFMOrchestrator {
       this.handleError?.("file_missing");
       return;
     }
-    if (!materialProfile) {
-      UI.info("Sélectionnez un matériau pour l’analyse.");
-      this.handleError?.("profil_matiere_manquant");
-      return;
-    }
     if (!demouldAxis) {
       UI.info("Veuillez valider l’axe de démoulage.");
       this.handleError?.("axe_manquant");
@@ -239,12 +239,9 @@ class DFMOrchestrator {
     UI.setLoading(true);
 
     const payload = {
-      fileId,
       file_id: fileId,
-      materialProfile,
-      material_profile: materialProfile,
-      demouldAxis,
-      demould_axis: demouldAxis
+      axis: demouldAxis,
+      material_profile: materialProfile?.resin || "GENERIC",
     };
     console.debug("[DFM] start payload", payload);
 
@@ -263,12 +260,9 @@ class DFMOrchestrator {
 
       if (res.status === 200 || res.status === 202) {
         const { job_id: jobId } = startResp;
-
-        if (startResp.result) {
-          await this.renderResults(startResp.result);
-        } else if (jobId) {
+        if (jobId) {
+          window.CAD.currentJobId = jobId;
           StatusUI.set("Analyse en cours…");
-          this.onAnalysisDone = (s) => this.renderResults(s.result);
           pollJobStatus(
             jobId,
             (s) => {
@@ -278,7 +272,16 @@ class DFMOrchestrator {
                 if (typeof s.progress === "number" && UI.progress) UI.progress(s.progress);
               }
             },
-            async (s) => { StatusUI.set("Analyse terminée"); await this.onAnalysisDone?.(s); },
+            async () => {
+              StatusUI.set("Analyse terminée");
+              const r = await fetch(`/api/dfm/result?job_id=${encodeURIComponent(jobId)}`);
+              if (r.ok){
+                const data = await r.json();
+                await this.renderResults(data);
+              }else{
+                this.handleError("result_failed");
+              }
+            },
             () => { StatusUI.set("Échec de l’analyse"); UI.err("Échec de l’analyse"); }
           );
         } else {
@@ -315,41 +318,45 @@ class DFMOrchestrator {
     if (!panel) return;
     panel.innerHTML = "";
 
-    if (results.metrics){
+    if (results.summary){
       const table = document.createElement("table");
       table.className = "table table-sm";
       const tbody = document.createElement("tbody");
-      Object.entries(results.metrics).forEach(([k,v])=>{
+      Object.entries(results.summary).forEach(([k,v])=>{
         const tr = document.createElement("tr");
-        tr.innerHTML = `<th>${k}</th><td>${typeof v === 'object' ? JSON.stringify(v) : v}</td>`;
+        tr.innerHTML = `<th>${k}</th><td>${Array.isArray(v) || typeof v === 'object' ? JSON.stringify(v) : v}</td>`;
         tbody.appendChild(tr);
       });
       table.appendChild(tbody);
       panel.appendChild(table);
     }
+    if (Array.isArray(results.issues) && results.issues.length){
+      const ul = document.createElement("ul");
+      ul.className = "list-unstyled";
+      results.issues.forEach(issue => {
+        const li = document.createElement("li");
+        const sev = issue.severity === 'error' ? 'danger' : issue.severity === 'warn' ? 'warning text-dark' : 'secondary';
+        li.innerHTML = `<span class="badge bg-${sev} me-1">${issue.type}</span>${issue.message}`;
+        ul.appendChild(li);
+      });
+      panel.appendChild(ul);
+    }
 
-    const thumbs = results.views?.thumbnails || {};
-    const thumbsDiv = document.createElement("div");
-    Object.entries(thumbs).forEach(([name,url])=>{
-      const a = document.createElement("a");
-      a.href = url;
-      a.target = "_blank";
-      const img = document.createElement("img");
-      img.src = url;
-      img.alt = name;
-      img.style.maxWidth = "100px";
-      img.className = "img-thumbnail me-2";
-      a.appendChild(img);
-      thumbsDiv.appendChild(a);
-    });
-    if (thumbsDiv.childNodes.length) panel.appendChild(thumbsDiv);
-
-    if (results.report_paths?.pdf){
-      const link = document.createElement("a");
-      link.href = results.report_paths.pdf;
-      link.textContent = "Télécharger le rapport";
-      link.className = "btn btn-sm btn-outline-secondary mt-2";
-      panel.appendChild(link);
+    if (results.heatmap?.per_face?.length) {
+      const hmBtn = document.createElement("button");
+      hmBtn.id = "dfmHeatmapBtn";
+      hmBtn.className = "btn btn-outline-primary btn-sm mt-2";
+      hmBtn.textContent = "Afficher heatmap (beta)";
+      if (!window.viewerAdapter?.viewer) hmBtn.disabled = true;
+      hmBtn.addEventListener("click", () => {
+        const mapping = {};
+        results.heatmap.per_face.forEach(({ face_id, value }) => {
+          mapping[face_id] = value;
+        });
+        const layer = new HeatmapLayer(window.viewerAdapter);
+        layer.apply(mapping);
+      });
+      panel.appendChild(hmBtn);
     }
 
     await this._applyViewData();
@@ -371,16 +378,6 @@ class DFMOrchestrator {
         }
       }
     }catch(e){ console.error("camera_states", e); }
-    try{
-      const heatRes = await fetch(`/static/dfm/${fileId}/heatmap_faces.json`);
-      if (heatRes.ok){
-        const mapping = await heatRes.json();
-        if (mapping && Object.keys(mapping).length){
-          const layer = new HeatmapLayer(window.viewerAdapter);
-          layer.apply(mapping);
-        }
-      }
-    }catch(e){ console.error("heatmap_faces", e); }
   }
 
   handleError(message){
@@ -510,77 +507,29 @@ export function collectMaterialForm(){
   return { ok:true, data:profile, warnings };
 }
 
-// ---------------------- Wiring des boutons ----------------------
+// ---------------------- Wiring du bouton Analyser ----------------------
 document.addEventListener("DOMContentLoaded", () => {
-  // Récupération des éléments
-  const modalEl = document.getElementById("materialQuestionnaireModal");
-  const btn = document.getElementById("submitQuestionnaire");
-  const analyzeBtn = document.getElementById("dfmAnalyzeBtn");
+  dfmOrchestrator.setFileId(window.CAD.fileIdStep);
+  dfmOrchestrator.setMaterialProfile(window.CAD.materialProfile);
 
-  // Sécurité : si le bouton n'existe pas, on sort proprement
-  if (!btn) {
-    console.warn("[DFM] #submitQuestionnaire introuvable");
-    return;
-  }
-
-  // Modal Bootstrap si dispo, sinon fallback maison
-  let modal = null;
-  if (modalEl) {
-    if (window.bootstrap?.Modal) {
-      modal = new bootstrap.Modal(modalEl);
-    } else {
-      modal = {
-        show(){ modalEl.classList.add("show"); modalEl.style.display="block"; modalEl.removeAttribute("aria-hidden"); },
-        hide(){ modalEl.classList.remove("show"); modalEl.style.display="none"; modalEl.setAttribute("aria-hidden","true"); }
-      };
-    }
-  }
-
-  // Ouvre le questionnaire matière quand on clique "Analyser"
-  analyzeBtn?.addEventListener("click", () => {
-    if (!dfmOrchestrator.setFileIdFromPage()){
-      UI.info("Aucun fichier à analyser. Merci d’importer une pièce.");
-      return;
-    }
-    modal?.show?.();
+  window.addEventListener('dfm:fileReady', e => {
+    window.CAD.fileIdStep = e.detail.fileId;
+    dfmOrchestrator.setFileId(e.detail.fileId);
   });
 
-  // Normalise un profil matière minimal
-  const arr = v => Array.isArray(v) ? v : (v ? [v] : []);
-  function normalizeProfile(raw){
-    const p = raw && typeof raw === "object" ? raw : {};
-    return {
-      mechanical: arr(p.mechanical),
-      aesthetic:  arr(p.aesthetic),
-      regulatory: arr(p.regulatory),
-      resin:      p.resin || "generic",
-      notes:      p.notes || ""
-    };
-  }
+  document.addEventListener('material:confirmed', e => {
+    window.CAD.materialProfile = e.detail;
+    dfmOrchestrator.setMaterialProfile(e.detail);
+  });
 
-  btn.addEventListener("click", () => {
-    UI.setLoading(true);
-    try {
-      const result  = typeof collectMaterialForm === "function" ? collectMaterialForm() : { data: {} };
-      const profile = normalizeProfile(result?.data);
-
-      dfmOrchestrator.setMaterialProfile(profile);
-      dfmOrchestrator.setFileIdFromPage();
-      console.debug("[DFM] materialProfile:", profile, "fileId:", dfmOrchestrator.fileId);
-
-      if (!dfmOrchestrator.fileId){
-        UI.info("Aucun fichier à analyser. Merci d’importer une pièce.");
-        return;
-      }
-
-      modal?.hide?.();
-      dfmOrchestrator.setState(DFM_STATES.MATERIAL_CONFIRMED);
-      dfmOrchestrator.setState(DFM_STATES.AXIS_PICK);
-    } catch (e) {
-      console.error(e);
-      UI.err(e?.message || "Formulaire invalide");
-    } finally {
-      UI.setLoading(false);
-    }
+  const analyzeBtn = document.getElementById("dfmAnalyzeBtn");
+  analyzeBtn?.addEventListener("click", () => {
+    const { fileIdStep, materialProfile } = window.CAD;
+    if (!fileIdStep){ UI.info("Importe d'abord un STEP"); return; }
+    if (!materialProfile){ UI.info("Sélectionne un matériau"); return; }
+    if (!dfmOrchestrator.demouldAxis){ dfmOrchestrator.renderAxisPanel(); return; }
+    dfmOrchestrator.setFileId(fileIdStep);
+    dfmOrchestrator.setMaterialProfile(materialProfile);
+    dfmOrchestrator.startAnalysis();
   });
 });

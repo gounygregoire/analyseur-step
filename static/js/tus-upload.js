@@ -87,6 +87,8 @@
     window.CADLYTICS = window.CADLYTICS || {};
     window.CADLYTICS.current = window.CADLYTICS.current || {};
     window.CADLYTICS.current.fileId = id;
+    window.CAD = window.CAD || {};
+    window.CAD.fileIdStep = id;
     // 3) notifie l’orchestrateur
     window.dispatchEvent(new CustomEvent('dfm:fileReady', { detail: { fileId: id }}));
     // 4) optionnel : accessible pour d’autres modules

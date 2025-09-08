@@ -21,7 +21,8 @@
     
     <!-- Bootstrap Icons -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css">
-    
+
+    <script>window.CAD={fileIdStep:null,materialProfile:null,axis:{x:0,y:0,z:1},currentJobId:null};</script>
     <script type="module" src="/static/dist/main.js"></script>
 
     <!-- Plausible Analytics -->
@@ -240,21 +241,13 @@
     <!-- === FIN CONTENEUR VIEWER === -->
 
     <!-- ✅ Outils DFM existants (inchangés) -->
-    <div id="dfmControls" data-viewer-required class="d-flex gap-3 mt-4">
+    <div id="dfmControls" data-viewer-required class="d-flex flex-wrap align-items-start gap-3 mt-4">
       <button type="button" class="btn btn-primary" id="dfmAnalyzeBtn">
         <i class="bi bi-search me-2"></i>Analyser
         <input type="hidden" id="fileId" value="">
       </button>
 
-      <select id="demoldingAxisSelect" class="form-select d-none" style="max-width: 200px;">
-        <option value="x">Axe X (horizontal)</option>
-        <option value="y">Axe Y (avant/arrière)</option>
-        <option value="z" selected>Axe Z (haut/bas)</option>
-      </select>
-
-      <button id="startDFMAnalysis" class="btn btn-success d-none">
-        <i class="bi bi-rocket-takeoff me-2"></i>Lancer analyse DFM
-      </button>
+      <div id="axisPickerInline" class="d-none"></div>
     </div>
 
     <!-- Outils 3D intégrés à ton UI (conservés, ids différents => main.js ne les utilise pas) -->

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -27,12 +29,60 @@ class DFMInput(BaseModel):
         return v
 
 
+class IssueLocation(BaseModel):
+    face_id: int
+    point: tuple[float, float, float]
+    value: float
+
+
+class Issue(BaseModel):
+    type: Literal["THICKNESS", "DRAFT", "RADIUS", "UNDERCUT", "WARP_RISK"]
+    severity: Literal["info", "warn", "error"]
+    message: str
+    locations: list[IssueLocation] = Field(default_factory=list)
+
+
+class HeatmapEntry(BaseModel):
+    face_id: int
+    value: float
+
+
+class Heatmap(BaseModel):
+    metric: str
+    range: tuple[float, float]
+    per_face: list[HeatmapEntry] = Field(default_factory=list)
+
+
+class Summary(BaseModel):
+    mass_g: float
+    bbox_mm: tuple[float, float, float]
+    projected_area_mm2: float
+    avg_thickness_mm: float
+    min_thickness_mm: float
+    wall_thickness_histogram: list[tuple[float, float, int]] = Field(default_factory=list)
+    min_radius_mm: float
+    draft_ok_ratio: float
+    low_res: bool = False
+
+
+class MaterialProfile(BaseModel):
+    id: str
+    draft_min_deg: float
+
+
+class Axis(BaseModel):
+    x: float
+    y: float
+    z: float
+
+
 class DFMResult(BaseModel):
     """Résultat normalisé de l'analyse DFM."""
 
-    metrics: dict = Field(default_factory=dict)
-    issues: list[dict] = Field(default_factory=list)
-    heatmaps: dict = Field(default_factory=dict)
-    views: dict = Field(default_factory=dict)
-    report_paths: dict = Field(default_factory=dict)
-    flags: dict = Field(default_factory=dict)
+    job_id: str
+    file_id: str
+    summary: Summary
+    issues: list[Issue] = Field(default_factory=list)
+    heatmap: Heatmap
+    axis: Axis
+    material_profile: MaterialProfile

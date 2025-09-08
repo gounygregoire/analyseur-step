@@ -84,6 +84,10 @@ export class XeokitModelViewer extends EventTarget {
       this.model.destroy();
     }
     this.model = await this.loader.load({ id: this.modelId, src: url });
+    if (this.model?.meshes?.length <= 1) {
+      document.getElementById('explodeBtn')?.remove();
+      document.getElementById('isolateBtn')?.remove();
+    }
     this.lastAABB = [...this.model.aabb];
     if (this.currentQuality === null) {
       const fit = () => {
