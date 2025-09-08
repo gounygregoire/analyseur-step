@@ -8,7 +8,7 @@ import os
 class Storage:
     """Centralise l'accès aux fichiers locaux."""
 
-    UPLOADS_DIR = "uploads"
+    UPLOADS_DIR = os.path.join("/data", "uploads")
     CONVERTED_DIR = "converted"
     DFM_ROOT = os.path.join("static", "dfm")
 

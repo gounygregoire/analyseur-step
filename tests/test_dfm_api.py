@@ -1,109 +1,150 @@
-import os
-import sys
 import time
+import json
+import sys
 import pathlib
-import pytest
+import logging
 from flask import Flask
 
-root = pathlib.Path(__file__).resolve().parents[1]
-sys.path.append(str(root))
-from api.dfm import dfm_bp
-from app.storage import Storage
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.append(str(ROOT))
+
+from app.api.dfm_routes import dfm_bp
+from app.dfm.interfaces import DFMResult
+from app.storage import files
+from app.dfm import services
 
 
-@pytest.fixture()
-def client():
+def create_client(tmp_path):
+    files.UPLOAD_DIR = tmp_path
+    files.DB_PATH = tmp_path / "files.sqlite"
+    services.RESULTS_DIR = tmp_path
+    services.LOG_PATH = tmp_path / "dfm.log"
+    for h in list(services._logger.handlers):
+        services._logger.removeHandler(h)
+    handler = logging.FileHandler(services.LOG_PATH)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    services._logger.addHandler(handler)
     app = Flask(__name__)
     app.register_blueprint(dfm_bp)
     return app.test_client()
 
 
-def test_dfm_endpoints(tmp_path, monkeypatch, client):
-    step_file = tmp_path / "piece.step"
-    step_file.write_text("STEP DATA")
-    bad_step = tmp_path / "bad.step"
-    bad_step.write_text("not a step")
+def test_upload_and_analysis(tmp_path, monkeypatch):
+    client = create_client(tmp_path)
 
-    def fake_get_step_path(file_id: str) -> str:
-        return str(step_file if file_id == "foo" else bad_step)
+    from app.dfm.dfm_analyzer import DFMReport, DimensionAnalysis
 
-    monkeypatch.setattr(Storage, "get_step_path", staticmethod(fake_get_step_path))
+    def fake_analyze(step_path: str, axis, material):
+        return DFMReport(
+            dimensions=DimensionAnalysis(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 10.0),
+            wall_thickness_issues=[],
+            geometry_issues=[],
+            overall_score="good",
+            moldability_rating=8,
+            recommendations=[],
+        )
 
-    resp = client.post(
+    monkeypatch.setattr(services, "analyze_dfm", fake_analyze)
+
+    step_path = tmp_path / "sample.step"
+    step_path.write_text("ISO-10303-21;")
+    with open(step_path, "rb") as fh:
+        resp = client.post(
+            "/api/upload",
+            data={"file": (fh, "sample.step")},
+            content_type="multipart/form-data",
+        )
+    assert resp.status_code == 200
+    file_id = resp.get_json()["file_id"]
+    saved = tmp_path / f"{file_id}.step"
+    assert saved.exists()
+    assert saved.read_text() == "ISO-10303-21;"
+    assert files.get(file_id).path == saved
+
+    start = client.post(
         "/api/dfm/start",
-        json={
-            "file_id": "foo",
-            "demold_axis": [0, 1, 0],
-            "material_profile": {},
-        },
+        json={"file_id": file_id, "material_profile": "ABS", "axis": {"x": 0, "y": 0, "z": 1}},
     )
-    assert resp.status_code == 202
-    job_id = resp.get_json()["job_id"]
+    assert start.status_code == 202
+    job_id = start.get_json()["job_id"]
 
     for _ in range(20):
-        st = client.get("/api/dfm/status", query_string={"job_id": job_id})
-        data = st.get_json()
+        status = client.get("/api/dfm/status", query_string={"job_id": job_id})
+        data = status.get_json()
         if data["status"] == "done":
             assert data["progress"] == 100
-            assert "result" in data
-            result_json = pathlib.Path("static/dfm/foo/result.json")
-            assert result_json.exists()
-            cam_json = pathlib.Path("static/dfm/foo/camera_states.json")
-            heat_json = pathlib.Path("static/dfm/foo/heatmap_faces.json")
-            thumb_png = pathlib.Path("static/dfm/foo/thumb_iso.png")
-            assert cam_json.exists()
-            assert heat_json.exists()
-            assert thumb_png.exists()
             break
-        time.sleep(0.1)
+        time.sleep(0.05)
     else:
-        pytest.fail("job not finished")
+        assert False, "job not finished"
 
-    # error case
-    resp_err = client.post(
+    result = client.get("/api/dfm/result", query_string={"job_id": job_id})
+    assert result.status_code == 200
+    data = result.get_json()
+    parsed = DFMResult(**data)
+    assert parsed.job_id == job_id
+    assert parsed.file_id == file_id
+    assert parsed.summary.bbox_mm == (1, 1, 1)
+    assert parsed.axis.z == 1
+    assert parsed.summary.low_res is False
+
+    result_file = services.RESULTS_DIR / f"{job_id}.json"
+    assert result_file.exists()
+    saved = json.loads(result_file.read_text())
+    assert saved["job_id"] == job_id
+    assert saved["axis"]["z"] == 1
+
+    log = services.LOG_PATH.read_text()
+    assert job_id in log and file_id in log
+
+
+def test_start_invalid_file_id(tmp_path):
+    client = create_client(tmp_path)
+    resp = client.post("/api/dfm/start", json={"file_id": "unknown"})
+    assert resp.status_code == 404
+
+
+def test_analysis_error(tmp_path, monkeypatch):
+    client = create_client(tmp_path)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("fail")
+
+    monkeypatch.setattr(services, "analyze_dfm", boom)
+
+    step_path = tmp_path / "sample.step"
+    step_path.write_text("ISO-10303-21;")
+    with open(step_path, "rb") as fh:
+        resp = client.post(
+            "/api/upload",
+            data={"file": (fh, "sample.step")},
+            content_type="multipart/form-data",
+        )
+    file_id = resp.get_json()["file_id"]
+
+    start = client.post(
         "/api/dfm/start",
-        json={"file_id": "bad", "demold_axis": [0, 0, 1], "material_profile": {}},
+        json={"file_id": file_id, "material_profile": "ABS", "axis": {"x": 0, "y": 0, "z": 1}},
     )
-    assert resp_err.status_code == 202
-    job_err = resp_err.get_json()["job_id"]
-    for _ in range(20):
-        st = client.get("/api/dfm/status", query_string={"job_id": job_err})
-        data = st.get_json()
-        if data["status"] == "error":
-            assert data["error_code"] == "invalid_step"
-            assert "Invalid" in data["message"]
-            assert data["progress"] == 100
-            break
-        time.sleep(0.1)
-    else:
-        pytest.fail("job error not reported")
-
-
-def test_dfm_fast_mode_api(tmp_path, monkeypatch, client):
-    step_file = tmp_path / "heavy.step"
-    step_file.write_text("ISO-10303 data")
-
-    def fake_get_step_path(file_id: str) -> str:
-        return str(step_file)
-
-    monkeypatch.setattr(Storage, "get_step_path", staticmethod(fake_get_step_path))
-    monkeypatch.setattr(os.path, "getsize", lambda p: 60 * 1024 * 1024)
-
-    resp = client.post(
-        "/api/dfm/start",
-        json={"file_id": "big", "demold_axis": [0, 1, 0], "material_profile": {}},
-    )
-    assert resp.status_code == 202
-    job_id = resp.get_json()["job_id"]
+    job_id = start.get_json()["job_id"]
 
     for _ in range(20):
-        st = client.get("/api/dfm/status", query_string={"job_id": job_id})
-        data = st.get_json()
-        if data["status"] == "done":
-            assert data["result"]["flags"]["partial"] is True
-            heat_json = pathlib.Path("static/dfm/big/heatmap_faces.json")
-            assert not heat_json.exists()
+        status = client.get("/api/dfm/status", query_string={"job_id": job_id})
+        if status.get_json()["status"] == "error":
             break
-        time.sleep(0.1)
+        time.sleep(0.05)
     else:
-        pytest.fail("fast job not finished")
+        assert False, "job not failed"
+
+    res = client.get("/api/dfm/result", query_string={"job_id": job_id})
+    assert res.status_code == 200
+    assert res.get_json()["error"] == "fail"
+
+
+def test_health_endpoint(tmp_path):
+    client = create_client(tmp_path)
+    resp = client.get("/api/dfm/health")
+    data = resp.get_json()
+    assert resp.status_code == 200
+    assert data["ok"] is True
+    assert "queue_depth" in data and "workers" in data
