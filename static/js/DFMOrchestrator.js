@@ -524,13 +524,25 @@ document.addEventListener("DOMContentLoaded", () => {
   document.addEventListener('material:confirmed', e => {
     window.CAD.materialProfile = e.detail;
     dfmOrchestrator.setMaterialProfile(e.detail);
+    if (!dfmOrchestrator.demouldAxis) {
+      dfmOrchestrator.renderAxisPanel();
+    } else {
+      dfmOrchestrator.startAnalysis();
+    }
   });
 
   const analyzeBtn = document.getElementById("dfmAnalyzeBtn");
   analyzeBtn?.addEventListener("click", () => {
     const { fileIdStep, materialProfile } = window.CAD;
     if (!fileIdStep){ UI.info("Importe d'abord un STEP"); return; }
-    if (!materialProfile){ UI.info("Sélectionne un matériau"); return; }
+    if (!materialProfile){
+      const modalEl = document.getElementById('materialQuestionnaireModal');
+      if (modalEl) {
+        const instance = bootstrap.Modal.getInstance(modalEl) || new bootstrap.Modal(modalEl);
+        instance.show();
+      }
+      return;
+    }
     if (!dfmOrchestrator.demouldAxis){ dfmOrchestrator.renderAxisPanel(); return; }
     dfmOrchestrator.setFileId(fileIdStep);
     dfmOrchestrator.setMaterialProfile(materialProfile);
