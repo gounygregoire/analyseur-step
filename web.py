@@ -13,7 +13,6 @@ from flask import (
     redirect,
     url_for,
     flash,
-    Blueprint
 )
 from flask_cors import CORS
 from flask_migrate import Migrate
@@ -62,8 +61,16 @@ app = Flask(
     __name__,
     static_folder="static",
     static_url_path="/static",
-    template_folder="templates"
+    template_folder="templates",
 )
+app.config["JSON_SORT_KEYS"] = False
+
+# Enregistre le blueprint de l’API DFM (URL telles que /api/dfm/...)
+app.register_blueprint(dfm_bp)
+
+# Lie Celery au contexte Flask (pas d’alias inutile)
+init_celery(app)
+
 # --- LOGGING (observability) ---
 # Essaie d'initialiser le logging applicatif avec l'app Flask.
 # Si indisponible / erreur de signature, on bascule sur le logging standard.
@@ -98,25 +105,8 @@ def _debug_static_and_routes_once():
     except Exception:
         logger.exception("[BOOT] debug failed")
 
-def create_app():
-    app = Flask(__name__)
-    app.config["JSON_SORT_KEYS"] = False
-
-    # Enregistre le blueprint de l’API DFM (URL telles que /api/dfm/...)
-    app.register_blueprint(dfm_bp)
-
-    @app.get("/health")
-    def health():
-        return {"ok": True}, 200
-
-    return app
 
 # <-- web:app pour gunicorn
-app = create_app()
-
-# Lie Celery au contexte Flask (pas d’alias inutile)
-init_celery(app)
-
 # IMPORTANT : ne mets PAS "celery = _celery" ici
 # (si tu veux exposer l'instance, elle s'appelle déjà "celery" car importée depuis celery_app)
 
@@ -1390,7 +1380,7 @@ def dfm_axes_suggest():
         logger.exception("axis suggestion failed")
         return jsonify({'error': 'axis_suggestion_failed', 'message': str(e)}), 500
 
-@bp.post("/api/dfm/start")
+@app.post("/api/dfm/start")
 def dfm_start():
     data = request.get_json(force=True) or {}
     file_id = data.get("fileId")
@@ -1401,7 +1391,7 @@ def dfm_start():
     return jsonify({"jobId": job.id}), 200
 
 
-@bp.get("/api/dfm/status")
+@app.get("/api/dfm/status")
 def dfm_status():
     job_id = request.args.get("jobId")
     if not job_id:
@@ -1416,7 +1406,7 @@ def dfm_status():
     }), 200
 
 
-@bp.get("/api/dfm/results")
+@app.get("/api/dfm/results")
 def dfm_results():
     job_id = request.args.get("jobId")
     if not job_id:
