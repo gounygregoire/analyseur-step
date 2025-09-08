@@ -23,6 +23,8 @@ services:
         value: "300"
       - key: OMP_NUM_THREADS
         value: "1"
+      - key: DATA_DIR
+        value: ./data # personnaliser si un volume persistant est monté
     plan: starter
 
   - type: worker
@@ -46,6 +48,8 @@ services:
         value: /tmp/converted
       - key: OMP_NUM_THREADS
         value: "1"
+      - key: DATA_DIR
+        value: ./data # personnaliser si un volume persistant est monté
 
 databases:
   - name: cadlytics-redis

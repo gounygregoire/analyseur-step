@@ -3,12 +3,16 @@
 DFM lit STEP, viewer lit XKT.
 """
 import os
+from pathlib import Path
+
+# Répertoire racine configurable
+DATA_DIR = Path(os.getenv("DATA_DIR", "data")).resolve()
 
 
 class Storage:
     """Centralise l'accès aux fichiers locaux."""
 
-    UPLOADS_DIR = os.path.join("/data", "uploads")
+    UPLOADS_DIR = str(Path(os.getenv("UPLOAD_FOLDER", DATA_DIR / "uploads")))
     CONVERTED_DIR = "converted"
     DFM_ROOT = os.path.join("static", "dfm")
 
@@ -44,3 +48,6 @@ class Storage:
 
 
 __all__ = ["Storage"]
+
+# Création du dossier d'uploads au chargement du module
+Path(Storage.UPLOADS_DIR).mkdir(parents=True, exist_ok=True)

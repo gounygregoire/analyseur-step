@@ -6,12 +6,15 @@ from pathlib import Path
 from typing import Optional
 from werkzeug.utils import secure_filename
 
+# Répertoire racine configurable
+DATA_DIR = Path(os.getenv("DATA_DIR", "data")).resolve()
+
 # Répertoire par défaut pour les STEP
-UPLOAD_DIR = Path(os.getenv("UPLOAD_FOLDER", "/data/uploads"))
+UPLOAD_DIR = Path(os.getenv("UPLOAD_FOLDER", DATA_DIR / "uploads"))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # Base de données pour persister les métadonnées
-DB_PATH = Path(os.getenv("FILES_DB", "/data/files.sqlite"))
+DB_PATH = Path(os.getenv("FILES_DB", DATA_DIR / "files.sqlite"))
 
 
 def _init_db() -> None:
