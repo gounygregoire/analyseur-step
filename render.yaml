@@ -2,8 +2,16 @@ services:
   - type: web
     name: cadlytics-web
     env: python
-    buildCommand: "npm ci && npm run build && pip install -r requirements.txt"
-    startCommand: "gunicorn app:app"
+    buildCommand: |
+      apt-get update && apt-get install -y --no-install-recommends \
+        libgl1-mesa-glx \
+        libglib2.0-0 \
+        libxrender1 \
+        libxext6 \
+      && rm -rf /var/lib/apt/lists/*
+      npm ci && npm run build
+      pip install --no-cache-dir -r requirements.txt
+    startCommand: "gunicorn app:app --workers=1 --threads=2 --timeout=600"
     envVars:
       - key: REDIS_URL
         sync: false
@@ -16,10 +24,18 @@ services:
       - key: OMP_NUM_THREADS
         value: "1"
     plan: starter
+
   - type: worker
     name: cadlytics-worker
     env: python
-    buildCommand: "pip install -r requirements.txt"
+    buildCommand: |
+      apt-get update && apt-get install -y --no-install-recommends \
+        libgl1-mesa-glx \
+        libglib2.0-0 \
+        libxrender1 \
+        libxext6 \
+      && rm -rf /var/lib/apt/lists/*
+      pip install --no-cache-dir -r requirements.txt
     startCommand: "python worker.py"
     envVars:
       - key: REDIS_URL
