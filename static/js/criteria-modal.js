@@ -250,8 +250,7 @@ function onAnalyseClick(e) {
   );
   const modalEl = document.getElementById("materialQuestionnaireModal");
   if (modalEl) {
-    const instance = bootstrap.Modal.getInstance(modalEl) || new bootstrap.Modal(modalEl);
-    instance.hide();
+    bootstrap.Modal.getInstance(modalEl)?.hide();
   }
 }
 

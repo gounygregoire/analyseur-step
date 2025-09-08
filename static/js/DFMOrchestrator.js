@@ -23,7 +23,7 @@ const UI = {
   warn(m){ if (window.showToast) showToast(m,{type:"warn"}); },
   err(m){  if (window.showToast) showToast(m,{type:"error"}); },
   setLoading(on){
-    const b = document.getElementById("dfmAnalyzeBtn");
+    const b = document.getElementById("analyzeBtn");
     if (b) b.disabled = !!on;
   },
   progress(pct){
@@ -79,6 +79,22 @@ async function pollJobStatus(jobId, onUpdate, onDone, onError) {
   }
   step();
 }
+
+export function showMaterialModal() {
+  if (!window.bootstrap) {
+    console.error("Bootstrap non chargé : modale impossible.");
+    alert("Erreur UI : recharge la page.");
+    return;
+  }
+  const el = document.getElementById('materialModal');
+  if (!el) {
+    console.error("#materialModal introuvable");
+    return;
+  }
+  const modal = new bootstrap.Modal(el, { backdrop: 'static' });
+  modal.show();
+}
+window.showMaterialModal = showMaterialModal;
 
 // ---------------------- États ----------------------
 export const DFM_STATES = {
@@ -197,6 +213,11 @@ class DFMOrchestrator {
     materialProfile = this.materialProfile,
     demouldAxis = this.demouldAxis
   } = {}) {
+    if (!this.materialProfile) {
+      console.warn("Aucun profil matière sélectionné, ouverture de la modale.");
+      showMaterialModal();
+      return;
+    }
     // ➊ Résolution robuste du fileId au tout début
     if (!fileId) {
       // a) champ caché
@@ -433,6 +454,7 @@ class DFMOrchestrator {
 }
 
 export const dfmOrchestrator = new DFMOrchestrator();
+window.DFMOrchestrator = dfmOrchestrator;
 
 // ---------------------- Formulaire matière ----------------------
 const EXCLUSIVE_GROUPS = [
@@ -530,22 +552,42 @@ document.addEventListener("DOMContentLoaded", () => {
       dfmOrchestrator.startAnalysis();
     }
   });
+});
 
-  const analyzeBtn = document.getElementById("dfmAnalyzeBtn");
-  analyzeBtn?.addEventListener("click", () => {
-    const { fileIdStep, materialProfile } = window.CAD;
-    if (!fileIdStep){ UI.info("Importe d'abord un STEP"); return; }
-    if (!materialProfile){
-      const modalEl = document.getElementById('materialQuestionnaireModal');
-      if (modalEl) {
-        const instance = bootstrap.Modal.getInstance(modalEl) || new bootstrap.Modal(modalEl);
-        instance.show();
+document.addEventListener('DOMContentLoaded', () => {
+  const analyzeBtn = document.getElementById('analyzeBtn');
+  if (!analyzeBtn) {
+    console.warn("#analyzeBtn introuvable");
+    return;
+  }
+  if (!analyzeBtn.dataset.bound) {
+    analyzeBtn.dataset.bound = "1";
+    analyzeBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      try {
+        if (typeof DFMOrchestrator?.startAnalysis === 'function') {
+          DFMOrchestrator.startAnalysis();
+        } else if (typeof startAnalysis === 'function') {
+          startAnalysis();
+        } else {
+          console.error("startAnalysis introuvable");
+          if (window.showMaterialModal) showMaterialModal();
+        }
+      } catch (err) {
+        console.error("Erreur au clic Analyser:", err);
       }
-      return;
-    }
-    if (!dfmOrchestrator.demouldAxis){ dfmOrchestrator.renderAxisPanel(); return; }
-    dfmOrchestrator.setFileId(fileIdStep);
-    dfmOrchestrator.setMaterialProfile(materialProfile);
-    dfmOrchestrator.startAnalysis();
-  });
+    });
+  }
+});
+
+document.getElementById('materialConfirmBtn')?.addEventListener('click', () => {
+  console.debug("[DFM] Matière confirmée");
+  const el = document.getElementById('materialModal');
+  if (el && window.bootstrap) {
+    const modal = bootstrap.Modal.getInstance(el) || new bootstrap.Modal(el);
+    modal.hide();
+  }
+  if (typeof DFMOrchestrator?.launchAxisPicking === 'function') {
+    DFMOrchestrator.launchAxisPicking();
+  }
 });
