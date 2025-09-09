@@ -3,7 +3,6 @@
  * États : IDLE → MATERIAL_CONFIRMED → AXIS_PICK → RUNNING → RESULTS → ERROR
  */
 
-import AxisPicker from "./modules/AxisPicker.js";
 import HeatmapLayer from "./modules/HeatmapLayer.js";
 
 // État global minimal pour la DFM
@@ -102,22 +101,24 @@ class DFMOrchestrator {
     this.fileId = null;
     this.materialProfile = null;
     this.demouldAxis = null;
-    this.axisPicker = null;
-    this._autoSuggestion = null;
+    this.currentAxis = 'AUTO';
+    this.invert = false;
+    this.initAxisPanel();
   }
 
   setState(next){
     this.state = next; dbg("state →", next);
-    if (next === DFM_STATES.AXIS_PICK) this.renderAxisPanel();
   }
 
   setFileId(id){
     this.fileId = id || null;
     const hidden = document.getElementById('fileId');
     if (hidden && hidden.type === 'hidden') hidden.value = this.fileId || '';
+    this.updateAxisPanelState?.();
   }
   setMaterialProfile(p){
     this.materialProfile = p || null;
+    this.updateAxisPanelState?.();
   }
   setDemouldAxis(a){
     const vec = axisToVector(a);
@@ -155,50 +156,80 @@ class DFMOrchestrator {
     return id;
   }
 
-  // ---------------------- Axis panel ----------------------
-  renderAxisPanel(){
-    if (!this.materialProfile){
-      UI.info("Compléter le questionnaire.");
+  initAxisPanel(){
+    this.axisPanel = document.getElementById('dfmAxisPanel');
+    if (!this.axisPanel) return;
+
+    this.axisButtons = {
+      X: document.getElementById('axisXBtn'),
+      Y: document.getElementById('axisYBtn'),
+      Z: document.getElementById('axisZBtn'),
+      AUTO: document.getElementById('axisAutoBtn')
+    };
+    this.invertToggle = document.getElementById('invertAxisToggle');
+
+    Object.entries(this.axisButtons).forEach(([axis, btn])=>{
+      if (!btn) return;
+      btn.addEventListener('click', ()=>{
+        this.currentAxis = axis;
+        console.log('axis', axis);
+      });
+    });
+
+    if (this.invertToggle){
+      this.invertToggle.addEventListener('change', e=>{
+        this.invert = !!e.target.checked;
+        console.log('invert', this.invert);
+      });
+    }
+
+    this.updateAxisPanelState();
+  }
+
+  updateAxisPanelState(){
+    const enabled = !!(this.fileId && this.materialProfile);
+    if (this.axisButtons){
+      Object.values(this.axisButtons).forEach(btn=>{ if (btn) btn.disabled = !enabled; });
+    }
+    if (this.invertToggle) this.invertToggle.disabled = !enabled;
+  }
+
+  async startDFM(){
+    const fileId = this.fileId;
+    const profile = this.materialProfile;
+    if (!fileId || !profile){
+      console.error("startDFM prérequis manquants", { fileId, profile });
+      UI.err("Fichier ou profil matière manquant");
       return;
     }
-    const wrap = document.getElementById('axisPickerInline');
-    if (!wrap) return;
-    wrap.classList.remove('d-none');
-    if (this.axisPicker) return;
-    this.axisPicker = new AxisPicker(wrap);
-    this.axisPicker.addEventListener('preview', e=>this.previewAxis(e.detail));
-    this.axisPicker.addEventListener('clear', ()=>window.viewerAdapter?.clearAxisPreview?.());
-    this.axisPicker.addEventListener('confirm', e=>this.confirmAxis(e.detail));
-  }
 
-  async previewAxis(sel){
-    dbg("previewAxis", sel);
-    if (sel.axis === "AUTO"){
-      try{
-        const res = await fetch(`/api/dfm/axes/suggest?fileId=${encodeURIComponent(this.fileId)}`);
-        if (res.ok){
-          const data = await res.json();
-          this._autoSuggestion = data;
-          window.viewerAdapter?.previewDemouldAxis?.(data);
-          if (data.axis && data.axis !== "VECTOR"){
-            this.axisPicker?.setValue({ axis:data.axis, direction:data.direction });
-          }
-        }
-      }catch(e){ console.error(e); }
-    }else{
-      this._autoSuggestion = sel;
-      window.viewerAdapter?.previewDemouldAxis?.(sel);
+    const payload = {
+      file_id: fileId,
+      material_profile_id: profile.id || profile.material_profile_id || profile,
+      axis: this.currentAxis,
+      invert: this.invert,
+    };
+
+    try{
+      const res = await fetch("/api/dfm/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (!res.ok){
+        const txt = await res.text().catch(() => "");
+        console.error("startDFM erreur", res.status, txt);
+        UI.err("Lancement DFM impossible");
+        return;
+      }
+
+      const data = await res.json().catch(() => ({}));
+      console.log("DFM démarrée", data);
+    }catch(e){
+      console.error("startDFM réseau", e);
+      UI.err("Erreur réseau lors du lancement de la DFM");
     }
-  }
-
-  confirmAxis(sel){
-    const chosen = sel.axis === "AUTO" && this._autoSuggestion ? this._autoSuggestion : sel;
-    this.setDemouldAxis(chosen);
-    dbg("confirmAxis", chosen);
-    if (!this.fileId) this.setFileIdFromPage();
-    if (!this.fileId){ UI.err("Aucun fichier à analyser"); return; }
-    if (!this.materialProfile){ UI.err("Profil matière manquant"); return; }
-    this.startAnalysis();
   }
 
   // ---------------------- Analyse ----------------------
@@ -452,12 +483,12 @@ if (typeof window !== 'undefined') {
   window.DFMOrchestrator = dfmOrchestrator;
 }
 
-// Expose startAnalysis globally for non-module callers
+// Expose startDFM globally for non-module callers
 if (typeof window !== 'undefined') {
-  if (typeof window.DFMOrchestrator.startAnalysis === 'function') {
-    window.startAnalysis = window.startAnalysis || window.DFMOrchestrator.startAnalysis.bind(window.DFMOrchestrator);
+  if (typeof window.DFMOrchestrator.startDFM === 'function') {
+    window.startDFM = window.DFMOrchestrator.startDFM.bind(window.DFMOrchestrator);
   }
-  console.debug("[DFM] startAnalysis exposé ?", typeof window.startAnalysis);
+  console.debug("[DFM] startDFM exposé ?", typeof window.startDFM);
 }
 
 // ---------------------- Formulaire matière ----------------------
@@ -555,10 +586,8 @@ export function initDFMUI() {
     document.addEventListener('material:confirmed', e => {
       window.CAD.materialProfile = e.detail;
       dfmOrchestrator.setMaterialProfile(e.detail);
-      if (!dfmOrchestrator.demouldAxis) {
-        dfmOrchestrator.renderAxisPanel();
-      } else {
-        dfmOrchestrator.startAnalysis();
+      if (dfmOrchestrator.demouldAxis) {
+        dfmOrchestrator.startDFM();
       }
     });
   });
@@ -578,12 +607,12 @@ export function initDFMUI() {
         else console.error("showMaterialModal manquant");
         return;
       }
-      if (typeof DFMOrchestrator?.startAnalysis === 'function') {
-        DFMOrchestrator.startAnalysis();
-      } else if (typeof window.startAnalysis === 'function') {
-        window.startAnalysis();
+      if (typeof DFMOrchestrator?.startDFM === 'function') {
+        DFMOrchestrator.startDFM();
+      } else if (typeof window.startDFM === 'function') {
+        window.startDFM();
       } else {
-        console.error("startAnalysis introuvable");
+        console.error("startDFM introuvable");
       }
     });
   });

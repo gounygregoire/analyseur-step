@@ -37,9 +37,7 @@ from heatmap import generate_heatmap
 from material_recommender import recommend_materials_for_questionnaire
 import xkt_converter
 from tasks.conversion import generate_preview, generate_final
-from tasks.dfm import dfm_run
 from celery_app import celery, init_celery
-from celery.result import AsyncResult
 from flask_login import LoginManager, login_required, current_user
 from translations import get_translation, get_all_translations
 from log import log_action
@@ -1380,47 +1378,6 @@ def dfm_axes_suggest():
         logger.exception("axis suggestion failed")
         return jsonify({'error': 'axis_suggestion_failed', 'message': str(e)}), 500
 
-@app.post("/api/dfm/start")
-def dfm_start():
-    data = request.get_json(force=True) or {}
-    file_id = data.get("fileId")
-    material_profile = data.get("materialProfile", {"resin": "generic", "mechanical": [], "aesthetic": [], "regulatory": [], "notes": ""})
-    demould_axis = data.get("demouldAxis", {"axis": "Y", "direction": 1})
-
-    job = dfm_run.apply_async(args=[file_id, material_profile, demould_axis], queue="dfm")
-    return jsonify({"jobId": job.id}), 200
-
-
-@app.get("/api/dfm/status")
-def dfm_status():
-    job_id = request.args.get("jobId")
-    if not job_id:
-        return jsonify({"error": "jobId manquant"}), 400
-
-    res = AsyncResult(job_id, app=celery)
-    # res.info contient meta si PROGRESS/SUCCESS, sinon None
-    return jsonify({
-        "jobId": job_id,
-        "state": res.state,
-        "meta": res.info if isinstance(res.info, dict) else None
-    }), 200
-
-
-@app.get("/api/dfm/results")
-def dfm_results():
-    job_id = request.args.get("jobId")
-    if not job_id:
-        return jsonify({"error": "jobId manquant"}), 400
-
-    res = AsyncResult(job_id, app=celery)
-
-    if res.successful():
-        return jsonify(res.result), 200
-    if res.failed():
-        return jsonify({"jobId": job_id, "state": res.state, "error": str(res.result)}), 500
-
-    # Pas prêt : renvoyer 202 pour indiquer au front de réessayer
-    return jsonify({"jobId": job_id, "state": res.state}), 202
 
 @app.route('/api/dfm-summary')
 def dfm_summary():
