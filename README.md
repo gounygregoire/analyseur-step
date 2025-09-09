@@ -1,4 +1,5 @@
 # Cadlytics
+![Coverage](coverage.svg)
 
 Ce dépôt contient le code du MVP de Cadlytics, SaaS d'analyse DFM et de visualisation 3D pour fichiers STEP.
 Le viewer 3D fonctionne avec **Xeokit** et attend des modèles au format **XKT**.

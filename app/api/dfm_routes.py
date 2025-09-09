@@ -22,12 +22,14 @@ def upload() -> tuple[dict, int] | tuple[dict, int]:
 def start_dfm():
     data = request.get_json(force=True) or {}
     file_id = data.get("file_id")
-    material_profile = data.get("material_profile", "GENERIC")
+    material_profile = data.get("material_profile")
     axis = data.get("axis")
     if not file_id:
         return jsonify({"error": "file_id_missing"}), 400
     if not files.get(file_id):
-        return jsonify({"error": "file_not_found"}), 404
+        return jsonify({"error": "file_not_found"}), 400
+    if not material_profile:
+        return jsonify({"error": "material_profile_missing"}), 400
     job_id = services.launch_job(file_id, material_profile, axis)
     return jsonify({"job_id": job_id}), 202
 
@@ -36,7 +38,8 @@ def start_dfm():
 def status_dfm():
     job_id = request.args.get("job_id")
     info = services.get_status(job_id)
-    return jsonify(info), 200
+    status_code = 404 if info.get("error") == "job_not_found" else 200
+    return jsonify(info), status_code
 
 
 @dfm_bp.get("/dfm/result")

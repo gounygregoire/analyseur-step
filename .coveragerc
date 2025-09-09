@@ -1,0 +1,15 @@
+[run]
+branch = True
+omit =
+    app/app.py
+    app/converters/*
+    app/jobs.py
+    app/queue.py
+    app/tasks.py
+    app/worker.py
+    app/dfm/dfm_analyzer.py
+    app/dfm/adapters/step_loader.py
+
+[report]
+fail_under = 75
+show_missing = True
