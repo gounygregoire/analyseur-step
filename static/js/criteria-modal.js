@@ -247,8 +247,13 @@ function onAnalyseClick(e) {
     first?.focus();
     return;
   }
-  // Diffuse le profil matière validé sur le bus
-  eventBus.publish("material:selected", { materialProfile: res.payload });
+  // Diffuse un profil matière synthétique (id/slug + critères) sur le bus
+  const profile = {
+    id: res.payload?.[0] || "custom",
+    slug: res.payload?.[0] || "custom",
+    criteria: res.payload,
+  };
+  eventBus.publish("material:selected", { materialProfile: profile });
   // Événement legacy pour compatibilité
   document.dispatchEvent(
     new CustomEvent("material:confirmed", { detail: res.payload })
