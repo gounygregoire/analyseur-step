@@ -7,14 +7,16 @@ import AxisPicker from "./modules/AxisPicker.js";
 import HeatmapLayer from "./modules/HeatmapLayer.js";
 
 // État global minimal pour la DFM
-window.CAD = {
-  fileIdStep: window.CAD?.fileIdStep ?? null,
-  materialProfile: window.CAD?.materialProfile ?? null,
-  axis: window.CAD?.axis ?? { x: 0, y: 0, z: 1 },
-  currentJobId: window.CAD?.currentJobId ?? null,
-};
+if (typeof window !== 'undefined') {
+  window.CAD = {
+    fileIdStep: window.CAD?.fileIdStep ?? null,
+    materialProfile: window.CAD?.materialProfile ?? null,
+    axis: window.CAD?.axis ?? { x: 0, y: 0, z: 1 },
+    currentJobId: window.CAD?.currentJobId ?? null,
+  };
+}
 
-const DEBUG_DFM = window.DEBUG_DFM === true;
+const DEBUG_DFM = (typeof window !== 'undefined' && window.DEBUG_DFM === true);
 const dbg = (...a) => { if (DEBUG_DFM) console.debug("[DFM]", ...a); };
 
 // ---------------------- UI helpers ----------------------
@@ -80,21 +82,21 @@ async function pollJobStatus(jobId, onUpdate, onDone, onError) {
   step();
 }
 
-export function showMaterialModal() {
-  if (!window.bootstrap) {
-    console.error("Bootstrap non chargé : modale impossible.");
-    alert("Erreur UI : recharge la page.");
-    return;
-  }
+export function showMaterialModal(prefill) {
+  if (!window.bootstrap) { console.error("Bootstrap non chargé"); return; }
   const el = document.getElementById('materialModal');
-  if (!el) {
-    console.error("#materialModal introuvable");
-    return;
-  }
+  if (!el) { console.error("#materialModal introuvable"); return; }
+
+  const profile = prefill || this?.materialProfile || null;
+  // Injection / pré-remplissage
+  try {
+    // renderMaterialSelector('#materialSelector', profile);
+    // renderFinishSelector('#materialFinish', profile);
+  } catch (e) { console.warn("Material selector injection skipped:", e); }
+
   const modal = new bootstrap.Modal(el, { backdrop: 'static' });
   modal.show();
 }
-window.showMaterialModal = showMaterialModal;
 
 // ---------------------- États ----------------------
 export const DFM_STATES = {
@@ -453,8 +455,18 @@ class DFMOrchestrator {
   }
 }
 
-export const dfmOrchestrator = new DFMOrchestrator();
-window.DFMOrchestrator = dfmOrchestrator;
+export const dfmOrchestrator = (typeof window !== 'undefined' && window.DFMOrchestrator) ? window.DFMOrchestrator : new DFMOrchestrator();
+if (typeof window !== 'undefined') {
+  window.DFMOrchestrator = dfmOrchestrator;
+}
+
+// Expose startAnalysis globally for non-module callers
+if (typeof window !== 'undefined') {
+  if (typeof window.DFMOrchestrator.startAnalysis === 'function') {
+    window.startAnalysis = window.startAnalysis || window.DFMOrchestrator.startAnalysis.bind(window.DFMOrchestrator);
+  }
+  console.debug("[DFM] startAnalysis exposé ?", typeof window.startAnalysis);
+}
 
 // ---------------------- Formulaire matière ----------------------
 const EXCLUSIVE_GROUPS = [
@@ -534,60 +546,91 @@ export function collectMaterialForm(){
 }
 
 // ---------------------- Wiring du bouton Analyser ----------------------
-document.addEventListener("DOMContentLoaded", () => {
-  dfmOrchestrator.setFileId(window.CAD.fileIdStep);
-  dfmOrchestrator.setMaterialProfile(window.CAD.materialProfile);
-
-  window.addEventListener('dfm:fileReady', e => {
-    window.CAD.fileIdStep = e.detail.fileId;
-    dfmOrchestrator.setFileId(e.detail.fileId);
-  });
-
-  document.addEventListener('material:confirmed', e => {
-    window.CAD.materialProfile = e.detail;
-    dfmOrchestrator.setMaterialProfile(e.detail);
-    if (!dfmOrchestrator.demouldAxis) {
-      dfmOrchestrator.renderAxisPanel();
-    } else {
-      dfmOrchestrator.startAnalysis();
-    }
-  });
-});
-
-document.addEventListener('DOMContentLoaded', () => {
-  const analyzeBtn = document.getElementById('analyzeBtn');
-  if (!analyzeBtn) {
-    console.warn("#analyzeBtn introuvable");
-    return;
+export function initDFMUI() {
+  if (typeof window !== 'undefined') {
+    window.showMaterialModal = showMaterialModal;
   }
-  if (!analyzeBtn.dataset.bound) {
-    analyzeBtn.dataset.bound = "1";
-    analyzeBtn.addEventListener('click', (e) => {
-      e.preventDefault();
-      try {
-        if (typeof DFMOrchestrator?.startAnalysis === 'function') {
-          DFMOrchestrator.startAnalysis();
-        } else if (typeof startAnalysis === 'function') {
-          startAnalysis();
-        } else {
-          console.error("startAnalysis introuvable");
-          if (window.showMaterialModal) showMaterialModal();
-        }
-      } catch (err) {
-        console.error("Erreur au clic Analyser:", err);
+
+  (function bindMaterialConfirm(){
+    const btn = document.getElementById('materialConfirmBtn');
+    if (!btn || btn.dataset.bound) return;
+    btn.dataset.bound = "1";
+    btn.addEventListener('click', ()=> {
+      const el = document.getElementById('materialModal');
+      if (el && window.bootstrap) {
+        const m = bootstrap.Modal.getInstance(el) || new bootstrap.Modal(el);
+        m.hide();
+      }
+      if (typeof DFMOrchestrator?.launchAxisPicking === 'function') {
+        DFMOrchestrator.launchAxisPicking();
+      } else if (typeof launchAxisPicking === 'function') {
+        launchAxisPicking();
       }
     });
-  }
-});
+  })();
 
-document.getElementById('materialConfirmBtn')?.addEventListener('click', () => {
-  console.debug("[DFM] Matière confirmée");
-  const el = document.getElementById('materialModal');
-  if (el && window.bootstrap) {
-    const modal = bootstrap.Modal.getInstance(el) || new bootstrap.Modal(el);
-    modal.hide();
+  document.addEventListener("DOMContentLoaded", () => {
+    dfmOrchestrator.setFileId(window.CAD.fileIdStep);
+    dfmOrchestrator.setMaterialProfile(window.CAD.materialProfile);
+
+    window.addEventListener('dfm:fileReady', e => {
+      window.CAD.fileIdStep = e.detail.fileId;
+      dfmOrchestrator.setFileId(e.detail.fileId);
+    });
+
+    document.addEventListener('material:confirmed', e => {
+      window.CAD.materialProfile = e.detail;
+      dfmOrchestrator.setMaterialProfile(e.detail);
+      if (!dfmOrchestrator.demouldAxis) {
+        dfmOrchestrator.renderAxisPanel();
+      } else {
+        dfmOrchestrator.startAnalysis();
+      }
+    });
+  });
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const btn = document.getElementById('analyzeBtn');
+    if (!btn || btn.dataset.bound) return;
+    btn.dataset.bound = "1";
+
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const hasProfile =
+        (window.DFMOrchestrator && DFMOrchestrator.materialProfile) ||
+        window.materialProfile;
+      if (!hasProfile) {
+        if (typeof showMaterialModal === 'function') showMaterialModal();
+        else console.error("showMaterialModal manquant");
+        return;
+      }
+      if (typeof DFMOrchestrator?.startAnalysis === 'function') {
+        DFMOrchestrator.startAnalysis();
+      } else if (typeof window.startAnalysis === 'function') {
+        window.startAnalysis();
+      } else {
+        console.error("startAnalysis introuvable");
+      }
+    });
+  });
+}
+
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+  initDFMUI();
+}
+function dfmSelfCheck() {
+  const errors = [];
+  if (!window.bootstrap || !bootstrap.Modal) errors.push("bootstrap.Modal absent");
+  if (!document.getElementById('materialModal')) errors.push("#materialModal absent");
+  if (!document.getElementById('analyzeBtn')) errors.push("#analyzeBtn absent");
+
+  if (errors.length) {
+    console.warn("[DFM selfcheck] Issues:", errors);
+  } else {
+    console.debug("[DFM selfcheck] OK");
   }
-  if (typeof DFMOrchestrator?.launchAxisPicking === 'function') {
-    DFMOrchestrator.launchAxisPicking();
-  }
-});
+}
+
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+  window.requestAnimationFrame(dfmSelfCheck);
+}

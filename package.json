@@ -7,13 +7,16 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "vite build",
     "dev": "vite build --watch",
-    "postinstall": "npm run build"
+    "postinstall": "npm run build",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "PWDEBUG=1 playwright test"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "module",
   "devDependencies": {
+    "@playwright/test": "^1.55.0",
     "@xeokit/xeokit-sdk": "^2.6.86",
     "vite": "^7.0.6"
   },
