@@ -111,6 +111,10 @@ class DFMOrchestrator {
         this.setMaterialProfile(profile);
       }
     });
+    eventBus.subscribe('axis:validated', payload => {
+      this.axisValidated = true;
+      this.axisSelection = payload || this.axisSelection;
+    });
   }
 
   setState(next){
@@ -262,6 +266,57 @@ class DFMOrchestrator {
       this.axisPanel.style.display = canShow ? 'block' : 'none';
     }
     this.updateAxisPanelState();
+  }
+
+  checkPrereqs(){
+    if (!this.fileId) return "file";
+    if (!this.materialProfile) return "material";
+    if (!this.axisValidated) return "axis";
+    return "ok";
+  }
+
+  onAnalyzeClick(e){
+    e?.preventDefault?.();
+    const missing = this.checkPrereqs();
+    switch (missing){
+      case "file": {
+        UI.info("Importe un STEP");
+        const zone = document.getElementById('uploadArea') || document.getElementById('dropzone');
+        if (zone){
+          zone.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          zone.classList.add('pulse');
+          setTimeout(()=>zone.classList.remove('pulse'), 1500);
+        }
+        return;
+      }
+      case "material": {
+        const off = eventBus.subscribe('material:selected', () => {
+          off();
+          setTimeout(()=>{
+            this.axisPanel?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            this.axisPanel?.classList.add('pulse');
+            setTimeout(()=>this.axisPanel?.classList.remove('pulse'), 1500);
+          },0);
+        });
+        showMaterialModal();
+        return;
+      }
+      case "axis": {
+        this.axisPanel?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        this.axisPanel?.classList.add('pulse');
+        setTimeout(()=>this.axisPanel?.classList.remove('pulse'), 1500);
+        return;
+      }
+      case "ok":
+        console.info('startDFM guard OK', {
+          fileId: this.fileId,
+          materialProfile: this.materialProfile,
+          axisValidated: this.axisValidated,
+        });
+        UI.setLoading(true);
+        this.startDFM();
+        return;
+    }
   }
 
   startDFM(){
@@ -723,13 +778,11 @@ export function initDFMUI() {
     btn.dataset.bound = "1";
 
     btn.addEventListener('click', (e) => {
-      e.preventDefault();
-      if (typeof DFMOrchestrator?.startDFM === 'function') {
-        DFMOrchestrator.startDFM();
-      } else if (typeof window.startDFM === 'function') {
-        window.startDFM();
+      if (typeof DFMOrchestrator?.onAnalyzeClick === 'function') {
+        DFMOrchestrator.onAnalyzeClick(e);
       } else {
-        console.error("startDFM introuvable");
+        e.preventDefault();
+        console.error("onAnalyzeClick introuvable");
       }
     });
   });
