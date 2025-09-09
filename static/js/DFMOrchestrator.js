@@ -78,10 +78,19 @@ async function pollJobStatus(jobId, onUpdate, onDone, onError) {
 }
 
 export function showMaterialModal() {
-  if (!window.bootstrap) { console.error("Bootstrap non chargé"); return; }
-  const el = document.getElementById('materialQuestionnaireModal');
-  if (!el) { console.error("#materialQuestionnaireModal introuvable"); return; }
-  const modal = new bootstrap.Modal(el, { backdrop: 'static' });
+  if (!window.bootstrap) {
+    console.error("Bootstrap non chargé");
+    return;
+  }
+  const el =
+    document.getElementById("materialQuestionnaireModal") ||
+    document.getElementById("materialModal") ||
+    document.querySelector("[data-material-modal]");
+  if (!el) {
+    console.error("Modal matière introuvable");
+    return;
+  }
+  const modal = bootstrap.Modal.getOrCreateInstance(el, { backdrop: "static" });
   modal.show();
 }
 
@@ -794,7 +803,12 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 function dfmSelfCheck() {
   const errors = [];
   if (!window.bootstrap || !bootstrap.Modal) errors.push("bootstrap.Modal absent");
-  if (!document.getElementById('materialQuestionnaireModal')) errors.push("#materialQuestionnaireModal absent");
+  if (!(
+    document.getElementById("materialQuestionnaireModal") ||
+    document.getElementById("materialModal") ||
+    document.querySelector("[data-material-modal]")
+  ))
+    errors.push("modal matière absent");
   if (!document.getElementById('analyzeBtn')) errors.push("#analyzeBtn absent");
 
   if (errors.length) {
