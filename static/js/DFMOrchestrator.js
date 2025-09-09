@@ -77,7 +77,7 @@ async function pollJobStatus(jobId, onUpdate, onDone, onError) {
   step();
 }
 
-export function showMaterialModal() {
+function showMaterialModal() {
   if (!window.bootstrap) {
     console.error("Bootstrap non chargé");
     return;
@@ -95,7 +95,7 @@ export function showMaterialModal() {
 }
 
 // ---------------------- États ----------------------
-export const DFM_STATES = {
+const DFM_STATES = {
   IDLE:"IDLE", MATERIAL_CONFIRMED:"MATERIAL_CONFIRMED", AXIS_PICK:"AXIS_PICK",
   RUNNING:"RUNNING", RESULTS:"RESULTS", ERROR:"ERROR"
 };
@@ -608,7 +608,7 @@ class DFMOrchestrator {
   }
 }
 
-export const dfmOrchestrator = (typeof window !== 'undefined' && window.DFMOrchestrator) ? window.DFMOrchestrator : new DFMOrchestrator();
+const dfmOrchestrator = (typeof window !== 'undefined' && window.DFMOrchestrator) ? window.DFMOrchestrator : new DFMOrchestrator();
 if (typeof window !== 'undefined') {
   window.DFMOrchestrator = dfmOrchestrator;
 }
@@ -690,7 +690,7 @@ const SECTION_LIMITS = { mechanical:3, aesthetic:2, regulatoryStrong:1 };
 // util
 const arr = v => Array.isArray(v) ? v : (v ? [v] : []);
 
-export function collectMaterialForm(){
+function collectMaterialForm(){
   const form = document.getElementById("materialQuestionnaireForm");
   const fd = new FormData(form);
   const data = {};
@@ -758,7 +758,7 @@ export function collectMaterialForm(){
 }
 
 // ---------------------- Wiring du bouton Analyser ----------------------
-export function initDFMUI() {
+function initDFMUI() {
   if (typeof window !== 'undefined') {
     window.showMaterialModal = showMaterialModal;
   }
@@ -795,6 +795,14 @@ export function initDFMUI() {
       }
     });
   });
+}
+
+if (typeof window !== 'undefined') {
+  window.showMaterialModal = showMaterialModal;
+  window.DFM_STATES = DFM_STATES;
+  window.dfmOrchestrator = dfmOrchestrator;
+  window.collectMaterialForm = collectMaterialForm;
+  window.initDFMUI = initDFMUI;
 }
 
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
