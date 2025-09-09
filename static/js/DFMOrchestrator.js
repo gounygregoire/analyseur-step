@@ -53,31 +53,26 @@ function axisToVector(ax){
   return null;
 }
 async function pollJobStatus(jobId, onUpdate, onDone, onError) {
-  let attempts = 0;
   let queuedSince = Date.now();
 
   async function step() {
     try {
-      const res = await fetch(`/api/dfm/status/${encodeURIComponent(jobId)}`);
-      const data = await res.json(); // {status:'queued'|'running'|'done'|'error', step?, progress?}
+      const res = await fetch(`/api/dfm/status?job_id=${encodeURIComponent(jobId)}`);
+      const data = await res.json(); // {status:'queued'|'running'|'done'|'failed', step?, progress?}
 
       onUpdate?.(data);
 
       if (data.status === "done") { await onDone?.(data); return; }
-      if (data.status === "error") { onError?.(data); return; }
-
-      attempts++;
-      const delay = Math.min(1000 * Math.pow(1.5, attempts), 10000);
+      if (data.status === "failed" || data.status === "error") { onError?.(data); return; }
 
       if (data.status === "queued" && Date.now() - queuedSince > 90_000) {
         StatusUI.set("Toujours en file d’attente… un worker va démarrer dès que possible.");
         queuedSince = Date.now();
       }
-      setTimeout(step, delay);
     } catch (e) {
       console.error("poll error", e);
-      setTimeout(step, 5000);
     }
+    setTimeout(step, 1500);
   }
   step();
 }
@@ -288,14 +283,18 @@ class DFMOrchestrator {
       return;
     }
 
+    const axisVec = this.demouldAxis
+      ? [this.demouldAxis.x, this.demouldAxis.y, this.demouldAxis.z]
+      : null;
     const payload = {
       file_id: fileId,
       material_profile_id: profile.id || profile.material_profile_id || profile,
-      axis: this.axisSelection?.axis ?? null,
+      axis: axisVec,
       invert: this.axisSelection?.invert ?? false,
     };
 
-    console.log("dfm:start", payload);
+    UI.setLoading(true);
+    console.log("DFM start: ready to send payload", payload);
     eventBus.publish('dfm:start', payload);
   }
 
@@ -558,20 +557,54 @@ eventBus.subscribe('dfm:start', async (payload) => {
       body: JSON.stringify(payload)
     });
 
+    if (res.status === 404) {
+      UI.err("Endpoint /api/dfm/start introuvable (vérifier blueprint/url_prefix)");
+      console.error('dfm:start 404');
+      UI.setLoading(false);
+      return;
+    }
     if (!res.ok) {
-      const msg = res.status === 404
-        ? 'endpoint introuvable'
-        : `Erreur ${res.status} ${res.statusText}`;
+      const msg = `HTTP ${res.status} : ${res.statusText}`;
       UI.err(msg);
       console.error('dfm:start', msg);
+      UI.setLoading(false);
       return;
     }
 
     const data = await res.json().catch(() => ({}));
-    console.log('dfm:start response', data);
+    const jobId = data.job_id;
+    console.log('dfm:start job', jobId, data);
+    if (!jobId) {
+      UI.err('Réponse invalide (job_id manquant)');
+      UI.setLoading(false);
+      return;
+    }
+
+    pollJobStatus(
+      jobId,
+      (s) => {
+        if (s.status === 'queued') {
+          StatusUI.set('En file d’attente…');
+        } else if (s.status === 'running') {
+          const label = s.step ? `Analyse en cours… (${s.step})` : 'Analyse en cours…';
+          StatusUI.set(label);
+          if (typeof s.progress === 'number') UI.progress(s.progress);
+        }
+      },
+      () => {
+        StatusUI.set('Analyse terminée');
+        UI.setLoading(false);
+      },
+      () => {
+        StatusUI.set('Analyse échouée');
+        UI.err('Analyse échouée');
+        UI.setLoading(false);
+      }
+    );
   } catch (err) {
     console.error('dfm:start network error', err);
     UI.err('Erreur réseau');
+    UI.setLoading(false);
   }
 });
 
@@ -691,14 +724,6 @@ export function initDFMUI() {
 
     btn.addEventListener('click', (e) => {
       e.preventDefault();
-      const hasProfile =
-        (window.DFMOrchestrator && DFMOrchestrator.materialProfile) ||
-        window.materialProfile;
-      if (!hasProfile) {
-        if (typeof showMaterialModal === 'function') showMaterialModal();
-        else console.error("showMaterialModal manquant");
-        return;
-      }
       if (typeof DFMOrchestrator?.startDFM === 'function') {
         DFMOrchestrator.startDFM();
       } else if (typeof window.startDFM === 'function') {
