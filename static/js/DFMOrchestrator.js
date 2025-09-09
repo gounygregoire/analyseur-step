@@ -82,18 +82,10 @@ async function pollJobStatus(jobId, onUpdate, onDone, onError) {
   step();
 }
 
-export function showMaterialModal(prefill) {
+export function showMaterialModal() {
   if (!window.bootstrap) { console.error("Bootstrap non chargé"); return; }
-  const el = document.getElementById('materialModal');
-  if (!el) { console.error("#materialModal introuvable"); return; }
-
-  const profile = prefill || this?.materialProfile || null;
-  // Injection / pré-remplissage
-  try {
-    // renderMaterialSelector('#materialSelector', profile);
-    // renderFinishSelector('#materialFinish', profile);
-  } catch (e) { console.warn("Material selector injection skipped:", e); }
-
+  const el = document.getElementById('materialQuestionnaireModal');
+  if (!el) { console.error("#materialQuestionnaireModal introuvable"); return; }
   const modal = new bootstrap.Modal(el, { backdrop: 'static' });
   modal.show();
 }
@@ -551,24 +543,6 @@ export function initDFMUI() {
     window.showMaterialModal = showMaterialModal;
   }
 
-  (function bindMaterialConfirm(){
-    const btn = document.getElementById('materialConfirmBtn');
-    if (!btn || btn.dataset.bound) return;
-    btn.dataset.bound = "1";
-    btn.addEventListener('click', ()=> {
-      const el = document.getElementById('materialModal');
-      if (el && window.bootstrap) {
-        const m = bootstrap.Modal.getInstance(el) || new bootstrap.Modal(el);
-        m.hide();
-      }
-      if (typeof DFMOrchestrator?.launchAxisPicking === 'function') {
-        DFMOrchestrator.launchAxisPicking();
-      } else if (typeof launchAxisPicking === 'function') {
-        launchAxisPicking();
-      }
-    });
-  })();
-
   document.addEventListener("DOMContentLoaded", () => {
     dfmOrchestrator.setFileId(window.CAD.fileIdStep);
     dfmOrchestrator.setMaterialProfile(window.CAD.materialProfile);
@@ -621,7 +595,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 function dfmSelfCheck() {
   const errors = [];
   if (!window.bootstrap || !bootstrap.Modal) errors.push("bootstrap.Modal absent");
-  if (!document.getElementById('materialModal')) errors.push("#materialModal absent");
+  if (!document.getElementById('materialQuestionnaireModal')) errors.push("#materialQuestionnaireModal absent");
   if (!document.getElementById('analyzeBtn')) errors.push("#analyzeBtn absent");
 
   if (errors.length) {
