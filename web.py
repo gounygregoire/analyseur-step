@@ -89,19 +89,11 @@ except Exception as e:
     logger = logging.getLogger("web")
     logger.warning("Observability logging init failed (%s) -> basic logging enabled", e)
 
-@app.before_request
-def _debug_static_and_routes_once():
-    if getattr(app, "_debug_dumped", False):
-        return
-    app._debug_dumped = True
-    try:
-        logger.info("[BOOT] static_folder: %s", app.static_folder)
-        logger.info("[BOOT] static_url_path: %s", app.static_url_path)
-        logger.info("[BOOT] template_folder: %s", app.template_folder)
-        for r in sorted(app.url_map.iter_rules(), key=lambda x: str(x)):
-            logger.info("   %s", r)
-    except Exception:
-        logger.exception("[BOOT] debug failed")
+logger.info("[BOOT] static_folder: %s", app.static_folder)
+logger.info("[BOOT] static_url_path: %s", app.static_url_path)
+logger.info("[BOOT] template_folder: %s", app.template_folder)
+for r in sorted(app.url_map.iter_rules(), key=lambda x: str(x)):
+    logger.info("[BOOT] %s", r)
 
 
 # <-- web:app pour gunicorn

@@ -257,16 +257,6 @@ if (typeof collectMaterialForm !== 'function') {
     };
   };
 }
-(function ensureMaterialConfirmHandler(){
-  const btn = document.getElementById('materialModalConfirm') || document.querySelector('[data-action="material-confirm"]');
-  if (!btn || btn.dataset.cadlyticsBound === '1') return;
-  btn.addEventListener('click', () => {
-    window.state = window.state || {};
-    window.state.materialProfile = window.collectMaterialForm();
-    document.dispatchEvent(new CustomEvent('material:confirmed', { detail: window.state.materialProfile }));
-  });
-  btn.dataset.cadlyticsBound = '1';
-})();
 // ==== CADLYTICS: MATERIAL PROFILE BLOCK - END ====
 
 // ==== CADLYTICS: DFM CHAIN BLOCK - BEGIN ====

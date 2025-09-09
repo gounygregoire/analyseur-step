@@ -1,6 +1,8 @@
 // Logiciel de sélection des critères matière
 // Applique les règles exclusives, conflits et limites puis gère le bouton "Analyser".
 
+import eventBus from "./modules/events-bus.js";
+
 // === Déclaration des règles métiers ===
 const RULES = {
   limits: { meca: 3, aesthetic: 2, regulatory: 1 },
@@ -245,12 +247,17 @@ function onAnalyseClick(e) {
     first?.focus();
     return;
   }
+  // Diffuse le profil matière validé sur le bus
+  eventBus.publish("material:selected", { materialProfile: res.payload });
+  // Événement legacy pour compatibilité
   document.dispatchEvent(
     new CustomEvent("material:confirmed", { detail: res.payload })
   );
   const modalEl = document.getElementById("materialQuestionnaireModal");
   if (modalEl) {
     bootstrap.Modal.getInstance(modalEl)?.hide();
+    document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+    document.body.classList.remove('modal-open');
   }
 }
 

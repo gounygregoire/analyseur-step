@@ -435,7 +435,7 @@
     </div>
 
     <!-- Modal questionnaire matériaux -->
-    <div class="modal fade" id="materialQuestionnaireModal" tabindex="-1" aria-labelledby="materialQuestionnaireModalLabel" aria-hidden="true">
+    <div class="modal fade" id="materialQuestionnaireModal" tabindex="-1" aria-labelledby="materialQuestionnaireModalLabel">
         <div class="modal-dialog modal-lg">
             <div class="modal-content">
                 <div class="modal-header">
@@ -735,34 +735,6 @@
             </div>
         </div>
     </footer>
-    <div class="modal fade" id="materialModal" tabindex="-1" aria-hidden="true">
-      <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h5 class="modal-title">Choix matière</h5>
-            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
-          </div>
-          <div class="modal-body">
-            <!-- Ancien layout : label + select/radios/short helper -->
-            <div class="c-field">
-              <label class="c-label" for="materialFamily">Famille de matière</label>
-              <div id="materialSelector"></div> <!-- laisse ce conteneur pour l’injection JS -->
-            </div>
-            <div class="c-field">
-              <label class="c-label" for="finish">Aspect / Finition (optionnel)</label>
-              <div id="materialFinish"></div>
-            </div>
-            <div class="c-field">
-              <small id="materialHelper" style="opacity:.7">Sélectionne d’abord la famille, puis la référence exacte.</small>
-            </div>
-          </div>
-          <div class="modal-footer">
-            <button id="materialCancelBtn" type="button" class="btn btn-light" data-bs-dismiss="modal">Annuler</button>
-            <button id="materialConfirmBtn" type="button" class="btn btn-primary">Valider</button>
-          </div>
-        </div>
-      </div>
-    </div>
 
             <script>
               document.addEventListener('DOMContentLoaded', () => {

@@ -4,7 +4,7 @@
  */
 
 import HeatmapLayer from "./modules/HeatmapLayer.js";
-import eventBus from "../../frontend/events-bus.js";
+import eventBus from "./modules/events-bus.js";
 
 // État global minimal pour la DFM
 if (typeof window !== 'undefined') {
@@ -58,7 +58,7 @@ async function pollJobStatus(jobId, onUpdate, onDone, onError) {
 
   async function step() {
     try {
-      const res = await fetch(`/api/dfm/status?job_id=${encodeURIComponent(jobId)}`);
+      const res = await fetch(`/api/dfm/status/${encodeURIComponent(jobId)}`);
       const data = await res.json(); // {status:'queued'|'running'|'done'|'error', step?, progress?}
 
       onUpdate?.(data);
@@ -106,6 +106,8 @@ class DFMOrchestrator {
     this.invert = false;
     this.axisValidated = false;
     this.axisSelection = null;
+    this.axisPanel = null;
+    this.axisPanelInitialized = false;
     this.initAxisPanel();
     eventBus.subscribe('material:selected', payload => {
       const profile = payload?.materialProfile ?? payload;
@@ -128,12 +130,25 @@ class DFMOrchestrator {
   }
   setMaterialProfile(p){
     this.materialProfile = p || null;
+    this.resetAxisValidation();
+    console.log('material selected', this.materialProfile, 'axis reset');
     this.refreshAxisState?.();
   }
   setDemouldAxis(a){
     const vec = axisToVector(a);
     this.demouldAxis = vec || null;
     window.CAD.axis = vec;
+  }
+
+  resetAxisValidation(){
+    this.axisValidated = false;
+    this.axisSelection = null;
+    if (this.axisConfirmBtn){
+      this.axisConfirmBtn.disabled = false;
+      this.axisConfirmBtn.classList.remove('btn-success');
+      this.axisConfirmBtn.classList.add('btn-primary');
+      this.axisConfirmBtn.innerHTML = "Valider l'axe de démoulage";
+    }
   }
 
   // ---------------------- Résolution de fileId ----------------------
@@ -167,8 +182,22 @@ class DFMOrchestrator {
   }
 
   initAxisPanel(){
-    this.axisPanel = document.getElementById('dfmAxisPanel');
-    if (!this.axisPanel) return;
+    const panel = document.getElementById('dfmAxisPanel');
+    if (!panel){
+      const obs = new MutationObserver(()=>{
+        const p = document.getElementById('dfmAxisPanel');
+        if (p){
+          obs.disconnect();
+          this.axisPanelInitialized = false;
+          this.initAxisPanel();
+        }
+      });
+      obs.observe(document.body, { childList: true, subtree: true });
+      return;
+    }
+    if (this.axisPanelInitialized && this.axisPanel === panel) return;
+    this.axisPanel = panel;
+    this.axisPanelInitialized = true;
     this.axisPanel.style.display = 'none';
 
     this.axisButtons = {
@@ -196,10 +225,14 @@ class DFMOrchestrator {
     }
 
     if (this.axisConfirmBtn){
+      this.resetAxisValidation();
       this.axisConfirmBtn.addEventListener('click', () => {
+        if (this.axisConfirmBtn.disabled) return;
+        this.axisConfirmBtn.disabled = true;
         console.log('axis confirm before', { fileId: this.fileId, material: this.materialProfile });
         if (!this.fileId || !this.materialProfile){
           UI.info("Importez un fichier et validez la matière avant l’axe.");
+          setTimeout(()=>{ this.axisConfirmBtn.disabled = false; }, 400);
           return;
         }
         this.axisValidated = true;
@@ -210,7 +243,9 @@ class DFMOrchestrator {
         };
         this.setDemouldAxis({ axis: this.currentAxis, direction: this.invert ? -1 : 1 });
         eventBus.publish('axis:validated', this.axisSelection);
-        this.axisConfirmBtn.textContent = 'Axe validé';
+        this.axisConfirmBtn.innerHTML = 'Axe validé <span class="ms-1">✅</span>';
+        this.axisConfirmBtn.classList.remove('btn-primary');
+        this.axisConfirmBtn.classList.add('btn-success');
         console.log('axis confirm after', this.axisSelection);
       });
     }
@@ -309,7 +344,7 @@ class DFMOrchestrator {
       this.handleError?.("file_missing");
       return;
     }
-    if (!demouldAxis) {
+    if (!demouldAxis || !this.axisValidated) {
       UI.info("Veuillez valider l’axe de démoulage.");
       this.handleError?.("axe_manquant");
       return;
@@ -378,7 +413,7 @@ class DFMOrchestrator {
         case 404: UI.err("Endpoint introuvable"); break;
         case 409: UI.err("Analyse déjà en cours pour ce fichier."); break;
         case 503: UI.err("Service indisponible (worker/broker). Réessayez."); break;
-        default:  UI.err("Démarrage analyse impossible");
+        default:  UI.err(`Erreur ${res.status} ${res.statusText}`);
       }
       this.handleError("start_failed");
 
