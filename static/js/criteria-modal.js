@@ -258,11 +258,16 @@ function onAnalyseClick(e) {
   document.dispatchEvent(
     new CustomEvent("material:confirmed", { detail: res.payload })
   );
-  const modalEl = document.getElementById("materialQuestionnaireModal");
+  const modalEl =
+    document.getElementById("materialQuestionnaireModal") ||
+    document.getElementById("materialModal") ||
+    document.querySelector("[data-material-modal]");
   if (modalEl) {
     bootstrap.Modal.getInstance(modalEl)?.hide();
-    document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
-    document.body.classList.remove('modal-open');
+    document
+      .querySelectorAll(".modal-backdrop")
+      .forEach((el) => el.remove());
+    document.body.classList.remove("modal-open");
   }
 }
 
