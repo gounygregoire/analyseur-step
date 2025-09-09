@@ -29,7 +29,7 @@ function reportViewerError(err) {
 }
 
 // État global partagé (accessible via window.state)
-const state = (window.state = window.state || {});
+const state = (typeof window !== 'undefined' ? (window.state = window.state || {}) : {});
 state.measurements = [];
 state.sectionPlane = null;
 state.fileLoaded = false;
@@ -101,13 +101,21 @@ export async function initViewer(modelUrl) {
     return null;
   }
 }
-window.initViewer = initViewer;
+if (typeof window !== 'undefined') {
+  window.initViewer = initViewer;
+}
 
 // Chargement auto via data-model
-document.addEventListener("DOMContentLoaded", () => {
-  const fname = document.body.dataset.model;
-  initViewer(fname ? `/uploads/${fname}` : undefined);
-});
+export function initUI() {
+  document.addEventListener("DOMContentLoaded", () => {
+    const fname = document.body.dataset.model;
+    initViewer(fname ? `/uploads/${fname}` : undefined);
+  });
+}
+
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+  initUI();
+}
 
 // ---------- UI ---------------------------------------------------------------
 function bindUI() {

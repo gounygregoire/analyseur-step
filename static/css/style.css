@@ -1432,3 +1432,52 @@ body {
     flex-wrap: wrap;
   }
 }
+
+/* Modal CADlytics look */
+#materialModal .modal-content {
+  border-radius: 14px;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.25);
+  background: var(--panel, #f9f8f6);
+  border: none;
+}
+#materialModal .modal-header {
+  border: none;
+  padding: 14px 16px 0 16px;
+}
+#materialModal .modal-title {
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--text-strong, #2e2a24);
+}
+#materialModal .btn-close {
+  filter: invert(20%);
+  opacity: .7;
+}
+#materialModal .modal-body {
+  padding: 12px 16px 0 16px;
+}
+#materialModal .modal-footer {
+  border: none;
+  padding: 12px 16px 16px 16px;
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+#materialModal .btn-primary {
+  border-radius: 12px;
+  padding: 8px 16px;
+  background: var(--accent, #5b6140);
+  border: none;
+}
+#materialModal .btn-primary:hover {
+  filter: brightness(1.05);
+}
+#materialModal .c-field {
+  margin-bottom: 10px;
+}
+#materialModal .c-label {
+  font-size: 13px;
+  opacity: 0.8;
+  margin-bottom: 6px;
+  display: block;
+}

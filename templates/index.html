@@ -729,10 +729,22 @@
             <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
           </div>
           <div class="modal-body">
-            <div id="materialSelector"></div>
+            <!-- Ancien layout : label + select/radios/short helper -->
+            <div class="c-field">
+              <label class="c-label" for="materialFamily">Famille de matière</label>
+              <div id="materialSelector"></div> <!-- laisse ce conteneur pour l’injection JS -->
+            </div>
+            <div class="c-field">
+              <label class="c-label" for="finish">Aspect / Finition (optionnel)</label>
+              <div id="materialFinish"></div>
+            </div>
+            <div class="c-field">
+              <small id="materialHelper" style="opacity:.7">Sélectionne d’abord la famille, puis la référence exacte.</small>
+            </div>
           </div>
           <div class="modal-footer">
-            <button id="materialConfirmBtn" type="button" class="btn btn-primary" data-action="material-confirm">Valider</button>
+            <button id="materialCancelBtn" type="button" class="btn btn-light" data-bs-dismiss="modal">Annuler</button>
+            <button id="materialConfirmBtn" type="button" class="btn btn-primary">Valider</button>
           </div>
         </div>
       </div>
