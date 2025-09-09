@@ -4,6 +4,7 @@
  */
 
 import HeatmapLayer from "./modules/HeatmapLayer.js";
+import eventBus from "../../frontend/events-bus.js";
 
 // État global minimal pour la DFM
 if (typeof window !== 'undefined') {
@@ -103,7 +104,16 @@ class DFMOrchestrator {
     this.demouldAxis = null;
     this.currentAxis = 'AUTO';
     this.invert = false;
+    this.axisValidated = false;
+    this.axisSelection = null;
     this.initAxisPanel();
+    eventBus.subscribe('material:selected', payload => {
+      const profile = payload?.materialProfile ?? payload;
+      if (profile) {
+        window.CAD.materialProfile = profile;
+        this.setMaterialProfile(profile);
+      }
+    });
   }
 
   setState(next){
@@ -114,11 +124,11 @@ class DFMOrchestrator {
     this.fileId = id || null;
     const hidden = document.getElementById('fileId');
     if (hidden && hidden.type === 'hidden') hidden.value = this.fileId || '';
-    this.updateAxisPanelState?.();
+    this.refreshAxisState?.();
   }
   setMaterialProfile(p){
     this.materialProfile = p || null;
-    this.updateAxisPanelState?.();
+    this.refreshAxisState?.();
   }
   setDemouldAxis(a){
     const vec = axisToVector(a);
@@ -159,6 +169,7 @@ class DFMOrchestrator {
   initAxisPanel(){
     this.axisPanel = document.getElementById('dfmAxisPanel');
     if (!this.axisPanel) return;
+    this.axisPanel.style.display = 'none';
 
     this.axisButtons = {
       X: document.getElementById('axisXBtn'),
@@ -167,6 +178,7 @@ class DFMOrchestrator {
       AUTO: document.getElementById('axisAutoBtn')
     };
     this.invertToggle = document.getElementById('invertAxisToggle');
+    this.axisConfirmBtn = document.getElementById('axisConfirmBtn');
 
     Object.entries(this.axisButtons).forEach(([axis, btn])=>{
       if (!btn) return;
@@ -183,7 +195,27 @@ class DFMOrchestrator {
       });
     }
 
-    this.updateAxisPanelState();
+    if (this.axisConfirmBtn){
+      this.axisConfirmBtn.addEventListener('click', () => {
+        console.log('axis confirm before', { fileId: this.fileId, material: this.materialProfile });
+        if (!this.fileId || !this.materialProfile){
+          UI.info("Importez un fichier et validez la matière avant l’axe.");
+          return;
+        }
+        this.axisValidated = true;
+        this.axisSelection = {
+          axis: this.currentAxis,
+          invert: this.invert,
+          ts: Date.now()
+        };
+        this.setDemouldAxis({ axis: this.currentAxis, direction: this.invert ? -1 : 1 });
+        eventBus.publish('axis:validated', this.axisSelection);
+        this.axisConfirmBtn.textContent = 'Axe validé';
+        console.log('axis confirm after', this.axisSelection);
+      });
+    }
+
+    this.refreshAxisState();
   }
 
   updateAxisPanelState(){
@@ -194,42 +226,42 @@ class DFMOrchestrator {
     if (this.invertToggle) this.invertToggle.disabled = !enabled;
   }
 
-  async startDFM(){
+  refreshAxisState(){
+    const canShow = !!(this.fileId && this.materialProfile);
+    if (this.axisPanel) {
+      this.axisPanel.style.display = canShow ? 'block' : 'none';
+    }
+    this.updateAxisPanelState();
+  }
+
+  startDFM(){
     const fileId = this.fileId;
     const profile = this.materialProfile;
-    if (!fileId || !profile){
-      console.error("startDFM prérequis manquants", { fileId, profile });
-      UI.err("Fichier ou profil matière manquant");
+    if (!fileId){
+      UI.info("Importez un fichier avant d’analyser.");
+      console.warn("startDFM: fileId manquant");
+      return;
+    }
+    if (!profile){
+      UI.info("Sélectionnez une matière.");
+      console.warn("startDFM: matière manquante");
+      return;
+    }
+    if (!this.axisValidated){
+      UI.info("Validez l’axe de démoulage.");
+      console.warn("startDFM: axe non validé");
       return;
     }
 
     const payload = {
       file_id: fileId,
       material_profile_id: profile.id || profile.material_profile_id || profile,
-      axis: this.currentAxis,
-      invert: this.invert,
+      axis: this.axisSelection?.axis ?? null,
+      invert: this.axisSelection?.invert ?? false,
     };
 
-    try{
-      const res = await fetch("/api/dfm/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-
-      if (!res.ok){
-        const txt = await res.text().catch(() => "");
-        console.error("startDFM erreur", res.status, txt);
-        UI.err("Lancement DFM impossible");
-        return;
-      }
-
-      const data = await res.json().catch(() => ({}));
-      console.log("DFM démarrée", data);
-    }catch(e){
-      console.error("startDFM réseau", e);
-      UI.err("Erreur réseau lors du lancement de la DFM");
-    }
+    console.log("dfm:start", payload);
+    eventBus.publish('dfm:start', payload);
   }
 
   // ---------------------- Analyse ----------------------
@@ -483,6 +515,31 @@ if (typeof window !== 'undefined') {
   window.DFMOrchestrator = dfmOrchestrator;
 }
 
+eventBus.subscribe('dfm:start', async (payload) => {
+  try {
+    const res = await fetch('/api/dfm/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+      const msg = res.status === 404
+        ? 'endpoint introuvable'
+        : `Erreur ${res.status} ${res.statusText}`;
+      UI.err(msg);
+      console.error('dfm:start', msg);
+      return;
+    }
+
+    const data = await res.json().catch(() => ({}));
+    console.log('dfm:start response', data);
+  } catch (err) {
+    console.error('dfm:start network error', err);
+    UI.err('Erreur réseau');
+  }
+});
+
 // Expose startDFM globally for non-module callers
 if (typeof window !== 'undefined') {
   if (typeof window.DFMOrchestrator.startDFM === 'function') {
@@ -586,7 +643,7 @@ export function initDFMUI() {
     document.addEventListener('material:confirmed', e => {
       window.CAD.materialProfile = e.detail;
       dfmOrchestrator.setMaterialProfile(e.detail);
-      if (dfmOrchestrator.demouldAxis) {
+      if (dfmOrchestrator.demouldAxis && dfmOrchestrator.axisValidated) {
         dfmOrchestrator.startDFM();
       }
     });
