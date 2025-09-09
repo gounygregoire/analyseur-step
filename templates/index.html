@@ -277,7 +277,6 @@
         <input type="hidden" id="fileId" value="">
       </button>
 
-      <div id="axisPickerInline" class="d-none"></div>
     </div>
 
     <!-- Outils 3D intégrés à ton UI (conservés, ids différents => main.js ne les utilise pas) -->
@@ -358,9 +357,6 @@
                                         <span id="injectionReadyText">En analyse...</span>
                                     </span>
                                 </div>
-                                <button id="changeDemoldingAxisBtn" class="btn btn-dfm-secondary me-2" style="display: none;">
-                                    <i class="bi bi-arrow-repeat me-2"></i>{% if current_language == 'en' %}Change axis{% else %}Changer axe{% endif %}
-                                </button>
                                 <button id="generatePdfBtn" class="btn btn-dfm-primary me-2" style="display: none;">
                                     <i class="bi bi-file-earmark-pdf me-2"></i>{% if current_language == 'en' %}PDF Report{% else %}Rapport PDF{% endif %}
                                 </button>

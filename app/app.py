@@ -10,6 +10,7 @@ from flask_compress import Compress
 from .jobs import generate_low_preview, generate_full_model
 from .queue import q, conn
 from .tasks import heavy_compute
+from server.dfm_api_blueprint_stub import dfm_bp
 
 app = Flask(__name__)
 app.config["UPLOAD_FOLDER"] = os.getenv("UPLOAD_FOLDER", "/tmp/uploads")
@@ -29,6 +30,8 @@ os.makedirs(app.config["OUTPUT_FOLDER"], exist_ok=True)
 
 compress = Compress()
 compress.init_app(app)
+
+app.register_blueprint(dfm_bp)
 
 
 def cleanup_output_folder(max_age_hours: int = 72) -> None:
@@ -184,6 +187,17 @@ def index():
         "index.html",
         max_upload_mb=app.config["MAX_CONTENT_LENGTH"] // (1024 * 1024),
     )
+
+
+def log_routes() -> None:
+    lines = []
+    for rule in app.url_map.iter_rules():
+        methods = ",".join(sorted(rule.methods - {"HEAD", "OPTIONS"}))
+        lines.append(f"{methods} {rule.rule}")
+    logger.info("Routes:\n%s", "\n".join(sorted(lines)))
+
+
+log_routes()
 
 if __name__ == "__main__":
     app.run()
