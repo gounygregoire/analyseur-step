@@ -1,4 +1,4 @@
-// Simple publish/subscribe bus without external deps
+// Simple publish/subscribe bus sans dépendances externes
 // Usage: import bus from "./events-bus.js";
 //        const unsubscribe = bus.subscribe('foo', payload => ...);
 //        bus.publish('foo', data);
@@ -23,3 +23,4 @@ export function createEventBus() {
 
 const eventBus = createEventBus();
 export default eventBus;
+
