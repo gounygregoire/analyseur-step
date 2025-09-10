@@ -1,20 +1,14 @@
-import os
-import sqlite3
-import logging
+"""Persistence utilitaire pour les fichiers STEP/XKT."""
+
+import os, sqlite3, logging, shutil
 from contextlib import closing
 
-from . import files as storage_files
 
 logger = logging.getLogger("app.storage.storage")
 
-_db_env = os.environ.get("FILES_DB_PATH")
-if _db_env:
-    DB_PATH = os.path.abspath(_db_env)
-else:
-    DB_PATH = str(storage_files.DB_PATH)
-
-UPLOAD_FOLDER = os.path.abspath(os.environ.get("UPLOAD_FOLDER", "/tmp/uploads"))
-OUTPUT_FOLDER = os.path.abspath(os.environ.get("OUTPUT_FOLDER", "/tmp/converted"))
+DB_PATH = os.environ.get("FILES_DB_PATH") or os.path.join(os.path.dirname(__file__), "files.sqlite")
+UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
+OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
 
 
 class Storage:
@@ -26,23 +20,40 @@ class Storage:
         return sqlite3.connect(DB_PATH)
 
     @staticmethod
+    def save_step_record(file_id: str, filename: str, path: str, size: int) -> None:
+        with closing(Storage._connect()) as con:
+            cur = con.cursor()
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS files (file_id TEXT PRIMARY KEY, filename TEXT, path TEXT, size INTEGER)"
+            )
+            cur.execute(
+                "INSERT OR REPLACE INTO files (file_id, filename, path, size) VALUES (?, ?, ?, ?)",
+                (file_id, filename, path, size),
+            )
+            con.commit()
+
+    @staticmethod
     def get_step_path(file_id: str) -> str | None:
-        # 1) SQLite index (table files: file_id, filename, path, size)
+        # 1) DB lookup
         try:
             with closing(Storage._connect()) as con:
                 cur = con.cursor()
-                cur.execute("CREATE TABLE IF NOT EXISTS files (file_id TEXT PRIMARY KEY, filename TEXT, path TEXT, size INTEGER)")
+                cur.execute(
+                    "CREATE TABLE IF NOT EXISTS files (file_id TEXT PRIMARY KEY, filename TEXT, path TEXT, size INTEGER)"
+                )
                 cur.execute("SELECT path FROM files WHERE file_id = ?", (file_id,))
                 row = cur.fetchone()
                 if row and row[0] and os.path.isfile(row[0]):
                     return row[0]
-        except Exception:
-            pass
-        # 2) Fallbacks: chemins dérivés par convention
+        except Exception as e:  # pragma: no cover
+            logger.warning("[Storage] DB lookup failed: %r", e)
+
+        # 2) Fallback by convention
         for ext in (".step", ".stp"):
             p = os.path.join(UPLOAD_FOLDER, f"{file_id}{ext}")
             if os.path.isfile(p):
                 return p
+
         logger.warning(
             "[Storage] step not found for file_id=%s (db_path=%s, upload_folder=%s)",
             file_id,
@@ -57,12 +68,21 @@ class Storage:
         return p if os.path.isfile(p) else None
 
     @staticmethod
-    def save_step_record(file_id: str, filename: str, path: str, size: int) -> None:
-        with closing(Storage._connect()) as con:
-            cur = con.cursor()
-            cur.execute("CREATE TABLE IF NOT EXISTS files (file_id TEXT PRIMARY KEY, filename TEXT, path TEXT, size INTEGER)")
-            cur.execute(
-                "INSERT OR REPLACE INTO files (file_id, filename, path, size) VALUES (?, ?, ?, ?)",
-                (file_id, filename, path, size),
+    def ensure_step_persisted(file_id: str, tmp_step_path: str, original_filename: str) -> str:
+        """Copy the uploaded/converted temp STEP into the canonical uploads dir and index it in SQLite if missing."""
+
+        os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+        ext = os.path.splitext(original_filename)[1].lower()
+        if ext not in (".step", ".stp"):
+            ext = ".step"
+        canonical = os.path.join(UPLOAD_FOLDER, f"{file_id}{ext}")
+        if not os.path.isfile(canonical):
+            shutil.copy2(tmp_step_path, canonical)
+            Storage.save_step_record(
+                file_id, original_filename, canonical, os.path.getsize(canonical)
             )
-            con.commit()
+            logger.info("[Storage] persisted STEP → %s", canonical)
+        else:
+            logger.info("[Storage] STEP already persisted → %s", canonical)
+        return canonical
+

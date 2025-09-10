@@ -13,9 +13,24 @@ from .tasks import heavy_compute
 from server.dfm_api_blueprint_stub import dfm_bp
 from app.storage.storage import Storage
 
+log = logging.getLogger("boot")
+os.makedirs(os.environ.get("UPLOAD_FOLDER", "/tmp/uploads"), exist_ok=True)
+os.makedirs(os.environ.get("OUTPUT_FOLDER", "/tmp/converted"), exist_ok=True)
+os.environ.setdefault(
+    "FILES_DB_PATH",
+    os.path.join(os.path.dirname(__file__), "storage/files.sqlite"),
+)
+log.info(
+    "[BOOT] UPLOAD_FOLDER=%s OUTPUT_FOLDER=%s FILES_DB_PATH=%s cwd=%s",
+    os.environ.get("UPLOAD_FOLDER"),
+    os.environ.get("OUTPUT_FOLDER"),
+    os.environ.get("FILES_DB_PATH"),
+    os.getcwd(),
+)
+
 app = Flask(__name__)
-app.config["UPLOAD_FOLDER"] = os.getenv("UPLOAD_FOLDER", "/tmp/uploads")
-app.config["OUTPUT_FOLDER"] = os.getenv("OUTPUT_FOLDER", "/tmp/converted")
+app.config["UPLOAD_FOLDER"] = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
+app.config["OUTPUT_FOLDER"] = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
 app.config["MAX_CONTENT_LENGTH"] = int(os.getenv("MAX_UPLOAD_MB", "300")) * 1024 * 1024
 app.config["COMPRESS_MIMETYPES"] = [
     "text/html",
@@ -26,8 +41,6 @@ app.config["COMPRESS_MIMETYPES"] = [
     "model/gltf-binary",
 ]
 
-os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
-os.makedirs(app.config["OUTPUT_FOLDER"], exist_ok=True)
 
 compress = Compress()
 compress.init_app(app)
@@ -90,12 +103,7 @@ def upload():
         shutil.copyfileobj(file.stream, dst, length=1024 * 1024)
 
     abs_step_path = os.path.abspath(step_path)
-    Storage.save_step_record(
-        file_id=job_id,
-        filename=original_filename,
-        path=abs_step_path,
-        size=os.path.getsize(abs_step_path),
-    )
+    abs_step_path = Storage.ensure_step_persisted(job_id, abs_step_path, original_filename)
 
     low_job = q.enqueue(
         generate_low_preview,
