@@ -7,7 +7,7 @@
 
 ## Validation axe
 - [ ] Cliquer sur « Valider l'axe ».
-- [ ] Un événement `axis:validated` est émis avec `{ axis, invert, ts }`.
+- [ ] Un événement `axis:confirmed` est émis avec `{ axis }`.
 - [ ] Un feedback visuel confirme la validation.
 
 ## Start DFM
