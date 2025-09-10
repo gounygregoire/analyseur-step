@@ -8,7 +8,6 @@ from datetime import datetime
 import cadquery as cq
 import trimesh
 from PIL import Image
-from flask import current_app
 
 from models import db, ModelJob, advance_model_job_status
 from celery_app import celery
@@ -21,6 +20,7 @@ from observability.metrics import (
     preview_size_bytes,
     final_size_bytes,
 )
+from app.storage.storage import Storage
 logger = get_logger(__name__)
 MAX_RETRIES = 3
 PREVIEW_MAX_FACES = 300_000
@@ -47,7 +47,10 @@ def generate_preview(self, job_id: str) -> None:
         return
     advance_model_job_status(job, "processing")
     db.session.commit()
-    step_path = os.path.join(current_app.config["UPLOAD_FOLDER"], f"{job.id}.step")
+    step_path = Storage.get_step_path(job.id)
+    if not step_path:
+        logger.error("step file missing: file_id=%s", job.id)
+        return
     tmp_dir = tempfile.mkdtemp(prefix="preview_")
     try:
         shape = cq.importers.importStep(step_path)
@@ -96,7 +99,10 @@ def generate_final(self, job_id: str) -> None:
         return
     advance_model_job_status(job, "processing")
     db.session.commit()
-    step_path = os.path.join(current_app.config["UPLOAD_FOLDER"], f"{job.id}.step")
+    step_path = Storage.get_step_path(job.id)
+    if not step_path:
+        logger.error("step file missing: file_id=%s", job.id)
+        return
     tmp_dir = tempfile.mkdtemp(prefix="final_")
     try:
         shape = cq.importers.importStep(step_path)
