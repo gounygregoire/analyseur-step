@@ -20,4 +20,6 @@ def test_start_missing_step(tmp_path, monkeypatch):
         json={"file_id": "missing", "material_profile_id": "ABS", "axis": "AUTO"},
     )
     assert resp.status_code == 400
-    assert resp.get_json()["error"] == "step_not_found_for_file_id"
+    data = resp.get_json()
+    assert data["error"] == "step_not_found_for_file_id"
+    assert "Upload must save" in data["hint"]

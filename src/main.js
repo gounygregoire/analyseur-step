@@ -375,6 +375,11 @@ function showLoading(state){
 /** Expose un fileId dans tous les points d’accès attendus par l’app */
 function exposeFileId(fileId) {
   if (!fileId) return;
+  const existing = window.CADLYTICS?.current?.fileId;
+  if (existing && existing !== fileId) {
+    console.warn('[ID] ignore new id', fileId, 'keep', existing);
+    fileId = existing;
+  }
 
   // 1) champ caché
   const h = document.getElementById('fileId');
