@@ -12,7 +12,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.append(str(ROOT))
 
 from api.dfm import dfm_bp
-from app.storage import Storage
+import app.storage.storage as storage
+import importlib
 import generate_3d_view
 import generate_thumbnails
 
@@ -23,9 +24,10 @@ def test_dfm_flow(tmp_path, monkeypatch):
     """End-to-end DFM analysis flow."""
     # Work inside temporary directory
     monkeypatch.chdir(tmp_path)
-    Storage.UPLOADS_DIR = "uploads"
-    Storage.DFM_ROOT = os.path.join("static", "dfm")
-    os.makedirs(Storage.UPLOADS_DIR, exist_ok=True)
+    monkeypatch.setenv("UPLOAD_FOLDER", "uploads")
+    monkeypatch.setenv("DFM_ROOT", os.path.join("static", "dfm"))
+    importlib.reload(storage)
+    os.makedirs(storage.UPLOAD_FOLDER, exist_ok=True)
 
     # Lightweight mocks to avoid heavy rendering
     def fake_generate_view_data(stl_path, file_id):
@@ -56,7 +58,7 @@ def test_dfm_flow(tmp_path, monkeypatch):
     def upload():
         file = request.files["file"]
         file_id = uuid.uuid4().hex
-        dest = os.path.join(Storage.UPLOADS_DIR, f"{file_id}.step")
+        dest = os.path.join(storage.UPLOAD_FOLDER, f"{file_id}.step")
         file.save(dest)
         return jsonify({"file_id": file_id})
 

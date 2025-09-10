@@ -7,3 +7,5 @@ static/models/
 
 node_modules/
 
+*.sqlite
+

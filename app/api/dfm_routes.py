@@ -8,11 +8,14 @@ from tasks.dfm import dfm_run
 from app.storage.storage import Storage
 from app.material_profiles import get_profile
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
 
 dfm_bp = Blueprint("dfm", __name__, url_prefix="/api/dfm")
+
+debug_bp = Blueprint("debug", __name__, url_prefix="/api")
 
 # Stockage en mémoire des statuts des jobs (fallback)
 _jobs: dict[str, str] = {}
@@ -39,13 +42,6 @@ def start() -> tuple[dict, int]:
     material_profile_id = data.get("material_profile_id")
     axis = data.get("axis")
     invert = bool(data.get("invert")) if "invert" in data else False
-    step_path = None
-    if file_id:
-        try:
-            step_path = Storage.get_step_path(file_id)
-        except FileNotFoundError:
-            step_path = None
-    logger.info("/api/dfm/start file_id=%s step_path=%s", file_id, step_path)
     if not file_id or not material_profile_id or not axis:
         return (
             jsonify({"error": "file_id, material_profile_id et axis requis"}),
@@ -53,8 +49,13 @@ def start() -> tuple[dict, int]:
         )
     if not get_profile(material_profile_id):
         return jsonify({"error": "unknown_material_profile"}), 400
+    step_path = Storage.get_step_path(file_id)
+    if not step_path:
+        return jsonify({"error": "step_not_found_for_file_id"}), 400
+    logger.info("/api/dfm/start file_id=%s step_path=%s", file_id, step_path)
     job = dfm_run.delay(
         file_id=file_id,
+        step_path=step_path,
         material_profile_id=material_profile_id,
         axis=axis,
         invert=invert,
@@ -114,5 +115,18 @@ def result() -> tuple[dict, int]:
         jsonify({"job_id": job_id, "status": state, "summary": {}, "issues": []}),
         200,
     )
+
+
+@debug_bp.get("/debug/file/<file_id>")
+def debug_file(file_id: str):
+    from app.storage.storage import Storage
+    step = Storage.get_step_path(file_id)
+    xkt = Storage.get_xkt_path(file_id)
+    return {
+        "file_id": file_id,
+        "step_path": step,
+        "xkt_path": xkt,
+        "exists_step": bool(step and os.path.isfile(step)),
+    }
 
 

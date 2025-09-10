@@ -19,6 +19,8 @@ services:
         value: /tmp/uploads
       - key: OUTPUT_FOLDER
         value: /tmp/converted
+      - key: FILES_DB_PATH
+        value: /opt/render/project/src/app/storage/files.sqlite
       - key: MAX_UPLOAD_MB
         value: "300"
       - key: OMP_NUM_THREADS
@@ -46,6 +48,8 @@ services:
         value: /tmp/uploads
       - key: OUTPUT_FOLDER
         value: /tmp/converted
+      - key: FILES_DB_PATH
+        value: /opt/render/project/src/app/storage/files.sqlite
       - key: OMP_NUM_THREADS
         value: "1"
       - key: DATA_DIR

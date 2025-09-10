@@ -1,0 +1,49 @@
+import os, sqlite3
+from contextlib import closing
+
+DB_PATH = os.environ.get("FILES_DB_PATH", os.path.join(os.path.dirname(__file__), "files.sqlite"))
+UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
+OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
+
+
+class Storage:
+    @staticmethod
+    def _connect():
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+        return sqlite3.connect(DB_PATH)
+
+    @staticmethod
+    def get_step_path(file_id: str) -> str | None:
+        # 1) SQLite index (table files: file_id, filename, path, size)
+        try:
+            with closing(Storage._connect()) as con:
+                cur = con.cursor()
+                cur.execute("CREATE TABLE IF NOT EXISTS files (file_id TEXT PRIMARY KEY, filename TEXT, path TEXT, size INTEGER)")
+                cur.execute("SELECT path FROM files WHERE file_id = ?", (file_id,))
+                row = cur.fetchone()
+                if row and row[0] and os.path.isfile(row[0]):
+                    return row[0]
+        except Exception:
+            pass
+        # 2) Fallbacks: chemins dérivés par convention
+        for ext in (".step", ".stp"):
+            p = os.path.join(UPLOAD_FOLDER, f"{file_id}{ext}")
+            if os.path.isfile(p):
+                return p
+        return None
+
+    @staticmethod
+    def get_xkt_path(file_id: str) -> str | None:
+        p = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+        return p if os.path.isfile(p) else None
+
+    @staticmethod
+    def save_step_record(file_id: str, filename: str, path: str, size: int) -> None:
+        with closing(Storage._connect()) as con:
+            cur = con.cursor()
+            cur.execute("CREATE TABLE IF NOT EXISTS files (file_id TEXT PRIMARY KEY, filename TEXT, path TEXT, size INTEGER)")
+            cur.execute(
+                "INSERT OR REPLACE INTO files (file_id, filename, path, size) VALUES (?, ?, ?, ?)",
+                (file_id, filename, path, size),
+            )
+            con.commit()

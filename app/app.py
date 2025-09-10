@@ -11,6 +11,7 @@ from .jobs import generate_low_preview, generate_full_model
 from .queue import q, conn
 from .tasks import heavy_compute
 from server.dfm_api_blueprint_stub import dfm_bp
+from app.storage.storage import Storage
 
 app = Flask(__name__)
 app.config["UPLOAD_FOLDER"] = os.getenv("UPLOAD_FOLDER", "/tmp/uploads")
@@ -82,10 +83,19 @@ def upload():
         return {"error": "No file provided"}, 400
 
     job_id = uuid.uuid4().hex
+    original_filename = secure_filename(file.filename or "")
     step_name = secure_filename(f"{job_id}.step")
     step_path = os.path.join(app.config["UPLOAD_FOLDER"], step_name)
     with open(step_path, "wb") as dst:
         shutil.copyfileobj(file.stream, dst, length=1024 * 1024)
+
+    abs_step_path = os.path.abspath(step_path)
+    Storage.save_step_record(
+        file_id=job_id,
+        filename=original_filename,
+        path=abs_step_path,
+        size=os.path.getsize(abs_step_path),
+    )
 
     low_job = q.enqueue(
         generate_low_preview,
