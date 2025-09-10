@@ -83,13 +83,13 @@ function showMaterialModal() {
     return;
   }
   const el =
-    document.getElementById("materialQuestionnaireModal") ||
     document.getElementById("materialModal") ||
     document.querySelector("[data-material-modal]");
   if (!el) {
     console.error("Modal matière introuvable");
     return;
   }
+  console.debug("ouverture modale matière");
   const modal = bootstrap.Modal.getOrCreateInstance(el, { backdrop: "static" });
   modal.show();
 }
@@ -110,19 +110,19 @@ class DFMOrchestrator {
     this.invert = false;
     this.axisValidated = false;
     this.axisSelection = null;
+    this.selectedAxis = null;
     this.axisPanel = null;
     this.axisPanelInitialized = false;
     this.initAxisPanel();
-    eventBus.subscribe('material:selected', payload => {
-      const profile = payload?.materialProfile ?? payload;
-      if (profile) {
-        window.CAD.materialProfile = profile;
-        this.setMaterialProfile(profile);
-      }
-    });
-    eventBus.subscribe('axis:validated', payload => {
-      this.axisValidated = true;
-      this.axisSelection = payload || this.axisSelection;
+  }
+
+  init(){
+    // Binding en JS pour éviter l'attribut onclick inline
+    document.getElementById('analyzeBtn')?.addEventListener('click', () => this.handleAnalyzeClick());
+    window.addEventListener('material:selected', (e) => {
+      this.materialProfile = e.detail.materialProfile;
+      window.CAD.materialProfile = this.materialProfile;
+      this.showAxisPicker();
     });
   }
 
@@ -250,7 +250,8 @@ class DFMOrchestrator {
           ts: Date.now()
         };
         this.setDemouldAxis({ axis: this.currentAxis, direction: this.invert ? -1 : 1 });
-        eventBus.publish('axis:validated', this.axisSelection);
+        const vec = this.demouldAxis;
+        window.dispatchEvent(new CustomEvent('axis:confirmed', { detail: { axis: vec } }));
         this.axisConfirmBtn.innerHTML = 'Axe validé <span class="ms-1">✅</span>';
         this.axisConfirmBtn.classList.remove('btn-primary');
         this.axisConfirmBtn.classList.add('btn-success');
@@ -277,55 +278,38 @@ class DFMOrchestrator {
     this.updateAxisPanelState();
   }
 
-  checkPrereqs(){
-    if (!this.fileId) return "file";
-    if (!this.materialProfile) return "material";
-    if (!this.axisValidated) return "axis";
-    return "ok";
+
+  handleAnalyzeClick(){
+    if (!this.fileId){
+      UI.info("Importe un STEP");
+      const zone = document.getElementById('uploadArea') || document.getElementById('dropzone');
+      if (zone){
+        zone.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        zone.classList.add('pulse');
+        setTimeout(()=>zone.classList.remove('pulse'), 1500);
+      }
+      return;
+    }
+    if (!this.materialProfile){
+      showMaterialModal();
+      return;
+    }
+    this.showAxisPicker();
   }
 
-  onAnalyzeClick(e){
-    e?.preventDefault?.();
-    const missing = this.checkPrereqs();
-    switch (missing){
-      case "file": {
-        UI.info("Importe un STEP");
-        const zone = document.getElementById('uploadArea') || document.getElementById('dropzone');
-        if (zone){
-          zone.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          zone.classList.add('pulse');
-          setTimeout(()=>zone.classList.remove('pulse'), 1500);
-        }
-        return;
-      }
-      case "material": {
-        const off = eventBus.subscribe('material:selected', () => {
-          off();
-          setTimeout(()=>{
-            this.axisPanel?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            this.axisPanel?.classList.add('pulse');
-            setTimeout(()=>this.axisPanel?.classList.remove('pulse'), 1500);
-          },0);
-        });
-        showMaterialModal();
-        return;
-      }
-      case "axis": {
-        this.axisPanel?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        this.axisPanel?.classList.add('pulse');
-        setTimeout(()=>this.axisPanel?.classList.remove('pulse'), 1500);
-        return;
-      }
-      case "ok":
-        console.info('startDFM guard OK', {
-          fileId: this.fileId,
-          materialProfile: this.materialProfile,
-          axisValidated: this.axisValidated,
-        });
-        UI.setLoading(true);
-        this.startDFM();
-        return;
-    }
+  showAxisPicker(){
+    this.axisPanel?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    this.axisPanel?.classList.add('pulse');
+    setTimeout(()=>this.axisPanel?.classList.remove('pulse'), 1500);
+
+    if (this._axisUnsub) this._axisUnsub();
+    const handler = (e) => {
+      this._axisUnsub();
+      this.selectedAxis = e.detail.axis;
+      this.startAnalysis({ fileId: this.fileId, materialProfile: this.materialProfile, axis: this.selectedAxis });
+    };
+    this._axisUnsub = () => window.removeEventListener('axis:confirmed', handler);
+    window.addEventListener('axis:confirmed', handler);
   }
 
   startDFM(){
@@ -366,7 +350,7 @@ class DFMOrchestrator {
   async startAnalysis({
     fileId = this.fileId,
     materialProfile = this.materialProfile,
-    demouldAxis = this.demouldAxis
+    axis = this.demouldAxis
   } = {}) {
     if (!this.materialProfile) {
       console.warn("Aucun profil matière sélectionné, ouverture de la modale.");
@@ -407,20 +391,20 @@ class DFMOrchestrator {
       this.handleError?.("file_missing");
       return;
     }
-    if (!demouldAxis || !this.axisValidated) {
+    if (!axis) {
       UI.info("Veuillez valider l’axe de démoulage.");
       this.handleError?.("axe_manquant");
       return;
     }
 
-    dbg("startAnalysis", { fileId, materialProfile, demouldAxis });
+    dbg("startAnalysis", { fileId, materialProfile, axis });
     this.setState(DFM_STATES.RUNNING);
     this._renderLoading();
     UI.setLoading(true);
 
     const payload = {
       file_id: fileId,
-      axis: demouldAxis,
+      axis,
       material_profile: materialProfile?.resin || "GENERIC",
     };
     console.debug("[DFM] start payload", payload);
@@ -608,9 +592,9 @@ class DFMOrchestrator {
   }
 }
 
-const dfmOrchestrator = (typeof window !== 'undefined' && window.DFMOrchestrator) ? window.DFMOrchestrator : new DFMOrchestrator();
+const orchestrator = (typeof window !== 'undefined' && window.DFMOrchestrator) ? window.DFMOrchestrator : new DFMOrchestrator();
 if (typeof window !== 'undefined') {
-  window.DFMOrchestrator = dfmOrchestrator;
+  window.DFMOrchestrator = orchestrator;
 }
 
 eventBus.subscribe('dfm:start', async (payload) => {
@@ -764,43 +748,22 @@ function initDFMUI() {
   }
 
   document.addEventListener("DOMContentLoaded", () => {
-    dfmOrchestrator.setFileId(window.CAD.fileIdStep);
-    dfmOrchestrator.setMaterialProfile(window.CAD.materialProfile);
+    orchestrator.setFileId(window.CAD.fileIdStep);
+    orchestrator.setMaterialProfile(window.CAD.materialProfile);
 
     window.addEventListener('dfm:fileReady', e => {
       window.CAD.fileIdStep = e.detail.fileId;
-      dfmOrchestrator.setFileId(e.detail.fileId);
+      orchestrator.setFileId(e.detail.fileId);
     });
 
-    document.addEventListener('material:confirmed', e => {
-      window.CAD.materialProfile = e.detail;
-      dfmOrchestrator.setMaterialProfile(e.detail);
-      if (dfmOrchestrator.demouldAxis && dfmOrchestrator.axisValidated) {
-        dfmOrchestrator.startDFM();
-      }
-    });
-  });
-
-  document.addEventListener('DOMContentLoaded', () => {
-    const btn = document.getElementById('analyzeBtn');
-    if (!btn || btn.dataset.bound) return;
-    btn.dataset.bound = "1";
-
-    btn.addEventListener('click', (e) => {
-      if (typeof DFMOrchestrator?.onAnalyzeClick === 'function') {
-        DFMOrchestrator.onAnalyzeClick(e);
-      } else {
-        e.preventDefault();
-        console.error("onAnalyzeClick introuvable");
-      }
-    });
+    orchestrator.init();
   });
 }
 
 if (typeof window !== 'undefined') {
   window.showMaterialModal = showMaterialModal;
   window.DFM_STATES = DFM_STATES;
-  window.dfmOrchestrator = dfmOrchestrator;
+  window.dfmOrchestrator = orchestrator;
   window.collectMaterialForm = collectMaterialForm;
   window.initDFMUI = initDFMUI;
 }
@@ -812,7 +775,6 @@ function dfmSelfCheck() {
   const errors = [];
   if (!window.bootstrap || !bootstrap.Modal) errors.push("bootstrap.Modal absent");
   if (!(
-    document.getElementById("materialQuestionnaireModal") ||
     document.getElementById("materialModal") ||
     document.querySelector("[data-material-modal]")
   ))
@@ -828,4 +790,9 @@ function dfmSelfCheck() {
 
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   window.requestAnimationFrame(dfmSelfCheck);
+}
+
+// Legacy global for older templates still calling onclick="onAnalyzeClick()"
+if (typeof window !== 'undefined') {
+  window.onAnalyzeClick = () => orchestrator.handleAnalyzeClick();
 }

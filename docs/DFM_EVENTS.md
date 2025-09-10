@@ -14,15 +14,13 @@ Payload :
 
 Émis lors de la validation de la modale matière.
 
-## `axis:validated`
+## `axis:confirmed`
 
 Payload :
 
 ```json
 {
-  "axis": [x, y, z],
-  "invert": bool,
-  "ts": 1234567890
+  "axis": [x, y, z]
 }
 ```
 

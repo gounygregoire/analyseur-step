@@ -263,7 +263,7 @@ if (typeof collectMaterialForm !== 'function') {
 (function bindDFMAfterMaterial(){
   if (window.__cadlyticsDFMChained) return;
   window.__cadlyticsDFMChained = true;
-  document.addEventListener('material:confirmed', () => {
+  window.addEventListener('material:selected', () => {
     window.state = window.state || {};
     if (window.state.fileLoaded && window.state.materialProfile) {
       if (typeof window.runDFM === 'function') {

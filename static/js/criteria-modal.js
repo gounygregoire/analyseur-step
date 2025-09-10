@@ -1,7 +1,7 @@
 // Logiciel de sélection des critères matière
 // Applique les règles exclusives, conflits et limites puis gère le bouton "Analyser".
 
-import eventBus from "./modules/events-bus.js";
+// Pas d'inline onclick : tout est câblé en JS
 
 // === Déclaration des règles métiers ===
 const RULES = {
@@ -130,7 +130,7 @@ function updateSummary() {
   if (summary) {
     summary.textContent = `✅ Valides: ${valids.length} | ⚠️ Avertissements: ${state.warnings.size} | ⛔ Blocants: ${state.blockers.size}`;
   }
-  const btn = document.getElementById("submitQuestionnaire");
+  const btn = document.getElementById("materialConfirmBtn");
   if (btn) btn.disabled = state.blockers.size > 0;
 }
 
@@ -238,7 +238,9 @@ function validateForm() {
   };
 }
 
-function onAnalyseClick(e) {
+let materialModal;
+
+function onMaterialConfirm(e) {
   const res = validateForm();
   if (!res.ok) {
     e.preventDefault();
@@ -247,32 +249,26 @@ function onAnalyseClick(e) {
     first?.focus();
     return;
   }
-  // Diffuse un profil matière synthétique (id/slug + critères) sur le bus
   const profile = {
     id: res.payload?.[0] || "custom",
     slug: res.payload?.[0] || "custom",
     criteria: res.payload,
   };
-  eventBus.publish("material:selected", { materialProfile: profile });
-  // Événement legacy pour compatibilité
-  document.dispatchEvent(
-    new CustomEvent("material:confirmed", { detail: res.payload })
+  console.debug("validation matière", profile);
+  window.dispatchEvent(
+    new CustomEvent("material:selected", { detail: { materialProfile: profile } })
   );
-  const modalEl =
-    document.getElementById("materialQuestionnaireModal") ||
-    document.getElementById("materialModal") ||
-    document.querySelector("[data-material-modal]");
-  if (modalEl) {
-    bootstrap.Modal.getInstance(modalEl)?.hide();
-    document
-      .querySelectorAll(".modal-backdrop")
-      .forEach((el) => el.remove());
-    document.body.classList.remove("modal-open");
-  }
+  console.debug("event material:selected émis", profile);
+  materialModal?.hide();
 }
 
 // === Initialisation ===
 document.addEventListener("DOMContentLoaded", () => {
+  const el = document.getElementById("materialModal");
+  if (el && window.bootstrap?.Modal) {
+    materialModal = bootstrap.Modal.getOrCreateInstance(el, { backdrop: "static" });
+  }
+
   document.querySelectorAll(".criterion").forEach((cb) => {
     cb.addEventListener("change", (e) => {
       const el = e.target;
@@ -288,8 +284,8 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   document
-    .getElementById("submitQuestionnaire")
-    ?.addEventListener("click", onAnalyseClick);
+    .getElementById("materialConfirmBtn")
+    ?.addEventListener("click", onMaterialConfirm);
 
   evaluate();
 });

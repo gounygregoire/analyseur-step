@@ -6,10 +6,10 @@ test('Ouverture et fermeture du modal matière', async ({ page }) => {
   await expect(analyze).toBeVisible();
 
   await analyze.click();
-  const modal = page.locator('#materialQuestionnaireModal.show, .modal.show:has(#materialQuestionnaireModal)');
+  const modal = page.locator('#materialModal.show, .modal.show:has(#materialModal)');
   await expect(modal).toBeVisible();
 
   await modal.getByRole('button', { name: 'Annuler' }).click();
 
-  await expect(page.locator('#materialQuestionnaireModal.show')).toHaveCount(0);
+  await expect(page.locator('#materialModal.show')).toHaveCount(0);
 });
