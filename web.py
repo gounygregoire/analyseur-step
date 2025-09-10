@@ -38,6 +38,7 @@ from material_recommender import recommend_materials_for_questionnaire
 import xkt_converter
 from tasks.conversion import generate_preview, generate_final
 from celery_app import celery, init_celery
+from app.storage.storage import Storage
 from flask_login import LoginManager, login_required, current_user
 from translations import get_translation, get_all_translations
 from log import log_action
@@ -49,8 +50,7 @@ from kombu.exceptions import OperationalError as KombuOperationalError
 from redis.exceptions import ConnectionError as RedisConnectionError
 from storage.s3 import get_signed_url
 from observability.logging import setup_logging, get_logger
-from api.dfm import dfm_bp
-from app.storage.storage import Storage
+from api.dfm import dfm_bp, debug_bp
 
 load_dotenv()
 
@@ -64,8 +64,9 @@ app = Flask(
 )
 app.config["JSON_SORT_KEYS"] = False
 
-# Enregistre le blueprint de l’API DFM (URL telles que /api/dfm/...)
+# Enregistre les blueprints de l’API
 app.register_blueprint(dfm_bp)
+app.register_blueprint(debug_bp)
 
 # Lie Celery au contexte Flask (pas d’alias inutile)
 init_celery(app)
@@ -130,27 +131,6 @@ def __routes():
     return "<pre>" + "\n".join(sorted(map(str, app.url_map.iter_rules()))) + "</pre>"
 
 # ========= FIN PATCH =========
-
-
-@app.get("/api/debug/file/<file_id>")
-def debug_file(file_id):
-    step = None
-    xkt = None
-    try:
-        step = Storage.get_step_path(file_id)
-    except FileNotFoundError:
-        step = None
-    try:
-        xkt = Storage.get_xkt_path(file_id)
-    except FileNotFoundError:
-        xkt = None
-    return jsonify({
-        "file_id": file_id,
-        "step_path": step,
-        "xkt_path": xkt,
-        "exists_step": bool(step and os.path.isfile(step)),
-    })
-
 
 
 def _resolve_xeokit():
@@ -736,6 +716,14 @@ def api_upload():
     os.rename(tmp_path, final_path)
     if upload_id:
         os.remove(info_path)
+
+    abs_step_path = os.path.abspath(final_path)
+    Storage.save_step_record(
+        file_id=job.id,
+        filename=filename,
+        path=abs_step_path,
+        size=os.path.getsize(abs_step_path),
+    )
 
     generate_preview.delay(job.id)
     generate_final.delay(job.id)

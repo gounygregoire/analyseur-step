@@ -17,7 +17,7 @@ spec.loader.exec_module(interfaces)
 DFMInput = interfaces.DFMInput
 
 from dfm_analyzer import run_dfm
-from app.storage import Storage
+from app.storage.storage import Storage
 
 try:  # optional RQ queue
     from app.queue import q
@@ -29,6 +29,8 @@ except Exception:  # pragma: no cover - RQ not available
 logger = logging.getLogger(__name__)
 
 _jobs: Dict[str, Dict[str, Any]] = {}
+
+DFM_ROOT = os.environ.get("DFM_ROOT", os.path.join("static", "dfm"))
 
 
 def start_job(file_id: str, demold_axis: list[float], material_profile: dict) -> str:
@@ -112,7 +114,8 @@ def _worker(
             job["progress"] = pct
 
         result = run_dfm(dfm_input, progress_cb=_progress, fast_mode=fast_mode)
-        out_dir = Storage.ensure_dfm_dir(file_id)
+        out_dir = os.path.join(DFM_ROOT, file_id)
+        os.makedirs(out_dir, exist_ok=True)
         json_path = os.path.join(out_dir, "result.json")
         with open(json_path, "w", encoding="utf-8") as fh:
             fh.write(result.model_dump_json(indent=2))
@@ -160,7 +163,8 @@ def _rq_worker(
             material_profile=material_profile,
         )
         result = run_dfm(dfm_input, progress_cb=_progress, fast_mode=fast_mode)
-        out_dir = Storage.ensure_dfm_dir(file_id)
+        out_dir = os.path.join(DFM_ROOT, file_id)
+        os.makedirs(out_dir, exist_ok=True)
         json_path = os.path.join(out_dir, "result.json")
         with open(json_path, "w", encoding="utf-8") as fh:
             fh.write(result.model_dump_json(indent=2))
