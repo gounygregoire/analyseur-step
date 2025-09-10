@@ -112,3 +112,14 @@ Le fichier converti est accessible via :
 ```
 http://localhost:5000/uploads/<uuid>.xkt
 ```
+
+## QA rapide
+
+1. **Upload STEP** : noter `file_id` dans la console et vérifier `GET /api/debug/file/<file_id>` → `step_path` existant.
+2. **Analyser sans matière** : clique sur *Analyser* ouvre la modale matière, aucune requête POST.
+3. **Matière validée** : le panneau d’axe apparaît sous le viewer.
+4. **Axe validé** : POST `/api/dfm/start` (JSON) avec `file_id`, `material_profile_id`, `axis`, `invert`; attendre `202` + `{job_id}` puis poller.
+5. **Serveur** : `tasks.dfm.dfm_run` utilise `Storage.get_step_path(file_id)` puis `dfm_analyzer.run_dfm(step_path=…)`.
+6. **XKT** : uniquement pour le viewer et les vues 3D, jamais pour les métriques.
+7. **Erreurs** : `file_id` inconnu, `material_profile_id` absent ou `axis` manquant → message d’erreur clair.
+

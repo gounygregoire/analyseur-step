@@ -50,6 +50,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from storage.s3 import get_signed_url
 from observability.logging import setup_logging, get_logger
 from api.dfm import dfm_bp
+from app.storage.storage import Storage
 
 load_dotenv()
 
@@ -129,6 +130,26 @@ def __routes():
     return "<pre>" + "\n".join(sorted(map(str, app.url_map.iter_rules()))) + "</pre>"
 
 # ========= FIN PATCH =========
+
+
+@app.get("/api/debug/file/<file_id>")
+def debug_file(file_id):
+    step = None
+    xkt = None
+    try:
+        step = Storage.get_step_path(file_id)
+    except FileNotFoundError:
+        step = None
+    try:
+        xkt = Storage.get_xkt_path(file_id)
+    except FileNotFoundError:
+        xkt = None
+    return jsonify({
+        "file_id": file_id,
+        "step_path": step,
+        "xkt_path": xkt,
+        "exists_step": bool(step and os.path.isfile(step)),
+    })
 
 
 

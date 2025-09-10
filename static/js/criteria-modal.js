@@ -243,9 +243,12 @@ function collectMaterialFromForm() {
   const form = document.getElementById("materialQuestionnaireForm");
   if (!form) return {};
   const fd = new FormData(form);
-  const profile = { resin: fd.get("resin") || "GENERIC" };
+  const profile = {
+    id: fd.get("resin") || "GENERIC",
+    draft_min_deg: parseFloat(fd.get("draft_min_deg")) || 1.0,
+  };
   fd.forEach((v, k) => {
-    if (k === "resin") return;
+    if (k === "resin" || k === "draft_min_deg") return;
     const key = k.replace("[]", "");
     if (profile[key]) {
       if (!Array.isArray(profile[key])) profile[key] = [profile[key]];
