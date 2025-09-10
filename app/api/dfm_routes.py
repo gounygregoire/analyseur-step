@@ -50,21 +50,23 @@ def start() -> tuple[dict, int]:
     if not get_profile(material_profile_id):
         return jsonify({"error": "unknown_material_profile"}), 400
     step_path = Storage.get_step_path(file_id)
+    current_app.logger.info(
+        "[DFM/START] file_id=%s resolved_step=%s exists=%s",
+        file_id,
+        step_path,
+        bool(step_path and os.path.isfile(step_path)),
+    )
     if not step_path:
-        current_app.logger.warning(
-            "DFM start: step_not_found_for_file_id file_id=%s", file_id
-        )
         return (
             {
                 "error": "step_not_found_for_file_id",
-                "hint": "Upload must save /tmp/uploads/<file_id>.step|.stp and call Storage.save_step_record",
+                "hint": "persist via ensure_step_persisted → /tmp/uploads/<file_id>.step|.stp",
             },
             400,
         )
     logger.info("/api/dfm/start file_id=%s step_path=%s", file_id, step_path)
     job = dfm_run.delay(
         file_id=file_id,
-        step_path=step_path,
         material_profile_id=material_profile_id,
         axis=axis,
         invert=invert,
@@ -128,14 +130,15 @@ def result() -> tuple[dict, int]:
 
 @debug_bp.get("/debug/file/<file_id>")
 def debug_file(file_id: str):
-    from app.storage.storage import Storage
+    from app.storage.storage import Storage, os
     step = Storage.get_step_path(file_id)
     xkt = Storage.get_xkt_path(file_id)
     return {
         "file_id": file_id,
         "step_path": step,
-        "xkt_path": xkt,
         "exists_step": bool(step and os.path.isfile(step)),
+        "xkt_path": xkt,
+        "exists_xkt": bool(xkt and os.path.isfile(xkt)),
     }
 
 

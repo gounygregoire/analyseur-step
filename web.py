@@ -14,6 +14,8 @@ from flask import (
     redirect,
     url_for,
     flash,
+    current_app,
+    abort,
 )
 from flask_cors import CORS
 from flask_migrate import Migrate
@@ -56,20 +58,22 @@ from api.dfm import dfm_bp, debug_bp
 load_dotenv()
 
 log = logging.getLogger("boot")
-UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
-OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
-FILES_DB_PATH = os.environ.get(
+os.makedirs(os.environ.get("UPLOAD_FOLDER", "/tmp/uploads"), exist_ok=True)
+os.makedirs(os.environ.get("OUTPUT_FOLDER", "/tmp/converted"), exist_ok=True)
+os.environ.setdefault(
     "FILES_DB_PATH",
     os.path.join(os.path.dirname(__file__), "app/storage/files.sqlite"),
 )
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 log.info(
-    "[BOOT] UPLOAD_FOLDER=%s OUTPUT_FOLDER=%s FILES_DB_PATH=%s",
-    UPLOAD_FOLDER,
-    OUTPUT_FOLDER,
-    FILES_DB_PATH,
+    "[BOOT] UPLOAD_FOLDER=%s OUTPUT_FOLDER=%s FILES_DB_PATH=%s cwd=%s",
+    os.environ.get("UPLOAD_FOLDER"),
+    os.environ.get("OUTPUT_FOLDER"),
+    os.environ.get("FILES_DB_PATH"),
+    os.getcwd(),
 )
+UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
+OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
+FILES_DB_PATH = os.environ.get("FILES_DB_PATH")
 
 # ========= FLASK APP (corrigé) =========
 # Une seule création d'app, avec static+templates configurés
@@ -502,10 +506,39 @@ def convert_step():
     in_name = base + ext_lower           # garde l’extension d’origine en minuscule
     in_path = os.path.join(temp_dir, in_name)
     f.save(in_path)
-
     dest_dir = app.config.get("OUTPUT_FOLDER", "/tmp/converted")
     os.makedirs(dest_dir, exist_ok=True)
-    out_name = f"{uuid.uuid4()}.xkt"
+    if ext_lower in ('.step', '.stp'):
+        file_id = uuid.uuid4().hex
+        assert file_id, "file_id must be defined before persisting STEP"
+        original_filename = orig
+        persisted = Storage.ensure_step_persisted(file_id, in_path, original_filename)
+        exists = bool(persisted and os.path.isfile(persisted))
+        current_app.logger.info(
+            "[UPLOAD→PERSIST] file_id=%s tmp=%s persisted=%s exists=%s",
+            file_id,
+            in_path,
+            persisted,
+            exists,
+        )
+        chk = Storage.get_step_path(file_id)
+        ok = bool(chk and os.path.isfile(chk))
+        current_app.logger.info(
+            "[VERIFY] get_step_path(file_id=%s) -> %s exists=%s",
+            file_id,
+            chk,
+            ok,
+        )
+        if not ok:
+            current_app.logger.error(
+                "[FATAL] STEP NOT FOUND JUST AFTER PERSIST. UPLOAD_FOLDER=%s FILES_DB_PATH=%s",
+                os.environ.get("UPLOAD_FOLDER", "/tmp/uploads"),
+                os.environ.get("FILES_DB_PATH"),
+            )
+            abort(500, description="persist_step_failed")
+        out_name = f"{file_id}.xkt"
+    else:
+        out_name = f"{uuid.uuid4()}.xkt"
     out_path = os.path.join(dest_dir, out_name)
 
     start = time.time()
@@ -563,7 +596,10 @@ def convert_step():
     logger.info("Conversion OK en %.2fs -> %s", time.time() - start, out_path)
     # La route /uploads/<fname> doit servir OUTPUT_FOLDER
     xkt_rel_url = f"/uploads/{out_name}"
-    return jsonify(success=True, url=xkt_rel_url, xktUrl=xkt_rel_url)
+    resp = {"success": True, "url": xkt_rel_url, "xktUrl": xkt_rel_url}
+    if ext_lower in (".step", ".stp"):
+        resp["file_id"] = file_id
+    return jsonify(resp)
 
 
 @app.route('/upload_file', methods=['POST'])
@@ -579,13 +615,36 @@ def upload_file_api():
 
     file_id = str(uuid.uuid4())
     original_filename = secure_filename(file.filename)
-    ext = os.path.splitext(original_filename)[1].lower()
-    if ext not in ('.step', '.stp'):
-        ext = '.step'
-    abs_step_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{file_id}{ext}")
-    file.save(abs_step_path)
-    step_size = os.path.getsize(abs_step_path)
-    Storage.save_step_record(file_id, original_filename, abs_step_path, step_size)
+    temp_dir = tempfile.mkdtemp(prefix="upload_")
+    tmp_step_path = os.path.join(temp_dir, original_filename)
+    file.save(tmp_step_path)
+    assert file_id, "file_id must be defined before persisting STEP"
+    persisted = Storage.ensure_step_persisted(file_id, tmp_step_path, original_filename)
+    exists = bool(persisted and os.path.isfile(persisted))
+    current_app.logger.info(
+        "[UPLOAD→PERSIST] file_id=%s tmp=%s persisted=%s exists=%s",
+        file_id,
+        tmp_step_path,
+        persisted,
+        exists,
+    )
+    chk = Storage.get_step_path(file_id)
+    ok = bool(chk and os.path.isfile(chk))
+    current_app.logger.info(
+        "[VERIFY] get_step_path(file_id=%s) -> %s exists=%s",
+        file_id,
+        chk,
+        ok,
+    )
+    if not ok:
+        current_app.logger.error(
+            "[FATAL] STEP NOT FOUND JUST AFTER PERSIST. UPLOAD_FOLDER=%s FILES_DB_PATH=%s",
+            os.environ.get("UPLOAD_FOLDER", "/tmp/uploads"),
+            os.environ.get("FILES_DB_PATH"),
+        )
+        abort(500, description="persist_step_failed")
+    step_size = os.path.getsize(persisted)
+    shutil.rmtree(temp_dir, ignore_errors=True)
 
     stl_filename = f"{file_id}.stl"
     xkt_filename = f"{file_id}.xkt"
@@ -593,7 +652,7 @@ def upload_file_api():
     job = ConversionJob(
         id=file_id,
         original_filename=original_filename,
-        step_filename=os.path.basename(abs_step_path),
+        step_filename=os.path.basename(persisted),
         stl_filename=stl_filename,
         xkt_filename=xkt_filename,
         step_file_size=step_size,
@@ -638,6 +697,36 @@ def upload():
     input_path = os.path.join(temp_dir, filename)
     file.save(input_path)
 
+    # Persister le STEP avant toute conversion
+    file_id = uuid.uuid4().hex
+    if ext in (".step", ".stp"):
+        assert file_id, "file_id must be defined before persisting STEP"
+        original_filename = filename
+        persisted = Storage.ensure_step_persisted(file_id, input_path, original_filename)
+        exists = bool(persisted and os.path.isfile(persisted))
+        current_app.logger.info(
+            "[UPLOAD→PERSIST] file_id=%s tmp=%s persisted=%s exists=%s",
+            file_id,
+            input_path,
+            persisted,
+            exists,
+        )
+        chk = Storage.get_step_path(file_id)
+        ok = bool(chk and os.path.isfile(chk))
+        current_app.logger.info(
+            "[VERIFY] get_step_path(file_id=%s) -> %s exists=%s",
+            file_id,
+            chk,
+            ok,
+        )
+        if not ok:
+            current_app.logger.error(
+                "[FATAL] STEP NOT FOUND JUST AFTER PERSIST. UPLOAD_FOLDER=%s FILES_DB_PATH=%s",
+                os.environ.get("UPLOAD_FOLDER", "/tmp/uploads"),
+                os.environ.get("FILES_DB_PATH"),
+            )
+            abort(500, description="persist_step_failed")
+
     if filename.endswith('.xkt'):
         out_name = f"{uuid.uuid4()}.xkt"
         dest_dir = os.path.join('static', 'models')
@@ -646,7 +735,7 @@ def upload():
         shutil.rmtree(temp_dir, ignore_errors=True)
         return redirect(url_for('index', model=out_name))
 
-    xkt_name = f"{uuid.uuid4()}.xkt"
+    xkt_name = f"{file_id}.xkt"
     xkt_path = os.path.join(temp_dir, xkt_name)
 
     try:
@@ -733,31 +822,12 @@ def api_upload():
     db.session.add(job)
     db.session.commit()
 
-    orig_ext = os.path.splitext(filename)[1].lower()
-    ext = orig_ext if orig_ext in ('.stp', '.step') else '.step'
-    abs_step_path = os.path.abspath(
-        os.path.join(app.config['UPLOAD_FOLDER'], f"{file_id}{ext}")
-    )
-    logger.info(
-        "upload pre-rename: file_id=%s tmp_path=%s", file_id, tmp_path
-    )
-    os.rename(tmp_path, abs_step_path)
+    abs_step_path = Storage.ensure_step_persisted(file_id, tmp_path, filename)
     if upload_id:
         os.remove(info_path)
-
-    logger.info(
-        "upload post-rename: file_id=%s abs_step_path=%s", file_id, abs_step_path
-    )
-    logger.info(
-        "upload save_step_record: file_id=%s path=%s", file_id, abs_step_path
-    )
-    Storage.save_step_record(
-        file_id=file_id,
-        filename=filename,
-        path=abs_step_path,
-        size=os.path.getsize(abs_step_path),
-    )
-    logger.info("upload save_step_record OK: file_id=%s", file_id)
+    if tmp_path != abs_step_path:
+        os.remove(tmp_path)
+    logger.info("upload persisted: file_id=%s step_path=%s", file_id, abs_step_path)
 
     generate_preview.delay(file_id)
     generate_final.delay(file_id)
@@ -830,8 +900,8 @@ def upload_job():
             ext = '.step'
         abs_step_path = os.path.abspath(os.path.join(app.config['UPLOAD_FOLDER'], f"{file_id}{ext}"))
         file.save(abs_step_path)
+        abs_step_path = Storage.ensure_step_persisted(file_id, abs_step_path, original_filename)
         step_size = os.path.getsize(abs_step_path)
-        Storage.save_step_record(file_id, original_filename, abs_step_path, step_size)
         logger.info(f"Saved STEP file: {abs_step_path}")
 
         step_filename = os.path.basename(abs_step_path)

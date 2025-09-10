@@ -63,24 +63,25 @@ export class XeokitModelViewer extends EventTarget {
   }
 
   // === Mini-patch : expose l’ID côté front (DOM + global + event)
-  _exposeFileId(id) {
-    if (!id) return;
-    if (!this.fileId) this.fileId = id;
-    else if (this.fileId !== id) {
-      console.warn('[ID] ignore new id', id, 'keep', this.fileId);
-      id = this.fileId;
-    }
-    document.body.dataset.fileid = this.fileId;
+  _exposeFileId(incomingId) {
+    if (!incomingId) return;
+    if (!this.fileId) this.fileId = incomingId;
+    else if (this.fileId !== incomingId)
+      console.warn('[ID] ignore new id', incomingId, 'keep', this.fileId);
+
+    const fileId = this.fileId;
+
+    document.body.dataset.fileid = fileId;
     window.CADLYTICS = window.CADLYTICS || {};
-    window.CADLYTICS.current = { jobId: this.fileId, modelId: this.fileId };
+    window.CADLYTICS.current = { jobId: fileId, modelId: fileId };
     window.viewerAdapter = window.viewerAdapter || {};
-    window.viewerAdapter.current = { jobId: this.fileId, modelId: this.fileId };
+    window.viewerAdapter.current = { jobId: fileId, modelId: fileId };
     const hidden = document.getElementById('fileId');
-    if (hidden && hidden.type === 'hidden') hidden.value = this.fileId;
-    window.dispatchEvent(new CustomEvent('dfm:fileReady', { detail: { fileId: this.fileId } }));
+    if (hidden && hidden.type === 'hidden') hidden.value = fileId;
+    window.dispatchEvent(new CustomEvent('dfm:fileReady', { detail: { fileId } }));
     window.state = window.state || {};
     window.state.fileLoaded = true;
-    console.debug('[VIEWER] fileId exposé:', this.fileId);
+    console.debug('[VIEWER] fileId exposé:', fileId);
   }
 
   // --- chargement ---------------------------------------------------------
