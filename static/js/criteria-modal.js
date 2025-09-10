@@ -238,35 +238,31 @@ function validateForm() {
   };
 }
 
-let materialModal;
-
-function onMaterialConfirm(e) {
-  const res = validateForm();
-  if (!res.ok) {
-    e.preventDefault();
-    const first = document.getElementById(res.hardErrors[0]);
-    first?.scrollIntoView({ behavior: "smooth", block: "center" });
-    first?.focus();
-    return;
-  }
-  const profile = {
-    id: res.payload?.[0] || "custom",
-    slug: res.payload?.[0] || "custom",
-    criteria: res.payload,
-  };
-  console.debug("validation matière", profile);
-  window.dispatchEvent(
-    new CustomEvent("material:selected", { detail: { materialProfile: profile } })
-  );
-  console.debug("event material:selected émis", profile);
-  materialModal?.hide();
+// Récupère toutes les valeurs du formulaire matière
+function collectMaterialFromForm() {
+  const form = document.getElementById("materialQuestionnaireForm");
+  if (!form) return {};
+  const fd = new FormData(form);
+  const profile = { resin: fd.get("resin") || "GENERIC" };
+  fd.forEach((v, k) => {
+    if (k === "resin") return;
+    const key = k.replace("[]", "");
+    if (profile[key]) {
+      if (!Array.isArray(profile[key])) profile[key] = [profile[key]];
+      profile[key].push(v);
+    } else {
+      profile[key] = v;
+    }
+  });
+  return profile;
 }
 
 // === Initialisation ===
 document.addEventListener("DOMContentLoaded", () => {
   const el = document.getElementById("materialModal");
   if (el && window.bootstrap?.Modal) {
-    materialModal = bootstrap.Modal.getOrCreateInstance(el, { backdrop: "static" });
+    // instancie la modale sans conserver de référence
+    bootstrap.Modal.getOrCreateInstance(el, { backdrop: "static" });
   }
 
   document.querySelectorAll(".criterion").forEach((cb) => {
@@ -285,7 +281,22 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document
     .getElementById("materialConfirmBtn")
-    ?.addEventListener("click", onMaterialConfirm);
+    ?.addEventListener("click", (e) => {
+      const res = validateForm();
+      if (!res.ok) {
+        e.preventDefault();
+        const first = document.getElementById(res.hardErrors[0]);
+        first?.scrollIntoView({ behavior: "smooth", block: "center" });
+        first?.focus();
+        return;
+      }
+      // Émission de l'event material:selected
+      const materialProfile = collectMaterialFromForm();
+      materialProfile.criteria = res.payload;
+      console.debug('[DFM] material:selected emit', materialProfile);
+      window.dispatchEvent(new CustomEvent('material:selected', { detail: { materialProfile }}));
+      bootstrap.Modal.getOrCreateInstance(document.getElementById('materialModal'))?.hide();
+    });
 
   evaluate();
 });
