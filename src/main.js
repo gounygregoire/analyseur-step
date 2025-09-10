@@ -423,11 +423,16 @@ async function convertAndGetXKT(files) {
   let fileId = data.file_id
             || deriveIdFromUrl(data.url)
             || deriveIdFromUrl(data.xktUrl);
-
+  const existing = window.CADLYTICS?.current?.fileId;
+  if (existing && fileId && existing !== fileId) {
+    console.warn(`[convert] file_id mismatch: keeping ${existing}, ignoring ${fileId}`);
+    fileId = existing;
+  }
+  if (!existing && fileId) {
+    exposeFileId(fileId);
+  }
   if (!fileId) {
     console.warn("[convert] pas de file_id ni dérivable", data);
-  } else {
-    exposeFileId(fileId);
   }
 
   return xktUrl;

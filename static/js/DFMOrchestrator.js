@@ -102,7 +102,13 @@ const DFM_STATES = {
 
 class DFMOrchestrator {
   constructor(){
-    this.state = DFM_STATES.IDLE;
+    this.phase = DFM_STATES.IDLE;
+    this.state = this.state || {
+      fileLoaded: false,
+      materialSelected: false,
+      axisConfirmed: false,
+      running: false,
+    };
     this.fileId = null;
     this.materialProfile = null;
     this.demouldAxis = null;
@@ -111,19 +117,20 @@ class DFMOrchestrator {
     this.axisValidated = false;
     this.axisSelection = null;
     this.selectedAxis = null;
+    this.selectedInvert = false;
     // panneau d'axe injecté à la volée
     this.axisPanel = null;
     this.axisPanelInitialized = false;
     this.axisPicker = null;
+    this.confirmedAxis = null;
   }
 
   init(){
-    // Binding en JS pour éviter l'attribut onclick inline
+    document.getElementById('dfmAxisPanel')?.remove();
     document.getElementById('analyzeBtn')?.addEventListener('click', () => this.handleAnalyzeClick());
 
-    // -- Écouteurs globaux (ajoutés une fois) --
     window.addEventListener('material:selected', (e) => {
-      this.materialProfile = e.detail.materialProfile;
+      this.setMaterialProfile(e.detail.materialProfile);
       window.CAD.materialProfile = this.materialProfile;
       dbg('material:selected', this.materialProfile);
       this.renderAxisPanel();
@@ -131,36 +138,51 @@ class DFMOrchestrator {
 
     window.addEventListener('axis:confirmed', (e) => {
       this.selectedAxis = e.detail.axis;
-      dbg('axis:confirmed', this.selectedAxis);
-      // Préconditions minimales avant d’appeler l’API DFM
-      if (!this.fileId || !this.materialProfile || !this.selectedAxis){
-        UI.info('Importez un STEP, choisissez une matière et un axe.');
-        dbg('startAnalysis bloqué', { fileId: this.fileId, materialProfile: !!this.materialProfile, axis: this.selectedAxis });
-        return;
-      }
-      this.startAnalysis({
-        fileId: this.fileId,
-        materialProfile: this.materialProfile,
-        axis: this.selectedAxis
-      });
+      this.selectedInvert = !!e.detail.invert;
+      this.state.axisConfirmed = true;
+      dbg('axis:confirmed', this.selectedAxis, this.selectedInvert);
+      this.startAnalysis();
     });
   }
 
   setState(next){
-    this.state = next; dbg("state →", next);
+    this.phase = next; dbg("state →", next);
   }
 
   setFileId(id){
-    this.fileId = id || null;
+    if (!id) return false;
+    if (this.fileId && this.fileId !== id) {
+      console.warn('[DFM] file_id mismatch', this.fileId, id);
+      return false;
+    }
+    this.fileId = id;
+    this.state.fileLoaded = true;
+    this.state.axisConfirmed = false;
     const hidden = document.getElementById('fileId');
     if (hidden && hidden.type === 'hidden') hidden.value = this.fileId || '';
     this.refreshAxisState?.();
+    return true;
   }
   setMaterialProfile(p){
     this.materialProfile = p || null;
+    this.state.materialSelected = !!this.materialProfile;
+    this.state.axisConfirmed = false;
     this.resetAxisValidation();
     dbg('material selected', this.materialProfile, 'axis reset');
     this.refreshAxisState?.();
+  }
+  async debugFileId(){
+    if (!this.fileId) {
+      console.warn('[DFM] debugFileId: aucun file_id');
+      return;
+    }
+    try {
+      const res = await fetch(`/api/dfm/debug/file/${this.fileId}`);
+      const data = await res.json().catch(()=>({}));
+      console.debug('[DFM debug]', data);
+    } catch (err) {
+      console.warn('debugFileId failed', err);
+    }
   }
   setDemouldAxis(a){
     const vec = axisToVector(a);
@@ -300,13 +322,9 @@ class DFMOrchestrator {
 
   // Affiche le sélecteur d'axe sous le viewer
   renderAxisPanel() {
-    // 1) Garde-fous
+    if (!this.state.materialSelected) return;
     if (!this.fileId && typeof this.setFileIdFromPage === 'function' && !this.setFileIdFromPage()) {
       UI?.info?.("Aucun fichier à analyser. Merci d’importer une pièce.");
-      return;
-    }
-    if (!this.materialProfile) {
-      UI?.info?.("Sélectionnez un matériau avant de choisir l’axe.");
       return;
     }
 
@@ -335,6 +353,10 @@ class DFMOrchestrator {
           </div>
         </div>
         <div id="axisWidget" class="mt-2"></div>
+        <div class="form-check form-switch mt-2">
+          <input class="form-check-input" type="checkbox" id="invertAxisToggle">
+          <label class="form-check-label" for="invertAxisToggle">Inverser le sens</label>
+        </div>
       </div>`;
 
     viewerEl.insertAdjacentElement('afterend', panel);
@@ -364,6 +386,8 @@ class DFMOrchestrator {
       };
     }
 
+    this.invertToggle = panel.querySelector('#invertAxisToggle');
+
     // 6) Bouton "Valider l’axe" → émettre axis:confirmed
     panel.querySelector('#axisConfirmBtn')?.addEventListener('click', () => {
       const axis = this.axisPicker?.getAxis?.();
@@ -371,8 +395,9 @@ class DFMOrchestrator {
         UI?.info?.("Choisissez une direction d’axe avant de valider.");
         return;
       }
-      dbg('axis:confirmed emit', axis);
-      window.dispatchEvent(new CustomEvent('axis:confirmed', { detail: { axis } }));
+      const invert = !!this.invertToggle?.checked;
+      dbg('axis:confirmed emit', axis, invert);
+      window.dispatchEvent(new CustomEvent('axis:confirmed', { detail: { axis, invert } }));
       panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
   }
@@ -388,11 +413,18 @@ class DFMOrchestrator {
       }
       return;
     }
-    if (!this.materialProfile){
+    if (!this.state.materialSelected){
       showMaterialModal();
       return;
     }
-    this.renderAxisPanel();
+    if (this.state.materialSelected && !this.state.axisConfirmed){
+      this.renderAxisPanel();
+      document.getElementById('dfmAxisPanel')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    if (this.state.axisConfirmed){
+      this.startAnalysis();
+    }
   }
 
   startDFM(){
@@ -430,141 +462,69 @@ class DFMOrchestrator {
   }
 
   // ---------------------- Analyse ----------------------
-    async startAnalysis({
-      fileId = this.fileId,
-      materialProfile = this.materialProfile,
-      axis = this.demouldAxis
-    } = {}) {
-      // Vérification minimale des prérequis
-      if (!materialProfile) {
-        dbg('startAnalysis: matière manquante');
-        console.warn("Aucun profil matière sélectionné, ouverture de la modale.");
-        showMaterialModal();
-        return;
-      }
-      // ➊ Résolution robuste du fileId au tout début
-    if (!fileId) {
-      // a) champ caché
-      const hid = document.getElementById('fileId');
-      if (hid && hid.value) fileId = hid.value;
+  async startAnalysis() {
+    const payload = {
+      file_id: this.fileId,
+      material_profile_id: this.materialProfile?.id,
+      axis: this.selectedAxis || { x: 0, y: 0, z: 1 },
+      invert: !!this.selectedInvert
+    };
+    console.debug('[DFM] start payload', payload);
 
-      // b) data-fileid sur <body>
-      if (!fileId && document?.body?.dataset?.fileid) {
-        fileId = document.body.dataset.fileid;
-      }
-
-      // c) global exposé par l’uploader
-      if (!fileId && window?.CADLYTICS?.current?.fileId) {
-        fileId = window.CADLYTICS.current.fileId;
-      }
-
-      // d) viewer éventuel
-      if (!fileId && window?.viewerAdapter?.current?.fileId) {
-        fileId = window.viewerAdapter.current.fileId;
-      }
-
-      // e) fallback orchestrateur
-      if (!fileId) fileId = this.setFileIdFromPage();
-
-      // On mémorise si trouvé
-      if (fileId) this.setFileId(fileId);
+    if (!payload.file_id || !payload.material_profile_id || !payload.axis) {
+      UI.info?.('Paramètre manquant pour l’analyse.');
+      return;
     }
 
-    // ➋ Garde-fous côté UI
-      if (!fileId) {
-        UI.info("Aucun fichier à analyser. Merci d’importer une pièce.");
-        dbg('startAnalysis: fileId manquant');
-        this.handleError?.("file_missing");
-        return;
-      }
-      if (!materialProfile) {
-        UI.info("Sélectionnez une matière.");
-        dbg('startAnalysis: matière manquante après résolution');
-        this.handleError?.("material_missing");
-        return;
-      }
-      if (!axis) {
-        UI.info("Veuillez valider l’axe de démoulage.");
-        dbg('startAnalysis: axe manquant');
-        this.handleError?.("axe_manquant");
-        return;
-      }
-
-    dbg("startAnalysis", { fileId, materialProfile, axis });
-    this.setState(DFM_STATES.RUNNING);
-    this._renderLoading();
-    UI.setLoading(true);
-
-    const payload = {
-      file_id: fileId,
-      axis,
-      material_profile: materialProfile?.resin || "GENERIC",
-    };
-    dbg('start payload', payload);
-
-
+    UI.setLoading?.(true);
+    this.state.running = true;
     try {
-      const res = await fetch("/api/dfm/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      const res = await fetch('/api/dfm/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-
-      let startResp = {};
-      try { startResp = await res.json(); } catch {}
-
-      dbg('POST /api/dfm/start', res.status, startResp);
-
-      if (res.status === 200 || res.status === 202) {
-        const { job_id: jobId } = startResp;
-        if (jobId) {
-          window.CAD.currentJobId = jobId;
-          StatusUI.set("Analyse en cours…");
-          pollJobStatus(
-            jobId,
-            (s) => {
-              if (s.status === "running") {
-                const label = s.step ? `Analyse en cours… (${s.step})` : "Analyse en cours…";
-                StatusUI.set(label);
-                if (typeof s.progress === "number" && UI.progress) UI.progress(s.progress);
-              }
-            },
-            async () => {
-              StatusUI.set("Analyse terminée");
-              const r = await fetch(`/api/dfm/result?job_id=${encodeURIComponent(jobId)}`);
-              if (r.ok){
-                const data = await r.json();
-                await this.renderResults(data);
-              }else{
-                this.handleError("result_failed");
-              }
-            },
-            () => { StatusUI.set("Échec de l’analyse"); UI.err("Échec de l’analyse"); }
-          );
-        } else {
-          this.handleError("missing_jobId");
-        }
+      let data = {};
+      try { data = await res.json(); } catch (e) {}
+      if (res.status !== 202) {
+        console.warn('DFM start rejected', res.status, data);
+        this.setStatus?.('start_failed', data?.error || 'Bad Request');
+        UI.setLoading?.(false);
         return;
       }
-
-      // Messages dédiés selon code HTTP
-      switch (res.status) {
-        case 400: UI.err("Aucun fichier: importez/convertez une pièce puis recommencez."); break;
-        case 404: UI.err("Endpoint introuvable"); break;
-        case 409: UI.err("Analyse déjà en cours pour ce fichier."); break;
-        case 503: UI.err("Service indisponible (worker/broker). Réessayez."); break;
-        default:  UI.err(`Erreur ${res.status} ${res.statusText}`);
-      }
-      this.handleError("start_failed");
-
-    } catch (e) {
-      console.error(e);
-      UI.err("Démarrage analyse impossible");
-      this.handleError("start_failed");
-
-    } finally {
-      UI.setLoading(false);
+      this.jobId = data.job_id;
+      this.pollStatus(this.jobId);
+    } catch (err) {
+      console.error('DFM start network error', err);
+      this.setStatus?.('start_failed', 'Network error');
+      UI.setLoading?.(false);
     }
+  }
+
+  pollStatus(jobId) {
+    pollJobStatus(
+      jobId,
+      (s) => {
+        if (s.status === 'queued') {
+          StatusUI.set('En file d’attente…');
+        } else if (s.status === 'running') {
+          const label = s.step ? `Analyse en cours… (${s.step})` : 'Analyse en cours…';
+          StatusUI.set(label);
+          if (typeof s.progress === 'number') UI.progress(s.progress);
+        }
+      },
+      () => {
+        StatusUI.set('Analyse terminée');
+        UI.setLoading(false);
+        this.state.running = false;
+      },
+      () => {
+        StatusUI.set('Analyse échouée');
+        UI.err('Analyse échouée');
+        UI.setLoading(false);
+        this.state.running = false;
+      }
+    );
   }
   async renderResults(results = {}){
     StatusUI.set("Analyse terminée");
@@ -735,11 +695,13 @@ eventBus.subscribe('dfm:start', async (payload) => {
       () => {
         StatusUI.set('Analyse terminée');
         UI.setLoading(false);
+        orchestrator.state.running = false;
       },
       () => {
         StatusUI.set('Analyse échouée');
         UI.err('Analyse échouée');
         UI.setLoading(false);
+        orchestrator.state.running = false;
       }
     );
   } catch (err) {
@@ -848,6 +810,8 @@ function initDFMUI() {
       window.CAD.fileIdStep = e.detail.fileId;
       orchestrator.setFileId(e.detail.fileId);
     });
+
+    document.getElementById('debugFileId')?.addEventListener('click', () => orchestrator.debugFileId());
 
     orchestrator.init();
   });

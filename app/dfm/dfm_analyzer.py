@@ -28,9 +28,11 @@ def run_dfm(
         logger.info("dfm %s dt=%.2fs rss=%.1fMB", step, time.perf_counter() - start_t, mem)
 
     t = time.perf_counter()
-    if not os.path.exists(input.step_path):
-        raise ValueError("STEP file not found")
-    with open(input.step_path, "r", errors="ignore") as fh:
+    # step_path is mandatory for any DFM analysis; do not fall back to XKT
+    step_path = input.get("step_path") if isinstance(input, dict) else getattr(input, "step_path", None)
+    if not step_path or not os.path.isfile(step_path):
+        raise ValueError("step_path_required")
+    with open(step_path, "r", errors="ignore") as fh:
         head = fh.read(64)
         if "ISO-10303" not in head and "STEP" not in head:
             raise ValueError("invalid_step")
@@ -46,10 +48,11 @@ def run_dfm(
         "volume": 0.0,
         "surface_area": 0.0,
     }
-    stl_path = None
+    stl_path = input.get("stl_path") if isinstance(input, dict) else getattr(input, "stl_path", None)
+    generated_stl = False
     try:  # optional CadQuery usage
         import cadquery as cq  # lazy import
-        workplane = cq.importers.importStep(input.step_path)
+        workplane = cq.importers.importStep(step_path)
         shape = workplane.val()
         bbox = shape.BoundingBox()
         metrics = {
@@ -57,9 +60,11 @@ def run_dfm(
             "volume": shape.Volume(),
             "surface_area": shape.Area(),
         }
-        stl_fd, stl_path = tempfile.mkstemp(suffix=".stl")
-        os.close(stl_fd)
-        cq.exporters.export(workplane, stl_path)
+        if not stl_path:
+            stl_fd, stl_path = tempfile.mkstemp(suffix=".stl")
+            os.close(stl_fd)
+            cq.exporters.export(workplane, stl_path)
+            generated_stl = True
     except Exception:
         pass
     if progress_cb:
@@ -67,19 +72,20 @@ def run_dfm(
     _log("metrics", t)
 
     from generate_3d_view import generate_view_data
-    out_dir = os.path.join("static", "dfm", input.file_id)
+    file_id = input.get("file_id") if isinstance(input, dict) else getattr(input, "file_id")
+    out_dir = os.path.join("static", "dfm", file_id)
     t = time.perf_counter()
     camera_states, heatmap_faces = generate_view_data(
-        stl_path, input.file_id, progress_cb, fast_mode=fast_mode
+        stl_path, file_id, progress_cb, fast_mode=fast_mode
     )
     _log("views_heatmap", t)
 
     from generate_thumbnails import generate_thumbnails
     t = time.perf_counter()
-    thumbnails = generate_thumbnails(input.step_path, out_dir)
+    thumbnails = generate_thumbnails(step_path, out_dir)
     _log("thumbnails", t)
 
-    if stl_path and os.path.exists(stl_path):
+    if generated_stl and stl_path and os.path.exists(stl_path):
         os.remove(stl_path)
 
     views = {"camera_states": camera_states, "thumbnails": thumbnails}
