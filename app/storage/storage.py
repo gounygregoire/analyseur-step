@@ -1,15 +1,21 @@
-import os, sqlite3
+import os
+import sqlite3
+import logging
 from contextlib import closing
 
-DB_PATH = os.environ.get("FILES_DB_PATH", os.path.join(os.path.dirname(__file__), "files.sqlite"))
-UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
-OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
+DB_PATH = os.path.abspath(
+    os.environ.get("FILES_DB_PATH", os.path.join(os.path.dirname(__file__), "files.sqlite"))
+)
+UPLOAD_FOLDER = os.path.abspath(os.environ.get("UPLOAD_FOLDER", "/tmp/uploads"))
+OUTPUT_FOLDER = os.path.abspath(os.environ.get("OUTPUT_FOLDER", "/tmp/converted"))
 
 
 class Storage:
     @staticmethod
     def _connect():
-        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+        db_dir = os.path.dirname(DB_PATH)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
         return sqlite3.connect(DB_PATH)
 
     @staticmethod
@@ -30,6 +36,12 @@ class Storage:
             p = os.path.join(UPLOAD_FOLDER, f"{file_id}{ext}")
             if os.path.isfile(p):
                 return p
+        logging.getLogger(__name__).warning(
+            "[Storage] step not found for file_id=%s (db_path=%s, upload_folder=%s)",
+            file_id,
+            DB_PATH,
+            UPLOAD_FOLDER,
+        )
         return None
 
     @staticmethod

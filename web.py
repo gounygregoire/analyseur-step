@@ -702,7 +702,9 @@ def api_upload():
             'dfm_json_url': existing.dfm_json_url,
         })
 
+    file_id = str(uuid.uuid4())
     job = ModelJob(
+        id=file_id,
         sha256=digest,
         original_filename=filename,
         size_bytes=size,
@@ -712,25 +714,47 @@ def api_upload():
     db.session.add(job)
     db.session.commit()
 
-    final_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{job.id}.step")
-    os.rename(tmp_path, final_path)
+    orig_ext = os.path.splitext(filename)[1].lower()
+    ext = orig_ext if orig_ext in ('.stp', '.step') else '.step'
+    abs_step_path = os.path.abspath(
+        os.path.join(app.config['UPLOAD_FOLDER'], f"{file_id}{ext}")
+    )
+    logger.info(
+        "upload pre-rename: file_id=%s tmp_path=%s", file_id, tmp_path
+    )
+    os.rename(tmp_path, abs_step_path)
     if upload_id:
         os.remove(info_path)
 
-    abs_step_path = os.path.abspath(final_path)
+    logger.info(
+        "upload post-rename: file_id=%s abs_step_path=%s", file_id, abs_step_path
+    )
+    logger.info(
+        "upload save_step_record: file_id=%s path=%s", file_id, abs_step_path
+    )
     Storage.save_step_record(
-        file_id=job.id,
+        file_id=file_id,
         filename=filename,
         path=abs_step_path,
         size=os.path.getsize(abs_step_path),
     )
+    logger.info("upload save_step_record OK: file_id=%s", file_id)
 
     generate_preview.delay(job.id)
     generate_final.delay(job.id)
 
-    logger.info(json.dumps({'action': 'upload', 'result': 'queued', 'job_id': job.id}))
+    logger.info(
+        json.dumps({'action': 'upload', 'result': 'queued', 'file_id': file_id})
+    )
 
-    return jsonify({'modelId': job.id, 'status': job.status, 'sha256': job.sha256}), 201
+    response_payload = {
+        'file_id': file_id,
+        'modelId': job.id,
+        'status': job.status,
+        'sha256': job.sha256,
+    }
+    logger.info("upload response: file_id=%s payload=%s", file_id, response_payload)
+    return jsonify(response_payload), 201
 
 
 @app.route('/api/models/<job_id>')
