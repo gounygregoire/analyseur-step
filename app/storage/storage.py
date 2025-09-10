@@ -3,9 +3,16 @@ import sqlite3
 import logging
 from contextlib import closing
 
-DB_PATH = os.path.abspath(
-    os.environ.get("FILES_DB_PATH", os.path.join(os.path.dirname(__file__), "files.sqlite"))
-)
+from . import files as storage_files
+
+logger = logging.getLogger("app.storage.storage")
+
+_db_env = os.environ.get("FILES_DB_PATH")
+if _db_env:
+    DB_PATH = os.path.abspath(_db_env)
+else:
+    DB_PATH = str(storage_files.DB_PATH)
+
 UPLOAD_FOLDER = os.path.abspath(os.environ.get("UPLOAD_FOLDER", "/tmp/uploads"))
 OUTPUT_FOLDER = os.path.abspath(os.environ.get("OUTPUT_FOLDER", "/tmp/converted"))
 
@@ -36,7 +43,7 @@ class Storage:
             p = os.path.join(UPLOAD_FOLDER, f"{file_id}{ext}")
             if os.path.isfile(p):
                 return p
-        logging.getLogger(__name__).warning(
+        logger.warning(
             "[Storage] step not found for file_id=%s (db_path=%s, upload_folder=%s)",
             file_id,
             DB_PATH,

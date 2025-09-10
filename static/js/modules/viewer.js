@@ -54,6 +54,7 @@ export class XeokitModelViewer extends EventTarget {
     this.heatmapActive = false;
     this.colorBuffer = null; // stocke vertex/face colors
     this.lastAABB = null;
+    this.fileId = null;
     window.addEventListener("resize", () => {
       if (this.lastAABB) {
         flyToAABB(this.viewer, this.lastAABB);
@@ -64,17 +65,22 @@ export class XeokitModelViewer extends EventTarget {
   // === Mini-patch : expose l’ID côté front (DOM + global + event)
   _exposeFileId(id) {
     if (!id) return;
-    document.body.dataset.fileid = id;
+    if (!this.fileId) this.fileId = id;
+    else if (this.fileId !== id) {
+      console.warn('[ID] ignore new id', id, 'keep', this.fileId);
+      id = this.fileId;
+    }
+    document.body.dataset.fileid = this.fileId;
     window.CADLYTICS = window.CADLYTICS || {};
-    window.CADLYTICS.current = { jobId: id, modelId: id };
+    window.CADLYTICS.current = { jobId: this.fileId, modelId: this.fileId };
     window.viewerAdapter = window.viewerAdapter || {};
-    window.viewerAdapter.current = { jobId: id, modelId: id };
+    window.viewerAdapter.current = { jobId: this.fileId, modelId: this.fileId };
     const hidden = document.getElementById('fileId');
-    if (hidden && hidden.type === 'hidden') hidden.value = id;
-    window.dispatchEvent(new CustomEvent('dfm:fileReady', { detail: { fileId: id }}));
+    if (hidden && hidden.type === 'hidden') hidden.value = this.fileId;
+    window.dispatchEvent(new CustomEvent('dfm:fileReady', { detail: { fileId: this.fileId } }));
     window.state = window.state || {};
     window.state.fileLoaded = true;
-    console.debug('[VIEWER] fileId exposé:', id);
+    console.debug('[VIEWER] fileId exposé:', this.fileId);
   }
 
   // --- chargement ---------------------------------------------------------

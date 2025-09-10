@@ -14,7 +14,8 @@ UPLOAD_DIR = Path(os.getenv("UPLOAD_FOLDER", DATA_DIR / "uploads"))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # Base de données pour persister les métadonnées
-DB_PATH = Path(os.getenv("FILES_DB", DATA_DIR / "files.sqlite"))
+_db_env = os.environ.get("FILES_DB_PATH") or os.environ.get("FILES_DB")
+DB_PATH = Path(_db_env or (DATA_DIR / "files.sqlite"))
 
 
 def _init_db() -> None:

@@ -1,6 +1,7 @@
 import os
 import hashlib
 import json
+import logging
 from flask import (
     Flask,
     render_template,
@@ -53,6 +54,22 @@ from observability.logging import setup_logging, get_logger
 from api.dfm import dfm_bp, debug_bp
 
 load_dotenv()
+
+log = logging.getLogger("boot")
+UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
+OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
+FILES_DB_PATH = os.environ.get(
+    "FILES_DB_PATH",
+    os.path.join(os.path.dirname(__file__), "app/storage/files.sqlite"),
+)
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+log.info(
+    "[BOOT] UPLOAD_FOLDER=%s OUTPUT_FOLDER=%s FILES_DB_PATH=%s",
+    UPLOAD_FOLDER,
+    OUTPUT_FOLDER,
+    FILES_DB_PATH,
+)
 
 # ========= FLASK APP (corrigé) =========
 # Une seule création d'app, avec static+templates configurés
@@ -186,9 +203,9 @@ def convert_step_to_stl(job_id):
     db.session.commit()
 
     step_path = os.path.abspath(os.path.join(app.config['UPLOAD_FOLDER'], job.step_filename))
-    stl_path = os.path.abspath(os.path.join(app.config['CONVERTED_FOLDER'], job.stl_filename))
+    stl_path = os.path.abspath(os.path.join(app.config['OUTPUT_FOLDER'], job.stl_filename))
     ext = os.path.splitext(step_path)[1].lower()
-    xkt_path = os.path.abspath(os.path.join(app.config['CONVERTED_FOLDER'], job.xkt_filename))
+    xkt_path = os.path.abspath(os.path.join(app.config['OUTPUT_FOLDER'], job.xkt_filename))
 
     viewer_ready = True
     viewer_error = None
@@ -257,8 +274,8 @@ def process_step_file(job_id, demolding_axis='z'):
     db.session.commit()
 
     step_path = os.path.abspath(os.path.join(app.config['UPLOAD_FOLDER'], job.step_filename))
-    stl_path = os.path.abspath(os.path.join(app.config['CONVERTED_FOLDER'], job.stl_filename))
-    xkt_path = os.path.abspath(os.path.join(app.config['CONVERTED_FOLDER'], job.xkt_filename))
+    stl_path = os.path.abspath(os.path.join(app.config['OUTPUT_FOLDER'], job.stl_filename))
+    xkt_path = os.path.abspath(os.path.join(app.config['OUTPUT_FOLDER'], job.xkt_filename))
     ext = os.path.splitext(step_path)[1].lower()
 
     viewer_ready = True
@@ -321,7 +338,7 @@ def cleanup_old_files():
     """Supprime les fichiers trop anciens dans uploads/ et converted/"""
     retention_days = app.config.get('FILE_RETENTION_DAYS', 7)
     cutoff = datetime.utcnow() - timedelta(days=retention_days)
-    for folder in (app.config['UPLOAD_FOLDER'], app.config['CONVERTED_FOLDER']):
+    for folder in (app.config['UPLOAD_FOLDER'], app.config['OUTPUT_FOLDER']):
         for name in os.listdir(folder):
             path = os.path.join(folder, name)
             try:
@@ -334,20 +351,18 @@ def cleanup_old_files():
 
 # Configuration
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
-CONVERTED_FOLDER = os.getenv("CONVERTED_FOLDER", "/tmp/converted")
 # Types de fichiers autorisés pour l'upload
 ALLOWED_EXTENSIONS = {'step', 'stp', 'stl'}
 FILE_RETENTION_DAYS = int(os.getenv('FILE_RETENTION_DAYS', '7'))
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['CONVERTED_FOLDER'] = CONVERTED_FOLDER
+app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
 app.config['FILE_RETENTION_DAYS'] = FILE_RETENTION_DAYS
 
 # Ensure directories exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(CONVERTED_FOLDER, exist_ok=True)
-logger.info("CONVERTED_FOLDER=%s", CONVERTED_FOLDER)
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+logger.info("OUTPUT_FOLDER=%s", OUTPUT_FOLDER)
 
 logger.info("PATH at runtime=%s", os.getenv("PATH"))
 
@@ -459,7 +474,7 @@ def change_language(lang):
 @app.route("/uploads/<path:fname>")
 def serve_xkt(fname):
     """Serve converted files for front-end requests"""
-    return send_from_directory(app.config["CONVERTED_FOLDER"], fname, as_attachment=False)
+    return send_from_directory(app.config["OUTPUT_FOLDER"], fname, as_attachment=False)
 
 
 @app.route('/convert', methods=['POST'])
@@ -488,7 +503,7 @@ def convert_step():
     in_path = os.path.join(temp_dir, in_name)
     f.save(in_path)
 
-    dest_dir = app.config.get("CONVERTED_FOLDER", "/tmp/converted")
+    dest_dir = app.config.get("OUTPUT_FOLDER", "/tmp/converted")
     os.makedirs(dest_dir, exist_ok=True)
     out_name = f"{uuid.uuid4()}.xkt"
     out_path = os.path.join(dest_dir, out_name)
@@ -546,7 +561,7 @@ def convert_step():
         shutil.rmtree(temp_dir, ignore_errors=True)
 
     logger.info("Conversion OK en %.2fs -> %s", time.time() - start, out_path)
-    # La route /uploads/<fname> doit servir CONVERTED_FOLDER
+    # La route /uploads/<fname> doit servir OUTPUT_FOLDER
     xkt_rel_url = f"/uploads/{out_name}"
     return jsonify(success=True, url=xkt_rel_url, xktUrl=xkt_rel_url)
 
@@ -562,22 +577,26 @@ def upload_file_api():
     if not allowed_file(file.filename):
         return jsonify({'error': 'Extension non autorisée'}), 400
 
-    job_id = str(uuid.uuid4())
+    file_id = str(uuid.uuid4())
     original_filename = secure_filename(file.filename)
-    step_filename = f"{job_id}_{original_filename}"
-    stl_filename = f"{job_id}.stl"
-    xkt_filename = f"{job_id}.xkt"
+    ext = os.path.splitext(original_filename)[1].lower()
+    if ext not in ('.step', '.stp'):
+        ext = '.step'
+    abs_step_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{file_id}{ext}")
+    file.save(abs_step_path)
+    step_size = os.path.getsize(abs_step_path)
+    Storage.save_step_record(file_id, original_filename, abs_step_path, step_size)
 
-    step_path = os.path.join(app.config['UPLOAD_FOLDER'], step_filename)
-    file.save(step_path)
+    stl_filename = f"{file_id}.stl"
+    xkt_filename = f"{file_id}.xkt"
 
     job = ConversionJob(
-        id=job_id,
+        id=file_id,
         original_filename=original_filename,
-        step_filename=step_filename,
+        step_filename=os.path.basename(abs_step_path),
         stl_filename=stl_filename,
         xkt_filename=xkt_filename,
-        step_file_size=os.path.getsize(step_path),
+        step_file_size=step_size,
         status='queued'
     )
 
@@ -586,15 +605,15 @@ def upload_file_api():
         db.session.commit()
     except Exception as exc:
         db.session.rollback()
-        logger.exception(f"DB error for job {job_id}: {exc}")
+        logger.exception(f"DB error for job {file_id}: {exc}")
         return jsonify({'error': "Erreur base de données"}), 500
 
     try:
-        process_step_file.delay(job_id)
+        process_step_file.delay(file_id)
     except Exception:
-        process_step_file(job_id)
+        process_step_file(file_id)
 
-    return jsonify({'id': job_id})
+    return jsonify({'file_id': file_id})
 
 
 @app.route('/upload', methods=['POST'])
@@ -692,9 +711,9 @@ def api_upload():
         os.remove(tmp_path)
         if upload_id:
             os.remove(info_path)
-        logger.info(json.dumps({'action': 'upload', 'result': 'cache_hit', 'job_id': existing.id}))
+        logger.info(json.dumps({'action': 'upload', 'result': 'cache_hit', 'file_id': existing.id}))
         return jsonify({
-            'modelId': existing.id,
+            'file_id': existing.id,
             'status': existing.status,
             'sha256': existing.sha256,
             'preview_url': existing.preview_url,
@@ -740,8 +759,8 @@ def api_upload():
     )
     logger.info("upload save_step_record OK: file_id=%s", file_id)
 
-    generate_preview.delay(job.id)
-    generate_final.delay(job.id)
+    generate_preview.delay(file_id)
+    generate_final.delay(file_id)
 
     logger.info(
         json.dumps({'action': 'upload', 'result': 'queued', 'file_id': file_id})
@@ -749,7 +768,6 @@ def api_upload():
 
     response_payload = {
         'file_id': file_id,
-        'modelId': job.id,
         'status': job.status,
         'sha256': job.sha256,
     }
@@ -774,7 +792,7 @@ def api_model_assets(job_id):
         assets['final'] = get_signed_url(job.final_url)
     if job.dfm_json_url:
         assets['dfm_json'] = get_signed_url(job.dfm_json_url)
-    return jsonify({'modelId': job.id, 'assets': assets, 'status': job.status})
+    return jsonify({'file_id': job.id, 'assets': assets, 'status': job.status})
 
 @app.route('/api/upload_job', methods=['POST'])
 @login_required
@@ -804,19 +822,21 @@ def upload_job():
         if tolerance <= 0 or tolerance > 1:
             tolerance = 0.1
         
-        # Generate unique filename
+        # Generate file_id and save STEP under UPLOAD_FOLDER/<file_id>.step|.stp
         file_id = str(uuid.uuid4())
         original_filename = secure_filename(file.filename)
-        step_filename = f"{file_id}_{original_filename}"
+        ext = os.path.splitext(original_filename)[1].lower()
+        if ext not in ('.step', '.stp'):
+            ext = '.step'
+        abs_step_path = os.path.abspath(os.path.join(app.config['UPLOAD_FOLDER'], f"{file_id}{ext}"))
+        file.save(abs_step_path)
+        step_size = os.path.getsize(abs_step_path)
+        Storage.save_step_record(file_id, original_filename, abs_step_path, step_size)
+        logger.info(f"Saved STEP file: {abs_step_path}")
+
+        step_filename = os.path.basename(abs_step_path)
         stl_filename = f"{file_id}.stl"
         xkt_filename = f"{file_id}.xkt"
-        
-        # Save uploaded file
-        step_path = os.path.abspath(os.path.join(app.config['UPLOAD_FOLDER'], step_filename))
-        file.save(step_path)
-        step_size = os.path.getsize(step_path)
-        
-        logger.info(f"Saved STEP file: {step_path}")
         
         # Adaptive tolerance for large files to improve performance
         file_size_mb = step_size / (1024 * 1024)
@@ -869,7 +889,7 @@ def upload_job():
             'conversion_id': file_id
         })
 
-        return jsonify({'success': True, 'job_id': file_id})
+        return jsonify({'success': True, 'file_id': file_id})
         
             
     except Exception as e:
@@ -1450,7 +1470,7 @@ def health_check():
         'database': db_status,
         'cadquery_available': True,
         'upload_folder': os.path.exists(UPLOAD_FOLDER),
-        'converted_folder': os.path.exists(CONVERTED_FOLDER)
+        'output_folder': os.path.exists(OUTPUT_FOLDER)
     })
 
 @app.route('/admin')

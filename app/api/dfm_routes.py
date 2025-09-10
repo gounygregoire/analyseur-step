@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, current_app
 from celery.result import AsyncResult
 from tasks.dfm import dfm_run
 from app.storage.storage import Storage
@@ -51,7 +51,16 @@ def start() -> tuple[dict, int]:
         return jsonify({"error": "unknown_material_profile"}), 400
     step_path = Storage.get_step_path(file_id)
     if not step_path:
-        return jsonify({"error": "step_not_found_for_file_id"}), 400
+        current_app.logger.warning(
+            "DFM start: step_not_found_for_file_id file_id=%s", file_id
+        )
+        return (
+            {
+                "error": "step_not_found_for_file_id",
+                "hint": "Upload must save /tmp/uploads/<file_id>.step|.stp and call Storage.save_step_record",
+            },
+            400,
+        )
     logger.info("/api/dfm/start file_id=%s step_path=%s", file_id, step_path)
     job = dfm_run.delay(
         file_id=file_id,

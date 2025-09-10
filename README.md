@@ -99,7 +99,7 @@ pour reconstruire automatiquement ce fichier à chaque modification.
 
 ### Variable d'environnement
 
-- `CONVERTED_FOLDER` : chemin de sortie des fichiers XKT.
+- `OUTPUT_FOLDER` : chemin de sortie des fichiers XKT.
 
 ### Test de l'endpoint `/convert`
 
