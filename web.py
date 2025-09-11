@@ -54,6 +54,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from storage.s3 import get_signed_url
 from observability.logging import setup_logging, get_logger
 from api.dfm import dfm_bp, debug_bp
+from api.contract import api_contract_bp
 
 load_dotenv()
 
@@ -92,6 +93,7 @@ app.config["JSON_SORT_KEYS"] = False
 # Enregistre les blueprints de l’API
 app.register_blueprint(dfm_bp)
 app.register_blueprint(debug_bp)
+app.register_blueprint(api_contract_bp)
 
 # Lie Celery au contexte Flask (pas d’alias inutile)
 init_celery(app)

@@ -465,13 +465,13 @@ class DFMOrchestrator {
   async startAnalysis() {
     const payload = {
       file_id: this.fileId,
-      material_profile_id: this.materialProfile?.id,
       axis: this.selectedAxis || { x: 0, y: 0, z: 1 },
-      invert: !!this.selectedInvert
+      material: this.materialProfile?.id,
+      options: {},
     };
     console.debug('[DFM] start payload', payload);
 
-    if (!payload.file_id || !payload.material_profile_id || !payload.axis) {
+    if (!payload.file_id || !payload.material || !payload.axis) {
       UI.info?.('Paramètre manquant pour l’analyse.');
       return;
     }
@@ -479,25 +479,25 @@ class DFMOrchestrator {
     UI.setLoading?.(true);
     this.state.running = true;
     try {
-      const res = await fetch('/api/dfm/start', {
+      const res = await fetch('/api/simple/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      let data = {};
-      try { data = await res.json(); } catch (e) {}
-      if (res.status !== 202) {
-        console.warn('DFM start rejected', res.status, data);
-        this.setStatus?.('start_failed', data?.error || 'Bad Request');
-        UI.setLoading?.(false);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = data.error || 'Analyse échouée';
+        this.handleError?.(msg);
         return;
       }
-      this.jobId = data.job_id;
-      this.pollStatus(this.jobId);
+      console.info('[dfm] report=', data.report_id);
+      await this.renderResults(data);
     } catch (err) {
       console.error('DFM start network error', err);
-      this.setStatus?.('start_failed', 'Network error');
+      this.handleError?.('Network error');
+    } finally {
       UI.setLoading?.(false);
+      this.state.running = false;
     }
   }
 
