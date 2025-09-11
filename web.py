@@ -20,7 +20,6 @@ from flask import (
 from flask_cors import CORS
 from flask_migrate import Migrate
 from werkzeug.utils import secure_filename, safe_join
-from werkzeug.exceptions import RequestEntityTooLarge
 import cadquery as cq
 import trimesh
 import uuid
@@ -52,32 +51,20 @@ from dotenv import load_dotenv
 from kombu.exceptions import OperationalError as KombuOperationalError
 from redis.exceptions import ConnectionError as RedisConnectionError
 from storage.s3 import get_signed_url
-from observability.logging import setup_logging, get_logger
 from api.dfm import dfm_bp, debug_bp
 from api.contract import api_contract_bp
+from errors import register_error_handlers
 
 load_dotenv()
 
-# >>> CADLYTICS PATCH: BOOT LOG (BEGIN)
-import os, logging
-log = logging.getLogger("boot")
-os.makedirs(os.environ.get("UPLOAD_FOLDER", "/tmp/uploads"), exist_ok=True)
-os.makedirs(os.environ.get("OUTPUT_FOLDER", "/tmp/converted"), exist_ok=True)
-log.info(
-    "[BOOT] UPLOAD_FOLDER=%s OUTPUT_FOLDER=%s FILES_DB_PATH=%s cwd=%s",
-    os.environ.get("UPLOAD_FOLDER"),
-    os.environ.get("OUTPUT_FOLDER"),
-    os.environ.get("FILES_DB_PATH"),
-    os.getcwd(),
-)
-# >>> CADLYTICS PATCH: BOOT LOG (END)
+import boot
 
 os.environ.setdefault(
     "FILES_DB_PATH",
     os.path.join(os.path.dirname(__file__), "app/storage/files.sqlite"),
 )
-UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
-OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
+UPLOAD_FOLDER = boot.UPLOAD_FOLDER
+OUTPUT_FOLDER = boot.OUTPUT_FOLDER
 FILES_DB_PATH = os.environ.get("FILES_DB_PATH")
 
 # ========= FLASK APP (corrigé) =========
@@ -89,6 +76,9 @@ app = Flask(
     template_folder="templates",
 )
 app.config["JSON_SORT_KEYS"] = False
+
+# Gestion des erreurs JSON
+register_error_handlers(app)
 
 # Enregistre les blueprints de l’API
 app.register_blueprint(dfm_bp)
@@ -103,7 +93,6 @@ init_celery(app)
 # Si indisponible / erreur de signature, on bascule sur le logging standard.
 
 try:
-    from observability.logging import setup_logging, get_logger
     # setup_logging attend l'app en paramètre dans ta lib
     setup_logging(app)                          # <-- IMPORTANT : on passe app
     logger = get_logger(__name__)               # ou get_logger("web")
@@ -168,10 +157,6 @@ def _resolve_xeokit():
         return xeokit
     logger.warning("xeokit-convert not found, falling back to npx")
     return "npx"
-
-@app.errorhandler(RequestEntityTooLarge)
-def handle_file_too_large(e):
-    return jsonify({"success": False, "error": "file_too_large"}), 413
 
 # Execute Celery tasks synchronously when no worker is running
 app.config['CELERY_TASK_ALWAYS_EAGER'] = os.getenv('CELERY_TASK_ALWAYS_EAGER', 'False').lower() == 'true'
@@ -368,13 +353,6 @@ FILE_RETENTION_DAYS = int(os.getenv('FILE_RETENTION_DAYS', '7'))
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
 app.config['FILE_RETENTION_DAYS'] = FILE_RETENTION_DAYS
-
-# Ensure directories exist
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-logger.info("OUTPUT_FOLDER=%s", OUTPUT_FOLDER)
-
-logger.info("PATH at runtime=%s", os.getenv("PATH"))
 
 # Initialize Flask-Login
 login_manager = LoginManager(app)
