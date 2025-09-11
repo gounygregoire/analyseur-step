@@ -5,6 +5,7 @@
 
 import HeatmapLayer from "./modules/HeatmapLayer.js";
 import eventBus from "./modules/events-bus.js";
+import { loadCameraPresetOptional } from "./modules/viewer.js";
 
 // État global minimal pour la DFM
 if (typeof window !== 'undefined') {
@@ -106,24 +107,18 @@ if (typeof window !== 'undefined') {
   window.renderDFMResults = renderDFMResults;
 }
 
-async function pollReport(fileId, maxMs = 120000) {
-  const start = Date.now();
-  while (Date.now() - start < maxMs) {
-    const r = await fetch(`/dfm/report/${fileId}`, { cache: 'no-store' });
-    if (r.status === 200) {
-      const data = await r.json();
-      renderDFMResults({
-        score: data.score ?? 0,
-        recommendations: Array.isArray(data.recommendations) ? data.recommendations : [],
-        metrics: data.metrics ?? {}
-      });
-      StatusUI.set('Analyse terminée');
+async function pollReport(fileId, maxMs = 120000){
+  const t0 = Date.now();
+  while (Date.now() - t0 < maxMs){
+    const r = await fetch(`/api/simple/report/${fileId}`, { cache: 'no-store' });
+    if (r.status === 200){
+      const d = await r.json();
+      renderDFMResults(d);
       return;
     }
     await new Promise(res => setTimeout(res, 2500));
   }
-  StatusUI.set('Analyse trop longue');
-  showError('Analyse trop longue. Réessaie ou contacte le support.');
+  showError('Analyse trop longue, réessaie.');
 }
 
 function showMaterialModal() {
@@ -631,19 +626,15 @@ class DFMOrchestrator {
   async _applyViewData(){
     const fileId = this.fileId;
     if (!fileId) return;
-    try{
-      const camRes = await fetch(`/static/dfm/${fileId}/camera_states.json`);
-      if (camRes.ok){
-        const cams = await camRes.json();
-        const iso = cams.iso;
-        const cam = window.viewerAdapter?.viewer?.camera;
-        if (iso && cam){
-          cam.eye = iso.eye;
-          cam.look = iso.look;
-          cam.up = iso.up;
-        }
+    const cams = await loadCameraPresetOptional(`/static/dfm/${fileId}/camera_states.json`);
+    if (cams?.iso) {
+      const cam = window.viewerAdapter?.viewer?.camera;
+      if (cam) {
+        cam.eye = cams.iso.eye;
+        cam.look = cams.iso.look;
+        cam.up = cams.iso.up;
       }
-    }catch(e){ console.error("camera_states", e); }
+    }
   }
 
   handleError(message){
@@ -875,3 +866,61 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 if (typeof window !== 'undefined') {
   window.onAnalyzeClick = () => orchestrator.handleAnalyzeClick();
 }
+
+// --- Visualiser workflow -------------------------------------------------
+let currentFileId = null;
+window.addEventListener('dfm:fileReady', e => { currentFileId = e.detail.fileId; });
+
+function getTolerance() {
+  const v = parseFloat(document.getElementById('tolerance')?.value);
+  return Number.isFinite(v) ? v : 0.1;
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const btnVisualiser = document.getElementById('btn-visualiser');
+  const btnAnalyser = document.getElementById('btn-analyser');
+  const viewer = window.viewerApp || window.viewer || window.viewerAdapter?.app;
+  if (!btnVisualiser || !viewer) return;
+
+  btnVisualiser.addEventListener('click', async () => {
+    if (btnAnalyser) btnAnalyser.disabled = true;
+    if (!currentFileId) {
+      if (btnAnalyser) btnAnalyser.disabled = false;
+      return toast('Aucun fichier');
+    }
+    console.log('[visualiser] start for', currentFileId);
+    const r = await fetch('/api/simple/convert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_id: currentFileId, tolerance: getTolerance() })
+    });
+    if (!r.ok) {
+      if (btnAnalyser) btnAnalyser.disabled = false;
+      return showError('Conversion impossible');
+    }
+    const { file_id, xkt_url } = await r.json();
+    console.log('[visualiser] xkt_url=', xkt_url);
+    await viewer.loadFromFileId(file_id);
+    console.log('[visualiser] done');
+    if (btnAnalyser) btnAnalyser.disabled = false;
+  });
+
+  if (btnAnalyser) {
+    btnAnalyser.addEventListener('click', async () => {
+      if (!currentFileId) return toast('Aucun fichier');
+      btnAnalyser.disabled = true;
+      console.log('[analyser] start for', currentFileId);
+      const r = await fetch('/api/simple/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file_id: currentFileId, axis: [0,0,1], material: 'ABS', options: {} })
+      });
+      if (!r.ok) {
+        btnAnalyser.disabled = false;
+        return showError('Analyse impossible');
+      }
+      await pollReport(currentFileId);
+      btnAnalyser.disabled = false;
+    });
+  }
+});
