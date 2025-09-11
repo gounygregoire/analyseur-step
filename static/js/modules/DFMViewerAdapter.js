@@ -1,4 +1,4 @@
-import { AnnotationsPlugin } from "@xeokit/xeokit-sdk";
+import { AnnotationsPlugin } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@2/dist/xeokit-sdk.es.js";
 
 // Interface d'affichage entre les résultats DFM et Xeokit
 export class DFMViewerAdapter {
