@@ -33,7 +33,7 @@ def test_dfm_smoke(tmp_path, monkeypatch):
             "min_thickness_mm": 1.2,
             "max_thickness_mm": 3.8,
             "avg_thickness_mm": 2.4,
-            "undercuts_count": 0,
+            "undercuts_count": 2,
         },
     }
 
@@ -43,14 +43,8 @@ def test_dfm_smoke(tmp_path, monkeypatch):
         (out_dir / "report.json").write_text(json.dumps(report_template))
         return types.SimpleNamespace(id="job1")
 
-    tasks_pkg = types.ModuleType("tasks")
-    dfm_mod = types.ModuleType("tasks.dfm")
-    dfm_mod.dfm_run = types.SimpleNamespace(delay=stub_delay)
-    tasks_pkg.dfm = dfm_mod
-    sys.modules["tasks"] = tasks_pkg
-    sys.modules["tasks.dfm"] = dfm_mod
-
     import app.api.dfm_routes as routes
+    monkeypatch.setattr(routes.dfm_run, "delay", stub_delay)
 
     app = Flask(__name__)
     app.register_blueprint(api_contract_bp)
@@ -59,14 +53,13 @@ def test_dfm_smoke(tmp_path, monkeypatch):
 
     # stub converter
     def fake_run(cmd, capture_output, text, timeout):
-        Path(cmd[2]).write_text("xkt")
+        Path(cmd[3]).write_text("xkt")
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("app.api.contract_routes.subprocess.run", fake_run)
-    monkeypatch.setattr(
-        "generate_thumbnails.generate_thumbnails",
-        lambda step_path, out_dir: {"iso": str(Path(out_dir) / "preview.png")},
-    )
+    gen_mod = types.ModuleType("generate_thumbnails")
+    gen_mod.generate_thumbnails = lambda step_path, out_dir: {"iso": str(Path(out_dir) / "preview.png")}
+    sys.modules["generate_thumbnails"] = gen_mod
 
     sample = Path("tests/sample.step")
     with sample.open("rb") as fh:
@@ -75,7 +68,7 @@ def test_dfm_smoke(tmp_path, monkeypatch):
     file_id = up.get_json()["file_id"]
 
     conv = client.post("/api/simple/convert", json={"file_id": file_id})
-    xkt_url = conv.get_json()["xkt_path"]
+    xkt_url = conv.get_json()["xkt_url"]
     print("XKT viewer URL:", xkt_url)
 
     start = client.post(

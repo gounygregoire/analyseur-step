@@ -125,7 +125,14 @@ def convert_step() -> tuple[Any, int]:
             502,
         )
 
+    if not os.path.isfile(xkt_path):
+        current_app.logger.error("xkt missing for %s -> %s", file_id, xkt_path)
+        return (
+            jsonify({"error": "xkt_convert_failed", "message": "xkt missing"}),
+            502,
+        )
     current_app.logger.info("conversion ok for %s in %.1fs", file_id, duration)
+    current_app.logger.info("XKT written -> %s", os.path.abspath(xkt_path))
     try:
         from generate_thumbnails import generate_thumbnails
         thumbs = generate_thumbnails(step_path, OUTPUT_FOLDER)
@@ -142,7 +149,7 @@ def convert_step() -> tuple[Any, int]:
     return (
         jsonify({
             "file_id": file_id,
-            "xkt_path": xkt_path,
+            "xkt_url": f"/static/converted/{file_id}.xkt",
             "preview_png": preview_path,
         }),
         200,

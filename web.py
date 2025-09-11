@@ -587,15 +587,18 @@ def convert_step():
                 return _fail(500, "xkt_too_small_or_missing", f"path={xkt_path}")
 
             current_app.logger.info("[CONVERT] OK xkt=%s size=%s", xkt_path, os.path.getsize(xkt_path))
+            abs_path = os.path.abspath(xkt_path)
+            current_app.logger.info("XKT written -> %s", abs_path)
             shutil.rmtree(temp_dir, ignore_errors=True)
-            return jsonify({"status":"ok", "file_id":file_id, "xkt_url":f"/uploads/{file_id}.xkt"}), 200
+            return jsonify({"file_id": file_id, "xkt_url": f"/static/converted/{file_id}.xkt"}), 200
 
         except Exception as e:
             shutil.rmtree(temp_dir, ignore_errors=True)
             return _fail(500, "convert_exception", repr(e))
         # >>> CADLYTICS PATCH: CONVERT HARDENING (END)
     else:
-        out_name = f"{uuid.uuid4()}.xkt"
+        file_id = uuid.uuid4().hex
+        out_name = f"{file_id}.xkt"
         out_path = os.path.join(dest_dir, out_name)
         start = time.time()
         try:
@@ -632,8 +635,9 @@ def convert_step():
         if not os.path.exists(out_path) or os.path.getsize(out_path) < 1024:
             return jsonify(success=False, error="xkt_too_small_or_missing"), 500
         logger.info("Conversion OK en %.2fs -> %s", time.time() - start, out_path)
-        xkt_rel_url = f"/uploads/{out_name}"
-        resp = {"success": True, "url": xkt_rel_url, "xktUrl": xkt_rel_url}
+        logger.info("XKT written -> %s", os.path.abspath(out_path))
+        xkt_rel_url = f"/static/converted/{file_id}.xkt"
+        resp = {"file_id": file_id, "xkt_url": xkt_rel_url}
         return jsonify(resp)
 @app.route('/upload_file', methods=['POST'])
 def upload_file_api():

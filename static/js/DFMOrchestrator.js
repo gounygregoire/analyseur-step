@@ -77,29 +77,53 @@ async function pollJobStatus(jobId, onUpdate, onDone, onError) {
   step();
 }
 
-function pollReport(fileId, onDone, onError) {
-  const started = Date.now();
-  async function step() {
-    try {
-      const res = await fetch(`/dfm/report/${encodeURIComponent(fileId)}`);
-      if (res.status === 200) {
-        const data = await res.json().catch(() => ({}));
-        onDone?.(data);
-        return;
-      }
-      if (res.status !== 404) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-    } catch (e) {
-      console.error("poll report error", e);
-    }
-    if (Date.now() - started > 120000) {
-      onError?.();
+function renderDFMResults({ score, recommendations, metrics }) {
+  const panel = document.getElementById('dfmAnalysisPanel');
+  if (!panel) return;
+  panel.innerHTML = '';
+
+  const scoreEl = document.createElement('div');
+  scoreEl.textContent = `Score: ${score}`;
+  panel.appendChild(scoreEl);
+
+  if (Array.isArray(recommendations) && recommendations.length) {
+    const ul = document.createElement('ul');
+    recommendations.forEach(r => {
+      const li = document.createElement('li');
+      li.textContent = r.message || r.id || JSON.stringify(r);
+      ul.appendChild(li);
+    });
+    panel.appendChild(ul);
+  }
+
+  if (metrics && Object.keys(metrics).length) {
+    const pre = document.createElement('pre');
+    pre.textContent = JSON.stringify(metrics, null, 2);
+    panel.appendChild(pre);
+  }
+}
+if (typeof window !== 'undefined') {
+  window.renderDFMResults = renderDFMResults;
+}
+
+async function pollReport(fileId, maxMs = 120000) {
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    const r = await fetch(`/dfm/report/${fileId}`, { cache: 'no-store' });
+    if (r.status === 200) {
+      const data = await r.json();
+      renderDFMResults({
+        score: data.score ?? 0,
+        recommendations: Array.isArray(data.recommendations) ? data.recommendations : [],
+        metrics: data.metrics ?? {}
+      });
+      StatusUI.set('Analyse terminée');
       return;
     }
-    setTimeout(step, 2500);
+    await new Promise(res => setTimeout(res, 2500));
   }
-  step();
+  StatusUI.set('Analyse trop longue');
+  showError('Analyse trop longue. Réessaie ou contacte le support.');
 }
 
 function showMaterialModal() {
@@ -699,30 +723,9 @@ eventBus.subscribe('dfm:start', async (payload) => {
 
     await res.json().catch(() => ({}));
     StatusUI.set('Analyse en cours…');
-    pollReport(
-      payload.file_id,
-      (data) => {
-        if (data.status === 'error') {
-          StatusUI.set('Analyse échouée');
-          UI.err(data.message || 'Analyse échouée');
-        } else {
-          StatusUI.set('Analyse terminée');
-          window.renderDFMResults?.({
-            score: data.score,
-            recommendations: data.recommendations || [],
-            metrics: data.metrics || {},
-          });
-        }
-        UI.setLoading(false);
-        orchestrator.state.running = false;
-      },
-      () => {
-        StatusUI.set('Analyse trop longue');
-        UI.err('Analyse trop longue / réessaie');
-        UI.setLoading(false);
-        orchestrator.state.running = false;
-      }
-    );
+    await pollReport(payload.file_id);
+    UI.setLoading(false);
+    orchestrator.state.running = false;
   } catch (err) {
     console.error('dfm:start network error', err);
     UI.err('Erreur réseau');
