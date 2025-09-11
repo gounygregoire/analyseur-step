@@ -77,6 +77,31 @@ async function pollJobStatus(jobId, onUpdate, onDone, onError) {
   step();
 }
 
+function pollReport(fileId, onDone, onError) {
+  const started = Date.now();
+  async function step() {
+    try {
+      const res = await fetch(`/dfm/report/${encodeURIComponent(fileId)}`);
+      if (res.status === 200) {
+        const data = await res.json().catch(() => ({}));
+        onDone?.(data);
+        return;
+      }
+      if (res.status !== 404) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+    } catch (e) {
+      console.error("poll report error", e);
+    }
+    if (Date.now() - started > 120000) {
+      onError?.();
+      return;
+    }
+    setTimeout(step, 2500);
+  }
+  step();
+}
+
 function showMaterialModal() {
   if (!window.bootstrap) {
     console.error("Bootstrap non chargé");
@@ -423,7 +448,7 @@ class DFMOrchestrator {
       return;
     }
     if (this.state.axisConfirmed){
-      this.startAnalysis();
+      this.startDFM();
     }
   }
 
@@ -446,17 +471,16 @@ class DFMOrchestrator {
       return;
     }
 
-    const axisVec = this.demouldAxis
-      ? [this.demouldAxis.x, this.demouldAxis.y, this.demouldAxis.z]
-      : null;
+    const axis = this.axisSelection?.axis || 'Z';
     const payload = {
       file_id: fileId,
-      material_profile_id: profile.id || profile.material_profile_id || profile,
-      axis: axisVec,
+      material: profile.id || profile.material_profile_id || profile,
+      axis,
       invert: this.axisSelection?.invert ?? false,
     };
 
     UI.setLoading(true);
+    this.state.running = true;
     dbg('DFM start: ready to send payload', payload);
     eventBus.publish('dfm:start', payload);
   }
@@ -653,14 +677,14 @@ if (typeof window !== 'undefined') {
 
 eventBus.subscribe('dfm:start', async (payload) => {
   try {
-    const res = await fetch('/api/dfm/start', {
+    const res = await fetch('/dfm/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
 
     if (res.status === 404) {
-      UI.err("Endpoint /api/dfm/start introuvable (vérifier blueprint/url_prefix)");
+      UI.err("Endpoint /dfm/start introuvable");
       console.error('dfm:start 404');
       UI.setLoading(false);
       return;
@@ -673,34 +697,28 @@ eventBus.subscribe('dfm:start', async (payload) => {
       return;
     }
 
-    const data = await res.json().catch(() => ({}));
-    const jobId = data.job_id;
-    dbg('dfm:start job', jobId, data);
-    if (!jobId) {
-      UI.err('Réponse invalide (job_id manquant)');
-      UI.setLoading(false);
-      return;
-    }
-
-    pollJobStatus(
-      jobId,
-      (s) => {
-        if (s.status === 'queued') {
-          StatusUI.set('En file d’attente…');
-        } else if (s.status === 'running') {
-          const label = s.step ? `Analyse en cours… (${s.step})` : 'Analyse en cours…';
-          StatusUI.set(label);
-          if (typeof s.progress === 'number') UI.progress(s.progress);
+    await res.json().catch(() => ({}));
+    StatusUI.set('Analyse en cours…');
+    pollReport(
+      payload.file_id,
+      (data) => {
+        if (data.status === 'error') {
+          StatusUI.set('Analyse échouée');
+          UI.err(data.message || 'Analyse échouée');
+        } else {
+          StatusUI.set('Analyse terminée');
+          window.renderDFMResults?.({
+            score: data.score,
+            recommendations: data.recommendations || [],
+            metrics: data.metrics || {},
+          });
         }
-      },
-      () => {
-        StatusUI.set('Analyse terminée');
         UI.setLoading(false);
         orchestrator.state.running = false;
       },
       () => {
-        StatusUI.set('Analyse échouée');
-        UI.err('Analyse échouée');
+        StatusUI.set('Analyse trop longue');
+        UI.err('Analyse trop longue / réessaie');
         UI.setLoading(false);
         orchestrator.state.running = false;
       }

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from flask import Blueprint, jsonify, request
+import os
+import json
 from celery.result import AsyncResult
 from tasks.dfm import dfm_run
 from app.material_profiles import get_profile
@@ -14,6 +16,9 @@ logger = logging.getLogger(__name__)
 dfm_bp = Blueprint("dfm", __name__, url_prefix="/api/dfm")
 
 debug_bp = Blueprint("debug", __name__, url_prefix="/api")
+
+# Public endpoints without /api prefix
+dfm_public_bp = Blueprint("dfm_public", __name__, url_prefix="/dfm")
 
 # Stockage en mémoire des statuts des jobs (fallback)
 _jobs: dict[str, str] = {}
@@ -69,6 +74,34 @@ def start() -> tuple[dict, int]:
     return jsonify({"job_id": job.id, "status": "queued"}), 202
 
 
+@dfm_public_bp.post("/start")
+def public_start() -> tuple[dict, int]:
+    """Endpoint legacy: lance une analyse DFM."""
+    data = request.get_json(silent=True) or {}
+    file_id = data.get("file_id")
+    material = data.get("material") or data.get("material_profile_id")
+    axis = data.get("axis")
+    invert = bool(data.get("invert")) if "invert" in data else False
+    tolerance = data.get("tolerance")
+    if not file_id or not material or not axis:
+        return jsonify({"error": "file_id, material et axis requis"}), 400
+    if not get_profile(material):
+        return jsonify({"error": "unknown_material"}), 400
+    from app.storage.storage import Storage
+
+    step_path = Storage.get_step_path(file_id)
+    if not step_path or not os.path.isfile(step_path):
+        return jsonify({"error": "step_not_found"}), 404
+    job = dfm_run.delay(
+        file_id=file_id,
+        material_profile_id=material,
+        axis=axis,
+        invert=invert,
+        tolerance=tolerance,
+    )
+    return jsonify({"job_id": job.id, "status": "queued"}), 202
+
+
 @dfm_bp.get("/status")
 def status() -> tuple[dict, int]:
     """Renvoie l'état du job DFM."""
@@ -120,6 +153,17 @@ def result() -> tuple[dict, int]:
         jsonify({"job_id": job_id, "status": state, "summary": {}, "issues": []}),
         200,
     )
+
+
+@dfm_public_bp.get("/report/<file_id>")
+def public_report(file_id: str):
+    """Retourne le report.json pour un file_id donné."""
+    path = os.path.join("static", "dfm", file_id, "report.json")
+    if not os.path.isfile(path):
+        return jsonify({"error": "not_found"}), 404
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    return jsonify(data), 200
 
 
 @debug_bp.get("/debug/file/<file_id>")

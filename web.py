@@ -51,7 +51,7 @@ from dotenv import load_dotenv
 from kombu.exceptions import OperationalError as KombuOperationalError
 from redis.exceptions import ConnectionError as RedisConnectionError
 from storage.s3 import get_signed_url
-from api.dfm import dfm_bp, debug_bp
+from api.dfm import dfm_bp, debug_bp, dfm_public_bp
 from api.contract import api_contract_bp
 from errors import register_error_handlers
 
@@ -83,6 +83,7 @@ register_error_handlers(app)
 # Enregistre les blueprints de l’API
 app.register_blueprint(dfm_bp)
 app.register_blueprint(debug_bp)
+app.register_blueprint(dfm_public_bp)
 app.register_blueprint(api_contract_bp)
 
 # Lie Celery au contexte Flask (pas d’alias inutile)
