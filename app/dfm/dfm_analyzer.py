@@ -91,15 +91,10 @@ def run_dfm(
     views = {"camera_states": camera_states, "thumbnails": thumbnails}
     heatmaps = {"faces": heatmap_faces} if heatmap_faces else {}
 
-    import importlib.util, pathlib
-    interfaces_path = pathlib.Path(__file__).resolve().parent / "app" / "dfm" / "interfaces.py"
-    spec = importlib.util.spec_from_file_location("dfm_interfaces", interfaces_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    DFMResult = module.DFMResult
+    from types import SimpleNamespace
 
     flags = {"partial": True} if fast_mode else {}
-    return DFMResult(
+    return SimpleNamespace(
         metrics=metrics,
         issues=[],
         heatmaps=heatmaps,

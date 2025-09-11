@@ -17,6 +17,20 @@ if (typeof window !== 'undefined') {
   };
 }
 
+const axisPanel = document.querySelector("#dfmAxisPanel");
+const btnAnalyser = document.querySelector("#analyzeBtn");
+if (axisPanel) axisPanel.style.display = "none";
+if (btnAnalyser) btnAnalyser.disabled = true;
+
+window.onCriteriaConfirmed = function(){
+  if (axisPanel) axisPanel.style.display = "";
+  if (btnAnalyser) btnAnalyser.disabled = true;
+};
+
+window.onAxisValidated = function(){
+  if (btnAnalyser) btnAnalyser.disabled = false;
+};
+
 const DEBUG_DFM = (typeof window !== 'undefined' && window.DEBUG_DFM === true);
 const dbg = (...a) => { if (DEBUG_DFM) console.debug("[DFM]", ...a); };
 
@@ -107,18 +121,22 @@ if (typeof window !== 'undefined') {
   window.renderDFMResults = renderDFMResults;
 }
 
-async function pollReport(fileId, maxMs = 120000){
+async function pollDFMReport(fileId, maxMs=120000){
   const t0 = Date.now();
-  while (Date.now() - t0 < maxMs){
-    const r = await fetch(`/api/simple/report/${fileId}`, { cache: 'no-store' });
-    if (r.status === 200){
+  while (Date.now() - t0 < maxMs) {
+    const r = await fetch(`/api/simple/report/${fileId}`, { cache: "no-store" });
+    if (r.status === 200) {
       const d = await r.json();
-      renderDFMResults(d);
+      renderDFMResults?.({
+        score: d.score ?? 0,
+        recommendations: Array.isArray(d.recommendations) ? d.recommendations : [],
+        metrics: d.metrics ?? {}
+      });
       return;
     }
     await new Promise(res => setTimeout(res, 2500));
   }
-  showError('Analyse trop longue, réessaie.');
+  showError?.("Analyse trop longue, réessaie.");
 }
 
 function showMaterialModal() {
@@ -534,6 +552,7 @@ class DFMOrchestrator {
         return;
       }
       console.info('[dfm] report=', data.report_id);
+      pollDFMReport(this.fileId);
       await this.renderResults(data);
       window.refreshHistory?.();
     } catch (err) {
@@ -626,13 +645,13 @@ class DFMOrchestrator {
   async _applyViewData(){
     const fileId = this.fileId;
     if (!fileId) return;
-    const cams = await loadCameraPresetOptional(`/static/dfm/${fileId}/camera_states.json`);
-    if (cams?.iso) {
+    const preset = await loadCameraPresetOptional(`/static/dfm/${fileId}/camera_states.json`);
+    if (preset?.iso) {
       const cam = window.viewerAdapter?.viewer?.camera;
       if (cam) {
-        cam.eye = cams.iso.eye;
-        cam.look = cams.iso.look;
-        cam.up = cams.iso.up;
+        cam.eye = preset.iso.eye;
+        cam.look = preset.iso.look;
+        cam.up = preset.iso.up;
       }
     }
   }
@@ -714,7 +733,7 @@ eventBus.subscribe('dfm:start', async (payload) => {
 
     await res.json().catch(() => ({}));
     StatusUI.set('Analyse en cours…');
-    await pollReport(payload.file_id);
+    await pollDFMReport(payload.file_id);
     UI.setLoading(false);
     orchestrator.state.running = false;
   } catch (err) {
@@ -869,7 +888,10 @@ if (typeof window !== 'undefined') {
 
 // --- Visualiser workflow -------------------------------------------------
 let currentFileId = null;
-window.addEventListener('dfm:fileReady', e => { currentFileId = e.detail.fileId; });
+window.addEventListener('dfm:fileReady', e => {
+  currentFileId = e.detail.fileId;
+  window.currentFileId = currentFileId;
+});
 
 function getTolerance() {
   const v = parseFloat(document.getElementById('tolerance')?.value);
@@ -877,50 +899,22 @@ function getTolerance() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  const btnVisualiser = document.getElementById('btn-visualiser');
-  const btnAnalyser = document.getElementById('btn-analyser');
+  const btnVisualiser = document.querySelector('#btn-visualiser');
   const viewer = window.viewerApp || window.viewer || window.viewerAdapter?.app;
   if (!btnVisualiser || !viewer) return;
 
   btnVisualiser.addEventListener('click', async () => {
-    if (btnAnalyser) btnAnalyser.disabled = true;
-    if (!currentFileId) {
-      if (btnAnalyser) btnAnalyser.disabled = false;
-      return toast('Aucun fichier');
-    }
-    console.log('[visualiser] start for', currentFileId);
+    if (!currentFileId) { toast?.('Aucun fichier'); return; }
+    console.log('[visualiser] start', currentFileId);
     const r = await fetch('/api/simple/convert', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file_id: currentFileId, tolerance: getTolerance() })
+      body: JSON.stringify({ file_id: currentFileId, tolerance: getTolerance?.() })
     });
-    if (!r.ok) {
-      if (btnAnalyser) btnAnalyser.disabled = false;
-      return showError('Conversion impossible');
-    }
+    if (!r.ok) { showError?.('Conversion impossible'); return; }
     const { file_id, xkt_url } = await r.json();
-    console.log('[visualiser] xkt_url=', xkt_url);
+    console.log('[visualiser] xkt_url', xkt_url);
     await viewer.loadFromFileId(file_id);
     console.log('[visualiser] done');
-    if (btnAnalyser) btnAnalyser.disabled = false;
   });
-
-  if (btnAnalyser) {
-    btnAnalyser.addEventListener('click', async () => {
-      if (!currentFileId) return toast('Aucun fichier');
-      btnAnalyser.disabled = true;
-      console.log('[analyser] start for', currentFileId);
-      const r = await fetch('/api/simple/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file_id: currentFileId, axis: [0,0,1], material: 'ABS', options: {} })
-      });
-      if (!r.ok) {
-        btnAnalyser.disabled = false;
-        return showError('Analyse impossible');
-      }
-      await pollReport(currentFileId);
-      btnAnalyser.disabled = false;
-    });
-  }
 });

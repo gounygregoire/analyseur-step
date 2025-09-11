@@ -5,7 +5,7 @@ import {
   SectionPlanesPlugin,
   DistanceMeasurementsPlugin,
   AnnotationsPlugin
-} from "@xeokit/xeokit-sdk";
+} from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@2/dist/xeokit-sdk.es.js";
 
 let cameraPresetOptionalLogged = false;
 export async function loadCameraPresetOptional(url) {
@@ -26,6 +26,20 @@ export async function loadCameraPresetOptional(url) {
 export function xktUrlFrom(fileId) {
   return `/static/converted/${fileId}.xkt`;
 }
+
+// Méthode publique appelée par l’orchestrateur
+export async function loadFromFileId(fileId) {
+  const url = xktUrlFrom(fileId);
+  console.log("[viewer] loadFromFileId", { fileId, url });
+  console.time("[viewer] xkt load");
+  const model = await xktLoader.load({ src: url });
+  console.timeEnd("[viewer] xkt load");
+  const aabb = (model && model.aabb) || viewer.scene.aabb;
+  if (aabb) viewer.cameraControl.fit(aabb);
+  console.log("[viewer] fit ok", aabb);
+}
+
+try { viewer.canvas.canvas.style.background = "#222"; } catch (e) {}
 
 export function flyToAABB(viewer, aabb, duration = 0.8, padding = 1.15) {
   if (!viewer || !aabb) return;
@@ -123,7 +137,7 @@ export class XeokitModelViewer extends EventTarget {
     console.timeEnd('[viewer] load');
     this.model = model;
     this.lastAABB = [...model.aabb];
-    const preset = await loadCameraPresetOptional(url.replace(/\.xkt$/, '_camera_status.json'));
+    const preset = await loadCameraPresetOptional(`/static/dfm/${fileId}/camera_states.json`);
     const fit = () => {
       if (preset) {
         this.viewer.camera.setState(preset);
@@ -154,7 +168,7 @@ export class XeokitModelViewer extends EventTarget {
       document.getElementById('isolateBtn')?.remove();
     }
     this.lastAABB = [...this.model.aabb];
-    const preset = await loadCameraPresetOptional(url.replace(/\.xkt$/, '_camera_status.json'));
+    const preset = await loadCameraPresetOptional(url.replace(/\.xkt$/, '_camera_states.json'));
     if (this.currentQuality === null) {
       const fit = () => {
         const aabb = this.model.aabb;
