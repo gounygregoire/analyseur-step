@@ -399,47 +399,68 @@ function exposeFileId(incomingId) {
   window.state.fileLoaded = true;
 
   window.dispatchEvent(new CustomEvent('dfm:fileReady', { detail: { fileId } }));
-  console.info('[UPLOAD] fileId exposé :', fileId);
+  console.info('[upload] file_id=', fileId);
 }
 
-/** Essaie d’extraire l’UUID depuis une URL /uploads/<uuid>.(step|stp|xkt|stl) */
-function deriveIdFromUrl(u) {
-  const m = String(u||"").match(/\/uploads\/([a-f0-9-]+)\.(?:step|stp|xkt|stl)$/i);
-  return m ? m[1] : null;
+/** Appelle /upload pour stocker le STEP et mémoriser le file_id. */
+async function uploadStepFile(file){
+  if (!file) return;
+  try{
+    showLoading(true);
+    fileInput.disabled = true;
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch('/api/simple/upload', { method:'POST', body: fd });
+    const data = await res.json().catch(()=>({}));
+    if (!res.ok){
+      const msg = data.error || `upload failed (${res.status})`;
+      window.showToast ? showToast(msg,{type:'error'}) : alert(msg);
+      setHasFileUI(false);
+      return;
+    }
+    exposeFileId.call(state, data.file_id);
+    lastXktUrl = null;
+  }catch(e){
+    console.error('[upload] error', e);
+    window.showToast ? showToast('Upload échoué',{type:'error'}) : alert('Upload échoué');
+    setHasFileUI(false);
+  }finally{
+    fileInput.disabled = false;
+    showLoading(false);
+    enableVisualizeBtn(!!state.fileId);
+  }
 }
 
-/** Appelle /convert, récupère xktUrl et expose fileId même si le back ne le renvoie pas */
-async function convertAndGetXKT(files) {
-  const fd = new FormData();
-  [...files].forEach(f => fd.append('file', f));
-
-  const res = await fetch('/convert', { method: 'POST', body: fd });
-  if (!res.ok) throw new Error(`Convert fail HTTP ${res.status}`);
-
-  const data = await res.json();
-  // Formats attendus côté back :
-  // { success:true, url:"/uploads/<id>.step", xkt_url:"/uploads/<id>.xkt", file_id?: "<id>" }
-
-  const xktUrl = data?.xkt_url;
-  if (!xktUrl) throw new Error('No xkt_url returned');
-
-  // 1) On tente d’obtenir un fileId
-  let fileId = data.file_id
-            || deriveIdFromUrl(data.url)
-            || deriveIdFromUrl(data.xkt_url);
-  const existing = window.CADLYTICS?.current?.fileId;
-  if (existing && fileId && existing !== fileId) {
-    console.warn(`[convert] file_id mismatch: keeping ${existing}, ignoring ${fileId}`);
-    fileId = existing;
+/** Lance la conversion en XKT pour le file_id courant. */
+async function convertCurrent(){
+  const fileId = state.fileId;
+  if (!fileId){
+    window.showToast ? showToast('Aucun fichier',{type:'error'}) : alert('Aucun fichier');
+    return;
   }
-  if (!existing && fileId) {
-    exposeFileId.call(state, fileId);
+  try{
+    showLoading(true);
+    enableVisualizeBtn(false);
+    const res = await fetch('/api/simple/convert', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ file_id: fileId, tolerance: 0.1 })
+    });
+    const data = await res.json().catch(()=>({}));
+    if (!res.ok){
+      const msg = data.error || `convert failed (${res.status})`;
+      window.showToast ? showToast(msg,{type:'error'}) : alert(msg);
+      return;
+    }
+    console.info('[convert] xkt=', data.xkt_path);
+    await loadXKTFromConvertResponse.call(state, { file_id: fileId, xkt_url: data.xkt_path });
+  }catch(e){
+    console.error('[convert] error', e);
+    window.showToast ? showToast('Conversion échouée',{type:'error'}) : alert('Conversion échouée');
+  }finally{
+    showLoading(false);
+    enableVisualizeBtn(true);
   }
-  if (!fileId) {
-    console.warn("[convert] pas de file_id ni dérivable", data);
-  }
-
-  return data;
 }
 
 // >>> CADLYTICS PATCH: VIEW LOAD SAFE (BEGIN)
@@ -466,36 +487,13 @@ async function loadXKTFromConvertResponse(response) {
 }
 // >>> CADLYTICS PATCH: VIEW LOAD SAFE (END)
 
-async function visualizeFromFiles(files){
-  if (!files || !files.length) return;
-  state.fileLoaded = false;
-  try {
-    showLoading(true);
-    setHasFileUI(true);
-    enableVisualizeBtn(false);
-
-    const response = await convertAndGetXKT(files);
-
-    // >>> CADLYTICS PATCH: VIEW HEAD PRECHECK (BEGIN)
-    await loadXKTFromConvertResponse.call(state, response);
-    // >>> CADLYTICS PATCH: VIEW HEAD PRECHECK (END)
-    enableVisualizeBtn(true);
-  } catch (err) {
-    console.error('Visualization error:', err);
-    enableVisualizeBtn(false);
-    setHasFileUI(false);
-    alert('Échec de la visualisation. Merci de réessayer.');
-  } finally {
-    showLoading(false);
-  }
-}
-
 // ---- Écouteurs fichier ----
 if (fileInput) {
   fileInput.addEventListener('change', () => {
-    if (fileInput.files?.length) {
+    const f = fileInput.files?.[0];
+    if (f) {
       setHasFileUI(true);
-      visualizeFromFiles(fileInput.files);
+      uploadStepFile(f);
     } else {
       setHasFileUI(false);
     }
@@ -519,7 +517,7 @@ if (dropzone) {
     const files = e.dataTransfer?.files;
     if (files && files.length) {
       setHasFileUI(true);
-      visualizeFromFiles(files);
+      uploadStepFile(files[0]);
     }
   }, { passive:false });
 }
@@ -530,17 +528,7 @@ if (visualizeBtn) {
   visualizeBtn.addEventListener('click', async (e) => {
     e.preventDefault();
     e.stopPropagation();
-    if (lastXktUrl) {
-      if (typeof initViewer === 'function') {
-        await initViewer(lastXktUrl);
-      }
-      return;
-    }
-    if (fileInput?.files?.length) {
-      await visualizeFromFiles(fileInput.files);
-    } else {
-      alert('Aucun fichier sélectionné.');
-    }
+    await convertCurrent();
   });
 }
 
