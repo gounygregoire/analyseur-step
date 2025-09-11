@@ -439,7 +439,7 @@ async function convertAndGetXKT(files) {
     console.warn("[convert] pas de file_id ni dérivable", data);
   }
 
-  return xktUrl;
+  return data;
 }
 
 async function visualizeFromFiles(files){
@@ -450,14 +450,48 @@ async function visualizeFromFiles(files){
     setHasFileUI(true);
     enableVisualizeBtn(false);
 
-    const xktUrl = await convertAndGetXKT(files);
-    lastXktUrl = xktUrl;
+    const response = await convertAndGetXKT(files);
+    const payload = response;
 
-    if (typeof initViewer === 'function') {
-      await initViewer(xktUrl);
-    } else {
-      console.warn('initViewer(modelUrl) is not available.');
-    }
+    // >>> CADLYTICS PATCH: VIEW HEAD PRECHECK (BEGIN)
+    (async () => {
+      try {
+        const incomingId =
+          (response && (response.file_id || response.id)) ||
+          (payload && payload.file_id) ||
+          state.fileId ||
+          document.body?.dataset?.fileid || '';
+
+        const id = String(incomingId || '').trim();
+        if (!state.fileId) state.fileId = id;
+        else if (id && state.fileId !== id) console.warn('[ID] ignore new id', id, 'keep', state.fileId);
+
+        const fileId = state.fileId || id;
+        const xktUrl = `/uploads/${fileId}.xkt`;
+        lastXktUrl = xktUrl;
+        console.debug('[VIEW] will load XKT', { fileId, xktUrl });
+
+        const head = await fetch(xktUrl, { method: 'HEAD' });
+        if (!head.ok) throw new Error(`XKT not available: ${head.status}`);
+
+        // Appel au loader existant
+        if (typeof initViewer === 'function') {
+          await initViewer(xktUrl);
+        } else if (typeof viewer?.loadXKT === 'function') {
+          await viewer.loadXKT(xktUrl);
+        } else if (typeof window.loadXKT === 'function') {
+          await window.loadXKT(xktUrl);
+        } else {
+          console.warn('[VIEW] No XKT loader function found');
+        }
+
+        console.info('[VIEW] XKT loaded', xktUrl);
+      } catch (e) {
+        console.error('[VIEW] Visualization error', e);
+        if (window.UI?.error) UI.error("Échec de la visualisation. Merci de réessayer.", e.message || String(e));
+      }
+    })();
+    // >>> CADLYTICS PATCH: VIEW HEAD PRECHECK (END)
     enableVisualizeBtn(true);
   } catch (err) {
     console.error('Visualization error:', err);

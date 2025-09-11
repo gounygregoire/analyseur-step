@@ -57,19 +57,23 @@ from api.dfm import dfm_bp, debug_bp
 
 load_dotenv()
 
+# >>> CADLYTICS PATCH: BOOT LOG (BEGIN)
+import os, logging
 log = logging.getLogger("boot")
 os.makedirs(os.environ.get("UPLOAD_FOLDER", "/tmp/uploads"), exist_ok=True)
 os.makedirs(os.environ.get("OUTPUT_FOLDER", "/tmp/converted"), exist_ok=True)
-os.environ.setdefault(
-    "FILES_DB_PATH",
-    os.path.join(os.path.dirname(__file__), "app/storage/files.sqlite"),
-)
 log.info(
     "[BOOT] UPLOAD_FOLDER=%s OUTPUT_FOLDER=%s FILES_DB_PATH=%s cwd=%s",
     os.environ.get("UPLOAD_FOLDER"),
     os.environ.get("OUTPUT_FOLDER"),
     os.environ.get("FILES_DB_PATH"),
     os.getcwd(),
+)
+# >>> CADLYTICS PATCH: BOOT LOG (END)
+
+os.environ.setdefault(
+    "FILES_DB_PATH",
+    os.path.join(os.path.dirname(__file__), "app/storage/files.sqlite"),
 )
 UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
 OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
@@ -474,11 +478,38 @@ def change_language(lang):
     # Rediriger vers la page précédente ou l'accueil
     return redirect(request.referrer or url_for('landing'))
 
+# >>> CADLYTICS PATCH: UPLOADS ROUTE (BEGIN)
+import os
+from flask import send_from_directory, current_app
 
-@app.route("/uploads/<path:fname>")
-def serve_xkt(fname):
-    """Serve converted files for front-end requests"""
-    return send_from_directory(app.config["OUTPUT_FOLDER"], fname, as_attachment=False)
+OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
+
+@app.route("/uploads/<path:filename>")
+def serve_uploads(filename):
+    full = os.path.join(OUTPUT_FOLDER, filename)
+    current_app.logger.info("[SERVE] /uploads/%s -> %s", filename, full)
+    return send_from_directory(
+        OUTPUT_FOLDER,
+        filename,
+        mimetype="application/octet-stream",
+        as_attachment=False,
+        max_age=0,
+    )
+# >>> CADLYTICS PATCH: UPLOADS ROUTE (END)
+
+# >>> CADLYTICS PATCH: DEBUG XKT (BEGIN)
+@app.get("/api/debug/xkt/<file_id>")
+def debug_xkt(file_id):
+    from app.storage.storage import Storage, os
+    p = Storage.get_xkt_path(file_id)
+    return {
+        "file_id": file_id,
+        "xkt_path": p,
+        "exists_xkt": bool(p and os.path.isfile(p)),
+        "size": (os.path.getsize(p) if p and os.path.isfile(p) else 0),
+    }
+# >>> CADLYTICS PATCH: DEBUG XKT (END)
+
 
 
 @app.route('/convert', methods=['POST'])
@@ -510,32 +541,37 @@ def convert_step():
     os.makedirs(dest_dir, exist_ok=True)
     if ext_lower in ('.step', '.stp'):
         file_id = uuid.uuid4().hex
-        assert file_id, "file_id must be defined before persisting STEP"
         original_filename = orig
+        # >>> CADLYTICS PATCH: PERSIST STEP (BEGIN)
+        from flask import current_app, abort
+        from app.storage.storage import Storage
+        import os
+
+        assert file_id, "file_id must be defined before persisting STEP"
+        if not original_filename:
+            original_filename = os.path.basename(in_path)
+
         persisted = Storage.ensure_step_persisted(file_id, in_path, original_filename)
         exists = bool(persisted and os.path.isfile(persisted))
         current_app.logger.info(
             "[UPLOAD→PERSIST] file_id=%s tmp=%s persisted=%s exists=%s",
-            file_id,
-            in_path,
-            persisted,
-            exists,
+            file_id, in_path, persisted, exists
         )
+
         chk = Storage.get_step_path(file_id)
         ok = bool(chk and os.path.isfile(chk))
         current_app.logger.info(
             "[VERIFY] get_step_path(file_id=%s) -> %s exists=%s",
-            file_id,
-            chk,
-            ok,
+            file_id, chk, ok
         )
         if not ok:
             current_app.logger.error(
                 "[FATAL] STEP NOT FOUND JUST AFTER PERSIST. UPLOAD_FOLDER=%s FILES_DB_PATH=%s",
                 os.environ.get("UPLOAD_FOLDER", "/tmp/uploads"),
-                os.environ.get("FILES_DB_PATH"),
+                os.environ.get("FILES_DB_PATH")
             )
             abort(500, description="persist_step_failed")
+        # >>> CADLYTICS PATCH: PERSIST STEP (END)
         out_name = f"{file_id}.xkt"
     else:
         out_name = f"{uuid.uuid4()}.xkt"
@@ -700,32 +736,37 @@ def upload():
     # Persister le STEP avant toute conversion
     file_id = uuid.uuid4().hex
     if ext in (".step", ".stp"):
-        assert file_id, "file_id must be defined before persisting STEP"
         original_filename = filename
+        # >>> CADLYTICS PATCH: PERSIST STEP (BEGIN)
+        from flask import current_app, abort
+        from app.storage.storage import Storage
+        import os
+
+        assert file_id, "file_id must be defined before persisting STEP"
+        if not original_filename:
+            original_filename = os.path.basename(input_path)
+
         persisted = Storage.ensure_step_persisted(file_id, input_path, original_filename)
         exists = bool(persisted and os.path.isfile(persisted))
         current_app.logger.info(
             "[UPLOAD→PERSIST] file_id=%s tmp=%s persisted=%s exists=%s",
-            file_id,
-            input_path,
-            persisted,
-            exists,
+            file_id, input_path, persisted, exists
         )
+
         chk = Storage.get_step_path(file_id)
         ok = bool(chk and os.path.isfile(chk))
         current_app.logger.info(
             "[VERIFY] get_step_path(file_id=%s) -> %s exists=%s",
-            file_id,
-            chk,
-            ok,
+            file_id, chk, ok
         )
         if not ok:
             current_app.logger.error(
                 "[FATAL] STEP NOT FOUND JUST AFTER PERSIST. UPLOAD_FOLDER=%s FILES_DB_PATH=%s",
                 os.environ.get("UPLOAD_FOLDER", "/tmp/uploads"),
-                os.environ.get("FILES_DB_PATH"),
+                os.environ.get("FILES_DB_PATH")
             )
             abort(500, description="persist_step_failed")
+        # >>> CADLYTICS PATCH: PERSIST STEP (END)
 
     if filename.endswith('.xkt'):
         out_name = f"{uuid.uuid4()}.xkt"

@@ -89,4 +89,6 @@ Flask-Compress
 boto3==1.35.0
 prometheus-client==0.20.0
 kombu>=5.3
+# >>> CADLYTICS PATCH: REQUIREMENTS-FIX (BEGIN)
 tomli>=2.0.1
+# >>> CADLYTICS PATCH: REQUIREMENTS-FIX (END)
