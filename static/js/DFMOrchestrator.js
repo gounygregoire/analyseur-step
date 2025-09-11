@@ -404,7 +404,7 @@ class DFMOrchestrator {
 
   handleAnalyzeClick(){
     if (!this.fileId){
-      UI.info("Importe un STEP");
+      UI.info("Importe un STEP d\u2019abord.");
       const zone = document.getElementById('uploadArea') || document.getElementById('dropzone');
       if (zone){
         zone.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -492,6 +492,7 @@ class DFMOrchestrator {
       }
       console.info('[dfm] report=', data.report_id);
       await this.renderResults(data);
+      window.refreshHistory?.();
     } catch (err) {
       console.error('DFM start network error', err);
       this.handleError?.('Network error');

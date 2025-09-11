@@ -1,5 +1,6 @@
 from pathlib import Path
 import subprocess
+import os
 
 import pytest
 from flask import Flask
@@ -20,12 +21,21 @@ SAMPLE_STEP = Path("tests/sample.step")
 
 
 def test_upload_convert_analyze_flow(client, monkeypatch):
+    history_path = Path(os.environ.get("OUTPUT_FOLDER", "/tmp/converted")) / "history.json"
+    if history_path.exists():
+        history_path.unlink()
+
     with SAMPLE_STEP.open("rb") as fh:
         resp = client.post("/api/simple/upload", data={"file": fh})
     assert resp.status_code == 200
     data = resp.get_json()
     file_id = data["file_id"]
     assert Path(data["step_path"]).exists()
+
+    hist = client.get("/api/simple/history").get_json()
+    entry = next(e for e in hist if e["file_id"] == file_id)
+    assert entry["filename"].endswith(SAMPLE_STEP.name)
+    assert "xkt_ready" not in entry
 
     def fake_run(cmd, capture_output, text, timeout):
         Path(cmd[3]).write_bytes(b"x")
@@ -41,6 +51,11 @@ def test_upload_convert_analyze_flow(client, monkeypatch):
     assert Path(conv["xkt_path"]).exists()
     assert Path(conv["preview_png"]).exists()
 
+    hist = client.get("/api/simple/history").get_json()
+    entry = next(e for e in hist if e["file_id"] == file_id)
+    assert entry.get("xkt_ready") is True
+    assert entry.get("convert_ms") >= 0
+
     resp = client.post(
         "/api/simple/analyze",
         json={"file_id": file_id, "axis": [0, 0, 1], "material": "ABS", "options": {}},
@@ -50,17 +65,26 @@ def test_upload_convert_analyze_flow(client, monkeypatch):
     assert rep["report_id"]
     assert rep["dfm_score"] == 0
 
+    hist = client.get("/api/simple/history").get_json()
+    entry = next(e for e in hist if e["file_id"] == file_id)
+    assert entry.get("dfm_score") == 0
+    assert entry.get("report_id") == rep["report_id"]
+
 
 def test_convert_missing_file_id(client):
     resp = client.post("/api/simple/convert", json={})
     assert resp.status_code == 400
-    assert resp.get_json()["error"] == "missing_or_unknown_file_id"
+    data = resp.get_json()
+    assert data["error"] == "missing_or_unknown_file_id"
+    assert "message" in data
 
 
 def test_convert_unknown_file_id(client):
     resp = client.post("/api/simple/convert", json={"file_id": "nope"})
     assert resp.status_code == 400
-    assert resp.get_json()["error"] == "missing_or_unknown_file_id"
+    data = resp.get_json()
+    assert data["error"] == "missing_or_unknown_file_id"
+    assert "message" in data
 
 
 def test_convert_invalid_tolerance(client):
@@ -71,7 +95,9 @@ def test_convert_invalid_tolerance(client):
         "/api/simple/convert", json={"file_id": file_id, "tolerance": "Standard (0.1mm)"}
     )
     assert resp.status_code == 422
-    assert resp.get_json()["error"] == "invalid_tolerance"
+    data = resp.get_json()
+    assert data["error"] == "invalid_tolerance"
+    assert "message" in data
 
 
 def test_convert_failure_returns_502(client, monkeypatch):
@@ -90,4 +116,4 @@ def test_convert_failure_returns_502(client, monkeypatch):
     assert resp.status_code == 502
     body = resp.get_json()
     assert body["error"] == "xkt_convert_failed"
-    assert "boom" in body["details"]
+    assert "boom" in body["message"]

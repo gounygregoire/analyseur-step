@@ -347,6 +347,44 @@ function byId(name) {
   return document.getElementById(name);
 }
 
+// ----------- Historique ----------------------------------------------------
+function renderHistory(entries) {
+  const tbody = document.getElementById('historyTableBody');
+  const loading = document.getElementById('historyLoading');
+  if (loading) loading.classList.add('d-none');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  if (!entries || !entries.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">Aucun historique de conversion disponible</td></tr>';
+    return;
+  }
+  entries.forEach((e) => {
+    const status = e.dfm_score !== undefined ? 'analyzed' : (e.xkt_ready ? 'converted' : 'uploaded');
+    const score = e.dfm_score !== undefined ? e.dfm_score : '';
+    const date = e.created_at ? new Date(e.created_at).toLocaleString() : '';
+    const actions = e.report_id ? `<a href="/reports/${e.report_id}.html" class="btn btn-sm btn-outline-primary">Voir</a>` : '';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${e.filename || e.file_id}</td><td>${date}</td><td>${status}</td><td>${score}</td><td>${actions}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+async function refreshHistory() {
+  try {
+    const res = await fetch('/api/simple/history');
+    const data = await res.json().catch(() => []);
+    renderHistory(data);
+  } catch (err) {
+    console.warn('history load failed', err);
+    renderHistory([]);
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.refreshHistory = refreshHistory;
+  document.addEventListener('DOMContentLoaded', () => refreshHistory());
+}
+
 (function wireUploadAndPreview(){
   const uploadArea = document.getElementById('uploadArea') || document.querySelector('.upload-area');
   if (!uploadArea || uploadArea.dataset.previewBound === '1') return;
@@ -420,6 +458,7 @@ async function uploadStepFile(file){
     }
     exposeFileId.call(state, data.file_id);
     lastXktUrl = null;
+    window.refreshHistory?.();
   }catch(e){
     console.error('[upload] error', e);
     window.showToast ? showToast('Upload échoué',{type:'error'}) : alert('Upload échoué');
@@ -435,7 +474,8 @@ async function uploadStepFile(file){
 async function convertCurrent(){
   const fileId = state.fileId;
   if (!fileId){
-    window.showToast ? showToast('Aucun fichier',{type:'error'}) : alert('Aucun fichier');
+    const msg = 'Importe un STEP d\u2019abord.';
+    window.showToast ? showToast(msg,{type:'error'}) : alert(msg);
     return;
   }
   try{
@@ -454,6 +494,7 @@ async function convertCurrent(){
     }
     console.info('[convert] xkt=', data.xkt_path);
     await loadXKTFromConvertResponse.call(state, { file_id: fileId, xkt_url: data.xkt_path });
+    window.refreshHistory?.();
   }catch(e){
     console.error('[convert] error', e);
     window.showToast ? showToast('Conversion échouée',{type:'error'}) : alert('Conversion échouée');
