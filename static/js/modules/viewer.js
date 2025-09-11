@@ -7,6 +7,21 @@ import {
   AnnotationsPlugin
 } from "@xeokit/xeokit-sdk";
 
+export async function loadCameraPreset(url) {
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return null; // 404 toléré
+    return await res.json();
+  } catch (e) {
+    console.warn("[viewer] camera preset skipped:", e);
+    return null;
+  }
+}
+
+export function xktUrlFrom(fileId) {
+  return `/static/converted/${fileId}.xkt`;
+}
+
 export function flyToAABB(viewer, aabb, duration = 0.8, padding = 1.15) {
   if (!viewer || !aabb) return;
   const [minX, minY, minZ, maxX, maxY, maxZ] = aabb;
@@ -40,7 +55,7 @@ export class XeokitModelViewer extends EventTarget {
       canvasId,
       transparent: false,
     });
-    this.viewer.scene.clearColor = [0.06, 0.07, 0.09];
+    this.viewer.scene.clearColor = [0.06, 0.07, 0.09, 1];
     this.viewer.cameraFlight.fitFOV = 20;
     this.loader = new XKTLoaderPlugin(this.viewer);
     this.edges = new EdgesPlugin(this.viewer);
@@ -84,23 +99,60 @@ export class XeokitModelViewer extends EventTarget {
     console.debug('[VIEWER] fileId exposé:', fileId);
   }
 
+  async loadFromFileId(fileId) {
+    if (!fileId) return;
+    this._exposeFileId(fileId);
+    const url = xktUrlFrom(fileId);
+    console.log('[viewer] file_id=', fileId, 'xkt=', url);
+    console.time('[viewer] load');
+    if (this.model) {
+      this.model.destroy();
+    }
+    const model = await this.loader.load({ id: this.modelId, src: url });
+    console.timeEnd('[viewer] load');
+    this.model = model;
+    this.lastAABB = [...model.aabb];
+    const preset = await loadCameraPreset(url.replace(/\.xkt$/, '_camera_status.json'));
+    const fit = () => {
+      if (preset) {
+        this.viewer.camera.setState(preset);
+      } else {
+        this.viewer.cameraControl.fit(model.aabb);
+      }
+      centerPivotOnAABB(this.viewer, model.aabb);
+    };
+    if (model.built) {
+      fit();
+    } else {
+      model.on('built', fit);
+    }
+    this.dispatchEvent(new CustomEvent('onAssetLoaded', { detail: { url } }));
+  }
+
   // --- chargement ---------------------------------------------------------
   async load(url, { quality = "preview", apiId } = {}) {
     const cam = this.viewer.camera.getState();
     if (this.model) {
       this.model.destroy();
     }
+    console.time('[viewer] load');
     this.model = await this.loader.load({ id: this.modelId, src: url });
+    console.timeEnd('[viewer] load');
     if (this.model?.meshes?.length <= 1) {
       document.getElementById('explodeBtn')?.remove();
       document.getElementById('isolateBtn')?.remove();
     }
     this.lastAABB = [...this.model.aabb];
+    const preset = await loadCameraPreset(url.replace(/\.xkt$/, '_camera_status.json'));
     if (this.currentQuality === null) {
       const fit = () => {
         const aabb = this.model.aabb;
         this.lastAABB = [...aabb];
-        flyToAABB(this.viewer, aabb);
+        if (preset) {
+          this.viewer.camera.setState(preset);
+        } else {
+          this.viewer.cameraControl.fit(aabb);
+        }
         centerPivotOnAABB(this.viewer, aabb);
       };
       if (this.model.built) {
