@@ -22,4 +22,4 @@ def test_start_missing_step(tmp_path, monkeypatch):
     assert resp.status_code == 400
     data = resp.get_json()
     assert data["error"] == "step_not_found_for_file_id"
-    assert "Upload must save" in data["hint"]
+    assert "Persist via ensure_step_persisted" in data["hint"]

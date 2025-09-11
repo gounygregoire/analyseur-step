@@ -49,21 +49,18 @@ def start() -> tuple[dict, int]:
         )
     if not get_profile(material_profile_id):
         return jsonify({"error": "unknown_material_profile"}), 400
+    # >>> CADLYTICS PATCH: DFM PRECHECK (BEGIN)
     step_path = Storage.get_step_path(file_id)
     current_app.logger.info(
         "[DFM/START] file_id=%s resolved_step=%s exists=%s",
-        file_id,
-        step_path,
-        bool(step_path and os.path.isfile(step_path)),
+        file_id, step_path, bool(step_path and os.path.isfile(step_path))
     )
     if not step_path:
-        return (
-            {
-                "error": "step_not_found_for_file_id",
-                "hint": "persist via ensure_step_persisted → /tmp/uploads/<file_id>.step|.stp",
-            },
-            400,
-        )
+        return {
+            "error": "step_not_found_for_file_id",
+            "hint": "Persist via ensure_step_persisted → /tmp/uploads/<file_id>.step|.stp",
+        }, 400
+    # >>> CADLYTICS PATCH: DFM PRECHECK (END)
     logger.info("/api/dfm/start file_id=%s step_path=%s", file_id, step_path)
     job = dfm_run.delay(
         file_id=file_id,
