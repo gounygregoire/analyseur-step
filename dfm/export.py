@@ -66,15 +66,22 @@ def export_step(step_path: str, gzip_output: bool = True) -> bytes:
     min_draft = 2.0  # degrés
     z_axis = cq.Vector(0, 0, 1)
     for idx, face in enumerate(faces):
-        u_mid = (face.u1 + face.u2) / 2
-        v_mid = (face.v1 + face.v2) / 2
-        normal = face.normalAt(u_mid, v_mid)
+        # >>> CADLYTICS PATCH: DRAFT-UV (BEGIN)
+        u1, u2, v1, v2 = face._uvBounds()
+        u_mid = (u1 + u2) / 2
+        v_mid = (v1 + v2) / 2
+        # >>> CADLYTICS PATCH: DRAFT-UV (END)
+        # >>> CADLYTICS PATCH: NORMAL-AT (BEGIN)
+        normal = face.normalAt(u_mid, v_mid)[0]
+        # >>> CADLYTICS PATCH: NORMAL-AT (END)
         angle = math.degrees(math.acos(abs(normal.dot(z_axis))))
         draft = 90 - angle
         if draft < min_draft:
             ratio = draft / min_draft if min_draft else 0
             severity = _severity_from_ratio(ratio)
-            c = face.center()
+            # >>> CADLYTICS PATCH: FACE-CENTER (BEGIN)
+            c = face.Center()
+            # >>> CADLYTICS PATCH: FACE-CENTER (END)
             add_issue({
                 "type": "draft",
                 "severity": severity,
@@ -92,7 +99,9 @@ def export_step(step_path: str, gzip_output: bool = True) -> bytes:
             if r < min_radius:
                 ratio = r / min_radius
                 severity = _severity_from_ratio(ratio)
-                c = edge.center()
+                # >>> CADLYTICS PATCH: EDGE-CENTER (BEGIN)
+                c = edge.Center()
+                # >>> CADLYTICS PATCH: EDGE-CENTER (END)
                 fi = next((i for i, f in enumerate(faces) if edge in f.Edges()), None)
                 add_issue({
                     "type": "radius",

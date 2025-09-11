@@ -418,22 +418,22 @@ async function convertAndGetXKT(files) {
 
   const data = await res.json();
   // Formats attendus côté back :
-  // { success:true, url:"/uploads/<id>.step", xktUrl:"/uploads/<id>.xkt", file_id?: "<id>" }
+  // { success:true, url:"/uploads/<id>.step", xkt_url:"/uploads/<id>.xkt", file_id?: "<id>" }
 
-  const xktUrl = data?.xktUrl;
-  if (!xktUrl) throw new Error('No xktUrl returned');
+  const xktUrl = data?.xkt_url;
+  if (!xktUrl) throw new Error('No xkt_url returned');
 
   // 1) On tente d’obtenir un fileId
   let fileId = data.file_id
             || deriveIdFromUrl(data.url)
-            || deriveIdFromUrl(data.xktUrl);
+            || deriveIdFromUrl(data.xkt_url);
   const existing = window.CADLYTICS?.current?.fileId;
   if (existing && fileId && existing !== fileId) {
     console.warn(`[convert] file_id mismatch: keeping ${existing}, ignoring ${fileId}`);
     fileId = existing;
   }
   if (!existing && fileId) {
-    exposeFileId(fileId);
+    exposeFileId.call(state, fileId);
   }
   if (!fileId) {
     console.warn("[convert] pas de file_id ni dérivable", data);
@@ -441,6 +441,30 @@ async function convertAndGetXKT(files) {
 
   return data;
 }
+
+// >>> CADLYTICS PATCH: VIEW LOAD SAFE (BEGIN)
+async function loadXKTFromConvertResponse(response) {
+  try {
+    const fileId = String(response.file_id || '').trim();
+    if (!this.fileId) this.fileId = fileId;
+    else if (this.fileId !== fileId) console.warn('[ID] ignore new id', fileId, 'keep', this.fileId);
+
+    const xktUrl = response.xkt_url || `/uploads/${fileId}.xkt`;
+    console.debug('[VIEW] will load XKT', { fileId, xktUrl });
+    if (typeof lastXktUrl !== 'undefined') lastXktUrl = xktUrl;
+
+    const head = await fetch(xktUrl, { method: 'HEAD' });
+    if (!head.ok) throw new Error(`XKT not available: ${head.status}`);
+
+    if (viewer?.loadXKT) await viewer.loadXKT(xktUrl);
+    else if (window.loadXKT) await window.loadXKT(xktUrl);
+    console.info('[VIEW] XKT loaded', xktUrl);
+  } catch (e) {
+    console.error('[VIEW] Visualization error', e);
+    (window.UI?.error ? UI.error : alert)('Échec de la visualisation. Merci de réessayer.\n' + (e.message || String(e)));
+  }
+}
+// >>> CADLYTICS PATCH: VIEW LOAD SAFE (END)
 
 async function visualizeFromFiles(files){
   if (!files || !files.length) return;
@@ -451,46 +475,9 @@ async function visualizeFromFiles(files){
     enableVisualizeBtn(false);
 
     const response = await convertAndGetXKT(files);
-    const payload = response;
 
     // >>> CADLYTICS PATCH: VIEW HEAD PRECHECK (BEGIN)
-    (async () => {
-      try {
-        const incomingId =
-          (response && (response.file_id || response.id)) ||
-          (payload && payload.file_id) ||
-          state.fileId ||
-          document.body?.dataset?.fileid || '';
-
-        const id = String(incomingId || '').trim();
-        if (!state.fileId) state.fileId = id;
-        else if (id && state.fileId !== id) console.warn('[ID] ignore new id', id, 'keep', state.fileId);
-
-        const fileId = state.fileId || id;
-        const xktUrl = `/uploads/${fileId}.xkt`;
-        lastXktUrl = xktUrl;
-        console.debug('[VIEW] will load XKT', { fileId, xktUrl });
-
-        const head = await fetch(xktUrl, { method: 'HEAD' });
-        if (!head.ok) throw new Error(`XKT not available: ${head.status}`);
-
-        // Appel au loader existant
-        if (typeof initViewer === 'function') {
-          await initViewer(xktUrl);
-        } else if (typeof viewer?.loadXKT === 'function') {
-          await viewer.loadXKT(xktUrl);
-        } else if (typeof window.loadXKT === 'function') {
-          await window.loadXKT(xktUrl);
-        } else {
-          console.warn('[VIEW] No XKT loader function found');
-        }
-
-        console.info('[VIEW] XKT loaded', xktUrl);
-      } catch (e) {
-        console.error('[VIEW] Visualization error', e);
-        if (window.UI?.error) UI.error("Échec de la visualisation. Merci de réessayer.", e.message || String(e));
-      }
-    })();
+    await loadXKTFromConvertResponse.call(state, response);
     // >>> CADLYTICS PATCH: VIEW HEAD PRECHECK (END)
     enableVisualizeBtn(true);
   } catch (err) {
