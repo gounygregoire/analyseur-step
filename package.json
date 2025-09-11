@@ -9,7 +9,8 @@
     "dev": "vite build --watch",
     "postinstall": "npm run build",
     "test:e2e": "playwright test",
-    "test:e2e:headed": "PWDEBUG=1 playwright test"
+    "test:e2e:headed": "PWDEBUG=1 playwright test",
+    "smoke:dfm": "pytest tests/test_dfm_smoke.py -q"
   },
   "keywords": [],
   "author": "",
