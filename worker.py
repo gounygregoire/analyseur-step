@@ -1,9 +1,9 @@
 # worker.py — Celery worker entrypoint for Render
 # Import the existing Celery app instance without going through web.py to avoid side effects.
 
-import os
-import logging
 
+# >>> CADLYTICS PATCH: BOOT LOG (BEGIN)
+import os, logging
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("boot")
 os.makedirs(os.environ.get("UPLOAD_FOLDER", "/tmp/uploads"), exist_ok=True)
@@ -19,6 +19,7 @@ log.info(
     os.environ.get("FILES_DB_PATH"),
     os.getcwd(),
 )
+# >>> CADLYTICS PATCH: BOOT LOG (END)
 log.info("worker.py starting Celery worker")
 
 from celery_app import celery  # the project must already expose `celery` in celery_app.py

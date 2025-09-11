@@ -1,8 +1,6 @@
-import os
 import uuid
 import shutil
 import time
-import logging
 from flask import Flask, request, send_from_directory, url_for, render_template
 from rq.job import Job
 from werkzeug.utils import secure_filename
@@ -13,6 +11,8 @@ from .tasks import heavy_compute
 from server.dfm_api_blueprint_stub import dfm_bp
 from app.storage.storage import Storage
 
+# >>> CADLYTICS PATCH: BOOT LOG (BEGIN)
+import os, logging
 log = logging.getLogger("boot")
 os.makedirs(os.environ.get("UPLOAD_FOLDER", "/tmp/uploads"), exist_ok=True)
 os.makedirs(os.environ.get("OUTPUT_FOLDER", "/tmp/converted"), exist_ok=True)
@@ -27,6 +27,7 @@ log.info(
     os.environ.get("FILES_DB_PATH"),
     os.getcwd(),
 )
+# >>> CADLYTICS PATCH: BOOT LOG (END)
 
 app = Flask(__name__)
 app.config["UPLOAD_FOLDER"] = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
@@ -95,20 +96,40 @@ def upload():
     if not file:
         return {"error": "No file provided"}, 400
 
-    job_id = uuid.uuid4().hex
+    file_id = uuid.uuid4().hex
     original_filename = secure_filename(file.filename or "")
-    step_name = secure_filename(f"{job_id}.step")
+    step_name = secure_filename(f"{file_id}.step")
     step_path = os.path.join(app.config["UPLOAD_FOLDER"], step_name)
     with open(step_path, "wb") as dst:
         shutil.copyfileobj(file.stream, dst, length=1024 * 1024)
 
     abs_step_path = os.path.abspath(step_path)
-    abs_step_path = Storage.ensure_step_persisted(job_id, abs_step_path, original_filename)
+    # >>> CADLYTICS PATCH: PERSIST STEP (BEGIN)
+    from flask import current_app, abort
+    from app.storage.storage import Storage
+    import os
+
+    assert file_id, "file_id must be defined before persisting STEP"
+    if not original_filename:
+        original_filename = os.path.basename(abs_step_path)
+
+    persisted = Storage.ensure_step_persisted(file_id, abs_step_path, original_filename)
+    exists = bool(persisted and os.path.isfile(persisted))
+    current_app.logger.info("[UPLOAD→PERSIST] file_id=%s tmp=%s persisted=%s exists=%s", file_id, abs_step_path, persisted, exists)
+
+    chk = Storage.get_step_path(file_id)
+    ok = bool(chk and os.path.isfile(chk))
+    current_app.logger.info("[VERIFY] get_step_path(file_id=%s) -> %s exists=%s", file_id, chk, ok)
+    if not ok:
+        current_app.logger.error("[FATAL] STEP NOT FOUND JUST AFTER PERSIST. UPLOAD_FOLDER=%s FILES_DB_PATH=%s", os.environ.get("UPLOAD_FOLDER", "/tmp/uploads"), os.environ.get("FILES_DB_PATH"))
+        abort(500, description="persist_step_failed")
+    step_path = chk
+    # >>> CADLYTICS PATCH: PERSIST STEP (END)
 
     low_job = q.enqueue(
         generate_low_preview,
         step_path,
-        job_id=job_id,
+        job_id=file_id,
         job_timeout=300,
     )
     full_job = q.enqueue(
