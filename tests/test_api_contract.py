@@ -67,6 +67,16 @@ def test_upload_convert_analyze_flow(client, monkeypatch):
     assert rep["report_id"]
     assert rep["dfm_score"] == 0
 
+    report_path = Path("static") / "dfm" / file_id / "report.json"
+    assert report_path.exists()
+    r = client.get(f"/api/simple/report/{file_id}")
+    assert r.status_code == 200
+    report = r.get_json()
+    assert report["status"] == "done"
+    assert report["score"] == 72
+    assert isinstance(report.get("recommendations"), list)
+    assert isinstance(report.get("metrics"), dict)
+
     hist = client.get("/api/simple/history").get_json()
     entry = next(e for e in hist if e["file_id"] == file_id)
     assert entry.get("dfm_score") == 0

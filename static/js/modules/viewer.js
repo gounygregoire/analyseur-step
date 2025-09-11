@@ -7,13 +7,18 @@ import {
   AnnotationsPlugin
 } from "@xeokit/xeokit-sdk";
 
-export async function loadCameraPreset(url) {
+let cameraPresetOptionalLogged = false;
+export async function loadCameraPresetOptional(url) {
+  if (!cameraPresetOptionalLogged) {
+    console.log("[viewer] camera preset optional mode");
+    cameraPresetOptionalLogged = true;
+  }
   try {
-    const res = await fetch(url, { cache: "no-store" });
-    if (!res.ok) return null; // 404 toléré
-    return await res.json();
+    const r = await fetch(url, { cache: "no-store" });
+    if (!r.ok) return null;
+    return await r.json();
   } catch (e) {
-    console.warn("[viewer] camera preset skipped:", e);
+    console.warn("[viewer] preset skipped", e);
     return null;
   }
 }
@@ -104,6 +109,12 @@ export class XeokitModelViewer extends EventTarget {
     this._exposeFileId(fileId);
     const url = xktUrlFrom(fileId);
     console.log('[viewer] file_id=', fileId, 'xkt=', url);
+    try {
+      const head = await fetch(url, { method: 'HEAD' });
+      if (head.ok) console.log('[viewer] GET', url, 'ok');
+    } catch (_) {
+      /* ignore HEAD errors */
+    }
     console.time('[viewer] load');
     if (this.model) {
       this.model.destroy();
@@ -112,7 +123,7 @@ export class XeokitModelViewer extends EventTarget {
     console.timeEnd('[viewer] load');
     this.model = model;
     this.lastAABB = [...model.aabb];
-    const preset = await loadCameraPreset(url.replace(/\.xkt$/, '_camera_status.json'));
+    const preset = await loadCameraPresetOptional(url.replace(/\.xkt$/, '_camera_status.json'));
     const fit = () => {
       if (preset) {
         this.viewer.camera.setState(preset);
@@ -143,7 +154,7 @@ export class XeokitModelViewer extends EventTarget {
       document.getElementById('isolateBtn')?.remove();
     }
     this.lastAABB = [...this.model.aabb];
-    const preset = await loadCameraPreset(url.replace(/\.xkt$/, '_camera_status.json'));
+    const preset = await loadCameraPresetOptional(url.replace(/\.xkt$/, '_camera_status.json'));
     if (this.currentQuality === null) {
       const fit = () => {
         const aabb = this.model.aabb;
