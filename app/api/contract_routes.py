@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 import json
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, jsonify, request, send_from_directory
 from werkzeug.utils import secure_filename
 
 from app.storage.storage import Storage
@@ -19,6 +19,19 @@ OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "300"))
 
 api_contract_bp = Blueprint("api_contract", __name__, url_prefix="/api/simple")
+
+
+@api_contract_bp.record_once
+def _register_models(state) -> None:
+    app = state.app
+
+    @app.get("/models/<path:filename>")
+    def _models(filename: str):
+        path = os.path.join(OUTPUT_FOLDER, filename)
+        if not os.path.isfile(path):
+            return jsonify({"error": "not_found"}), 404
+        mimetype = "model/xkt" if filename.endswith(".xkt") else None
+        return send_from_directory(OUTPUT_FOLDER, filename, mimetype=mimetype)
 
 
 @api_contract_bp.post("/upload")
@@ -69,92 +82,78 @@ def upload_step() -> tuple[Any, int]:
 
 @api_contract_bp.post("/convert")
 def convert_step() -> tuple[Any, int]:
-    data = request.get_json(silent=True) or request.form or {}
-    file_id = data.get("file_id")
-    if not file_id:
-        current_app.logger.warning("/convert missing file_id")
-        return jsonify({"error": "missing_or_unknown_file_id", "message": "file_id manquant"}), 400
-
-    step_path = Storage.get_step_path(file_id)
-    if not step_path or not os.path.isfile(step_path):
-        current_app.logger.warning("/convert unknown file_id=%s", file_id)
-        return jsonify({"error": "missing_or_unknown_file_id", "message": "file_id inconnu"}), 400
-
-    tolerance_raw = data.get("tolerance", 0.1)
     try:
-        tolerance = float(tolerance_raw)
-    except (TypeError, ValueError):
-        current_app.logger.warning("/convert invalid tolerance=%r", tolerance_raw)
-        return jsonify({"error": "invalid_tolerance", "message": "tolerance invalide"}), 422
+        data = request.get_json(silent=True) or request.form or {}
+        file_id = data.get("file_id")
+        if not file_id:
+            return jsonify({"error": "missing_file_id"}), 400
 
-    os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-    xkt_path = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
-    preview_path = os.path.join(OUTPUT_FOLDER, f"{file_id}.png")
-    current_app.logger.info("[convert] file_id=%s", file_id)
+        step_path = Storage.get_step_path(file_id)
+        if not step_path or not os.path.exists(step_path):
+            return jsonify({"error": "missing_or_unknown_file_id"}), 400
 
-    cmd = ["python", "xkt_converter.py", step_path, xkt_path]
-    current_app.logger.info(
-        "conversion start for %s -> %s (tol=%s)", step_path, xkt_path, tolerance
-    )
-    t0 = time.time()
-    try:
-        res = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=120
-        )
-    except subprocess.TimeoutExpired:
-        duration = time.time() - t0
-        current_app.logger.error("conversion timeout for %s after %.1fs", file_id, duration)
-        return (
-            jsonify({"error": "xkt_convert_failed", "message": "timeout"}),
-            502,
-        )
-    except FileNotFoundError as exc:
-        current_app.logger.error("converter missing for %s: %s", file_id, exc)
-        return (
-            jsonify({"error": "xkt_convert_failed", "message": str(exc)[:200]}),
-            502,
-        )
+        os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+        xkt_path = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+        preview_path = os.path.join(OUTPUT_FOLDER, f"{file_id}.png")
 
-    duration = time.time() - t0
-    if res.returncode != 0:
-        stderr = ((res.stdout or "") + (res.stderr or "")).strip()[:200]
-        current_app.logger.error(
-            "conversion failed rc=%s for %s: %s", res.returncode, file_id, stderr
-        )
-        return (
-            jsonify({"error": "xkt_convert_failed", "message": stderr}),
-            502,
-        )
+        if os.path.exists(xkt_path):
+            current_app.logger.info(f"[convert] XKT ready /models/{file_id}.xkt")
+            try:
+                History.record_convert(file_id, 0)
+            except Exception as exc:  # fail soft
+                current_app.logger.warning("history convert failed for %s: %s", file_id, exc)
+            return (
+                jsonify(
+                    {
+                        "file_id": file_id,
+                        "xkt_url": f"/models/{file_id}.xkt",
+                        "preview_png": f"/models/{file_id}.png" if os.path.exists(preview_path) else None,
+                    }
+                ),
+                200,
+            )
 
-    if not os.path.isfile(xkt_path):
-        current_app.logger.error("xkt missing for %s -> %s", file_id, xkt_path)
+        xeokit_bin = os.environ.get("XEOKIT_CONVERT") or "xeokit-convert"
+        cmd = [xeokit_bin, "--out", xkt_path, step_path]
+        t0 = time.time()
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        duration_ms = (time.time() - t0) * 1000
+        if res.returncode != 0:
+            current_app.logger.error(
+                f"[convert] fail rc={res.returncode} stderr={res.stderr[:4000]}"
+            )
+            return jsonify({"error": "convert_failed", "stderr": res.stderr}), 500
+
+        current_app.logger.info(f"[convert] XKT ready /models/{file_id}.xkt")
+
+        try:
+            from generate_thumbnails import generate_thumbnails
+            thumbs = generate_thumbnails(step_path, OUTPUT_FOLDER)
+            preview_path = thumbs.get("iso", preview_path)
+        except Exception as exc:  # pragma: no cover
+            current_app.logger.warning(
+                "thumbnail generation failed for %s: %s", file_id, exc
+            )
+            Path(preview_path).write_bytes(b"")
+
+        try:
+            History.record_convert(file_id, duration_ms)
+        except Exception as exc:  # fail soft
+            current_app.logger.warning("history convert failed for %s: %s", file_id, exc)
+
         return (
-            jsonify({"error": "xkt_convert_failed", "message": "xkt missing"}),
-            502,
+            jsonify(
+                {
+                    "file_id": file_id,
+                    "xkt_url": f"/models/{file_id}.xkt",
+                    "preview_png": f"/models/{file_id}.png" if os.path.exists(preview_path) else None,
+                }
+            ),
+            200,
         )
-    current_app.logger.info("conversion ok for %s in %.1fs", file_id, duration)
-    current_app.logger.info("XKT written → %s", os.path.abspath(xkt_path))
-    current_app.logger.info(f"[convert] XKT available at /models/{file_id}.xkt")
-    try:
-        from generate_thumbnails import generate_thumbnails
-        thumbs = generate_thumbnails(step_path, OUTPUT_FOLDER)
-        preview_path = thumbs.get("iso", preview_path)
     except Exception as exc:  # pragma: no cover
-        current_app.logger.warning("thumbnail generation failed for %s: %s", file_id, exc)
-        Path(preview_path).write_bytes(b"")
-
-    try:
-        History.record_convert(file_id, duration * 1000)
-    except Exception as exc:  # fail soft
-        current_app.logger.warning("history convert failed for %s: %s", file_id, exc)
-
-    response = {
-        "file_id": file_id,
-        "xkt_url": f"/models/{file_id}.xkt",
-    }
-    if os.path.isfile(preview_path):
-        response["preview_png"] = f"/models/{file_id}.png"
-    return jsonify(response), 200
+        current_app.logger.error("[convert] unexpected error: %s", exc)
+        return jsonify({"error": "convert_failed", "message": str(exc)}), 500
 
 
 @api_contract_bp.post("/analyze")

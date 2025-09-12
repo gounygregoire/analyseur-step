@@ -18,7 +18,8 @@ if (typeof window !== "undefined") {
 
 // Sélecteurs compatibles (deux variantes d'ID)
 const btnVisualiser = document.querySelector("#btn-visualiser, #visualizeBtn");
-const axisPanel = document.querySelector("#dfmAxisPanel, #axis-panel");
+const btnAnalyser   = document.querySelector("#analyzeBtn, #btn-analyser");
+const axisPanel     = document.querySelector("#dfmAxisPanel, #axis-panel");
 
 // État initial : cacher l'axe mais laisser Analyser cliquable
 if (axisPanel) axisPanel.style.display = "none";
@@ -32,7 +33,7 @@ const UI = {
   warn(m){ if (window.showToast) showToast(m,{type:"warn"}); },
   err(m){  if (window.showToast) showToast(m,{type:"error"}); },
   setLoading(on){
-    const b = document.getElementById("analyzeBtn");
+    const b = btnAnalyser;
     if (b) b.disabled = !!on;
   },
   progress(pct){
@@ -155,16 +156,56 @@ function openMaterialModal(){
 }
 
 function materialIsConfirmed(){
-  return orchestrator?.state?.materialSelected;
+  return !!window.selectedMaterial;
 }
 
 function axisIsValidated(){
-  return orchestrator?.axisValidated || orchestrator?.state?.axisConfirmed;
+  return !!window.selectedAxis;
 }
 
-function showAxisPanel(){
-  orchestrator.renderAxisPanel?.();
-  document.getElementById('dfmAxisPanel')?.scrollIntoView({ behavior:'smooth', block:'center' });
+function showAxisPanel() {
+  if (!axisPanel) return;
+  if (!window.currentFileId || !materialIsConfirmed()) return;
+  axisPanel.style.display = "";
+}
+
+window.addEventListener("material:confirmed", () => { showAxisPanel(); });
+window.addEventListener("axis:confirmed", (e) => { window.selectedAxis = e?.detail; });
+
+if (btnAnalyser) {
+  btnAnalyser.addEventListener("click", async () => {
+    if (!window.currentFileId) { openMaterialModal?.(); return; }
+    if (!materialIsConfirmed()) { openMaterialModal?.(); return; }
+    if (!axisIsValidated()) { showAxisPanel(); return; }
+    const payload = {
+      file_id: window.currentFileId,
+      axis: window.selectedAxis?.axis || "auto",
+      invert: !!window.selectedAxis?.invert,
+      material: window.selectedMaterial?.id || window.selectedMaterial
+    };
+    console.log("[dfm] start", payload);
+    const res = await fetch("/api/simple/analyze", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(payload)
+    });
+    console.log("[dfm] analyze status", res.status);
+
+    const t0 = Date.now();
+    while (Date.now() - t0 < 120000) {
+      const rr = await fetch(`/api/simple/report/${window.currentFileId}`, {cache:"no-store"});
+      if (rr.status === 200) {
+        const data = await rr.json();
+        console.log("[dfm] report", data);
+        renderDFMResults?.({
+          score: data.score ?? 0,
+          recommendations: Array.isArray(data.recommendations) ? data.recommendations : [],
+          metrics: data.metrics ?? {}
+        });
+        break;
+      }
+      await new Promise(r => setTimeout(r, 2500));
+    }
+  });
 }
 
 // ---------------------- États ----------------------
@@ -199,8 +240,6 @@ class DFMOrchestrator {
   }
 
   init(){
-    document.getElementById('dfmAxisPanel')?.remove();
-    document.getElementById('analyzeBtn')?.addEventListener('click', () => this.handleAnalyzeClick());
 
     window.addEventListener('material:selected', (e) => {
       this.setMaterialProfile(e.detail.materialProfile);
@@ -805,7 +844,7 @@ function dfmSelfCheck() {
     document.querySelector("[data-material-modal]")
   ))
     errors.push("modal matière absent");
-  if (!document.getElementById('analyzeBtn')) errors.push("#analyzeBtn absent");
+  if (!btnAnalyser) errors.push("#analyzeBtn/#btn-analyser absent");
 
   if (errors.length) {
     console.warn("[DFM selfcheck] Issues:", errors);
@@ -820,7 +859,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 
 // Legacy global for older templates still calling onclick="onAnalyzeClick()"
 if (typeof window !== 'undefined') {
-  window.onAnalyzeClick = () => orchestrator.handleAnalyzeClick();
+  window.onAnalyzeClick = () => btnAnalyser?.click();
 }
 
 // --- Visualiser & analyse workflow ---------------------------------------
@@ -840,9 +879,8 @@ window.addEventListener("dfm:fileReady", async (e) => {
     body: JSON.stringify({ file_id: fid, tolerance: getTolerance?.() })
   });
   console.log("[auto] convert status", r.status);
-  try { const j = await r.json(); console.log("[auto] convert payload", j); } catch {}
-  const va = window.viewerAdapter || window.viewer || window.viewerApp;
-  if (va?.loadFromFileId) await va.loadFromFileId(fid);
+  try { console.log("[auto] convert payload", await r.json()); } catch {}
+  await (window.viewerAdapter?.loadFromFileId?.(fid));
 });
 
 // Bouton "Visualiser"
@@ -857,12 +895,7 @@ if (btnVisualiser) {
       body: JSON.stringify({ file_id: fid, tolerance: getTolerance?.() })
     });
     console.log("[visualiser] convert status", r.status);
-    let payload = {};
-    try { payload = await r.json(); } catch {}
-    console.log("[visualiser] payload", payload);
-    const va = window.viewerAdapter || window.viewer || window.viewerApp;
-    if (!va?.loadFromFileId) { console.error("[visualiser] viewerAdapter missing"); return; }
-    await va.loadFromFileId(payload.file_id || fid);
-    console.log("[visualiser] done");
+    try { console.log("[visualiser] payload", await r.json()); } catch {}
+    await (window.viewerAdapter?.loadFromFileId?.(fid));
   });
 }
