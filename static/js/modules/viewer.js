@@ -15,8 +15,12 @@ window.viewerAdapter = {
       try {
         console.log("[viewer] try xkt", url);
         console.time("[viewer] xkt load");
-        const model = await xktLoader.load({ src: url });
+        const model = await xktLoader.load({ id: fileId, src: url });
         console.timeEnd("[viewer] xkt load");
+        if (viewer.model) {
+          try { viewer.model.destroy?.(); } catch (err) { console.warn("[viewer] destroy old model", err); }
+        }
+        viewer.model = model;
         const aabb = (model && model.aabb) || viewer.scene.aabb;
         if (aabb) {
           viewer.cameraControl.fit(aabb);

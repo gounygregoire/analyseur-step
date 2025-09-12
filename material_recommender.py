@@ -7,9 +7,11 @@ from dataclasses import dataclass
 from typing import List, Dict, Any
 import json
 
+
 @dataclass
 class MaterialRecommendation:
     """Recommandation de matériau avec propriétés et justification"""
+    id: str
     name: str
     category: str
     description: str
@@ -414,6 +416,7 @@ class MaterialRecommendationEngine:
         for material_id, score in top_3_materials:
             material_data = self.materials_database[material_id]
             recommendation = MaterialRecommendation(
+                id=material_id,
                 name=material_data["name"],
                 category=material_data["category"],
                 description=material_data["description"],
@@ -650,6 +653,7 @@ def recommend_materials_for_questionnaire(questionnaire_data: Dict[str, Any], df
     result = []
     for rec in recommendations:
         result.append({
+            'id': rec.id,
             'name': rec.name,
             'category': rec.category,
             'description': rec.description,
