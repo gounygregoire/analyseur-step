@@ -48,7 +48,7 @@ def test_upload_convert_analyze_flow(client, monkeypatch):
     )
     assert resp.status_code == 200
     conv = resp.get_json()
-    assert conv["xkt_url"] == f"/static/converted/{file_id}.xkt"
+    assert conv["xkt_url"] == f"/models/{file_id}.xkt"
     xkt_path = Path(os.environ.get("OUTPUT_FOLDER", "/tmp/converted")) / f"{file_id}.xkt"
     assert xkt_path.exists()
     assert Path(conv["preview_png"]).exists()

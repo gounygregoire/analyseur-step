@@ -1,7 +1,6 @@
 import {
   Viewer,
   XKTLoaderPlugin,
-  EdgesPlugin,
   SectionPlanesPlugin,
   DistanceMeasurementsPlugin,
   AnnotationsPlugin
@@ -10,33 +9,42 @@ import {
 let cameraPresetOptionalLogged = false;
 export async function loadCameraPresetOptional(url) {
   if (!cameraPresetOptionalLogged) {
-    console.log("[viewer] camera preset optional mode");
+    console.log('[viewer] camera preset optional');
     cameraPresetOptionalLogged = true;
   }
   try {
-    const r = await fetch(url, { cache: "no-store" });
+    const r = await fetch(url, { cache: 'no-store' });
     if (!r.ok) return null;
     return await r.json();
-  } catch (e) {
-    console.warn("[viewer] preset skipped", e);
+  } catch (_) {
     return null;
   }
 }
 
-export function xktUrlFrom(fileId) {
-  return `/static/converted/${fileId}.xkt`;
-}
+const xktUrlCandidates = (id) => [
+  `/static/converted/${id}.xkt`,
+  `/models/${id}.xkt`
+];
 
 // Méthode publique appelée par l’orchestrateur
 export async function loadFromFileId(fileId) {
-  const url = xktUrlFrom(fileId);
-  console.log("[viewer] loadFromFileId", { fileId, url });
-  console.time("[viewer] xkt load");
-  const model = await xktLoader.load({ src: url });
-  console.timeEnd("[viewer] xkt load");
-  const aabb = (model && model.aabb) || viewer.scene.aabb;
-  if (aabb) viewer.cameraControl.fit(aabb);
-  console.log("[viewer] fit ok", aabb);
+  const urls = xktUrlCandidates(fileId);
+  let lastErr;
+  for (const url of urls) {
+    try {
+      console.log('[viewer] try xkt', url);
+      console.time('[viewer] xkt load');
+      const model = await xktLoader.load({ src: url });
+      console.timeEnd('[viewer] xkt load');
+      const aabb = (model && model.aabb) || viewer.scene.aabb;
+      if (aabb) viewer.cameraControl.fit(aabb);
+      console.log('[viewer] fit ok', aabb);
+      return;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  console.error('[viewer] all xkt URLs failed', urls, lastErr);
 }
 
 try { viewer.canvas.canvas.style.background = "#222"; } catch (e) {}
@@ -77,7 +85,6 @@ export class XeokitModelViewer extends EventTarget {
     this.viewer.scene.clearColor = [0.06, 0.07, 0.09, 1];
     this.viewer.cameraFlight.fitFOV = 20;
     this.loader = new XKTLoaderPlugin(this.viewer);
-    this.edges = new EdgesPlugin(this.viewer);
     this.sections = new SectionPlanesPlugin(this.viewer);
     this.measure = new DistanceMeasurementsPlugin(this.viewer);
     this.annotations = new AnnotationsPlugin(this.viewer, {});
@@ -121,37 +128,47 @@ export class XeokitModelViewer extends EventTarget {
   async loadFromFileId(fileId) {
     if (!fileId) return;
     this._exposeFileId(fileId);
-    const url = xktUrlFrom(fileId);
-    console.log('[viewer] file_id=', fileId, 'xkt=', url);
-    try {
-      const head = await fetch(url, { method: 'HEAD' });
-      if (head.ok) console.log('[viewer] GET', url, 'ok');
-    } catch (_) {
-      /* ignore HEAD errors */
-    }
-    console.time('[viewer] load');
-    if (this.model) {
-      this.model.destroy();
-    }
-    const model = await this.loader.load({ id: this.modelId, src: url });
-    console.timeEnd('[viewer] load');
-    this.model = model;
-    this.lastAABB = [...model.aabb];
-    const preset = await loadCameraPresetOptional(`/static/dfm/${fileId}/camera_states.json`);
-    const fit = () => {
-      if (preset) {
-        this.viewer.camera.setState(preset);
-      } else {
-        this.viewer.cameraControl.fit(model.aabb);
+    const urls = xktUrlCandidates(fileId);
+    let lastErr;
+    for (const url of urls) {
+      console.log('[viewer] file_id=', fileId, 'xkt=', url);
+      try {
+        const head = await fetch(url, { method: 'HEAD' });
+        if (head.ok) console.log('[viewer] GET', url, 'ok');
+      } catch (_) {
+        /* ignore HEAD errors */
       }
-      centerPivotOnAABB(this.viewer, model.aabb);
-    };
-    if (model.built) {
-      fit();
-    } else {
-      model.on('built', fit);
+      console.time('[viewer] load');
+      if (this.model) {
+        this.model.destroy();
+      }
+      try {
+        const model = await this.loader.load({ id: this.modelId, src: url });
+        console.timeEnd('[viewer] load');
+        this.model = model;
+        this.lastAABB = [...model.aabb];
+        const preset = await loadCameraPresetOptional(`/static/dfm/${fileId}/camera_states.json`);
+        const fit = () => {
+          if (preset) {
+            this.viewer.camera.setState(preset);
+          } else {
+            this.viewer.cameraControl.fit(model.aabb);
+          }
+          centerPivotOnAABB(this.viewer, model.aabb);
+        };
+        if (model.built) {
+          fit();
+        } else {
+          model.on('built', fit);
+        }
+        this.dispatchEvent(new CustomEvent('onAssetLoaded', { detail: { url } }));
+        return;
+      } catch (e) {
+        console.timeEnd('[viewer] load');
+        lastErr = e;
+      }
     }
-    this.dispatchEvent(new CustomEvent('onAssetLoaded', { detail: { url } }));
+    console.error('[viewer] all xkt URLs failed', urls, lastErr);
   }
 
   // --- chargement ---------------------------------------------------------
@@ -282,7 +299,7 @@ export class XeokitModelViewer extends EventTarget {
 
   // --- wireframe ----------------------------------------------------------
   toggleWireframe(on) {
-    this.edges.enabled = on;
+    console.warn('[viewer] EdgesPlugin indisponible en v2');
   }
 
   // --- DFM issues ---------------------------------------------------------
@@ -325,6 +342,22 @@ export class XeokitModelViewer extends EventTarget {
     }
   }
 }
+
+// Désactive le bouton "Arêtes" si présent
+function disableEdgesButton() {
+  const ids = ["edgesBtn", "toggleEdgesBtn", "wireframeBtn"]; // variantes possibles
+  ids.forEach((id) => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    const clone = btn.cloneNode(true);
+    btn.parentNode.replaceChild(clone, btn); // supprime les handlers existants
+    clone.addEventListener("click", () => {
+      console.warn('[viewer] EdgesPlugin indisponible en v2');
+    });
+  });
+}
+
+window.addEventListener("DOMContentLoaded", disableEdgesButton);
 
 // ==== CADLYTICS: MATERIAL PROFILE BLOCK - BEGIN ====
 if (typeof collectMaterialForm !== 'function') {
