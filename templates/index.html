@@ -23,6 +23,9 @@
     
     <!-- Custom CSS -->
     <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+    <style>
+      #dfmAxisPanel, #axis-panel { display: none; }
+    </style>
     
     <!-- Favicon -->
     <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}">
@@ -32,7 +35,6 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css">
 
     <script>window.CAD={fileIdStep:null,materialProfile:null,axis:{x:0,y:0,z:1},currentJobId:null};</script>
-    <script type="module" src="/static/dist/main.js" defer></script>
 
     <!-- Plausible Analytics -->
     <script async defer data-domain="cadlytics.replit.app" src="https://plausible.io/js/script.js"></script>
@@ -200,7 +202,7 @@
         <button id="measureBtn" class="btn btn-sm btn-light"  title="Mesure (M)">Mesure</button>
         <button id="sectionBtn" class="btn btn-sm btn-light"  title="Coupes (X)">Coupes</button>
         <!-- Bouton "Arêtes" pilote le mode filaire (fallback) dans main.js -->
-        <button id="edgesBtn"   class="btn btn-sm btn-light"  title="Arêtes / Filaire">Arêtes</button>
+        <button id="edgesBtn"   class="btn btn-sm btn-light"  title="Arêtes / Filaire" disabled>Arêtes</button>
         <button id="resetBtn"   class="btn btn-sm btn-light"  title="Réinitialiser (R)">Reset</button>
         <button id="pngBtn"     class="btn btn-sm btn-light"  title="Exporter PNG">PNG</button>
       </div>
@@ -250,7 +252,7 @@
     <!-- === FIN CONTENEUR VIEWER === -->
 
     <!-- Panneau de sélection d'axe (nouveau) -->
-    <div id="dfmAxisPanel" class="card mt-3">
+    <div id="dfmAxisPanel" class="card mt-3" style="display:none;">
       <div class="card-body">
         <div class="btn-group mb-3" role="group" aria-label="Choix de l'axe">
           <button type="button" class="btn btn-outline-primary" id="axisXBtn">X</button>
@@ -736,42 +738,7 @@
         </div>
     </footer>
 
-            <script>
-              document.addEventListener('DOMContentLoaded', () => {
-                const model = document.body.dataset.model;
-
-                const showTools = () => {
-                  const panel = document.getElementById('viewerToolsPanel');
-                  if (panel) panel.style.display = 'block';
-                  const dfm = document.getElementById('dfmControls');
-                  if (dfm) dfm.style.display = 'flex';
-                };
-
-                const loadModel = () => {
-                  if (!model || !window.viewer || typeof window.viewer.loadModel !== 'function') return;
-                  window.viewer.loadModel('/view/' + model);
-                  showTools();
-                };
-
-                const ensureViewer = () => {
-                  if (window.viewer) {
-                    loadModel();
-                    return;
-                  }
-                  if (typeof Viewer === 'undefined') {
-                    setTimeout(ensureViewer, 500);
-                    return;
-                  }
-                  if (typeof initViewer === 'function') {
-                    initViewer();
-                    loadModel();
-                  }
-                };
-
-                ensureViewer();
-              });
-              </script>
-              <button id="debugFileId" class="btn btn-sm btn-secondary d-none">Debug file_id</button>
+            <button id="debugFileId" class="btn btn-sm btn-secondary d-none">Debug file_id</button>
 
 <script type="module" src="{{ url_for('static', filename='js/criteria-modal.js') }}" defer></script>
 <script type="module" src="{{ url_for('static', filename='js/DFMOrchestrator.js') }}" defer></script>

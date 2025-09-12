@@ -134,7 +134,7 @@ def convert_step() -> tuple[Any, int]:
         )
     current_app.logger.info("conversion ok for %s in %.1fs", file_id, duration)
     current_app.logger.info("XKT written → %s", os.path.abspath(xkt_path))
-    current_app.logger.info("XKT available at /models/%s.xkt.", file_id)
+    current_app.logger.info(f"[convert] XKT available at /models/{file_id}.xkt")
     try:
         from generate_thumbnails import generate_thumbnails
         thumbs = generate_thumbnails(step_path, OUTPUT_FOLDER)
@@ -148,14 +148,13 @@ def convert_step() -> tuple[Any, int]:
     except Exception as exc:  # fail soft
         current_app.logger.warning("history convert failed for %s: %s", file_id, exc)
 
-    return (
-        jsonify({
-            "file_id": file_id,
-            "xkt_url": f"/models/{file_id}.xkt",
-            "preview_png": preview_path,
-        }),
-        200,
-    )
+    response = {
+        "file_id": file_id,
+        "xkt_url": f"/models/{file_id}.xkt",
+    }
+    if os.path.isfile(preview_path):
+        response["preview_png"] = f"/models/{file_id}.png"
+    return jsonify(response), 200
 
 
 @api_contract_bp.post("/analyze")

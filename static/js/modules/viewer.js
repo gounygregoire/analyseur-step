@@ -1,49 +1,66 @@
-import { Viewer, XKTLoaderPlugin, CameraControl, CameraFlightAnimation } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@2/dist/xeokit-sdk.es.js";
+import { Viewer, XKTLoaderPlugin }
+  from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@2/dist/xeokit-sdk.es.js";
 
-// Initialise le viewer Xeokit (v2) sans EdgesPlugin
-const _viewer = new Viewer({
-  canvasId: "viewerCanvas",
-  transparent: false,
-});
-new CameraControl(_viewer);
-new CameraFlightAnimation(_viewer);
-const xktLoader = new XKTLoaderPlugin(_viewer);
+// Instancie le viewer v2 sans plugins obsolètes
+const viewer = new Viewer({ canvasId: "viewer3d" });
+const xktLoader = new XKTLoaderPlugin(viewer);
 
-// Liste des emplacements possibles pour les fichiers XKT
-const xktUrlCandidates = (id) => [
-  `/static/converted/${id}.xkt`,
-  `/models/${id}.xkt`,
-];
-
-// Charge un modèle à partir d'un fileId en essayant plusieurs URLs
-export async function loadFromFileId(fileId) {
-  let lastErr;
-  const urls = xktUrlCandidates(fileId);
-  for (const url of urls) {
-    try {
-      console.log('[viewer] try xkt', url);
-      console.time('[viewer] xkt load');
-      const model = await xktLoader.load({ src: url });
-      console.timeEnd('[viewer] xkt load');
-      const aabb = (model && model.aabb) || _viewer.scene.aabb;
-      _viewer.cameraControl.fit(aabb);
-      console.log('[viewer] fit ok', aabb);
-      return;
-    } catch (e) {
-      lastErr = e;
+// Expose un adaptateur global pour l'orchestrateur
+window.viewerAdapter = {
+  viewer,
+  async loadFromFileId(fileId) {
+    const urls = [`/static/converted/${fileId}.xkt`, `/models/${fileId}.xkt`];
+    let lastErr;
+    for (const url of urls) {
+      try {
+        console.log("[viewer] try xkt", url);
+        console.time("[viewer] xkt load");
+        const model = await xktLoader.load({ src: url });
+        console.timeEnd("[viewer] xkt load");
+        const aabb = (model && model.aabb) || viewer.scene.aabb;
+        if (aabb) {
+          viewer.cameraControl.fit(aabb);
+          console.log("[viewer] fit ok", aabb);
+        }
+        return true;
+      } catch (e) {
+        lastErr = e;
+      }
     }
+    console.error("[viewer] all xkt URLs failed", urls, lastErr);
+    return false;
   }
-  console.error('[viewer] all xkt URLs failed', urls, lastErr);
-}
-
-try { _viewer.canvas.canvas.style.background = '#222'; } catch (e) {}
-
-// Expose l'API minimale attendue par l'orchestrateur
-window.viewer = {
-  loadFromFileId,
-  scene: _viewer.scene,
-  cameraControl: _viewer.cameraControl,
-  cameraFlight: _viewer.cameraFlight,
 };
 
-export default window.viewer;
+try { viewer.canvas.canvas.style.background = "#222"; } catch (e) {}
+
+// Bouton arêtes désactivé (fonction edges indisponible en v2)
+const edgesBtn = document.getElementById("edgesBtn");
+if (edgesBtn) {
+  edgesBtn.disabled = true;
+  console.warn("[viewer] edges disabled (xeokit v2)");
+  edgesBtn.addEventListener("click", () => {
+    console.warn("[viewer] edges disabled (xeokit v2)");
+  });
+}
+
+export default window.viewerAdapter;
+
+// Charge et applique une position de caméra si disponible
+export async function loadCameraPresetOptional(url) {
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return null;
+    const cam = await res.json();
+    if (cam?.eye && cam?.look && cam?.up) {
+      viewer.camera.eye = cam.eye;
+      viewer.camera.look = cam.look;
+      viewer.camera.up = cam.up;
+      console.log("[viewer] preset caméra appliqué", url);
+    }
+    return cam;
+  } catch (e) {
+    console.warn("[viewer] preset caméra absent", url);
+    return null;
+  }
+}
