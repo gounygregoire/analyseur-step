@@ -134,7 +134,7 @@ def convert_step() -> tuple[Any, int]:
         )
     current_app.logger.info("conversion ok for %s in %.1fs", file_id, duration)
     current_app.logger.info("XKT written → %s", os.path.abspath(xkt_path))
-    current_app.logger.info("XKT available at /models/%s.xkt", file_id)
+    current_app.logger.info("XKT available at /models/%s.xkt.", file_id)
     try:
         from generate_thumbnails import generate_thumbnails
         thumbs = generate_thumbnails(step_path, OUTPUT_FOLDER)
