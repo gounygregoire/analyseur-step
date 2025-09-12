@@ -71,6 +71,11 @@ export async function initViewer(modelUrl) {
     window.viewerAdapter.viewer = viewer;
     window.viewerAdapter.loadFromFileId = async function(fileId) {
       if (!fileId) return false;
+      // Nettoie l'ancien modèle pour éviter les collisions d'ID dans Xeokit
+      if (viewer.model) {
+        try { viewer.model.destroy?.(); } catch (err) { console.warn('[viewer] destroy failed', err); }
+        viewer.model = null;
+      }
       const urls = [
         `/static/converted/${fileId}.xkt`,
         `/models/${fileId}.xkt`
@@ -79,7 +84,7 @@ export async function initViewer(modelUrl) {
       for (const url of urls) {
         try {
           console.log("[viewer] try xkt", url);
-          const model = await xktLoader.load({ id: "current", src: url });
+          const model = await xktLoader.load({ id: fileId, src: url });
           viewer.model = model;
           const aabb = viewer.scene.getAABB();
           try {
