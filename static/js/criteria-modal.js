@@ -238,31 +238,48 @@ function validateForm() {
   };
 }
 
-// Récupère toutes les valeurs du formulaire matière
-function collectMaterialFromForm() {
+// Récupère toutes les valeurs du questionnaire (sans choix de résine)
+function collectQuestionnaire() {
   const form = document.getElementById("materialQuestionnaireForm");
-  if (!form) return null;
+  if (!form) return {};
   const fd = new FormData(form);
-  const resin = fd.get("resin");
-  if (!resin) {
-    toast("Choisis une matière avant de valider");
-    return null;
-  }
-  const profile = {
-    id: resin,
-    draft_min_deg: parseFloat(fd.get("draft_min_deg")) || 1.0,
-  };
+  const obj = {};
   fd.forEach((v, k) => {
-    if (k === "resin" || k === "draft_min_deg") return;
-    const key = k.replace("[]", "");
-    if (profile[key]) {
-      if (!Array.isArray(profile[key])) profile[key] = [profile[key]];
-      profile[key].push(v);
+    const key = k.endsWith('[]') ? k.slice(0, -2) : k;
+    if (obj[key]) {
+      if (!Array.isArray(obj[key])) obj[key] = [obj[key]];
+      obj[key].push(v);
     } else {
-      profile[key] = v;
+      obj[key] = v;
     }
   });
-  return profile;
+  return obj;
+}
+
+async function fetchRecommendations(questionnaire) {
+  const res = await fetch('/api/material-recommendations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ questionnaire })
+  });
+  if (!res.ok) throw new Error('recommandations échouées');
+  const data = await res.json();
+  return data.recommendations || [];
+}
+
+  function renderRecommendations(recs) {
+    const container = document.getElementById('materialOptions');
+  if (!container) return;
+  container.innerHTML = '';
+  recs.forEach((r, i) => {
+    const div = document.createElement('div');
+    div.className = 'form-check';
+    div.innerHTML = `
+      <input class="form-check-input" type="radio" name="material_choice" id="rec_${i}" value="${r.id}">
+      <label class="form-check-label" for="rec_${i}">${r.name} - ${r.score}%</label>`;
+    container.appendChild(div);
+  });
+  container.classList.remove('d-none');
 }
 
 // === Initialisation ===
@@ -273,41 +290,47 @@ document.addEventListener("DOMContentLoaded", () => {
     bootstrap.Modal.getOrCreateInstance(el, { backdrop: "static" });
   }
 
-  document.querySelectorAll(".criterion").forEach((cb) => {
-    cb.addEventListener("change", (e) => {
-      const el = e.target;
-      if (el.checked) {
-        if (!checkLimits(el) || !checkHardConflicts(el.id)) {
-          el.checked = false;
-          return;
-        }
-      }
-      enforceExclusives(el.id);
-      evaluate();
-    });
-  });
+  let recommendations = null;
 
   document
     .getElementById("materialConfirmBtn")
-    ?.addEventListener("click", (e) => {
-      const res = validateForm();
-      if (!res.ok) {
-        e.preventDefault();
-        const first = document.getElementById(res.hardErrors[0]);
-        first?.scrollIntoView({ behavior: "smooth", block: "center" });
-        first?.focus();
+    ?.addEventListener("click", async (e) => {
+      const questionnaire = collectQuestionnaire();
+      if (!recommendations) {
+        try {
+          recommendations = await fetchRecommendations(questionnaire);
+          if (!recommendations.length) {
+            toast('Aucune recommandation trouvée');
+            return;
+          }
+          renderRecommendations(recommendations);
+          e.target.innerHTML = '<i class="bi bi-check-circle me-2"></i>Valider';
+          return;
+        } catch (err) {
+          console.error(err);
+          toast('Erreur lors de la recommandation');
+          return;
+        }
+      }
+
+      const selected = document.querySelector('input[name="material_choice"]:checked');
+      if (!selected) {
+        toast('Choisis une matière recommandée');
         return;
       }
-      // Émission de l'event material:selected
-      const materialProfile = collectMaterialFromForm();
-      if (!materialProfile) {
-        e.preventDefault();
-        return;
-      }
-      materialProfile.criteria = res.payload;
+
+      const materialProfile = {
+        id: selected.value,
+        draft_min_deg: 1.0,
+        criteria: questionnaire
+      };
       console.debug('[DFM] material:selected emit', materialProfile);
       window.dispatchEvent(new CustomEvent('material:selected', { detail: { materialProfile }}));
       bootstrap.Modal.getOrCreateInstance(document.getElementById('materialModal'))?.hide();
+      recommendations = null;
+      const container = document.getElementById('materialOptions');
+      if (container) { container.innerHTML=''; container.classList.add('d-none'); }
+      e.target.innerHTML = '<i class="bi bi-check-circle me-2"></i>Analyser et recommander';
     });
 
   evaluate();
