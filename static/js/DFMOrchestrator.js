@@ -18,7 +18,6 @@ if (typeof window !== "undefined") {
 
 // Sélecteurs compatibles (deux variantes d'ID)
 const btnVisualiser = document.querySelector("#btn-visualiser, #visualizeBtn");
-const btnAnalyser = document.querySelector("#analyzeBtn, #btn-analyser");
 const axisPanel = document.querySelector("#dfmAxisPanel, #axis-panel");
 
 // État initial : cacher l'axe mais laisser Analyser cliquable
@@ -864,63 +863,5 @@ if (btnVisualiser) {
     if (!va?.loadFromFileId) { console.error("[visualiser] viewerAdapter missing"); return; }
     await va.loadFromFileId(payload.file_id || fid);
     console.log("[visualiser] done");
-  });
-}
-
-// Gating axe & matière / clic "Analyser"
-function materialIsConfirmed() { return !!window.selectedMaterial; }
-function axisIsValidated() { return !!window.selectedAxis; }
-
-function showAxisPanel() {
-  if (!axisPanel) return;
-  // garde-fou : axe visible uniquement si fileId + matière
-  if (!window.currentFileId || !materialIsConfirmed()) return;
-  axisPanel.style.display = "";
-}
-
-// Hooks de confirmation
-window.addEventListener("material:confirmed", () => {
-  showAxisPanel();
-});
-
-window.addEventListener("axis:confirmed", (e) => {
-  window.selectedAxis = e?.detail;
-});
-
-// Clic "Analyser"
-if (btnAnalyser) {
-  btnAnalyser.addEventListener("click", async () => {
-    if (!window.currentFileId) { openMaterialModal?.(); return; }
-    if (!materialIsConfirmed()) { openMaterialModal?.(); return; }
-    if (!axisIsValidated()) { showAxisPanel(); return; }
-
-    const payload = {
-      file_id: window.currentFileId,
-      axis: window.selectedAxis?.axis || "auto",
-      invert: !!window.selectedAxis?.invert,
-      material: window.selectedMaterial?.id || window.selectedMaterial
-    };
-    console.log("[dfm] start", payload);
-    const res = await fetch("/api/simple/analyze", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-    console.log("[dfm] analyze status", res.status);
-
-    const t0 = Date.now();
-    while (Date.now() - t0 < 120000) {
-      const r = await fetch(`/api/simple/report/${window.currentFileId}`, { cache: "no-store" });
-      if (r.status === 200) {
-        const data = await r.json();
-        console.log("[dfm] report", data);
-        renderDFMResults?.({
-          score: data.score ?? 0,
-          recommendations: Array.isArray(data.recommendations) ? data.recommendations : [],
-          metrics: data.metrics ?? {}
-        });
-        break;
-      }
-      await new Promise(res => setTimeout(res, 2500));
-    }
   });
 }
