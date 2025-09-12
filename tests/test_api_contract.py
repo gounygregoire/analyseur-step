@@ -38,20 +38,22 @@ def test_upload_convert_analyze_flow(client, monkeypatch):
     assert "xkt_ready" not in entry
 
     def fake_run(cmd, capture_output, text, timeout):
-        Path(cmd[3]).write_bytes(b"x")
+        Path(cmd[2]).write_bytes(b"x")
         return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
 
     monkeypatch.setattr("app.api.contract_routes.subprocess.run", fake_run)
 
-    resp = client.post(
-        "/api/simple/convert", json={"file_id": file_id, "tolerance": 0.1}
-    )
+    resp = client.post("/api/simple/convert", json={"file_id": file_id})
     assert resp.status_code == 200
     conv = resp.get_json()
     assert conv["xkt_url"] == f"/models/{file_id}.xkt"
     xkt_path = Path(os.environ.get("OUTPUT_FOLDER", "/tmp/converted")) / f"{file_id}.xkt"
     assert xkt_path.exists()
-    assert Path(conv["preview_png"]).exists()
+    preview_real = Path(os.environ.get("OUTPUT_FOLDER", "/tmp/converted")) / f"{file_id}.png"
+    assert preview_real.exists()
+    # GET /models route
+    r = client.get(conv["xkt_url"])
+    assert r.status_code == 200
 
     hist = client.get("/api/simple/history").get_json()
     entry = next(e for e in hist if e["file_id"] == file_id)
@@ -87,8 +89,7 @@ def test_convert_missing_file_id(client):
     resp = client.post("/api/simple/convert", json={})
     assert resp.status_code == 400
     data = resp.get_json()
-    assert data["error"] == "missing_or_unknown_file_id"
-    assert "message" in data
+    assert data["error"] == "missing_file_id"
 
 
 def test_convert_unknown_file_id(client):
@@ -96,23 +97,29 @@ def test_convert_unknown_file_id(client):
     assert resp.status_code == 400
     data = resp.get_json()
     assert data["error"] == "missing_or_unknown_file_id"
-    assert "message" in data
 
 
-def test_convert_invalid_tolerance(client):
+def test_convert_idempotent(client, monkeypatch):
     with SAMPLE_STEP.open("rb") as fh:
         resp = client.post("/api/simple/upload", data={"file": fh})
     file_id = resp.get_json()["file_id"]
-    resp = client.post(
-        "/api/simple/convert", json={"file_id": file_id, "tolerance": "Standard (0.1mm)"}
-    )
-    assert resp.status_code == 422
-    data = resp.get_json()
-    assert data["error"] == "invalid_tolerance"
-    assert "message" in data
+
+    def fake_run(cmd, capture_output, text, timeout):
+        Path(cmd[2]).write_bytes(b"x")
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("app.api.contract_routes.subprocess.run", fake_run)
+    client.post("/api/simple/convert", json={"file_id": file_id})
+
+    def fail_run(*args, **kwargs):  # should not be called
+        raise AssertionError("should not run")
+
+    monkeypatch.setattr("app.api.contract_routes.subprocess.run", fail_run)
+    resp = client.post("/api/simple/convert", json={"file_id": file_id})
+    assert resp.status_code == 200
 
 
-def test_convert_failure_returns_502(client, monkeypatch):
+def test_convert_failure_returns_500(client, monkeypatch):
     with SAMPLE_STEP.open("rb") as fh:
         resp = client.post("/api/simple/upload", data={"file": fh})
     file_id = resp.get_json()["file_id"]
@@ -122,10 +129,21 @@ def test_convert_failure_returns_502(client, monkeypatch):
 
     monkeypatch.setattr("app.api.contract_routes.subprocess.run", fail_run)
 
-    resp = client.post(
-        "/api/simple/convert", json={"file_id": file_id, "tolerance": 0.1}
-    )
-    assert resp.status_code == 502
+    resp = client.post("/api/simple/convert", json={"file_id": file_id})
+    assert resp.status_code == 500
     body = resp.get_json()
-    assert body["error"] == "xkt_convert_failed"
-    assert "boom" in body["message"]
+    assert body["error"] == "convert_failed"
+    assert "boom" in body["stderr"]
+
+
+def test_models_route_serves_xkt(client):
+    out = Path(os.environ.get("OUTPUT_FOLDER", "/tmp/converted"))
+    out.mkdir(parents=True, exist_ok=True)
+    p = out / "dummy.xkt"
+    p.write_bytes(b"abc")
+    resp = client.get("/models/dummy.xkt")
+    assert resp.status_code == 200
+    assert resp.data == b"abc"
+    assert resp.mimetype == "model/xkt"
+    resp = client.get("/models/missing.xkt")
+    assert resp.status_code == 404
