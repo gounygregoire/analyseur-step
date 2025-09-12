@@ -241,10 +241,15 @@ function validateForm() {
 // Récupère toutes les valeurs du formulaire matière
 function collectMaterialFromForm() {
   const form = document.getElementById("materialQuestionnaireForm");
-  if (!form) return {};
+  if (!form) return null;
   const fd = new FormData(form);
+  const resin = fd.get("resin");
+  if (!resin) {
+    toast("Choisis une matière avant de valider");
+    return null;
+  }
   const profile = {
-    id: fd.get("resin") || "GENERIC",
+    id: resin,
     draft_min_deg: parseFloat(fd.get("draft_min_deg")) || 1.0,
   };
   fd.forEach((v, k) => {
@@ -295,6 +300,10 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       // Émission de l'event material:selected
       const materialProfile = collectMaterialFromForm();
+      if (!materialProfile) {
+        e.preventDefault();
+        return;
+      }
       materialProfile.criteria = res.payload;
       console.debug('[DFM] material:selected emit', materialProfile);
       window.dispatchEvent(new CustomEvent('material:selected', { detail: { materialProfile }}));

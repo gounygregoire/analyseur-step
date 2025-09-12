@@ -483,10 +483,11 @@ class DFMOrchestrator {
 
   async handleAnalyzeClick(){
     console.info('[dfm] analyse demandée');
-    if (!window.currentFileId) { console.info('[dfm] demande fichier'); openMaterialModal(); return; }
+    const fileId = this.resolveFileId();
+    if (!fileId) { console.info('[dfm] demande fichier'); openMaterialModal(); return; }
     if (!materialIsConfirmed()) { console.info('[dfm] demande matière'); openMaterialModal(); return; }
     if (!axisIsValidated()) { console.info('[dfm] demande axe'); showAxisPanel(); return; }
-    this.setFileId(window.currentFileId);
+    this.setFileId(fileId);
     await this.startDFM();
   }
 
