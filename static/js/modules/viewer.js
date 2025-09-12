@@ -1,43 +1,32 @@
-import {
-  Viewer,
-  XKTLoaderPlugin,
-  SectionPlanesPlugin,
-  DistanceMeasurementsPlugin,
-  AnnotationsPlugin
-} from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@2/dist/xeokit-sdk.es.js";
+import { Viewer, XKTLoaderPlugin, CameraControl, CameraFlightAnimation } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@2/dist/xeokit-sdk.es.js";
 
-let cameraPresetOptionalLogged = false;
-export async function loadCameraPresetOptional(url) {
-  if (!cameraPresetOptionalLogged) {
-    console.log('[viewer] camera preset optional');
-    cameraPresetOptionalLogged = true;
-  }
-  try {
-    const r = await fetch(url, { cache: 'no-store' });
-    if (!r.ok) return null;
-    return await r.json();
-  } catch (_) {
-    return null;
-  }
-}
+// Initialise le viewer Xeokit (v2) sans EdgesPlugin
+const _viewer = new Viewer({
+  canvasId: "viewerCanvas",
+  transparent: false,
+});
+new CameraControl(_viewer);
+new CameraFlightAnimation(_viewer);
+const xktLoader = new XKTLoaderPlugin(_viewer);
 
+// Liste des emplacements possibles pour les fichiers XKT
 const xktUrlCandidates = (id) => [
   `/static/converted/${id}.xkt`,
-  `/models/${id}.xkt`
+  `/models/${id}.xkt`,
 ];
 
-// Méthode publique appelée par l’orchestrateur
+// Charge un modèle à partir d'un fileId en essayant plusieurs URLs
 export async function loadFromFileId(fileId) {
-  const urls = xktUrlCandidates(fileId);
   let lastErr;
+  const urls = xktUrlCandidates(fileId);
   for (const url of urls) {
     try {
       console.log('[viewer] try xkt', url);
       console.time('[viewer] xkt load');
       const model = await xktLoader.load({ src: url });
       console.timeEnd('[viewer] xkt load');
-      const aabb = (model && model.aabb) || viewer.scene.aabb;
-      if (aabb) viewer.cameraControl.fit(aabb);
+      const aabb = (model && model.aabb) || _viewer.scene.aabb;
+      _viewer.cameraControl.fit(aabb);
       console.log('[viewer] fit ok', aabb);
       return;
     } catch (e) {
@@ -47,376 +36,14 @@ export async function loadFromFileId(fileId) {
   console.error('[viewer] all xkt URLs failed', urls, lastErr);
 }
 
-try { viewer.canvas.canvas.style.background = "#222"; } catch (e) {}
+try { _viewer.canvas.canvas.style.background = '#222'; } catch (e) {}
 
-export function flyToAABB(viewer, aabb, duration = 0.8, padding = 1.15) {
-  if (!viewer || !aabb) return;
-  const [minX, minY, minZ, maxX, maxY, maxZ] = aabb;
-  const cx = (minX + maxX) / 2;
-  const cy = (minY + maxY) / 2;
-  const cz = (minZ + maxZ) / 2;
-  const dx = ((maxX - minX) * padding) / 2;
-  const dy = ((maxY - minY) * padding) / 2;
-  const dz = ((maxZ - minZ) * padding) / 2;
-  viewer.cameraFlight.flyTo({
-    aabb: [cx - dx, cy - dy, cz - dz, cx + dx, cy + dy, cz + dz],
-    duration,
-  });
-}
+// Expose l'API minimale attendue par l'orchestrateur
+window.viewer = {
+  loadFromFileId,
+  scene: _viewer.scene,
+  cameraControl: _viewer.cameraControl,
+  cameraFlight: _viewer.cameraFlight,
+};
 
-export function centerPivotOnAABB(viewer, aabb) {
-  if (!viewer || !aabb) return;
-  const [minX, minY, minZ, maxX, maxY, maxZ] = aabb;
-  const cx = (minX + maxX) / 2;
-  const cy = (minY + maxY) / 2;
-  const cz = (minZ + maxZ) / 2;
-  viewer.cameraControl.pivotPoint = [cx, cy, cz];
-  viewer.cameraControl.followPointer = true;
-}
-
-// Gestionnaire de visualisation avec swap preview/final + overlay DFM
-export class XeokitModelViewer extends EventTarget {
-  constructor(canvasId) {
-    super();
-    this.viewer = new Viewer({
-      canvasId,
-      transparent: false,
-    });
-    this.viewer.scene.clearColor = [0.06, 0.07, 0.09, 1];
-    this.viewer.cameraFlight.fitFOV = 20;
-    this.loader = new XKTLoaderPlugin(this.viewer);
-    this.sections = new SectionPlanesPlugin(this.viewer);
-    this.measure = new DistanceMeasurementsPlugin(this.viewer);
-    this.annotations = new AnnotationsPlugin(this.viewer, {});
-    this.modelId = "model"; // identifiant constant pour swap
-    this.previewUrl = null;
-    this.finalUrl = null;
-    this.currentQuality = null; // 'preview' | 'final'
-    this.heatmapActive = false;
-    this.colorBuffer = null; // stocke vertex/face colors
-    this.lastAABB = null;
-    this.fileId = null;
-    window.addEventListener("resize", () => {
-      if (this.lastAABB) {
-        flyToAABB(this.viewer, this.lastAABB);
-      }
-    });
-  }
-
-  // === Mini-patch : expose l’ID côté front (DOM + global + event)
-  _exposeFileId(incomingId) {
-    if (!incomingId) return;
-    if (!this.fileId) this.fileId = incomingId;
-    else if (this.fileId !== incomingId)
-      console.warn('[ID] ignore new id', incomingId, 'keep', this.fileId);
-
-    const fileId = this.fileId;
-
-    document.body.dataset.fileid = fileId;
-    window.CADLYTICS = window.CADLYTICS || {};
-    window.CADLYTICS.current = { jobId: fileId, modelId: fileId };
-    window.viewerAdapter = window.viewerAdapter || {};
-    window.viewerAdapter.current = { jobId: fileId, modelId: fileId };
-    const hidden = document.getElementById('fileId');
-    if (hidden && hidden.type === 'hidden') hidden.value = fileId;
-    window.dispatchEvent(new CustomEvent('dfm:fileReady', { detail: { fileId } }));
-    window.state = window.state || {};
-    window.state.fileLoaded = true;
-    console.debug('[VIEWER] fileId exposé:', fileId);
-  }
-
-  async loadFromFileId(fileId) {
-    if (!fileId) return;
-    this._exposeFileId(fileId);
-    const urls = xktUrlCandidates(fileId);
-    let lastErr;
-    for (const url of urls) {
-      console.log('[viewer] file_id=', fileId, 'xkt=', url);
-      try {
-        const head = await fetch(url, { method: 'HEAD' });
-        if (head.ok) console.log('[viewer] GET', url, 'ok');
-      } catch (_) {
-        /* ignore HEAD errors */
-      }
-      console.time('[viewer] load');
-      if (this.model) {
-        this.model.destroy();
-      }
-      try {
-        const model = await this.loader.load({ id: this.modelId, src: url });
-        console.timeEnd('[viewer] load');
-        this.model = model;
-        this.lastAABB = [...model.aabb];
-        const preset = await loadCameraPresetOptional(`/static/dfm/${fileId}/camera_states.json`);
-        const fit = () => {
-          if (preset) {
-            this.viewer.camera.setState(preset);
-          } else {
-            this.viewer.cameraControl.fit(model.aabb);
-          }
-          centerPivotOnAABB(this.viewer, model.aabb);
-        };
-        if (model.built) {
-          fit();
-        } else {
-          model.on('built', fit);
-        }
-        this.dispatchEvent(new CustomEvent('onAssetLoaded', { detail: { url } }));
-        return;
-      } catch (e) {
-        console.timeEnd('[viewer] load');
-        lastErr = e;
-      }
-    }
-    console.error('[viewer] all xkt URLs failed', urls, lastErr);
-  }
-
-  // --- chargement ---------------------------------------------------------
-  async load(url, { quality = "preview", apiId } = {}) {
-    const cam = this.viewer.camera.getState();
-    if (this.model) {
-      this.model.destroy();
-    }
-    console.time('[viewer] load');
-    this.model = await this.loader.load({ id: this.modelId, src: url });
-    console.timeEnd('[viewer] load');
-    if (this.model?.meshes?.length <= 1) {
-      document.getElementById('explodeBtn')?.remove();
-      document.getElementById('isolateBtn')?.remove();
-    }
-    this.lastAABB = [...this.model.aabb];
-    const preset = await loadCameraPresetOptional(url.replace(/\.xkt$/, '_camera_states.json'));
-    if (this.currentQuality === null) {
-      const fit = () => {
-        const aabb = this.model.aabb;
-        this.lastAABB = [...aabb];
-        if (preset) {
-          this.viewer.camera.setState(preset);
-        } else {
-          this.viewer.cameraControl.fit(aabb);
-        }
-        centerPivotOnAABB(this.viewer, aabb);
-      };
-      if (this.model.built) {
-        fit();
-      } else {
-        this.model.on("built", fit);
-      }
-      this.dispatchEvent(new CustomEvent("onAssetLoaded", { detail: { url } }));
-    } else {
-      // upgrade/downgrade -> restituer caméra
-      this.viewer.camera.setState(cam);
-      if (quality === "final") {
-        this.dispatchEvent(new CustomEvent("onAssetUpgraded", { detail: { url } }));
-      }
-    }
-    this.currentQuality = quality;
-    if (apiId) {
-      this.apiId = apiId;
-      this._exposeFileId(apiId);
-    }
-    if (this.heatmapActive && this.colorBuffer) {
-      this._applyColors(this.colorBuffer);
-    }
-  }
-
-  // --- polling ------------------------------------------------------------
-  startPolling(apiId) {
-    this.apiId = apiId;
-    // mini-patch : expose l’ID dès qu’on connaît l’apiId
-    this._exposeFileId(apiId);
-    this._poll();
-  }
-
-  async _poll() {
-    if (!this.apiId) return;
-    try {
-      const res = await fetch(`/api/models/${this.apiId}`);
-      if (!res.ok) throw new Error("API");
-      const data = await res.json();
-      if (data.preview_ready && !this.previewUrl) {
-        this.previewUrl = data.preview_url;
-        await this.load(this.previewUrl, { quality: "preview" });
-        this._setProgress(0.5);
-      }
-      if (data.final_ready && !this.finalUrl) {
-        this.finalUrl = data.final_url;
-        await this.load(this.finalUrl, { quality: "final" });
-        this._setProgress(0.8);
-      }
-      if (data.dfm_ready) {
-        this._setProgress(1);
-      }
-      if (!data.final_ready) {
-        setTimeout(() => this._poll(), 1500);
-      }
-    } catch (e) {
-      setTimeout(() => this._poll(), 1500);
-    }
-  }
-
-  // --- qualité ------------------------------------------------------------
-  async toggleQuality() {
-    if (this.currentQuality === "preview" && this.finalUrl) {
-      await this.load(this.finalUrl, { quality: "final" });
-      return "final";
-    } else if (this.previewUrl) {
-      await this.load(this.previewUrl, { quality: "preview" });
-      return "preview";
-    }
-  }
-
-  // --- heatmap ------------------------------------------------------------
-  applyHeatmap(buffer) {
-    this.colorBuffer = buffer; // {vertexColors: Float32Array} ou {faceColors: Float32Array}
-    this._applyColors(buffer);
-    this.heatmapActive = true;
-    this.dispatchEvent(new Event("onDFMOverlayToggled"));
-  }
-
-  _applyColors(buffer) {
-    if (!this.model) return;
-    this.model.meshes.forEach((m) => {
-      const g = m.geometry;
-      if (buffer.vertexColors) {
-        g.setColors({ colors: buffer.vertexColors });
-      } else if (buffer.faceColors) {
-        g.setColors({ colors: buffer.faceColors, space: "faces" });
-      }
-    });
-  }
-
-  toggleHeatmap(on) {
-    if (!this.model) return;
-    if (on && this.colorBuffer) {
-      this._applyColors(this.colorBuffer);
-    } else {
-      this.model.meshes.forEach((m) => m.geometry.setColors(null));
-    }
-    this.heatmapActive = on;
-    this.dispatchEvent(new Event("onDFMOverlayToggled"));
-  }
-
-  // --- wireframe ----------------------------------------------------------
-  toggleWireframe(on) {
-    console.warn('[viewer] EdgesPlugin indisponible en v2');
-  }
-
-  // --- DFM issues ---------------------------------------------------------
-  setIssues(issues) {
-    const list = document.getElementById("dfmIssues");
-    if (list) {
-      list.innerHTML = "";
-    }
-    issues
-      .sort((a, b) => a.severity.localeCompare(b.severity))
-      .forEach((iss) => {
-        const ann = this.annotations.createAnnotation({
-          id: iss.id,
-          worldPos: iss.worldPos,
-          text: iss.message,
-        });
-        if (list) {
-          const li = document.createElement("li");
-          li.textContent = `${iss.severity} - ${iss.type}`;
-          li.onclick = () => {
-            this.viewer.scene.setObjectsVisible(this.viewer.scene.visibleObjects, false);
-            this.viewer.scene.setObjectVisible(ann.entity.id, true);
-            this.viewer.cameraFlight.flyTo({ aabb: iss.aabb });
-          };
-          list.appendChild(li);
-        }
-      });
-  }
-
-  // --- snapshot -----------------------------------------------------------
-  snapshot() {
-    return this.viewer.getSnapshot({ format: "png" });
-  }
-
-  // --- progression --------------------------------------------------------
-  _setProgress(ratio) {
-    const bar = document.getElementById("progressBar");
-    if (bar) {
-      bar.style.width = `${Math.round(ratio * 100)}%`;
-    }
-  }
-}
-
-// Désactive le bouton "Arêtes" si présent
-function disableEdgesButton() {
-  const ids = ["edgesBtn", "toggleEdgesBtn", "wireframeBtn"]; // variantes possibles
-  ids.forEach((id) => {
-    const btn = document.getElementById(id);
-    if (!btn) return;
-    const clone = btn.cloneNode(true);
-    btn.parentNode.replaceChild(clone, btn); // supprime les handlers existants
-    clone.addEventListener("click", () => {
-      console.warn('[viewer] EdgesPlugin indisponible en v2');
-    });
-  });
-}
-
-window.addEventListener("DOMContentLoaded", disableEdgesButton);
-
-// ==== CADLYTICS: MATERIAL PROFILE BLOCK - BEGIN ====
-if (typeof collectMaterialForm !== 'function') {
-  window.collectMaterialForm = function collectMaterialForm() {
-    const form = document.getElementById('materialForm') || document.querySelector('[data-form="material"]');
-    // Lis les champs de manière défensive
-    const getVal = sel => (form && form.querySelector(sel) ? form.querySelector(sel).value : null);
-    const getChecks = sel => Array.from(form ? form.querySelectorAll(sel) : []).filter(i => i.checked).map(i => i.value);
-    return {
-      family: getVal('[name="materialFamily"]'),
-      rigidity: getVal('[name="rigidity"]'),
-      color: getVal('[name="color"]'),
-      constraints: getChecks('[name="constraints"]'),
-    };
-  };
-}
-// ==== CADLYTICS: MATERIAL PROFILE BLOCK - END ====
-
-// ==== CADLYTICS: DFM CHAIN BLOCK - BEGIN ====
-(function bindDFMAfterMaterial(){
-  if (window.__cadlyticsDFMChained) return;
-  window.__cadlyticsDFMChained = true;
-  window.addEventListener('material:selected', () => {
-    window.state = window.state || {};
-    if (window.state.fileLoaded && window.state.materialProfile) {
-      if (typeof window.runDFM === 'function') {
-        window.runDFM();
-      } else {
-        console.warn('runDFM() introuvable. Vérifie son export global.');
-      }
-    } else {
-      console.warn('DFM non lancée (pré-requis manquants):', {
-        fileLoaded: window.state.fileLoaded,
-        materialProfile: !!window.state.materialProfile
-      });
-    }
-  });
-})();
-// ==== CADLYTICS: DFM CHAIN BLOCK - END ====
-
-// ==== CADLYTICS: TOAST UTIL - BEGIN ====
-(function ensureToast(){
-  if (window.showToast) return;
-  const ensureStyle = () => {
-    if (document.getElementById('cadlytics-toast-style')) return;
-    const css = document.createElement('style');
-    css.id = 'cadlytics-toast-style';
-    css.textContent = `
-    .cadlytics-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);padding:12px 16px;border-radius:8px;background:#333;color:#fff;box-shadow:0 6px 20px rgba(0,0,0,.2);opacity:.96;z-index:9999;font:14px/1.3 system-ui,Segoe UI,Roboto}
-    `;
-    document.head.appendChild(css);
-  };
-  window.showToast = function(message){
-    ensureStyle();
-    const el = document.createElement('div');
-    el.className = 'cadlytics-toast';
-    el.textContent = message;
-    document.body.appendChild(el);
-    setTimeout(()=>{ el.remove(); }, 3000);
-  };
-})();
-// ==== CADLYTICS: TOAST UTIL - END ====
+export default window.viewer;

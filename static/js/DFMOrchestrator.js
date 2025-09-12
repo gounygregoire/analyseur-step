@@ -4,7 +4,6 @@
  */
 
 import HeatmapLayer from "./modules/HeatmapLayer.js";
-import eventBus from "./modules/events-bus.js";
 import { loadCameraPresetOptional } from "./modules/viewer.js";
 
 // État global minimal pour la DFM
@@ -18,15 +17,7 @@ if (typeof window !== 'undefined') {
 }
 
 const axisPanel = document.querySelector("#dfmAxisPanel");
-const btnAnalyser = document.querySelector("#analyzeBtn");
 if (axisPanel) axisPanel.style.display = "none";
-if (btnAnalyser) btnAnalyser.disabled = true;
-
-window.onCriteriaConfirmed = function(){
-  if (!window.CAD?.fileIdStep || !window.CAD?.materialProfile) return; // ne pas afficher l'axe
-  if (axisPanel) axisPanel.style.display = "";
-  if (btnAnalyser) btnAnalyser.disabled = true;
-};
 
 const DEBUG_DFM = (typeof window !== 'undefined' && window.DEBUG_DFM === true);
 const dbg = (...a) => { if (DEBUG_DFM) console.debug("[DFM]", ...a); };
@@ -155,6 +146,23 @@ function showMaterialModal() {
   modal.show();
 }
 
+function openMaterialModal(){
+  showMaterialModal();
+}
+
+function materialIsConfirmed(){
+  return orchestrator?.state?.materialSelected;
+}
+
+function axisIsValidated(){
+  return orchestrator?.axisValidated || orchestrator?.state?.axisConfirmed;
+}
+
+function showAxisPanel(){
+  orchestrator.renderAxisPanel?.();
+  document.getElementById('dfmAxisPanel')?.scrollIntoView({ behavior:'smooth', block:'center' });
+}
+
 // ---------------------- États ----------------------
 const DFM_STATES = {
   IDLE:"IDLE", MATERIAL_CONFIRMED:"MATERIAL_CONFIRMED", AXIS_PICK:"AXIS_PICK",
@@ -194,6 +202,11 @@ class DFMOrchestrator {
       this.setMaterialProfile(e.detail.materialProfile);
       window.CAD.materialProfile = this.materialProfile;
       dbg('material:selected', this.materialProfile);
+      window.dispatchEvent(new CustomEvent('material:confirmed'));
+    });
+
+    window.addEventListener('material:confirmed', () => {
+      dbg('material:confirmed');
       this.renderAxisPanel();
     });
 
@@ -202,7 +215,6 @@ class DFMOrchestrator {
       this.selectedInvert = !!e.detail.invert;
       this.state.axisConfirmed = true;
       dbg('axis:confirmed', this.selectedAxis, this.selectedInvert);
-      if (btnAnalyser) btnAnalyser.disabled = false;
     });
   }
 
@@ -464,66 +476,16 @@ class DFMOrchestrator {
     });
   }
 
-  handleAnalyzeClick(){
-    if (!this.fileId){
-      UI.info("Importe un STEP d\u2019abord.");
-      const zone = document.getElementById('uploadArea') || document.getElementById('dropzone');
-      if (zone){
-        zone.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        zone.classList.add('pulse');
-        setTimeout(()=>zone.classList.remove('pulse'), 1500);
-      }
-      return;
-    }
-    if (!this.state.materialSelected){
-      showMaterialModal();
-      return;
-    }
-    if (this.state.materialSelected && !this.state.axisConfirmed){
-      this.renderAxisPanel();
-      document.getElementById('dfmAxisPanel')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      return;
-    }
-    if (this.state.axisConfirmed){
-      this.startDFM();
-    }
-  }
-
-  startDFM(){
-    const fileId = this.fileId;
-    const profile = this.materialProfile;
-    if (!fileId){
-      UI.info("Importez un fichier avant d’analyser.");
-      console.warn("startDFM: fileId manquant");
-      return;
-    }
-    if (!profile){
-      UI.info("Sélectionnez une matière.");
-      console.warn("startDFM: matière manquante");
-      return;
-    }
-    if (!this.axisValidated){
-      UI.info("Validez l’axe de démoulage.");
-      console.warn("startDFM: axe non validé");
-      return;
-    }
-
-    const axis = this.axisSelection?.axis || 'Z';
-    const payload = {
-      file_id: fileId,
-      material: profile.id || profile.material_profile_id || profile,
-      axis,
-      invert: this.axisSelection?.invert ?? false,
-    };
-
-    UI.setLoading(true);
-    this.state.running = true;
-    dbg('DFM start: ready to send payload', payload);
-    eventBus.publish('dfm:start', payload);
+  async handleAnalyzeClick(){
+    if (!window.currentFileId) { openMaterialModal(); return; }
+    if (!materialIsConfirmed()) { openMaterialModal(); return; }
+    if (!axisIsValidated()) { showAxisPanel(); return; }
+    this.setFileId(window.currentFileId);
+    await this.startDFM();
   }
 
   // ---------------------- Analyse ----------------------
-  async startAnalysis() {
+  async startDFM() {
     const payload = {
       file_id: this.fileId,
       axis: this.selectedAxis || { x: 0, y: 0, z: 1 },
@@ -709,40 +671,6 @@ if (typeof window !== 'undefined') {
   window.DFMOrchestrator = orchestrator;
 }
 
-eventBus.subscribe('dfm:start', async (payload) => {
-  try {
-    const res = await fetch('/dfm/start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-
-    if (res.status === 404) {
-      UI.err("Endpoint /dfm/start introuvable");
-      console.error('dfm:start 404');
-      UI.setLoading(false);
-      return;
-    }
-    if (!res.ok) {
-      const msg = `HTTP ${res.status} : ${res.statusText}`;
-      UI.err(msg);
-      console.error('dfm:start', msg);
-      UI.setLoading(false);
-      return;
-    }
-
-    await res.json().catch(() => ({}));
-    StatusUI.set('Analyse en cours…');
-    await pollDFMReport(payload.file_id);
-    UI.setLoading(false);
-    orchestrator.state.running = false;
-  } catch (err) {
-    console.error('dfm:start network error', err);
-    UI.err('Erreur réseau');
-    UI.setLoading(false);
-  }
-});
-
 // Expose startDFM globally for non-module callers
 if (typeof window !== 'undefined') {
   if (typeof window.DFMOrchestrator.startDFM === 'function') {
@@ -832,6 +760,7 @@ function collectMaterialForm(){
 function initDFMUI() {
   if (typeof window !== 'undefined') {
     window.showMaterialModal = showMaterialModal;
+    window.openMaterialModal = openMaterialModal;
   }
 
   document.addEventListener("DOMContentLoaded", () => {
@@ -851,6 +780,7 @@ function initDFMUI() {
 
 if (typeof window !== 'undefined') {
   window.showMaterialModal = showMaterialModal;
+  window.openMaterialModal = openMaterialModal;
   window.DFM_STATES = DFM_STATES;
   window.dfmOrchestrator = orchestrator;
   window.collectMaterialForm = collectMaterialForm;
@@ -887,46 +817,48 @@ if (typeof window !== 'undefined') {
 }
 
 // --- Visualiser workflow -------------------------------------------------
-let currentFileId = null;
-
 function getTolerance() {
   const v = parseFloat(document.getElementById('tolerance')?.value);
   return Number.isFinite(v) ? v : 0.1;
 }
 
-async function convertAndView(fid){
+async function convertAndLoad(fid) {
   console.log('[visualiser] start', fid);
-  const r = await fetch('/api/simple/convert', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ file_id: fid, tolerance: getTolerance?.() })
-  });
-  if (!r.ok) return false;
-  await r.json().catch(() => ({}));
-  const viewer = window.viewerApp || window.viewer || window.viewerAdapter?.app || window.viewerAdapter;
-  if (viewer?.loadFromFileId) await viewer.loadFromFileId(fid);
-  console.log('[visualiser] done');
-  return true;
+  try {
+    const r = await fetch('/api/simple/convert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_id: fid, tolerance: getTolerance?.() })
+    });
+    console.log('[visualiser] convert status', r.status);
+    if (!r.ok) { console.error('[visualiser] convert failed'); return; }
+    const { file_id, xkt_url } = await r.json();
+    console.log('[visualiser] convert ->', { file_id, xkt_url });
+    if (xkt_url) {
+      try {
+        const h = await fetch(xkt_url, { method: 'HEAD', cache: 'no-store' });
+        console.log('[visualiser] HEAD', xkt_url, h.status);
+      } catch (e) {}
+    }
+    const viewer = window.viewer || window.viewerApp || window.viewerAdapter;
+    if (!viewer?.loadFromFileId) { console.error('[visualiser] viewer.loadFromFileId missing'); return; }
+    await viewer.loadFromFileId(file_id);
+    console.log('[visualiser] done');
+  } catch (e) {
+    console.error('[visualiser] error', e);
+  }
 }
 
-window.addEventListener('dfm:fileReady', async (e) => {
+window.addEventListener('dfm:fileReady', (e) => {
   const fid = e.detail.fileId; if (!fid) return;
-  currentFileId = fid;
   window.currentFileId = fid;
-  try {
-    const ok = await convertAndView(fid);
-    if (!ok) console.warn('autoconvert failed');
-  } catch (e) {
-    console.warn('autoconvert error', e);
-  }
+  convertAndLoad(fid);
 });
 
-document.addEventListener('DOMContentLoaded', () => {
-  const btnVisualiser = document.querySelector('#btn-visualiser, #visualizeBtn');
-  if (!btnVisualiser) return;
+const btnVisualiser = document.querySelector('#btn-visualiser, #visualizeBtn');
+if (btnVisualiser) {
   btnVisualiser.addEventListener('click', async () => {
-    if (!currentFileId) { toast?.('Aucun fichier'); return; }
-    const ok = await convertAndView(currentFileId);
-    if (!ok) showError?.('Conversion impossible');
+    if (!window.currentFileId) { console.warn('[visualiser] no fileId'); return; }
+    await convertAndLoad(window.currentFileId);
   });
-});
+}
