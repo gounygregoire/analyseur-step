@@ -163,20 +163,21 @@ function axisIsValidated(){
   return !!window.selectedAxis;
 }
 
-function showAxisPanel() {
+function showAxisPanelIfReady() {
   if (!axisPanel) return;
   if (!window.currentFileId || !materialIsConfirmed()) return;
   axisPanel.style.display = "";
 }
 
-window.addEventListener("material:confirmed", () => { showAxisPanel(); });
+window.addEventListener("material:confirmed", showAxisPanelIfReady);
+window.addEventListener("material:selected", showAxisPanelIfReady);
 window.addEventListener("axis:confirmed", (e) => { window.selectedAxis = e?.detail; });
 
 if (btnAnalyser) {
   btnAnalyser.addEventListener("click", async () => {
     if (!window.currentFileId) { openMaterialModal?.(); return; }
     if (!materialIsConfirmed()) { openMaterialModal?.(); return; }
-    if (!axisIsValidated()) { showAxisPanel(); return; }
+    if (!axisIsValidated()) { showAxisPanelIfReady(); return; }
     const payload = {
       file_id: window.currentFileId,
       axis: window.selectedAxis?.axis || "auto",
@@ -525,7 +526,7 @@ class DFMOrchestrator {
     const fileId = this.resolveFileId();
     if (!fileId) { console.info('[dfm] demande fichier'); openMaterialModal(); return; }
     if (!materialIsConfirmed()) { console.info('[dfm] demande matière'); openMaterialModal(); return; }
-    if (!axisIsValidated()) { console.info('[dfm] demande axe'); showAxisPanel(); return; }
+    if (!axisIsValidated()) { console.info('[dfm] demande axe'); showAxisPanelIfReady(); return; }
     this.setFileId(fileId);
     await this.startDFM();
   }

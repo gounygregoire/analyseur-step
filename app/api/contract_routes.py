@@ -88,16 +88,15 @@ def convert_step() -> tuple[Any, int]:
         if not file_id:
             return jsonify({"error": "missing_file_id"}), 400
 
-        step_path = Storage.get_step_path(file_id)
-        if not step_path or not os.path.exists(step_path):
+        step_in_path = Storage.get_step_path(file_id)
+        if not step_in_path or not os.path.exists(step_in_path):
             return jsonify({"error": "missing_or_unknown_file_id"}), 400
 
         os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-        xkt_path = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+        xkt_out_path = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
         preview_path = os.path.join(OUTPUT_FOLDER, f"{file_id}.png")
-
-        if os.path.exists(xkt_path):
-            current_app.logger.info(f"[convert] XKT ready /models/{file_id}.xkt")
+        if os.path.exists(xkt_out_path):
+            current_app.logger.info(f"[convert] XKT ready {xkt_out_path}")
             try:
                 History.record_convert(file_id, 0)
             except Exception as exc:  # fail soft
@@ -113,22 +112,42 @@ def convert_step() -> tuple[Any, int]:
                 200,
             )
 
-        xeokit_bin = os.environ.get("XEOKIT_CONVERT") or "xeokit-convert"
-        cmd = [xeokit_bin, "--out", xkt_path, step_path]
-        t0 = time.time()
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
-        duration_ms = (time.time() - t0) * 1000
-        if res.returncode != 0:
-            current_app.logger.error(
-                f"[convert] fail rc={res.returncode} stderr={res.stderr[:4000]}"
-            )
-            return jsonify({"error": "convert_failed", "stderr": res.stderr}), 500
+        xeokit_bin_path = os.environ.get("XEOKIT_CONVERT") or "xeokit-convert"
 
-        current_app.logger.info(f"[convert] XKT ready /models/{file_id}.xkt")
+        def _run_convert(cmd: list[str]):
+            return subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+
+        tried: list[str] = []
+        res = None
+        t0 = time.time()
+        for variant in (
+            ["--output", xkt_out_path],
+            ["-o", xkt_out_path],
+            ["--out", xkt_out_path],
+        ):
+            cmd = [xeokit_bin_path, *variant, step_in_path]
+            tried.append(" ".join(cmd))
+            try:
+                res = _run_convert(cmd)
+            except Exception as exc:  # pragma: no cover
+                current_app.logger.error("[convert] exception %s for cmd=%s", exc, cmd)
+                return jsonify({"error": "convert_failed", "stderr": str(exc)}), 500
+            if res.returncode == 0:
+                break
+        else:
+            stderr = res.stderr if res else ""
+            current_app.logger.error(
+                f"[convert] failed. tried={tried} stderr={stderr[:3000]}"
+            )
+            return jsonify({"error": "convert_failed", "stderr": stderr}), 500
+
+        duration_ms = (time.time() - t0) * 1000
+
+        current_app.logger.info(f"[convert] XKT ready {xkt_out_path}")
 
         try:
             from generate_thumbnails import generate_thumbnails
-            thumbs = generate_thumbnails(step_path, OUTPUT_FOLDER)
+            thumbs = generate_thumbnails(step_in_path, OUTPUT_FOLDER)
             preview_path = thumbs.get("iso", preview_path)
         except Exception as exc:  # pragma: no cover
             current_app.logger.warning(
