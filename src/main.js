@@ -551,9 +551,8 @@ async function loadXKTFromConvertResponse(response) {
 
     const head = await fetch(xktUrl, { method: 'HEAD' });
     if (!head.ok) throw new Error(`XKT not available: ${head.status}`);
-
-    if (viewer?.loadXKT) await viewer.loadXKT(xktUrl);
-    else if (window.loadXKT) await window.loadXKT(xktUrl);
+    const model = await xktLoader.load({ id: fileId, src: xktUrl });
+    viewer.model = model;
     console.info('[VIEW] XKT loaded', xktUrl);
   } catch (e) {
     console.error('[VIEW] Visualization error', e);
