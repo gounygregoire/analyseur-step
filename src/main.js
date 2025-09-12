@@ -213,12 +213,14 @@ function bindUI() {
     });
   });
 
-  // Arêtes (fallback = filaire, car EdgesPlugin indisponible)
-  byId("edgesBtn")?.addEventListener("click", () => {
-    const on = !viewer.scene.objectsWireframe;
-    setWireframe(on);
-    toggleActive("edgesBtn", on);
-  });
+  // Arêtes (fallback filaire, fonctionnalité edges indisponible)
+  const edgesBtnEl = byId("edgesBtn");
+  if (edgesBtnEl) {
+    edgesBtnEl.disabled = true;
+    edgesBtnEl.addEventListener("click", () => {
+      console.warn('[viewer] edges disabled (xeokit v2)');
+    });
+  }
 
   // Reset complet
   byId("resetBtn")?.addEventListener("click", resetAll);
@@ -335,7 +337,7 @@ function resetAll() {
   setWireframe(false);
   cameraControl.reset?.();
   renderMeasurements();
-  ["measureBtn","sectionBtn","edgesBtn"].forEach((id) => toggleActive(id, false));
+  ["measureBtn","sectionBtn"].forEach((id) => toggleActive(id, false));
 }
 
 function toggleActive(id, on) {
