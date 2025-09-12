@@ -67,7 +67,34 @@ export async function initViewer(modelUrl) {
 
     // Adapte l'app Xeokit pour l'Orchestrateur DFM
     viewer.measure = dist;
-    window.viewerAdapter = new DFMViewerAdapter(viewer);
+    window.viewerAdapter = window.viewerAdapter || new DFMViewerAdapter(viewer);
+    window.viewerAdapter.viewer = viewer;
+    window.viewerAdapter.loadFromFileId = async function(fileId) {
+      if (!fileId) return false;
+      const urls = [
+        `/static/converted/${fileId}.xkt`,
+        `/models/${fileId}.xkt`
+      ];
+      let lastErr;
+      for (const url of urls) {
+        try {
+          console.log("[viewer] try xkt", url);
+          const model = await xktLoader.load({ id: "current", src: url });
+          viewer.model = model;
+          const aabb = viewer.scene.getAABB();
+          try {
+            cameraControl.fit?.({ aabb });
+          } catch {
+            try { viewer.cameraFlight.fit?.({ aabb }); } catch {}
+          }
+          return true;
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+      console.error("[viewer] all xkt URLs failed", urls, lastErr);
+      return false;
+    };
 
     try {
       if (!window.__axes_gizmo__) {
