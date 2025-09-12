@@ -23,12 +23,9 @@ if (axisPanel) axisPanel.style.display = "none";
 if (btnAnalyser) btnAnalyser.disabled = true;
 
 window.onCriteriaConfirmed = function(){
+  if (!window.CAD?.fileIdStep || !window.CAD?.materialProfile) return; // ne pas afficher l'axe
   if (axisPanel) axisPanel.style.display = "";
   if (btnAnalyser) btnAnalyser.disabled = true;
-};
-
-window.onAxisValidated = function(){
-  if (btnAnalyser) btnAnalyser.disabled = false;
 };
 
 const DEBUG_DFM = (typeof window !== 'undefined' && window.DEBUG_DFM === true);
@@ -92,7 +89,9 @@ async function pollJobStatus(jobId, onUpdate, onDone, onError) {
   step();
 }
 
-function renderDFMResults({ score, recommendations, metrics }) {
+function renderDFMResults(report = {}) {
+  const { score = 0, recommendations = [], metrics = {} } = report;
+
   const panel = document.getElementById('dfmAnalysisPanel');
   if (!panel) return;
   panel.innerHTML = '';
@@ -203,7 +202,7 @@ class DFMOrchestrator {
       this.selectedInvert = !!e.detail.invert;
       this.state.axisConfirmed = true;
       dbg('axis:confirmed', this.selectedAxis, this.selectedInvert);
-      this.startAnalysis();
+      if (btnAnalyser) btnAnalyser.disabled = false;
     });
   }
 
@@ -384,11 +383,12 @@ class DFMOrchestrator {
 
   // Affiche le sélecteur d'axe sous le viewer
   renderAxisPanel() {
-    if (!this.state.materialSelected) return;
-    if (!this.fileId && typeof this.setFileIdFromPage === 'function' && !this.setFileIdFromPage()) {
-      UI?.info?.("Aucun fichier à analyser. Merci d’importer une pièce.");
-      return;
+    if (!this.fileId && typeof this.setFileIdFromPage === 'function') this.setFileIdFromPage();
+    if (!this.fileId || !this.materialProfile) {
+      if (!this.fileId) UI?.info?.("Aucun fichier à analyser. Merci d’importer une pièce.");
+      return; // ne pas afficher l'axe
     }
+    if (!this.state.materialSelected) return;
 
     // 2) Nettoyage d’un éventuel panneau déjà présent
     let panel = document.getElementById('dfmAxisPanel');
@@ -552,7 +552,7 @@ class DFMOrchestrator {
         return;
       }
       console.info('[dfm] report=', data.report_id);
-      pollDFMReport(this.fileId);
+      await pollDFMReport(this.fileId); // 404…404…200
       await this.renderResults(data);
       window.refreshHistory?.();
     } catch (err) {
@@ -888,33 +888,45 @@ if (typeof window !== 'undefined') {
 
 // --- Visualiser workflow -------------------------------------------------
 let currentFileId = null;
-window.addEventListener('dfm:fileReady', e => {
-  currentFileId = e.detail.fileId;
-  window.currentFileId = currentFileId;
-});
 
 function getTolerance() {
   const v = parseFloat(document.getElementById('tolerance')?.value);
   return Number.isFinite(v) ? v : 0.1;
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-  const btnVisualiser = document.querySelector('#btn-visualiser');
-  const viewer = window.viewerApp || window.viewer || window.viewerAdapter?.app;
-  if (!btnVisualiser || !viewer) return;
+async function convertAndView(fid){
+  console.log('[visualiser] start', fid);
+  const r = await fetch('/api/simple/convert', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ file_id: fid, tolerance: getTolerance?.() })
+  });
+  if (!r.ok) return false;
+  await r.json().catch(() => ({}));
+  const viewer = window.viewerApp || window.viewer || window.viewerAdapter?.app || window.viewerAdapter;
+  if (viewer?.loadFromFileId) await viewer.loadFromFileId(fid);
+  console.log('[visualiser] done');
+  return true;
+}
 
+window.addEventListener('dfm:fileReady', async (e) => {
+  const fid = e.detail.fileId; if (!fid) return;
+  currentFileId = fid;
+  window.currentFileId = fid;
+  try {
+    const ok = await convertAndView(fid);
+    if (!ok) console.warn('autoconvert failed');
+  } catch (e) {
+    console.warn('autoconvert error', e);
+  }
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+  const btnVisualiser = document.querySelector('#btn-visualiser, #visualizeBtn');
+  if (!btnVisualiser) return;
   btnVisualiser.addEventListener('click', async () => {
     if (!currentFileId) { toast?.('Aucun fichier'); return; }
-    console.log('[visualiser] start', currentFileId);
-    const r = await fetch('/api/simple/convert', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file_id: currentFileId, tolerance: getTolerance?.() })
-    });
-    if (!r.ok) { showError?.('Conversion impossible'); return; }
-    const { file_id, xkt_url } = await r.json();
-    console.log('[visualiser] xkt_url', xkt_url);
-    await viewer.loadFromFileId(file_id);
-    console.log('[visualiser] done');
+    const ok = await convertAndView(currentFileId);
+    if (!ok) showError?.('Conversion impossible');
   });
 });
