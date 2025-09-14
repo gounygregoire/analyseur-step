@@ -16,10 +16,11 @@ if (typeof window !== "undefined") {
   };
 }
 
-// Sélecteurs compatibles (deux variantes d'ID)
-const btnVisualiser = document.querySelector("#btn-visualiser, #visualizeBtn");
-const btnAnalyser   = document.querySelector("#analyzeBtn, #btn-analyser");
-const axisPanel     = document.querySelector("#dfmAxisPanel, #axis-panel");
+// PATCH START: selectors
+const btnVisualiser = document.querySelector('#btn-visualiser, #visualizeBtn');
+const btnAnalyser   = document.querySelector('#analyzeBtn, #btn-analyser');
+const axisPanel     = document.querySelector('#dfmAxisPanel, #axis-panel');
+// PATCH END
 
 // État initial : cacher l'axe mais laisser Analyser cliquable
 if (axisPanel) axisPanel.style.display = "none";
@@ -155,23 +156,22 @@ function openMaterialModal(){
   showMaterialModal();
 }
 
-function materialIsConfirmed(){
-  return !!window.selectedMaterial;
+// PATCH START: show axis after material confirmed
+function materialIsConfirmed(){ return !!window.selectedMaterial; }
+function showAxisPanelIfReady(){
+  if (!axisPanel) return;
+  if (!window.currentFileId || !materialIsConfirmed()) return;
+  axisPanel.style.display = '';
 }
+window.addEventListener('material:confirmed', showAxisPanelIfReady);
+window.addEventListener('material:selected',  showAxisPanelIfReady); // compat
+// PATCH END
+
+window.addEventListener('axis:confirmed', (e) => { window.selectedAxis = e?.detail; });
 
 function axisIsValidated(){
   return !!window.selectedAxis;
 }
-
-function showAxisPanelIfReady() {
-  if (!axisPanel) return;
-  if (!window.currentFileId || !materialIsConfirmed()) return;
-  axisPanel.style.display = "";
-}
-
-window.addEventListener("material:confirmed", showAxisPanelIfReady);
-window.addEventListener("material:selected", showAxisPanelIfReady);
-window.addEventListener("axis:confirmed", (e) => { window.selectedAxis = e?.detail; });
 
 if (btnAnalyser) {
   btnAnalyser.addEventListener("click", async () => {
@@ -869,34 +869,32 @@ function getTolerance() {
   return Number.isFinite(v) ? v : 0.1;
 }
 
-// Autoconversion post-upload
-window.addEventListener("dfm:fileReady", async (e) => {
+// PATCH START: autoconvert on file ready
+window.addEventListener('dfm:fileReady', async (e) => {
   const fid = (e?.detail && e.detail.fileId) || window.currentFileId;
   if (!fid) return;
-  console.log("[auto] convert start", fid);
-  const r = await fetch("/api/simple/convert", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
+  const r = await fetch('/api/simple/convert', {
+    method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ file_id: fid, tolerance: getTolerance?.() })
   });
-  console.log("[auto] convert status", r.status);
-  try { console.log("[auto] convert payload", await r.json()); } catch {}
+  console.log('[auto] convert status', r.status);
+  try { console.log('[auto] payload', await r.json()); } catch {}
   await (window.viewerAdapter?.loadFromFileId?.(fid));
 });
+// PATCH END
 
-// Bouton "Visualiser"
+// PATCH START: visualiser button
 if (btnVisualiser) {
-  btnVisualiser.addEventListener("click", async () => {
+  btnVisualiser.addEventListener('click', async () => {
     const fid = window.currentFileId;
-    if (!fid) { console.warn("[visualiser] no fileId"); return; }
-    console.log("[visualiser] start", fid);
-    const r = await fetch("/api/simple/convert", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+    if (!fid) { console.warn('[visualiser] no fileId'); return; }
+    const r = await fetch('/api/simple/convert', {
+      method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ file_id: fid, tolerance: getTolerance?.() })
     });
-    console.log("[visualiser] convert status", r.status);
-    try { console.log("[visualiser] payload", await r.json()); } catch {}
+    console.log('[visualiser] convert status', r.status);
+    try { console.log('[visualiser] payload', await r.json()); } catch {}
     await (window.viewerAdapter?.loadFromFileId?.(fid));
   });
 }
+// PATCH END

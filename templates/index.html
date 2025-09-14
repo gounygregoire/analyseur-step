@@ -23,9 +23,6 @@
     
     <!-- Custom CSS -->
     <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
-    <style>
-      #dfmAxisPanel, #axis-panel { display: none; }
-    </style>
     
     <!-- Favicon -->
     <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}">
@@ -193,8 +190,9 @@
 
     <!-- === CONTENEUR VIEWER NOUVEAU (overlay) === -->
     <div id="viewer" class="viewer-wrapper position-relative" style="height: 600px; border-radius:10px; background:#e8e9ea; overflow:hidden;">
-      <!-- Canvas -->
-      <canvas id="viewer3d" style="width:100%;height:100%;display:block;"></canvas>
+      <!-- PATCH START: viewer canvas -->
+      <canvas id="xktCanvas" class="xkt-canvas" aria-label="3D viewer"></canvas>
+      <!-- PATCH END -->
 
       <!-- Barre d’outils overlay : IDs attendus par main.js -->
       <div id="toolbar" data-viewer-required class="toolbar position-absolute" style="top:10px; left:10px; z-index:10; display:flex; gap:8px;">

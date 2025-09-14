@@ -21,19 +21,6 @@ MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "300"))
 api_contract_bp = Blueprint("api_contract", __name__, url_prefix="/api/simple")
 
 
-@api_contract_bp.record_once
-def _register_models(state) -> None:
-    app = state.app
-
-    @app.get("/models/<path:filename>")
-    def _models(filename: str):
-        path = os.path.join(OUTPUT_FOLDER, filename)
-        if not os.path.isfile(path):
-            return jsonify({"error": "not_found"}), 404
-        mimetype = "model/xkt" if filename.endswith(".xkt") else None
-        return send_from_directory(OUTPUT_FOLDER, filename, mimetype=mimetype)
-
-
 @api_contract_bp.post("/upload")
 def upload_step() -> tuple[Any, int]:
     file = request.files.get("file")
@@ -101,24 +88,14 @@ def convert_step() -> tuple[Any, int]:
                 History.record_convert(file_id, 0)
             except Exception as exc:  # fail soft
                 current_app.logger.warning("history convert failed for %s: %s", file_id, exc)
-            return (
-                jsonify(
-                    {
-                        "file_id": file_id,
-                        "xkt_url": f"/models/{file_id}.xkt",
-                        "preview_png": f"/models/{file_id}.png" if os.path.exists(preview_path) else None,
-                    }
-                ),
-                200,
-            )
+            return jsonify({"file_id": file_id, "xkt_url": f"/models/{file_id}.xkt"}), 200
 
         xeokit_bin_path = os.environ.get("XEOKIT_CONVERT") or "xeokit-convert"
 
-        def _run_convert(cmd: list[str]):
+        def _run(cmd: list[str]):
             return subprocess.run(cmd, capture_output=True, text=True, timeout=300)
 
         tried: list[str] = []
-        res = None
         t0 = time.time()
         for variant in (
             ["--output", xkt_out_path],
@@ -127,19 +104,17 @@ def convert_step() -> tuple[Any, int]:
         ):
             cmd = [xeokit_bin_path, *variant, step_in_path]
             tried.append(" ".join(cmd))
-            try:
-                res = _run_convert(cmd)
-            except Exception as exc:  # pragma: no cover
-                current_app.logger.error("[convert] exception %s for cmd=%s", exc, cmd)
-                return jsonify({"error": "convert_failed", "stderr": str(exc)}), 500
+            res = _run(cmd)
             if res.returncode == 0:
                 break
         else:
-            stderr = res.stderr if res else ""
             current_app.logger.error(
-                f"[convert] failed. tried={tried} stderr={stderr[:3000]}"
+                f"[convert] failed tried={tried} stderr={res.stderr[:2000]}"
             )
-            return jsonify({"error": "convert_failed", "stderr": stderr}), 500
+            return (
+                jsonify({"error": "convert_failed", "stderr": res.stderr}),
+                500,
+            )
 
         duration_ms = (time.time() - t0) * 1000
 
@@ -160,16 +135,7 @@ def convert_step() -> tuple[Any, int]:
         except Exception as exc:  # fail soft
             current_app.logger.warning("history convert failed for %s: %s", file_id, exc)
 
-        return (
-            jsonify(
-                {
-                    "file_id": file_id,
-                    "xkt_url": f"/models/{file_id}.xkt",
-                    "preview_png": f"/models/{file_id}.png" if os.path.exists(preview_path) else None,
-                }
-            ),
-            200,
-        )
+        return jsonify({"file_id": file_id, "xkt_url": f"/models/{file_id}.xkt"}), 200
     except Exception as exc:  # pragma: no cover
         current_app.logger.error("[convert] unexpected error: %s", exc)
         return jsonify({"error": "convert_failed", "message": str(exc)}), 500
@@ -250,3 +216,11 @@ def get_report(file_id: str) -> tuple[Any, int]:
     with open(path, "r", encoding="utf-8") as fh:
         data = json.load(fh)
     return jsonify(data), 200
+
+
+# PATCH START: serve converted models
+@api_contract_bp.route('/models/<path:filename>', methods=['GET', 'HEAD'])
+def serve_models(filename):
+    output_dir = os.environ.get('OUTPUT_FOLDER', '/tmp/converted')
+    return send_from_directory(output_dir, filename)
+# PATCH END
