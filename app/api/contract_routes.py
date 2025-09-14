@@ -1,10 +1,8 @@
 from __future__ import annotations
 import os
 import subprocess
-import time
 import uuid
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 import json
 
@@ -81,7 +79,6 @@ def convert_step() -> tuple[Any, int]:
 
         os.makedirs(OUTPUT_FOLDER, exist_ok=True)
         xkt_out_path = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
-        preview_path = os.path.join(OUTPUT_FOLDER, f"{file_id}.png")
         if os.path.exists(xkt_out_path):
             current_app.logger.info(f"[convert] XKT ready {xkt_out_path}")
             try:
@@ -92,50 +89,24 @@ def convert_step() -> tuple[Any, int]:
 
         xeokit_bin_path = os.environ.get("XEOKIT_CONVERT") or "xeokit-convert"
 
-        def _run(cmd: list[str]):
+        # PATCH START: resilient xeokit convert
+        def _run(cmd):
             return subprocess.run(cmd, capture_output=True, text=True, timeout=300)
 
-        tried: list[str] = []
-        t0 = time.time()
-        for variant in (
-            ["--output", xkt_out_path],
-            ["-o", xkt_out_path],
-            ["--out", xkt_out_path],
-        ):
+        tried = []
+        for variant in (["--output", xkt_out_path], ["-o", xkt_out_path], ["--out", xkt_out_path]):
             cmd = [xeokit_bin_path, *variant, step_in_path]
             tried.append(" ".join(cmd))
             res = _run(cmd)
             if res.returncode == 0:
                 break
         else:
-            current_app.logger.error(
-                f"[convert] failed tried={tried} stderr={res.stderr[:2000]}"
-            )
-            return (
-                jsonify({"error": "convert_failed", "stderr": res.stderr}),
-                500,
-            )
+            current_app.logger.error(f"[convert] failed tried={tried} stderr={res.stderr[:2000]}")
+            return jsonify({"error":"convert_failed","stderr":res.stderr}), 500
 
-        duration_ms = (time.time() - t0) * 1000
-
-        current_app.logger.info(f"[convert] XKT ready {xkt_out_path}")
-
-        try:
-            from generate_thumbnails import generate_thumbnails
-            thumbs = generate_thumbnails(step_in_path, OUTPUT_FOLDER)
-            preview_path = thumbs.get("iso", preview_path)
-        except Exception as exc:  # pragma: no cover
-            current_app.logger.warning(
-                "thumbnail generation failed for %s: %s", file_id, exc
-            )
-            Path(preview_path).write_bytes(b"")
-
-        try:
-            History.record_convert(file_id, duration_ms)
-        except Exception as exc:  # fail soft
-            current_app.logger.warning("history convert failed for %s: %s", file_id, exc)
-
+        current_app.logger.info(f"[convert] XKT ready /models/{file_id}.xkt")
         return jsonify({"file_id": file_id, "xkt_url": f"/models/{file_id}.xkt"}), 200
+        # PATCH END
     except Exception as exc:  # pragma: no cover
         current_app.logger.error("[convert] unexpected error: %s", exc)
         return jsonify({"error": "convert_failed", "message": str(exc)}), 500
