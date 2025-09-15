@@ -77,6 +77,7 @@ export async function initViewer(modelUrl) {
         viewer.model = null;
       }
       const urls = [
+        `/api/simple/models/${fileId}.xkt`,
         `/static/converted/${fileId}.xkt`,
         `/models/${fileId}.xkt`
       ];
