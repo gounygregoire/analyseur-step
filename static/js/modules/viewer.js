@@ -87,7 +87,11 @@ if (!window.__XE_VIEWER_BOOT__) {
     const xktLoader = new XEXKTLoaderPlugin(viewer);
 
     async function pickUrl(id) {
-      const urls = [`/models/${id}.xkt`, `/static/converted/${id}.xkt`];
+      const urls = [
+        `/api/simple/models/${id}.xkt`,
+        `/models/${id}.xkt`,
+        `/static/converted/${id}.xkt`
+      ];
       for (const u of urls) {
         try {
           const h = await fetch(u, { method: 'HEAD', cache: 'no-store' });
