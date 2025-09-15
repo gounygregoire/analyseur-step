@@ -79,7 +79,11 @@ if (!window.__XE_VIEWER_BOOT__) {
   window.initViewer = function initViewer(cfg = {}) {
     const canvas = getCanvasFromConfig(cfg);
     if (!canvas) {
-      console.error('[viewer] canvas introuvable', { cfg });
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", () => initViewer(cfg), { once: true });
+      } else {
+        console.error('[viewer] canvas introuvable', { cfg });
+      }
       return null;
     }
     const viewer = new XEViewer({ canvasElement: canvas });
@@ -109,7 +113,7 @@ if (!window.__XE_VIEWER_BOOT__) {
       const model = await xktLoader.load({ src: url });
       console.timeEnd('[viewer] xkt load');
       const aabb = (model && model.aabb) || viewer.scene.aabb;
-      if (aabb) viewer.cameraControl.fit(aabb);
+      if (aabb) viewer.cameraFlight.fit(aabb);
       console.log('[viewer] fit ok', aabb);
       return true;
     }
