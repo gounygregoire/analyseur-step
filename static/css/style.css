@@ -1439,3 +1439,11 @@ body {
 #dfmAxisPanel,#axis-panel{display:none;} /* anti-flash: axe caché au chargement */
 /* PATCH END */
 
+#dfmAxisPanel {
+  display: none;
+}
+
+.viewer-wrapper {
+  min-height: 420px;
+}
+
