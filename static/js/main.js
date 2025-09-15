@@ -19,7 +19,22 @@ function setDropState(stateName) {
   if (stateName) dz.classList.add(stateName);
 }
 
+async function displayModel(btn, url) {
+  if (!url) return;
+  setBtn(btn, 'Affichage…', true, true);
+  try {
+    await loadXKT(url);
+  } catch (err) {
+    console.error(err);
+    alert('Affichage impossible : ' + err.message);
+  } finally {
+    setBtn(btn, 'Prêt', false, false);
+  }
+}
+
 async function uploadAndConvert(btn) {
+  if (!state.file) throw new Error('Aucun fichier à envoyer');
+  setDropState('is-ready');
   const tol = $('toleranceSelect')?.value || 'standard';
   const fd = new FormData();
   fd.append('file', state.file);
@@ -43,18 +58,12 @@ async function uploadAndConvert(btn) {
   setDropState('is-success');
 
   if (j.xkt_url) {
-    setBtn(btn, 'Affichage…', true, true);
-    await loadXKT(j.xkt_url);
-    setBtn(btn, 'Prêt', false, false);
+    await displayModel(btn, j.xkt_url);
     return;
   }
 
   setBtn(btn, 'Conversion…', true, true);
-  await pollStatus(state.file_id, async (xkt_url) => {
-    setBtn(btn, 'Affichage…', true, true);
-    await loadXKT(xkt_url);
-    setBtn(btn, 'Prêt', false, false);
-  });
+  await pollStatus(state.file_id, (xkt_url) => displayModel(btn, xkt_url));
 }
 
 async function pollStatus(file_id, onReady) {
@@ -99,14 +108,16 @@ function attachUploadHandlers() {
   fileInput.addEventListener('change', async (e) => {
     state.file = e.target.files?.[0] || null;
     console.info('[upload] fichier sélectionné:', state.file?.name);
-    setDropState(null); // reset
-    if (state.file) {
-      try {
-        await uploadAndConvert(btn);
-      } catch (err) {
-        console.error(err);
-        alert('Upload/convert : ' + err.message);
-      }
+    if (!state.file) {
+      setDropState(null);
+      return;
+    }
+    try {
+      await uploadAndConvert(btn);
+    } catch (err) {
+      setDropState('is-error');
+      console.error(err);
+      alert('Upload/convert : ' + err.message);
     }
   });
 
@@ -119,6 +130,7 @@ function attachUploadHandlers() {
     try {
       await uploadAndConvert(btn);
     } catch (err) {
+      setDropState('is-error');
       console.error(err);
       alert('Upload/convert : ' + err.message);
     }
@@ -126,7 +138,11 @@ function attachUploadHandlers() {
 }
 
 (async () => {
-  await startViewer();
+  try {
+    await startViewer(); // ⬅️ si ça plante, on passe quand même à la suite
+  } catch (e) {
+    console.error('[viewer] init error (upload restera fonctionnel)', e);
+  }
   attachUploadHandlers();
 
   // Quand le modèle est affiché → état "ready"
