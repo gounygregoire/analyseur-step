@@ -99,7 +99,7 @@
                     </h4>
                     <form id="uploadForm" enctype="multipart/form-data">
                                 <div id="uploadArea">
-                                    <div id="dropzone" class="dropzone upload-area">
+                                    <div id="dropzone" class="dropzone upload-area" data-dropzone>
                                         <div class="upload-content">
                                 <p id="fileNameDisplay" class="text-success mt-3"></p>
                             <i class="bi bi-file-earmark-arrow-up" style="font-size: 3rem; color: var(--kaki-medium); margin-bottom: 1rem;"></i>
@@ -194,7 +194,7 @@
         <!-- Le canvas sera injecté si absent -->
 
       <!-- Barre d’outils overlay : IDs attendus par main.js -->
-      <div id="toolbar" data-viewer-required class="toolbar position-absolute" style="top:10px; left:10px; z-index:10; display:flex; gap:8px;">
+            <div id="toolbar" data-viewer-required class="toolbar viewer-tools position-absolute" style="top:10px; left:10px; z-index:10; display:flex; gap:8px;">
         <button id="fitBtn"     class="btn btn-sm btn-light"  title="Ajuster (F)">Fit</button>
         <button id="measureBtn" class="btn btn-sm btn-light"  title="Mesure (M)">Mesure</button>
         <button id="sectionBtn" class="btn btn-sm btn-light"  title="Coupes (X)">Coupes</button>
@@ -268,7 +268,7 @@
     </div>
 
     <!-- ✅ Outils DFM existants (inchangés) -->
-    <div id="dfmControls" data-viewer-required class="d-flex flex-wrap align-items-start gap-3 mt-4">
+    <div id="dfmControls" data-viewer-required class="viewer-tools d-flex flex-wrap align-items-start gap-3 mt-4">
       <button type="button" class="btn btn-primary" id="analyzeBtn">
         <i class="bi bi-search me-2"></i>Analyser
         <input type="hidden" id="fileId" value="">
@@ -277,7 +277,7 @@
     </div>
 
     <!-- Outils 3D intégrés à ton UI (conservés, ids différents => main.js ne les utilise pas) -->
-    <div class="mt-3" id="viewerToolsPanel" data-viewer-required style="display: none;">
+    <div class="mt-3 viewer-tools" id="viewerToolsPanel" data-viewer-required>
       <div class="card">
         <div class="card-body">
           <div class="row align-items-center">
