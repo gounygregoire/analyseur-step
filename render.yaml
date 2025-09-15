@@ -2,60 +2,60 @@ services:
   - type: web
     name: cadlytics-web
     env: python
-    buildCommand: |
-      apt-get update && apt-get install -y --no-install-recommends \
-        libgl1-mesa-glx \
-        libglib2.0-0 \
-        libxrender1 \
-        libxext6 \
-      && rm -rf /var/lib/apt/lists/*
-      npm ci && npm run build
-      pip install --no-cache-dir -r requirements.txt
-    startCommand: "gunicorn app:app --workers=1 --threads=2 --timeout=600"
+    plan: starter
     envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: PIP_DEFAULT_TIMEOUT
+        value: "600"
       - key: REDIS_URL
-        sync: false
+        fromService:
+          type: redis
+          name: cadlytics-redis
+          property: connectionString
       - key: UPLOAD_FOLDER
         value: /tmp/uploads
       - key: OUTPUT_FOLDER
         value: /tmp/converted
-      - key: FILES_DB_PATH
-        value: /opt/render/project/src/app/storage/files.sqlite
-      - key: MAX_UPLOAD_MB
-        value: "300"
-      - key: OMP_NUM_THREADS
-        value: "1"
-      - key: DATA_DIR
-        value: ./data # personnaliser si un volume persistant est monté
-    plan: starter
+    buildCommand: |
+      npm ci
+      npm run build
+      python -m pip install --upgrade pip setuptools wheel
+      python -m pip install --no-cache-dir --timeout 600 --retries 10 -r requirements-web.txt
+    startCommand: gunicorn app:app --workers 2 --threads 8 --timeout 120
 
   - type: worker
     name: cadlytics-worker
     env: python
-    buildCommand: |
-      apt-get update && apt-get install -y --no-install-recommends \
-        libgl1-mesa-glx \
-        libglib2.0-0 \
-        libxrender1 \
-        libxext6 \
-      && rm -rf /var/lib/apt/lists/*
-      pip install --no-cache-dir -r requirements.txt
-    startCommand: "python worker.py"
+    plan: starter
     envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: PIP_DEFAULT_TIMEOUT
+        value: "600"
       - key: REDIS_URL
-        sync: false
-      - key: UPLOAD_FOLDER
-        value: /tmp/uploads
-      - key: OUTPUT_FOLDER
-        value: /tmp/converted
-      - key: FILES_DB_PATH
-        value: /opt/render/project/src/app/storage/files.sqlite
-      - key: OMP_NUM_THREADS
-        value: "1"
-      - key: DATA_DIR
-        value: ./data # personnaliser si un volume persistant est monté
+        fromService:
+          type: redis
+          name: cadlytics-redis
+          property: connectionString
+      - key: OUTPUT_BUCKET
+        value: ""
+      - key: OUTPUT_PREFIX
+        value: ""
+    buildCommand: |
+      python -m pip install --upgrade pip setuptools wheel
+      python -m pip install --no-cache-dir --timeout 600 --retries 10 -r requirements-worker.txt
+    startCommand: |
+      python - <<'PY'
+      import os, redis
+      from rq import Worker, Queue, Connection
+      url = os.environ['REDIS_URL']
+      r = redis.from_url(url)
+      with Connection(r):
+          Worker([Queue(os.environ.get('RQ_QUEUE','default'))]).work(burst=False)
+      PY
 
 databases:
   - name: cadlytics-redis
-    plan: free
+    plan: starter
     ipAllowList: []

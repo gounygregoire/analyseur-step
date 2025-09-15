@@ -1,37 +1,150 @@
-import uuid
-import shutil
+# --- APP WEB: upload & conversion XKT via npx, DFM enqueue RQ ---
+import os, uuid, shlex, subprocess
+from flask import Flask, request, jsonify, send_from_directory, abort
+from flask_cors import CORS
+from redis import Redis
+from rq import Queue
+
+app = Flask(__name__)
+CORS(app)
+
+UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
+OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
+REDIS_URL = os.environ.get("REDIS_URL")
+redis_conn = Redis.from_url(REDIS_URL) if REDIS_URL else None
+q = Queue(connection=redis_conn) if redis_conn else None
+
+ALLOWED = {".stp", ".step"}
+def allowed(name): return os.path.splitext(name.lower())[1] in ALLOWED
+
+def _npx_cmd():
+    return "npx"  # Render fournit Node 20, PATH ajouté en dessous
+
+def run_xkt_convert(step_path: str, xkt_path: str):
+    npx = _npx_cmd()
+    cmd = f"""{shlex.quote(npx)} -y @xeokit/xeokit-convert@latest \
+      --input {shlex.quote(step_path)} \
+      --output {shlex.quote(xkt_path)}"""
+    env = os.environ.copy()
+    env["PATH"] = env.get("PATH","") + ":/opt/render/project/nodes/node-20.19.5/bin"
+    proc = subprocess.run(cmd, shell=True, env=env,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"xeokit-convert failed ({proc.returncode})\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
+
+@app.post("/upload")
+def upload():
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify(error="no_file"), 400
+    if not allowed(f.filename):
+        return jsonify(error="bad_ext"), 400
+    file_id = str(uuid.uuid4())
+    step_path = os.path.join(UPLOAD_FOLDER, f"{file_id}.step")
+    xkt_path  = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+    f.save(step_path)
+    try:
+        run_xkt_convert(step_path, xkt_path)
+    except Exception as e:
+        return jsonify(error="convert_fail", detail=str(e)), 500
+    xkt_url = f"/xkt/{file_id}.xkt" if os.path.exists(xkt_path) else None
+    return jsonify(file_id=file_id, status=("ready" if xkt_url else "processing"), xkt_url=xkt_url)
+
+@app.get("/convert/status")
+def convert_status():
+    file_id = request.args.get("file_id")
+    if not file_id:
+        return jsonify(error="no_file_id"), 400
+    xkt_path = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+    if os.path.exists(xkt_path):
+        return jsonify(status="ready", xkt_url=f"/xkt/{file_id}.xkt")
+    return jsonify(status="processing")
+
+@app.get("/xkt/<path:fname>")
+def serve_xkt(fname):
+    if not fname.endswith(".xkt"):
+        abort(404)
+    return send_from_directory(OUTPUT_FOLDER, fname, as_attachment=False)
+
+# ---------- DFM (enqueue au worker RQ) ----------
+@app.post("/dfm/start")
+def dfm_start():
+    if not q:
+        return jsonify(error="queue_unavailable"), 503
+    payload = request.get_json(silent=True) or {}
+    file_id = payload.get("file_id")
+    if not file_id:
+        return jsonify(error="no_file_id"), 400
+    step_path = os.path.join(UPLOAD_FOLDER, f"{file_id}.step")
+    xkt_path  = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+    job = q.enqueue("tasks.run_dfm", step_path, xkt_path, job_timeout=60*30)
+    return jsonify(job_id=job.get_id(), status="queued")
+
+@app.get("/dfm/status")
+def dfm_status():
+    if not q:
+        return jsonify(error="queue_unavailable"), 503
+    from rq.job import Job
+    job_id = request.args.get("job_id")
+    if not job_id:
+        return jsonify(error="no_job_id"), 400
+    try:
+        job = Job.fetch(job_id, connection=redis_conn)
+    except Exception:
+        return jsonify(status="unknown")
+    resp = {"status": job.get_status()}
+    if job.is_finished:
+        resp["result"] = job.result
+    elif job.is_failed:
+        resp["error"] = str(job.exc_info or "failed")
+    return jsonify(resp)
+
+import logging
 import time
-from flask import Flask, request, send_from_directory, url_for, render_template
-from rq.job import Job
-from werkzeug.utils import secure_filename
+from flask import url_for, render_template
 from flask_compress import Compress
-from .jobs import generate_low_preview, generate_full_model
-from .queue import q, conn
+from rq.job import Job
+
 from .tasks import heavy_compute
 from server.dfm_api_blueprint_stub import dfm_bp
-from app.storage.storage import Storage
+
+try:
+    from .queue import q as legacy_q, conn as legacy_conn
+except Exception:  # pragma: no cover - legacy queue optional
+    legacy_q = None
+    legacy_conn = None
+
+if redis_conn is None and legacy_conn is not None:
+    redis_conn = legacy_conn
+if q is None:
+    if legacy_q is not None:
+        q = legacy_q
+    elif redis_conn is not None:
+        q = Queue(connection=redis_conn)
+conn = redis_conn
 
 # >>> CADLYTICS PATCH: BOOT LOG (BEGIN)
-import os, logging
 log = logging.getLogger("boot")
-os.makedirs(os.environ.get("UPLOAD_FOLDER", "/tmp/uploads"), exist_ok=True)
-os.makedirs(os.environ.get("OUTPUT_FOLDER", "/tmp/converted"), exist_ok=True)
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 os.environ.setdefault(
     "FILES_DB_PATH",
     os.path.join(os.path.dirname(__file__), "storage/files.sqlite"),
 )
 log.info(
     "[BOOT] UPLOAD_FOLDER=%s OUTPUT_FOLDER=%s FILES_DB_PATH=%s cwd=%s",
-    os.environ.get("UPLOAD_FOLDER"),
-    os.environ.get("OUTPUT_FOLDER"),
+    UPLOAD_FOLDER,
+    OUTPUT_FOLDER,
     os.environ.get("FILES_DB_PATH"),
     os.getcwd(),
 )
 # >>> CADLYTICS PATCH: BOOT LOG (END)
 
-app = Flask(__name__)
-app.config["UPLOAD_FOLDER"] = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
-app.config["OUTPUT_FOLDER"] = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+app.config["OUTPUT_FOLDER"] = OUTPUT_FOLDER
 app.config["MAX_CONTENT_LENGTH"] = int(os.getenv("MAX_UPLOAD_MB", "300")) * 1024 * 1024
 app.config["COMPRESS_MIMETYPES"] = [
     "text/html",
@@ -41,7 +154,6 @@ app.config["COMPRESS_MIMETYPES"] = [
     "model/xkt",
     "model/gltf-binary",
 ]
-
 
 compress = Compress()
 compress.init_app(app)
@@ -85,63 +197,12 @@ if os.getenv("ENABLE_RQ_TEST_ROUTES") == "1" or os.getenv("FLASK_ENV") != "produ
         result = job.result if job.is_finished else None
         return {"id": job.id, "status": job.get_status(), "result": result}
 
+
 def _exc_message(exc):
     if not exc:
         return None
     return exc.strip().splitlines()[-1]
 
-@app.route("/upload", methods=["POST"])
-def upload():
-    file = request.files.get("file")
-    if not file:
-        return {"error": "No file provided"}, 400
-
-    file_id = uuid.uuid4().hex
-    original_filename = secure_filename(file.filename or "")
-    step_name = secure_filename(f"{file_id}.step")
-    step_path = os.path.join(app.config["UPLOAD_FOLDER"], step_name)
-    with open(step_path, "wb") as dst:
-        shutil.copyfileobj(file.stream, dst, length=1024 * 1024)
-
-    abs_step_path = os.path.abspath(step_path)
-    # >>> CADLYTICS PATCH: PERSIST STEP (BEGIN)
-    from flask import current_app, abort
-    from app.storage.storage import Storage
-    import os
-
-    assert file_id, "file_id must be defined before persisting STEP"
-    if not original_filename:
-        original_filename = os.path.basename(abs_step_path)
-
-    persisted = Storage.ensure_step_persisted(file_id, abs_step_path, original_filename)
-    exists = bool(persisted and os.path.isfile(persisted))
-    current_app.logger.info("[UPLOAD→PERSIST] file_id=%s tmp=%s persisted=%s exists=%s", file_id, abs_step_path, persisted, exists)
-
-    chk = Storage.get_step_path(file_id)
-    ok = bool(chk and os.path.isfile(chk))
-    current_app.logger.info("[VERIFY] get_step_path(file_id=%s) -> %s exists=%s", file_id, chk, ok)
-    if not ok:
-        current_app.logger.error("[FATAL] STEP NOT FOUND JUST AFTER PERSIST. UPLOAD_FOLDER=%s FILES_DB_PATH=%s", os.environ.get("UPLOAD_FOLDER", "/tmp/uploads"), os.environ.get("FILES_DB_PATH"))
-        abort(500, description="persist_step_failed")
-    step_path = chk
-    # >>> CADLYTICS PATCH: PERSIST STEP (END)
-
-    low_job = q.enqueue(
-        generate_low_preview,
-        step_path,
-        job_id=file_id,
-        job_timeout=300,
-    )
-    full_job = q.enqueue(
-        generate_full_model,
-        step_path,
-        depends_on=low_job,
-        job_timeout=1800,
-    )
-    low_job.meta["full_job_id"] = full_job.id
-    low_job.save_meta()
-
-    return {"job_id": low_job.id}, 202
 
 @app.route("/jobs/<job_id>/status")
 def job_status(job_id: str):
@@ -188,6 +249,7 @@ def job_status(job_id: str):
 
     return {"status": status, "low_url": low_url, "full_url": full_url, "message": message}
 
+
 @app.route("/jobs/<job_id>/result")
 def job_result(job_id: str):
     try:
@@ -211,6 +273,7 @@ def job_result(job_id: str):
         return {"error": "Result not ready"}, 404
     return result
 
+
 @app.route("/models/<path:filename>", methods=["GET", "HEAD"])
 def models(filename):
     mimetype = None
@@ -219,6 +282,7 @@ def models(filename):
     elif filename.endswith(".glb"):
         mimetype = "model/gltf-binary"
     return send_from_directory(app.config["OUTPUT_FOLDER"], filename, mimetype=mimetype)
+
 
 @app.route("/")
 def index():

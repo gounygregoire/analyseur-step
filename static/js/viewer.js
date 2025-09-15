@@ -5,23 +5,18 @@ export function onModelLoaded(cb) { bus.addEventListener('model-loaded', cb, { o
 
 async function loadXeokit() {
   try {
-    // ✅ si tu bundles vraiment, ça marchera
-    return await import('@xeokit/xeokit-sdk');
-  } catch (e) {
-    console.warn('[viewer] import local xeokit raté, fallback CDN ESM…', e);
-    // ✅ fallback sans bundler
+    return await import('@xeokit/xeokit-sdk');                 // si bundlé
+  } catch {
+    console.warn('[viewer] fallback CDN ESM');
     return await import('https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@1.8.2/+esm');
   }
 }
 
 export async function bootstrapViewer() {
   const ready = d => d.readyState === 'complete' || d.readyState === 'interactive';
-  if (!ready(document)) {
-    await new Promise(res => document.addEventListener('DOMContentLoaded', res, { once:true }));
-  }
+  if (!ready(document)) await new Promise(res => document.addEventListener('DOMContentLoaded', res, { once:true }));
   const container = document.getElementById('viewerContainer');
   if (!container) throw new Error('[viewer] viewerContainer introuvable');
-
   let canvas = document.getElementById('xktCanvas');
   if (!canvas) {
     canvas = document.createElement('canvas');
@@ -37,18 +32,6 @@ export async function bootstrapViewer() {
 
 export async function startViewer() {
   const canvas = await bootstrapViewer();
-
-  // Test WebGL offscreen (pas sur le vrai canvas)
-  try {
-    const test = document.createElement('canvas');
-    const gl = test.getContext('webgl2') || test.getContext('webgl') || test.getContext('experimental-webgl');
-    if (!gl) throw new Error('WebGL indisponible');
-    console.info('[viewer] WebGL smoke test ok');
-  } catch (e) {
-    console.warn('[viewer] Pas de WebGL : la visu ne sera pas dispo, mais l’upload restera fonctionnel.', e);
-  }
-
-  // Charge Xeokit (local ou CDN)
   const { Viewer, XKTLoaderPlugin } = await loadXeokit();
 
   _viewer = new Viewer({
@@ -57,7 +40,6 @@ export async function startViewer() {
     logarithmicDepthBufferEnabled: true,
     dtxEnabled: true
   });
-
   _viewer.scene.gammaOutput = true;
   _viewer.scene.gammaInput = true;
 
@@ -65,7 +47,6 @@ export async function startViewer() {
   ro.observe(document.getElementById('viewerContainer'));
 
   _loader = new XKTLoaderPlugin(_viewer);
-
   console.info('[viewer] ready (sans modèle)');
   return { canvas, viewer: _viewer };
 }
@@ -81,7 +62,7 @@ export async function loadXKT(url) {
   return model;
 }
 
-// — Compat éventuelle avec DFMOrchestrator —
+// Compat optionnelle
 export function loadCameraPresetOptional(preset) {
   try {
     if (!_viewer) return;
