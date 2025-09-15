@@ -211,7 +211,7 @@ def job_result(job_id: str):
         return {"error": "Result not ready"}, 404
     return result
 
-@app.route("/models/<path:filename>")
+@app.route("/models/<path:filename>", methods=["GET", "HEAD"])
 def models(filename):
     mimetype = None
     if filename.endswith(".xkt"):
