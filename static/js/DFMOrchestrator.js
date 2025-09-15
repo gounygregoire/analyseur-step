@@ -17,7 +17,7 @@ if (typeof window !== "undefined") {
 }
 
 // PATCH START: selectors
-const btnVisualiser = document.querySelector('#btn-visualiser, #visualizeBtn');
+// const btnVisualiser = document.querySelector('#btn-visualiser, #visualizeBtn');
 const btnAnalyser   = document.querySelector('#analyzeBtn, #btn-analyser');
 const axisPanel     = document.querySelector('#dfmAxisPanel, #axis-panel');
 // PATCH END
