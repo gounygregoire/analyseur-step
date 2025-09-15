@@ -27,6 +27,7 @@ import time
 import shutil
 import tempfile
 import subprocess
+import shlex
 from OCP.STEPControl import STEPControl_Reader
 from OCP.StlAPI import StlAPI_Writer
 from OCP.Interface import Interface_Static
@@ -171,7 +172,7 @@ def upload():
     xkt = os.path.join(OUTPUT_FOLDER, f'{file_id}.xkt')
     f.save(step)
     try:
-        run_sync_conversion(step, xkt, tol)
+        run_xkt_convert(step, xkt, tol)
     except Exception as e:
         return jsonify(error='convert_fail', detail=str(e)), 500
     xkt_url = f'/xkt/{file_id}.xkt' if os.path.exists(xkt) else None
@@ -188,7 +189,6 @@ def convert_status():
         return jsonify(status='ready', xkt_url=f'/xkt/{file_id}.xkt')
     return jsonify(status='processing')
 
-
 @app.get('/xkt/<path:fname>')
 def serve_xkt(fname: str):
     if not fname.endswith('.xkt'):
@@ -196,9 +196,31 @@ def serve_xkt(fname: str):
     return send_from_directory(OUTPUT_FOLDER, fname, as_attachment=False)
 
 
-def run_sync_conversion(step_path: str, xkt_path: str, tolerance: str):
-    cmd = ['xeokit-convert', '--input', step_path, '--output', xkt_path]
-    subprocess.run(cmd, check=True)
+def _npx_cmd():
+    candidates = [
+        "npx",
+        "/opt/render/project/nodes/node-20.19.5/bin/npx",
+        "/opt/render/project/nodes/node-*/bin/npx"
+    ]
+    for c in candidates:
+        if os.path.exists(c) or c == "npx":
+            return c
+    return "npx"
+
+
+def run_xkt_convert(step_path: str, xkt_path: str, tolerance: str = "standard"):
+    npx = _npx_cmd()
+    cmd = f"""{shlex.quote(npx)} -y @xeokit/xeokit-convert@latest \
+      --input {shlex.quote(step_path)} \
+      --output {shlex.quote(xkt_path)}"""
+    env = os.environ.copy()
+    env["PATH"] = env.get("PATH", "") + ":/opt/render/project/nodes/node-20.19.5/bin"
+    proc = subprocess.run(cmd, shell=True, env=env,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"xeokit-convert failed ({proc.returncode})\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+        )
 
 
 def _resolve_xeokit():
