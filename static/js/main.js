@@ -22,27 +22,38 @@ async function uploadAndConvert(btn) {
   fd.append('tolerance', tol);
 
   setBtn(btn, 'Envoi…', true, true);
-  const r = await fetch('/upload', { method: 'POST', body: fd });
-  const j = await r.json().catch(() => ({}));
-  console.info('[upload] /upload →', j);
-  if (!r.ok) throw new Error(j?.error || ('HTTP ' + r.status));
-  state.file_id = j.file_id;
+  try {
+    const r = await fetch('/upload', { method: 'POST', body: fd });
+    const j = await r.json().catch(() => ({}));
+    console.info('[upload] /upload →', j);
+    if (!r.ok) {
+      const msg = j?.detail || j?.error || ('HTTP ' + r.status);
+      throw new Error(msg);
+    }
+    state.file_id = j.file_id;
 
-  if (j.xkt_url) {
-    setBtn(btn, 'Affichage…', true, true);
-    await loadXKT(j.xkt_url);
-    setBtn(btn, 'Prêt', false, false);
-    markDropSuccess(true);
-    return;
+    if (j.xkt_url) {
+      setBtn(btn, 'Affichage…', true, true);
+      await loadXKT(j.xkt_url);
+      setBtn(btn, 'Prêt', false, false);
+      markDropSuccess(true);
+      return;
+    }
+
+    setBtn(btn, 'Conversion…', true, true);
+    await pollStatus(state.file_id, async (xkt_url) => {
+      setBtn(btn, 'Affichage…', true, true);
+      await loadXKT(xkt_url);
+      setBtn(btn, 'Prêt', false, false);
+      markDropSuccess(true);
+    });
+  } catch (err) {
+    console.error('[upload] erreur', err);
+    alert('Erreur upload/convert : ' + (err?.message || err));
+    markDropSuccess(false);
+    setBtn(btn, 'VISUALISER', false, false);
+    return; // stop flow
   }
-
-  setBtn(btn, 'Conversion…', true, true);
-  await pollStatus(state.file_id, async (xkt_url) => {
-    setBtn(btn, 'Affichage…', true, true);
-    await loadXKT(xkt_url);
-    setBtn(btn, 'Prêt', false, false);
-    markDropSuccess(true);
-  });
 }
 
 function markDropSuccess(ok) {
@@ -82,16 +93,14 @@ function attachUploadHandlers() {
     markDropSuccess(false);
     // auto-lancement dès sélection
     if (state.file) {
-      try { await uploadAndConvert(btn); }
-      catch (err) { console.error(err); alert('Upload/convert erreur: ' + err.message); markDropSuccess(false); setBtn(btn, 'VISUALISER', false, false); }
+      await uploadAndConvert(btn);
     }
   });
 
   btn.addEventListener('click', async (e) => {
     e.preventDefault();
     if (!state.file) { alert('Choisis un fichier .stp/.step'); return; }
-    try { await uploadAndConvert(btn); }
-    catch (err) { console.error(err); alert('Upload/convert erreur: ' + err.message); markDropSuccess(false); setBtn(btn, 'VISUALISER', false, false); }
+    await uploadAndConvert(btn);
   });
 }
 
