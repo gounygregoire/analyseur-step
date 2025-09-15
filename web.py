@@ -198,9 +198,8 @@ def serve_xkt(fname: str):
 
 
 def run_sync_conversion(step_path: str, xkt_path: str, tolerance: str):
-    tol_map = {'coarse': 1.0, 'fine': 0.2}
-    stl_tol = tol_map.get(tolerance, 0.6)
-    xkt_converter.convert_step_to_xkt(step_path, xkt_path, stl_tolerance=stl_tol)
+    cmd = ['xeokit-convert', '--input', step_path, '--output', xkt_path]
+    subprocess.run(cmd, check=True)
 
 
 def _resolve_xeokit():

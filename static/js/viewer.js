@@ -1,100 +1,65 @@
 // static/js/viewer.js
-
-let _viewer, _xktLoader;
-
-export async function loadCameraPresetOptional(u) {
-  try {
-    const r = await fetch(u, { cache: 'no-store' });
-    return r.ok ? await r.json() : null;
-  } catch {
-    return null;
-  }
-}
+let _viewer; // instance moteur si besoin (xeokit, etc.)
 
 export async function bootstrapViewer() {
-  const ready = (d) => d.readyState === 'complete' || d.readyState === 'interactive';
+  const ready = d => d.readyState === 'complete' || d.readyState === 'interactive';
   if (!ready(document)) {
     await new Promise(res => document.addEventListener('DOMContentLoaded', res, { once: true }));
     console.info('[viewer] DOMContentLoaded');
   }
   const container = document.getElementById('viewerContainer');
   if (!container) throw new Error('[viewer] viewerContainer introuvable');
+
   let canvas = document.getElementById('xktCanvas');
   if (!canvas) {
-    console.warn('[viewer] xktCanvas absent, création…');
+    console.warn('[viewer] xktCanvas absent, création.');
     canvas = document.createElement('canvas');
     canvas.id = 'xktCanvas';
     canvas.style.width = '100%';
     canvas.style.height = '100%';
     container.appendChild(canvas);
   }
-  // sécurité : garantir une hauteur au container
-  const cs = getComputedStyle(container);
-  const h = container.clientHeight || parseInt(cs.height) || 0;
-  if (h < 200) {
-    container.style.minHeight = '320px';
-    console.warn('[viewer] container était trop petit, minHeight=320px appliqué');
+
+  // Garantir une zone visible
+  if ((container.clientHeight || 0) < 320) {
+    container.style.minHeight = '360px';
   }
+
   console.info('[viewer] bootstrap ok', { w: container.clientWidth, h: container.clientHeight });
   return canvas;
 }
 
-export async function initViewer() {
-  try {
-    const canvas = await bootstrapViewer();
-    console.info('[viewer] init ok', { canvas });
-    // N’INSTANCIE PAS encore Xeokit ici, juste retourne le canvas
-    return { canvas };
-  } catch (e) {
-    console.error('[viewer] init failed', e);
-    throw e;
-  }
-}
-
-function smokeTestGL(canvas) {
-  const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
-  if (!gl) throw new Error('[viewer] WebGL non disponible');
-  gl.clearColor(0.95, 0.95, 0.95, 1.0);
+// Test WebGL sur un canvas jetable (ne touche JAMAIS au canvas du viewer)
+function smokeTestGL() {
+  const test = document.createElement('canvas');
+  const gl2 = test.getContext('webgl2');
+  const gl = gl2 || test.getContext('webgl') || test.getContext('experimental-webgl');
+  if (!gl) throw new Error('[viewer] WebGL indisponible');
+  gl.clearColor(0.95, 0.95, 0.95, 1);
   gl.clear(gl.COLOR_BUFFER_BIT);
-  console.info('[viewer] WebGL smoke test ok');
+  console.info(`[viewer] WebGL smoke test ok (${gl2 ? 'webgl2' : 'webgl1'})`);
 }
 
 export async function startViewer() {
-  if (_viewer) {
-    console.warn('[viewer] déjà initialisé');
-    return { canvas: _viewer.canvas }; // retourne au moins le canvas
-  }
-  const { canvas } = await initViewer();
-  smokeTestGL(canvas);
-  if (window.__CADLYTICS_VIEWER) {
-    _viewer = window.__CADLYTICS_VIEWER;
-    _xktLoader = window.__CADLYTICS_XKT_LOADER || _xktLoader;
-  } else {
-    const mod = await import('https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@2/dist/xeokit-sdk.es.js');
-    const { Viewer, XKTLoaderPlugin } = mod;
-    _viewer = new Viewer({ canvasId: canvas.id });
-    _xktLoader = new XKTLoaderPlugin(_viewer);
-    window.__CADLYTICS_VIEWER = _viewer;
-    window.__CADLYTICS_XKT_LOADER = _xktLoader;
-  }
+  const canvas = await bootstrapViewer();
+  smokeTestGL();            // ✅ test offscreen, pas sur `canvas`
+  // ⬇️ Ici seulement, on laisse le moteur créer SON contexte sur `canvas`
+  // Exemple (à adapter à ta lib) :
+  // const { Viewer, XKTLoaderPlugin } = await import('@xeokit/xeokit-sdk');
+  // _viewer = new Viewer({ canvasElement: canvas, transparent: false });
+  // _viewer.cameraControl.navMode = "orbit";
   console.info('[viewer] ready (sans modèle)');
   return { canvas };
 }
 
 export async function loadXKT(url) {
-  console.info('[viewer] loadXKT', url);
-  if (!_viewer) throw new Error('viewer non initialisé');
-  let model;
-  if (_xktLoader && _xktLoader.load) {
-    model = await _xktLoader.load({ id: 'model', src: url, edges: true });
-    const aabb = model?.aabb || _viewer.scene?.aabb;
-    if (aabb && _viewer.cameraFlight) {
-      _viewer.cameraFlight.fit(aabb);
-    }
-  } else if (_viewer.loadXKT) {
-    model = await _viewer.loadXKT(url);
-    if (_viewer.fitAll) _viewer.fitAll();
+  if (!_viewer) {
+    console.warn('[viewer] pas d’instance moteur, charge à adapter si tu utilises une API custom');
   }
-  console.info('[viewer] XKT affiché');
-  return model;
+  console.info('[viewer] loadXKT', url);
+  // Exemple ESM xeokit :
+  // const loader = new XKTLoaderPlugin(_viewer);
+  // const model = await loader.load({ id: 'model', src: url, edges: true });
+  // _viewer.cameraFlight.flyTo(model);
+  // Si tu as une API custom : _viewer.loadXKT(url); _viewer.fitAll();
 }
