@@ -865,9 +865,11 @@ if (typeof window !== 'undefined') {
 
 // --- Visualiser & analyse workflow ---------------------------------------
 function getTolerance() {
-  const v = parseFloat(document.getElementById("tolerance")?.value);
+  const v = parseFloat(document.getElementById("toleranceInput")?.value);
   return Number.isFinite(v) ? v : 0.1;
 }
+
+if (typeof window !== "undefined") window.getTolerance = getTolerance;
 
 // PATCH START: visualize flow via viewerAdapter
 (function(){
