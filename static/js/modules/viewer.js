@@ -8,6 +8,25 @@ export async function loadCameraPresetOptional(u){
 }
 // PATCH END
 
+// PATCH START: convert helper exposed via viewerAdapter
+export async function convert(fileId){
+  if (!fileId) return { ok:false };
+  try{
+    const r = await fetch('/api/simple/convert', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ file_id: fileId, tolerance: window.getTolerance?.() })
+    });
+    console.log('[viewer] convert status', r.status);
+    let j=null; try{ j = await r.json(); }catch{}
+    console.log('[viewer] payload', j);
+    return { ok:r.ok, data:j };
+  }catch(e){
+    console.warn('[viewer] convert fetch error', e); return { ok:false };
+  }
+}
+// PATCH END
+
 // PATCH START: visualiser flow + axis show after material
 (function(){
   function $(s){ return document.querySelector(s); }
@@ -24,27 +43,10 @@ export async function loadCameraPresetOptional(u){
   window.addEventListener('material:confirmed', showAxisIfReady);
   window.addEventListener('material:selected',  showAxisIfReady);
 
-  async function convert(fileId){
-    if (!fileId) return { ok:false };
-    try{
-      const r = await fetch('/api/simple/convert', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ file_id: fileId, tolerance: window.getTolerance?.() })
-      });
-      console.log('[visualiser] convert status', r.status);
-      let j=null; try{ j = await r.json(); }catch{}
-      console.log('[visualiser] payload', j);
-      return { ok:r.ok, data:j };
-    }catch(e){
-      console.warn('[visualiser] convert fetch error', e); return { ok:false };
-    }
-  }
-
   async function doVisualize(fid){
     const va = window.viewerAdapter;
-    if (!va || !va.loadFromFileId){ console.error('[visualiser] viewerAdapter manquant'); return; }
-    await convert(fid);              // idempotent : OK si déjà converti
+    if (!va || !va.loadFromFileId || !va.convert){ console.error('[visualiser] viewerAdapter manquant'); return; }
+    await va.convert(fid);           // idempotent : OK si déjà converti
     await va.loadFromFileId(fid);    // la fonction choisit l’URL qui marche
   }
 
@@ -119,7 +121,7 @@ if (!window.__XE_VIEWER_BOOT__) {
     }
 
     // Expose un adaptateur global unique
-    window.viewerAdapter = { viewer, loadFromFileId };
+    window.viewerAdapter = { viewer, loadFromFileId, convert };
     console.log('[viewer] init ok');
     return viewer;
   };
