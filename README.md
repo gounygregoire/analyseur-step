@@ -75,20 +75,14 @@ Exécuter une seule fois :
 ```bash
 npm install
 ```
-Cette commande installe notamment `@xeokit/xeokit-convert` pour la conversion des modèles au format XKT.
 
-Pour générer le bundle dans `static/dist/` :
+Le point d’entrée front est `static/js/main.js`. Si besoin, construis le bundle avec :
 
 ```bash
 npm run build
 ```
-Ce script régénère `static/dist/main.js`.
-Pendant le développement il suffit de lancer
 
-```bash
-npm run dev
-```
-pour reconstruire automatiquement ce fichier à chaque modification.
+Le script est ensuite chargé via `<script type="module" src="/static/js/main.js" defer></script>`.
 
 ## Conversion STEP → XKT
 
