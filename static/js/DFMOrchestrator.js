@@ -869,32 +869,41 @@ function getTolerance() {
   return Number.isFinite(v) ? v : 0.1;
 }
 
-// PATCH START: autoconvert on file ready
-window.addEventListener('dfm:fileReady', async (e) => {
-  const fid = (e?.detail && e.detail.fileId) || window.currentFileId;
-  if (!fid) return;
-  const r = await fetch('/api/simple/convert', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ file_id: fid, tolerance: getTolerance?.() })
-  });
-  console.log('[auto] convert status', r.status);
-  try { console.log('[auto] payload', await r.json()); } catch {}
-  await (window.viewerAdapter?.loadFromFileId?.(fid));
-});
-// PATCH END
+// PATCH START: visualize flow via viewerAdapter
+(function(){
+  function $(s){ return document.querySelector(s); }
+  const btnVisualiser = $('#btn-visualiser, #visualizeBtn');
 
-// PATCH START: visualiser button
-if (btnVisualiser) {
-  btnVisualiser.addEventListener('click', async () => {
-    const fid = window.currentFileId;
-    if (!fid) { console.warn('[visualiser] no fileId'); return; }
+  async function convert(fileId){
+    if (!fileId) return false;
     const r = await fetch('/api/simple/convert', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ file_id: fid, tolerance: getTolerance?.() })
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ file_id: fileId, tolerance: window.getTolerance?.() })
     });
     console.log('[visualiser] convert status', r.status);
     try { console.log('[visualiser] payload', await r.json()); } catch {}
-    await (window.viewerAdapter?.loadFromFileId?.(fid));
+    return r.ok;
+  }
+
+  async function doVisualize(fid){
+    if (!fid) { console.warn('[visualiser] no fileId'); return; }
+    if (!window.viewerAdapter?.viewer) {
+      // Si personne n'a démarré le viewer, on le fait ici
+      const canvas = document.getElementById('xktCanvas');
+      window.initViewer?.({ canvasElement: canvas });
+    }
+    await convert(fid); // idempotent: OK si déjà converti
+    await window.viewerAdapter?.loadFromFileId?.(fid);
+  }
+
+  if (btnVisualiser) {
+    btnVisualiser.addEventListener('click', () => doVisualize(window.currentFileId));
+  }
+
+  window.addEventListener('dfm:fileReady', (e) => {
+    const fid = (e?.detail && e.detail.fileId) || window.currentFileId;
+    if (fid) doVisualize(fid);
   });
-}
+})();
 // PATCH END
