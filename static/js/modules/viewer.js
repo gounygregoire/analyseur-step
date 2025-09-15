@@ -1,13 +1,5 @@
-import { Viewer, XKTLoaderPlugin }
+import { Viewer as XEViewer, XKTLoaderPlugin as XEXKTLoaderPlugin }
   from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@2/dist/xeokit-sdk.es.js";
-
-// PATCH START: init with canvasElement
-const _canvas = document.getElementById('xktCanvas');
-if (!_canvas) { console.error('[viewer] missing #xktCanvas'); }
-const _viewer = new Viewer({ canvasElement: _canvas });
-const xktLoader = new XKTLoaderPlugin(_viewer);
-try { _viewer.canvas.canvas.style.background = '#e9ecef'; } catch(e){}
-// PATCH END
 
 // PATCH START: optional camera preset
 export async function loadCameraPresetOptional(u){
@@ -16,73 +8,6 @@ export async function loadCameraPresetOptional(u){
 }
 // PATCH END
 
-// PATCH START: loadFromFileId with /models fallback
-async function pickReachableUrl(id){
-  const urls = [`/models/${id}.xkt`, `/static/converted/${id}.xkt`];
-  for (const u of urls){
-    try { const h = await fetch(u, { method:'HEAD', cache:'no-store' });
-          console.log('[viewer] HEAD', u, h.status);
-          if (h.ok) return u; } catch {}
-  }
-  return null;
-}
-export async function loadFromFileId(fileId){
-  const url = await pickReachableUrl(fileId);
-  if (!url){ console.error('[viewer] no reachable XKT'); return false; }
-  console.log('[viewer] load', url);
-  console.time('[viewer] xkt load');
-  const model = await xktLoader.load({ src: url });
-  console.timeEnd('[viewer] xkt load');
-  const aabb = (model && model.aabb) || _viewer.scene.aabb;
-  if (aabb) _viewer.cameraControl.fit(aabb);
-  console.log('[viewer] fit ok', aabb);
-  return true;
-}
-// expose pour l’orchestrateur
-window.viewerAdapter = { viewer: _viewer, loadFromFileId };
-// PATCH END
-// PATCH START: xeokit v2 bootstrap + robust loader
-import { Viewer, XKTLoaderPlugin } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@2/dist/xeokit-sdk.es.js";
-
-(function initViewerV2(){
-  function ready(fn){ /complete|interactive/.test(document.readyState) ? fn() : document.addEventListener('DOMContentLoaded', fn); }
-  ready(() => {
-    const canvas = document.getElementById('xktCanvas');
-    if (!canvas){ console.error('initViewer failed canvas introuvable'); return; }
-
-    const viewer = new Viewer({ canvasElement: canvas });
-    const xktLoader = new XKTLoaderPlugin(viewer);
-    try { viewer.canvas.canvas.style.background = '#e9ecef'; } catch(e){}
-
-    async function pickUrl(id){
-      const urls = [`/models/${id}.xkt`, `/static/converted/${id}.xkt`];
-      for (const u of urls){
-        try { const h = await fetch(u, { method:'HEAD', cache:'no-store' });
-              console.log('[viewer] HEAD', u, h.status);
-              if (h.ok) return u; } catch {}
-      }
-      return null;
-    }
-
-    async function loadFromFileId(fileId){
-      const url = await pickUrl(fileId);
-      if (!url){ console.error('[viewer] no reachable XKT for', fileId); return false; }
-      console.log('[viewer] load', url);
-      console.time('[viewer] xkt load');
-      const model = await xktLoader.load({ src: url });
-      console.timeEnd('[viewer] xkt load');
-      const aabb = (model && model.aabb) || viewer.scene.aabb;
-      if (aabb) viewer.cameraControl.fit(aabb);
-      console.log('[viewer] fit ok', aabb);
-      return true;
-    }
-
-    // expose pour l’orchestrateur
-    window.viewerAdapter = { viewer, loadFromFileId };
-    console.log('[viewer] init ok');
-  });
-})();
-// PATCH END
 // PATCH START: visualiser flow + axis show after material
 (function(){
   function $(s){ return document.querySelector(s); }
@@ -137,3 +62,68 @@ import { Viewer, XKTLoaderPlugin } from "https://cdn.jsdelivr.net/npm/@xeokit/xe
   });
 })();
 // PATCH END
+
+// PATCH START: single-boot viewer with default canvas + robust loader
+if (!window.__XE_VIEWER_BOOT__) {
+  window.__XE_VIEWER_BOOT__ = true;
+
+  function getCanvasFromConfig(cfg = {}) {
+    return (
+      cfg.canvasElement ||
+      (cfg.canvasId && document.getElementById(cfg.canvasId)) ||
+      document.getElementById('xktCanvas')
+    );
+  }
+
+  // initViewer peut être appelée par le code existant (main.js). On la rend tolérante.
+  window.initViewer = function initViewer(cfg = {}) {
+    const canvas = getCanvasFromConfig(cfg);
+    if (!canvas) {
+      console.error('[viewer] canvas introuvable', { cfg });
+      return null;
+    }
+    const viewer = new XEViewer({ canvasElement: canvas });
+    try { viewer.canvas.canvas.style.background = '#e9ecef'; } catch (e) {}
+    const xktLoader = new XEXKTLoaderPlugin(viewer);
+
+    async function pickUrl(id) {
+      const urls = [`/models/${id}.xkt`, `/static/converted/${id}.xkt`];
+      for (const u of urls) {
+        try {
+          const h = await fetch(u, { method: 'HEAD', cache: 'no-store' });
+          console.log('[viewer] HEAD', u, h.status);
+          if (h.ok) return u;
+        } catch (_) {}
+      }
+      return null;
+    }
+
+    async function loadFromFileId(fileId) {
+      const url = await pickUrl(fileId);
+      if (!url) { console.error('[viewer] no reachable XKT for', fileId); return false; }
+      console.log('[viewer] load', url);
+      console.time('[viewer] xkt load');
+      const model = await xktLoader.load({ src: url });
+      console.timeEnd('[viewer] xkt load');
+      const aabb = (model && model.aabb) || viewer.scene.aabb;
+      if (aabb) viewer.cameraControl.fit(aabb);
+      console.log('[viewer] fit ok', aabb);
+      return true;
+    }
+
+    // Expose un adaptateur global unique
+    window.viewerAdapter = { viewer, loadFromFileId };
+    console.log('[viewer] init ok');
+    return viewer;
+  };
+
+  // Démarrage automatique après DOM si personne n'appelle initViewer explicitement
+  document.addEventListener('DOMContentLoaded', () => {
+    if (!window.viewerAdapter) {
+      const canvas = document.getElementById('xktCanvas');
+      if (canvas) window.initViewer({ canvasElement: canvas });
+    }
+  });
+}
+// PATCH END
+

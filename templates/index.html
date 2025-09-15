@@ -190,9 +190,8 @@
 
     <!-- === CONTENEUR VIEWER NOUVEAU (overlay) === -->
     <div id="viewer" class="viewer-wrapper position-relative" style="height: 600px; border-radius:10px; background:#e8e9ea; overflow:hidden;">
-      <!-- PATCH START: viewer canvas -->
+      <!-- PATCH: viewer canvas -->
       <canvas id="xktCanvas" class="xkt-canvas" aria-label="3D viewer"></canvas>
-      <!-- PATCH END -->
 
       <!-- Barre d’outils overlay : IDs attendus par main.js -->
       <div id="toolbar" data-viewer-required class="toolbar position-absolute" style="top:10px; left:10px; z-index:10; display:flex; gap:8px;">
@@ -204,9 +203,6 @@
         <button id="resetBtn"   class="btn btn-sm btn-light"  title="Réinitialiser (R)">Reset</button>
         <button id="pngBtn"     class="btn btn-sm btn-light"  title="Exporter PNG">PNG</button>
       </div>
-
-      <canvas id="axisGizmo" class="position-absolute" width="80" height="80" style="bottom:10px; right:10px; z-index:10;">
-      </canvas>
 
       <!-- Panneau latéral compact (mesures + coupes) exploité par main.js -->
       <aside id="sidePanel" class="panel collapsed position-absolute"
