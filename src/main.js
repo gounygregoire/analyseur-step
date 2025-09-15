@@ -99,6 +99,9 @@ export async function initViewer(modelUrl) {
         }
       }
       console.error("[viewer] all xkt URLs failed", urls, lastErr);
+      if (typeof window !== "undefined" && typeof window.showError === "function") {
+        window.showError("Impossible de charger le modèle 3D");
+      }
       return false;
     };
 
