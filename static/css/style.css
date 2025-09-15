@@ -1435,7 +1435,7 @@ body {
 
 /* PATCH START: viewer canvas css */
 .xkt-canvas{width:100%;height:100%;display:block;}
-#viewer-wrapper,.viewer-wrapper,[data-viewer="xkt"]{min-height:420px;position:relative;}
+#viewer-wrapper,.viewer-wrapper,[data-viewer="xkt"]{min-height:360px;position:relative;}
 #dfmAxisPanel,#axis-panel{display:none;} /* anti-flash: axe caché au chargement */
 /* PATCH END */
 
@@ -1444,6 +1444,7 @@ body {
 }
 
 .viewer-wrapper {
-  min-height: 420px;
+  min-height: 360px;
+  height: 100%;
 }
 

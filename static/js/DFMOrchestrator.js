@@ -4,7 +4,7 @@
  */
 
 import HeatmapLayer from "./modules/HeatmapLayer.js";
-import { loadCameraPresetOptional } from "./modules/viewer.js";
+import { loadCameraPresetOptional } from "./viewer.js";
 
 // État global minimal pour la DFM
 if (typeof window !== "undefined") {

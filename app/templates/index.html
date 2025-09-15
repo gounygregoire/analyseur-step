@@ -13,15 +13,17 @@
     <button type="submit" class="btn btn-primary">Uploader</button>
     <span id="modeBadge" class="badge bg-secondary ms-2"></span>
   </form>
-  <div id="viewer" style="width:100%;height:600px;position:relative;">
-    <canvas id="viewer3d" class="w-100 h-100"></canvas>
-    <div id="statusText" class="position-absolute top-50 start-50 translate-middle text-white">
-      Prévisualisation en cours…
+  <section class="viewer-wrapper" style="height:600px;">
+    <div id="viewerContainer" style="width:100%;height:100%;min-height:360px;position:relative;">
+      <canvas id="xktCanvas" class="w-100 h-100"></canvas>
+      <div id="statusText" class="position-absolute top-50 start-50 translate-middle text-white">
+        Prévisualisation en cours…
+      </div>
     </div>
-  </div>
+  </section>
     <script>
       const MAX_UPLOAD_MB = {{ max_upload_mb }};
     </script>
-    <script type="module" src="{{ url_for('static', filename='dist/main.js') }}"></script>
+    <script type="module" src="{{ url_for('static', filename='js/main.js') }}" defer></script>
   </body>
 </html>

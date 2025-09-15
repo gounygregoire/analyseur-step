@@ -36,9 +36,12 @@ state.fileLoaded = false;
 
 // ---------- Initialisation ---------------------------------------------------
 export async function initViewer(modelUrl) {
-  const canvasEl = document.getElementById("viewer3d");
+  const canvasEl = document.querySelector('#xktCanvas') || document.querySelector('#viewer3d');
+  console.log('[viewer] query canvas', canvasEl);
+  const containerEl = document.getElementById('viewerContainer');
+  console.log('[viewer] container size', containerEl?.offsetWidth, containerEl?.offsetHeight);
   if (!canvasEl) {
-    reportViewerError("canvas introuvable");
+    reportViewerError('canvas introuvable');
     return null;
   }
   try {
@@ -143,7 +146,8 @@ if (typeof window !== 'undefined') {
 
 // Chargement auto via data-model
 export function initUI() {
-  document.addEventListener("DOMContentLoaded", () => {
+  document.addEventListener('DOMContentLoaded', () => {
+    console.log('[viewer] DOMContentLoaded');
     const fname = document.body.dataset.model;
     initViewer(fname ? `/uploads/${fname}` : undefined);
   });
