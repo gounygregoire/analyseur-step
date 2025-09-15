@@ -876,18 +876,6 @@ if (typeof window !== "undefined") window.getTolerance = getTolerance;
   function $(s){ return document.querySelector(s); }
   const btnVisualiser = $('#btn-visualiser, #visualizeBtn');
 
-  async function convert(fileId){
-    if (!fileId) return false;
-    const r = await fetch('/api/simple/convert', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ file_id: fileId, tolerance: window.getTolerance?.() })
-    });
-    console.log('[visualiser] convert status', r.status);
-    try { console.log('[visualiser] payload', await r.json()); } catch {}
-    return r.ok;
-  }
-
   async function doVisualize(fid){
     if (!fid) { console.warn('[visualiser] no fileId'); return; }
     if (!window.viewerAdapter?.viewer) {
@@ -895,7 +883,7 @@ if (typeof window !== "undefined") window.getTolerance = getTolerance;
       const canvas = document.getElementById('xktCanvas');
       window.initViewer?.({ canvasElement: canvas });
     }
-    await convert(fid); // idempotent: OK si déjà converti
+    await window.viewerAdapter?.convert?.(fid); // idempotent: OK si déjà converti
     await window.viewerAdapter?.loadFromFileId?.(fid);
   }
 
