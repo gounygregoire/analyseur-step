@@ -80,12 +80,18 @@ def convert_step() -> tuple[Any, int]:
         os.makedirs(OUTPUT_FOLDER, exist_ok=True)
         xkt_out_path = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
         if os.path.exists(xkt_out_path):
-            current_app.logger.info(f"[convert] XKT ready {xkt_out_path}")
+            current_app.logger.info(
+                f"[convert] XKT ready /api/simple/models/{file_id}.xkt"
+            )
             try:
                 History.record_convert(file_id, 0)
             except Exception as exc:  # fail soft
-                current_app.logger.warning("history convert failed for %s: %s", file_id, exc)
-            return jsonify({"file_id": file_id, "xkt_url": f"/models/{file_id}.xkt"}), 200
+                current_app.logger.warning(
+                    "history convert failed for %s: %s", file_id, exc
+                )
+            return jsonify(
+                {"file_id": file_id, "xkt_url": f"/api/simple/models/{file_id}.xkt"}
+            ), 200
 
         xeokit_bin_path = os.environ.get("XEOKIT_CONVERT") or "xeokit-convert"
 
@@ -104,8 +110,12 @@ def convert_step() -> tuple[Any, int]:
             current_app.logger.error(f"[convert] failed tried={tried} stderr={res.stderr[:2000]}")
             return jsonify({"error":"convert_failed","stderr":res.stderr}), 500
 
-        current_app.logger.info(f"[convert] XKT ready /models/{file_id}.xkt")
-        return jsonify({"file_id": file_id, "xkt_url": f"/models/{file_id}.xkt"}), 200
+        current_app.logger.info(
+            f"[convert] XKT ready /api/simple/models/{file_id}.xkt"
+        )
+        return jsonify(
+            {"file_id": file_id, "xkt_url": f"/api/simple/models/{file_id}.xkt"}
+        ), 200
         # PATCH END
     except Exception as exc:  # pragma: no cover
         current_app.logger.error("[convert] unexpected error: %s", exc)
