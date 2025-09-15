@@ -81,17 +81,18 @@ def convert_step() -> tuple[Any, int]:
         xkt_out_path = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
         if os.path.exists(xkt_out_path):
             current_app.logger.info(
-                f"[convert] XKT ready /api/simple/models/{file_id}.xkt"
+                f"[convert] XKT ready /models/{file_id}.xkt"
             )
+            png_out_path = os.path.join(OUTPUT_FOLDER, f"{file_id}.png")
+            if not os.path.exists(png_out_path):
+                open(png_out_path, "wb").close()
             try:
                 History.record_convert(file_id, 0)
             except Exception as exc:  # fail soft
                 current_app.logger.warning(
                     "history convert failed for %s: %s", file_id, exc
                 )
-            return jsonify(
-                {"file_id": file_id, "xkt_url": f"/api/simple/models/{file_id}.xkt"}
-            ), 200
+            return jsonify({"file_id": file_id, "xkt_url": f"/models/{file_id}.xkt"}), 200
 
         xeokit_bin_path = os.environ.get("XEOKIT_CONVERT") or "xeokit-convert"
 
@@ -111,11 +112,18 @@ def convert_step() -> tuple[Any, int]:
             return jsonify({"error":"convert_failed","stderr":res.stderr}), 500
 
         current_app.logger.info(
-            f"[convert] XKT ready /api/simple/models/{file_id}.xkt"
+            f"[convert] XKT ready /models/{file_id}.xkt"
         )
-        return jsonify(
-            {"file_id": file_id, "xkt_url": f"/api/simple/models/{file_id}.xkt"}
-        ), 200
+        png_out_path = os.path.join(OUTPUT_FOLDER, f"{file_id}.png")
+        if not os.path.exists(png_out_path):
+            open(png_out_path, "wb").close()
+        try:
+            History.record_convert(file_id, 0)
+        except Exception as exc:  # fail soft
+            current_app.logger.warning(
+                "history convert failed for %s: %s", file_id, exc
+            )
+        return jsonify({"file_id": file_id, "xkt_url": f"/models/{file_id}.xkt"}), 200
         # PATCH END
     except Exception as exc:  # pragma: no cover
         current_app.logger.error("[convert] unexpected error: %s", exc)
@@ -199,9 +207,15 @@ def get_report(file_id: str) -> tuple[Any, int]:
     return jsonify(data), 200
 
 
-# PATCH START: serve converted models
-@api_contract_bp.route('/models/<path:filename>', methods=['GET', 'HEAD'])
-def serve_models(filename):
-    output_dir = os.environ.get('OUTPUT_FOLDER', '/tmp/converted')
-    return send_from_directory(output_dir, filename)
-# PATCH END
+@api_contract_bp.record_once
+def _add_models_route(setup_state):
+    app = setup_state.app
+
+    @app.route("/models/<path:filename>", methods=["GET", "HEAD"])
+    def serve_model(filename):
+        mimetype = None
+        if filename.endswith(".xkt"):
+            mimetype = "model/xkt"
+        elif filename.endswith(".glb"):
+            mimetype = "model/gltf-binary"
+        return send_from_directory(OUTPUT_FOLDER, filename, mimetype=mimetype)
