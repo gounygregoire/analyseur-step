@@ -27,43 +27,6 @@ export async function convert(fileId){
 }
 // PATCH END
 
-// PATCH START: visualiser flow + axis show after material
-(function(){
-  function $(s){ return document.querySelector(s); }
-  const btnVisualiser = $('#btn-visualiser, #visualizeBtn');
-  const axisPanel = $('#dfmAxisPanel, #axis-panel');
-
-  // Montre l'axe dès que la matière est validée (et seulement alors)
-  function materialIsConfirmed(){ return !!window.selectedMaterial; }
-  function showAxisIfReady(){
-    if (!axisPanel) return;
-    if (!window.currentFileId || !materialIsConfirmed()) return;
-    axisPanel.style.display = '';
-  }
-  window.addEventListener('material:confirmed', showAxisIfReady);
-  window.addEventListener('material:selected',  showAxisIfReady);
-
-  async function doVisualize(fid){
-    const va = window.viewerAdapter;
-    if (!va || !va.loadFromFileId || !va.convert){ console.error('[visualiser] viewerAdapter manquant'); return; }
-    await va.convert(fid);           // idempotent : OK si déjà converti
-    await va.loadFromFileId(fid);    // la fonction choisit l’URL qui marche
-  }
-
-  if (btnVisualiser) {
-    btnVisualiser.addEventListener('click', () => {
-      if (!window.currentFileId) { console.warn('[visualiser] no fileId'); return; }
-      doVisualize(window.currentFileId);
-    });
-  }
-
-  // Autoconversion après upload si l’app envoie l’évènement
-  window.addEventListener('dfm:fileReady', (e) => {
-    const fid = (e?.detail && e.detail.fileId) || window.currentFileId;
-    if (fid) doVisualize(fid);
-  });
-})();
-// PATCH END
 
 // PATCH START: single-boot viewer with default canvas + robust loader
 if (!window.__XE_VIEWER_BOOT__) {
