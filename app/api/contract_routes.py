@@ -1,6 +1,5 @@
 from __future__ import annotations
 import os
-import subprocess
 import uuid
 from datetime import datetime
 from typing import Any
@@ -11,6 +10,7 @@ from werkzeug.utils import secure_filename
 
 from app.storage.storage import Storage
 from app.storage import history as History
+import xkt_converter
 
 UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
 OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
@@ -94,22 +94,19 @@ def convert_step() -> tuple[Any, int]:
                 )
             return jsonify({"file_id": file_id, "xkt_url": f"/models/{file_id}.xkt"}), 200
 
-        xeokit_bin_path = os.environ.get("XEOKIT_CONVERT") or "xeokit-convert"
+        try:
+            xkt_converter.convert_step_to_xkt(
+                step_in_path,
+                xkt_out_path,
+                stl_tolerance=float(data.get("tolerance", 0.1)),
+            )
+        except Exception as exc:
+            current_app.logger.error("[convert] failed %s", exc)
+            return jsonify({"error": "convert_failed"}), 500
 
-        # PATCH START: resilient xeokit convert
-        def _run(cmd):
-            return subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-
-        tried = []
-        for variant in (["--output", xkt_out_path], ["-o", xkt_out_path], ["--out", xkt_out_path]):
-            cmd = [xeokit_bin_path, *variant, step_in_path]
-            tried.append(" ".join(cmd))
-            res = _run(cmd)
-            if res.returncode == 0:
-                break
-        else:
-            current_app.logger.error(f"[convert] failed tried={tried} stderr={res.stderr[:2000]}")
-            return jsonify({"error":"convert_failed","stderr":res.stderr}), 500
+        if not os.path.exists(xkt_out_path):
+            current_app.logger.error("[convert] output missing %s", xkt_out_path)
+            return jsonify({"error": "convert_failed"}), 500
 
         current_app.logger.info(
             f"[convert] XKT ready /models/{file_id}.xkt"
@@ -124,7 +121,6 @@ def convert_step() -> tuple[Any, int]:
                 "history convert failed for %s: %s", file_id, exc
             )
         return jsonify({"file_id": file_id, "xkt_url": f"/models/{file_id}.xkt"}), 200
-        # PATCH END
     except Exception as exc:  # pragma: no cover
         current_app.logger.error("[convert] unexpected error: %s", exc)
         return jsonify({"error": "convert_failed", "message": str(exc)}), 500

@@ -1,15 +1,17 @@
 from pathlib import Path
-import subprocess
 import os
+import sys
+import types
 
 import pytest
 from flask import Flask
 
-from app.api.contract_routes import api_contract_bp
-
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    fake_module = types.SimpleNamespace(convert_step_to_xkt=lambda *a, **k: None)
+    monkeypatch.setitem(sys.modules, "xkt_converter", fake_module)
+    from app.api.contract_routes import api_contract_bp
     app = Flask(__name__)
     app.register_blueprint(api_contract_bp)
     app.config["TESTING"] = True
@@ -37,11 +39,13 @@ def test_upload_convert_analyze_flow(client, monkeypatch):
     assert entry["filename"].endswith(SAMPLE_STEP.name)
     assert "xkt_ready" not in entry
 
-    def fake_run(cmd, capture_output, text, timeout):
-        Path(cmd[2]).write_bytes(b"x")
-        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+    def fake_convert(inp, out, stl_tolerance):
+        Path(out).write_bytes(b"x")
 
-    monkeypatch.setattr("app.api.contract_routes.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "app.api.contract_routes.xkt_converter.convert_step_to_xkt",
+        fake_convert,
+    )
 
     resp = client.post("/api/simple/convert", json={"file_id": file_id})
     assert resp.status_code == 200
@@ -104,17 +108,22 @@ def test_convert_idempotent(client, monkeypatch):
         resp = client.post("/api/simple/upload", data={"file": fh})
     file_id = resp.get_json()["file_id"]
 
-    def fake_run(cmd, capture_output, text, timeout):
-        Path(cmd[2]).write_bytes(b"x")
-        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+    def fake_convert(inp, out, stl_tolerance):
+        Path(out).write_bytes(b"x")
 
-    monkeypatch.setattr("app.api.contract_routes.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "app.api.contract_routes.xkt_converter.convert_step_to_xkt",
+        fake_convert,
+    )
     client.post("/api/simple/convert", json={"file_id": file_id})
 
-    def fail_run(*args, **kwargs):  # should not be called
+    def fail_convert(*args, **kwargs):  # should not be called
         raise AssertionError("should not run")
 
-    monkeypatch.setattr("app.api.contract_routes.subprocess.run", fail_run)
+    monkeypatch.setattr(
+        "app.api.contract_routes.xkt_converter.convert_step_to_xkt",
+        fail_convert,
+    )
     resp = client.post("/api/simple/convert", json={"file_id": file_id})
     assert resp.status_code == 200
 
@@ -124,16 +133,18 @@ def test_convert_failure_returns_500(client, monkeypatch):
         resp = client.post("/api/simple/upload", data={"file": fh})
     file_id = resp.get_json()["file_id"]
 
-    def fail_run(cmd, capture_output, text, timeout):
-        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="boom error")
+    def fail_convert(inp, out, stl_tolerance):
+        pass  # do not create file
 
-    monkeypatch.setattr("app.api.contract_routes.subprocess.run", fail_run)
+    monkeypatch.setattr(
+        "app.api.contract_routes.xkt_converter.convert_step_to_xkt",
+        fail_convert,
+    )
 
     resp = client.post("/api/simple/convert", json={"file_id": file_id})
     assert resp.status_code == 500
     body = resp.get_json()
     assert body["error"] == "convert_failed"
-    assert "boom" in body["stderr"]
 
 
 def test_models_route_serves_xkt(client):

@@ -6,8 +6,6 @@ import sys
 
 from flask import Flask
 
-from api.contract import api_contract_bp
-
 
 def test_dfm_smoke(tmp_path, monkeypatch):
     uploads = tmp_path / "uploads"
@@ -17,6 +15,10 @@ def test_dfm_smoke(tmp_path, monkeypatch):
     monkeypatch.setenv("UPLOAD_FOLDER", str(uploads))
     monkeypatch.setenv("OUTPUT_FOLDER", str(outputs))
     monkeypatch.setenv("FILES_DB_PATH", str(tmp_path / "files.sqlite"))
+
+    fake_module = types.SimpleNamespace(convert_step_to_xkt=lambda *a, **k: None)
+    monkeypatch.setitem(sys.modules, "xkt_converter", fake_module)
+    from api.contract import api_contract_bp
 
     # Stub Celery task module before importing routes
     report_template = {
@@ -43,8 +45,14 @@ def test_dfm_smoke(tmp_path, monkeypatch):
         (out_dir / "report.json").write_text(json.dumps(report_template))
         return types.SimpleNamespace(id="job1")
 
+    fake_tasks = types.ModuleType("tasks.dfm")
+    fake_tasks.dfm_run = types.SimpleNamespace(delay=stub_delay)
+    monkeypatch.setitem(sys.modules, "tasks.dfm", fake_tasks)
+    fake_mat = types.ModuleType("app.material_profiles")
+    fake_mat.get_profile = lambda name: {"id": name}
+    monkeypatch.setitem(sys.modules, "app.material_profiles", fake_mat)
+
     import app.api.dfm_routes as routes
-    monkeypatch.setattr(routes.dfm_run, "delay", stub_delay)
 
     app = Flask(__name__)
     app.register_blueprint(api_contract_bp)
@@ -52,11 +60,13 @@ def test_dfm_smoke(tmp_path, monkeypatch):
     client = app.test_client()
 
     # stub converter
-    def fake_run(cmd, capture_output, text, timeout):
-        Path(cmd[3]).write_text("xkt")
-        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+    def fake_convert(inp, out, stl_tolerance):
+        Path(out).write_text("xkt")
 
-    monkeypatch.setattr("app.api.contract_routes.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "app.api.contract_routes.xkt_converter.convert_step_to_xkt",
+        fake_convert,
+    )
     gen_mod = types.ModuleType("generate_thumbnails")
     gen_mod.generate_thumbnails = lambda step_path, out_dir: {"iso": str(Path(out_dir) / "preview.png")}
     sys.modules["generate_thumbnails"] = gen_mod
