@@ -1,5 +1,7 @@
 // static/js/viewer.js
 
+let _viewer, _xktLoader;
+
 export async function loadCameraPresetOptional(u) {
   try {
     const r = await fetch(u, { cache: 'no-store' });
@@ -58,15 +60,41 @@ function smokeTestGL(canvas) {
 }
 
 export async function startViewer() {
-  if (window.__viewerBooted) {
+  if (_viewer) {
     console.warn('[viewer] déjà initialisé');
-    return window.__viewerInstance;
+    return { canvas: _viewer.canvas }; // retourne au moins le canvas
   }
   const { canvas } = await initViewer();
   smokeTestGL(canvas);
-  const instance = { canvas /*, viewer */ };
-  window.__viewerBooted = true;
-  window.__viewerInstance = instance;
+  if (window.__CADLYTICS_VIEWER) {
+    _viewer = window.__CADLYTICS_VIEWER;
+    _xktLoader = window.__CADLYTICS_XKT_LOADER || _xktLoader;
+  } else {
+    const mod = await import('https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@2/dist/xeokit-sdk.es.js');
+    const { Viewer, XKTLoaderPlugin } = mod;
+    _viewer = new Viewer({ canvasId: canvas.id });
+    _xktLoader = new XKTLoaderPlugin(_viewer);
+    window.__CADLYTICS_VIEWER = _viewer;
+    window.__CADLYTICS_XKT_LOADER = _xktLoader;
+  }
   console.info('[viewer] ready (sans modèle)');
-  return instance;
+  return { canvas };
+}
+
+export async function loadXKT(url) {
+  console.info('[viewer] loadXKT', url);
+  if (!_viewer) throw new Error('viewer non initialisé');
+  let model;
+  if (_xktLoader && _xktLoader.load) {
+    model = await _xktLoader.load({ id: 'model', src: url, edges: true });
+    const aabb = model?.aabb || _viewer.scene?.aabb;
+    if (aabb && _viewer.cameraFlight) {
+      _viewer.cameraFlight.fit(aabb);
+    }
+  } else if (_viewer.loadXKT) {
+    model = await _viewer.loadXKT(url);
+    if (_viewer.fitAll) _viewer.fitAll();
+  }
+  console.info('[viewer] XKT affiché');
+  return model;
 }

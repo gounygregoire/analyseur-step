@@ -17,7 +17,7 @@ if (typeof window !== "undefined") {
 }
 
 // PATCH START: selectors
-// const btnVisualiser = document.querySelector('#btn-visualiser, #visualizeBtn');
+// const btnVisualiser = document.querySelector('#btnVisualiser');
 const btnAnalyser   = document.querySelector('#analyzeBtn, #btn-analyser');
 const axisPanel     = document.querySelector('#dfmAxisPanel, #axis-panel');
 // PATCH END
@@ -865,7 +865,7 @@ if (typeof window !== 'undefined') {
 
 // --- Visualiser & analyse workflow ---------------------------------------
 function getTolerance() {
-  const v = parseFloat(document.getElementById("toleranceInput")?.value);
+  const v = parseFloat(document.getElementById("toleranceSelect")?.value);
   return Number.isFinite(v) ? v : 0.1;
 }
 
@@ -874,7 +874,7 @@ if (typeof window !== "undefined") window.getTolerance = getTolerance;
 // PATCH START: visualize flow via viewerAdapter
 (function(){
   function $(s){ return document.querySelector(s); }
-  const btnVisualiser = $('#btn-visualiser, #visualizeBtn');
+  const btnVisualiser = $('#btnVisualiser');
 
   async function doVisualize(fid){
     if (!fid) { console.warn('[visualiser] no fileId'); return; }
