@@ -167,16 +167,15 @@ def upload():
     if not allowed(f.filename):
         return jsonify(error='bad_ext'), 400
     file_id = str(uuid.uuid4())
-    step_path = os.path.join(UPLOAD_FOLDER, f'{file_id}.step')
-    f.save(step_path)
-    xkt_path = os.path.join(OUTPUT_FOLDER, f'{file_id}.xkt')
+    step = os.path.join(UPLOAD_FOLDER, f'{file_id}.step')
+    xkt = os.path.join(OUTPUT_FOLDER, f'{file_id}.xkt')
+    f.save(step)
     try:
-        run_sync_conversion(step_path, xkt_path, tol)
-        status = 'ready' if os.path.exists(xkt_path) else 'processing'
+        run_sync_conversion(step, xkt, tol)
     except Exception as e:
         return jsonify(error='convert_fail', detail=str(e)), 500
-    xkt_url = f'/xkt/{file_id}.xkt' if os.path.exists(xkt_path) else None
-    return jsonify(file_id=file_id, status=status, xkt_url=xkt_url)
+    xkt_url = f'/xkt/{file_id}.xkt' if os.path.exists(xkt) else None
+    return jsonify(file_id=file_id, status=('ready' if xkt_url else 'processing'), xkt_url=xkt_url)
 
 
 @app.get('/convert/status')

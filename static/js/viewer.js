@@ -1,5 +1,8 @@
 // static/js/viewer.js
 let _viewer; // instance moteur si besoin (xeokit, etc.)
+const bus = new EventTarget();
+
+export function onModelLoaded(cb) { bus.addEventListener('model-loaded', cb, { once:false }); }
 
 export async function bootstrapViewer() {
   const ready = d => d.readyState === 'complete' || d.readyState === 'interactive';
@@ -53,13 +56,34 @@ export async function startViewer() {
 }
 
 export async function loadXKT(url) {
-  if (!_viewer) {
-    console.warn('[viewer] pas d’instance moteur, charge à adapter si tu utilises une API custom');
-  }
+  if (!_viewer) console.warn('[viewer] init attendu avant loadXKT');
   console.info('[viewer] loadXKT', url);
-  // Exemple ESM xeokit :
+  // Adapte selon ta lib. Exemple générique :
+  if (_viewer?.loadXKT) {
+    const model = await _viewer.loadXKT(url);
+    if (_viewer.fitAll) _viewer.fitAll();
+    bus.dispatchEvent(new CustomEvent('model-loaded', { detail: { url, model } }));
+    return model;
+  }
+  // Exemple xeokit (si tu utilises le SDK ESM) :
   // const loader = new XKTLoaderPlugin(_viewer);
   // const model = await loader.load({ id: 'model', src: url, edges: true });
   // _viewer.cameraFlight.flyTo(model);
-  // Si tu as une API custom : _viewer.loadXKT(url); _viewer.fitAll();
+  // bus.dispatchEvent(new CustomEvent('model-loaded', { detail: { url, model } }));
+}
+
+// --- Compat (répare l'import de DFMOrchestrator.js) ---
+export function loadCameraPresetOptional(preset) {
+  try {
+    const v = (typeof _viewer !== 'undefined') ? _viewer : null;
+    if (!v) return; // no-op si le viewer n'est pas prêt
+    // Adapte si tu utilises xeokit : cameraFlight / zoomTo / fitAll
+    if (v.cameraFlight && preset?.aabb) {
+      v.cameraFlight.flyTo(preset.aabb);
+    } else if (v.fitAll) {
+      v.fitAll();
+    }
+  } catch (e) {
+    console.warn('[viewer] camera preset ignoré', e);
+  }
 }

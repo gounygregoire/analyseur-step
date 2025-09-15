@@ -1448,3 +1448,19 @@ body {
   height: 100%;
 }
 
+[data-dropzone].is-success {
+  outline: 2px solid #3fb35d;
+  box-shadow: 0 0 0 4px rgba(63,179,93,.15);
+}
+
+.viewer-tools {
+  opacity: .25;
+  pointer-events: none;
+  transition: opacity .2s ease;
+}
+
+.has-model .viewer-tools {
+  opacity: 1;
+  pointer-events: auto;
+}
+
