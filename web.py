@@ -150,6 +150,59 @@ def __routes():
 # ========= FIN PATCH =========
 
 
+ALLOWED = {'.stp', '.step'}
+
+
+def allowed(filename: str) -> bool:
+    ext = os.path.splitext(filename.lower())[1]
+    return ext in ALLOWED
+
+
+@app.post('/upload')
+def upload():
+    f = request.files.get('file')
+    tol = request.form.get('tolerance', 'standard')
+    if not f or not f.filename:
+        return jsonify(error='no_file'), 400
+    if not allowed(f.filename):
+        return jsonify(error='bad_ext'), 400
+    file_id = str(uuid.uuid4())
+    step_path = os.path.join(UPLOAD_FOLDER, f'{file_id}.step')
+    f.save(step_path)
+    xkt_path = os.path.join(OUTPUT_FOLDER, f'{file_id}.xkt')
+    try:
+        run_sync_conversion(step_path, xkt_path, tol)
+        status = 'ready' if os.path.exists(xkt_path) else 'processing'
+    except Exception as e:
+        return jsonify(error='convert_fail', detail=str(e)), 500
+    xkt_url = f'/xkt/{file_id}.xkt' if os.path.exists(xkt_path) else None
+    return jsonify(file_id=file_id, status=status, xkt_url=xkt_url)
+
+
+@app.get('/convert/status')
+def convert_status():
+    file_id = request.args.get('file_id')
+    if not file_id:
+        return jsonify(error='no_file_id'), 400
+    xkt_path = os.path.join(OUTPUT_FOLDER, f'{file_id}.xkt')
+    if os.path.exists(xkt_path):
+        return jsonify(status='ready', xkt_url=f'/xkt/{file_id}.xkt')
+    return jsonify(status='processing')
+
+
+@app.get('/xkt/<path:fname>')
+def serve_xkt(fname: str):
+    if not fname.endswith('.xkt'):
+        abort(404)
+    return send_from_directory(OUTPUT_FOLDER, fname, as_attachment=False)
+
+
+def run_sync_conversion(step_path: str, xkt_path: str, tolerance: str):
+    tol_map = {'coarse': 1.0, 'fine': 0.2}
+    stl_tol = tol_map.get(tolerance, 0.6)
+    xkt_converter.convert_step_to_xkt(step_path, xkt_path, stl_tolerance=stl_tol)
+
+
 def _resolve_xeokit():
     """Résout le binaire xeokit-convert ou renvoie 'npx'."""
     xeokit = os.getenv("XEOKIT_CONVERT") or shutil.which("xeokit-convert")
@@ -712,8 +765,8 @@ def upload_file_api():
     return jsonify({'file_id': file_id})
 
 
-@app.route('/upload', methods=['POST'])
-def upload():
+@app.route('/upload_legacy', methods=['POST'])
+def upload_legacy():
     """Upload a STEP/STP file then ouvrir le viewer intégré"""
     if 'file' not in request.files:
         flash('Aucun fichier sélectionné', 'error')

@@ -117,10 +117,10 @@
                         
                         <!-- Contrôles de tolérance -->
                         <div class="mt-3">
-                            <label for="toleranceInput" class="form-label" style="color: var(--brown-dark); font-weight: 600;">
+                            <label for="toleranceSelect" class="form-label" style="color: var(--brown-dark); font-weight: 600;">
                                 {{ t.upload_tolerance }}
                             </label>
-                            <select class="form-select" id="toleranceInput" name="tolerance">
+                            <select class="form-select" id="toleranceSelect" name="tolerance">
                                 <option value="0.01">{{ t.upload_high_precision }}</option>
                                 <option value="0.1" selected>{{ t.upload_standard }}</option>
                                 <option value="0.5">{{ t.upload_fast }}</option>
@@ -133,7 +133,7 @@
                         
                         <!-- Bouton principal -->
                         <div class="text-center mt-4">
-                            <button type="button" class="btn btn-primary btn-lg" id="visualizeBtn">
+                            <button type="button" class="btn btn-primary btn-lg" id="btnVisualiser">
                                 <i class="bi bi-eye me-2"></i>
                                 {{ t.upload_visualize }}
                             </button>
