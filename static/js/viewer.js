@@ -1,5 +1,5 @@
 // static/js/viewer.js
-let _viewer; // instance moteur si besoin (xeokit, etc.)
+let _viewer, _loader;
 const bus = new EventTarget();
 
 export function onModelLoaded(cb) { bus.addEventListener('model-loaded', cb, { once:false }); }
@@ -32,58 +32,54 @@ export async function bootstrapViewer() {
   return canvas;
 }
 
-// Test WebGL sur un canvas jetable (ne touche JAMAIS au canvas du viewer)
-function smokeTestGL() {
-  const test = document.createElement('canvas');
-  const gl2 = test.getContext('webgl2');
-  const gl = gl2 || test.getContext('webgl') || test.getContext('experimental-webgl');
-  if (!gl) throw new Error('[viewer] WebGL indisponible');
-  gl.clearColor(0.95, 0.95, 0.95, 1);
-  gl.clear(gl.COLOR_BUFFER_BIT);
-  console.info(`[viewer] WebGL smoke test ok (${gl2 ? 'webgl2' : 'webgl1'})`);
-}
-
 export async function startViewer() {
   const canvas = await bootstrapViewer();
-  smokeTestGL();            // ✅ test offscreen, pas sur `canvas`
-  // ⬇️ Ici seulement, on laisse le moteur créer SON contexte sur `canvas`
-  // Exemple (à adapter à ta lib) :
-  // const { Viewer, XKTLoaderPlugin } = await import('@xeokit/xeokit-sdk');
-  // _viewer = new Viewer({ canvasElement: canvas, transparent: false });
-  // _viewer.cameraControl.navMode = "orbit";
+
+  // 👉 ESM via npm (@xeokit/xeokit-sdk) – conseillé
+  const { Viewer, XKTLoaderPlugin } = await import('@xeokit/xeokit-sdk');
+
+  _viewer = new Viewer({
+    canvasElement: canvas,
+    transparent: false,
+    logarithmicDepthBufferEnabled: true,
+    dtxEnabled: true
+  });
+
+  // Améliorations visuelles basiques
+  _viewer.scene.gammaOutput = true;
+  _viewer.scene.gammaInput = true;
+
+  // Resize robuste
+  const container = document.getElementById('viewerContainer');
+  const ro = new ResizeObserver(() => { try { _viewer.resize(); } catch {} });
+  ro.observe(container);
+
+  // Loader XKT
+  _loader = new XKTLoaderPlugin(_viewer);
+
   console.info('[viewer] ready (sans modèle)');
-  return { canvas };
+  return { canvas, viewer: _viewer };
 }
 
 export async function loadXKT(url) {
-  if (!_viewer) console.warn('[viewer] init attendu avant loadXKT');
+  if (!_viewer || !_loader) throw new Error('viewer non initialisé');
   console.info('[viewer] loadXKT', url);
-  // Adapte selon ta lib. Exemple générique :
-  if (_viewer?.loadXKT) {
-    const model = await _viewer.loadXKT(url);
-    if (_viewer.fitAll) _viewer.fitAll();
-    bus.dispatchEvent(new CustomEvent('model-loaded', { detail: { url, model } }));
-    return model;
+  const model = await _loader.load({ id: 'model', src: url, edges: true });
+  if (_viewer.cameraFlight) {
+    _viewer.cameraFlight.flyTo(model);
+  } else if (_viewer.fitAll) {
+    _viewer.fitAll();
   }
-  // Exemple xeokit (si tu utilises le SDK ESM) :
-  // const loader = new XKTLoaderPlugin(_viewer);
-  // const model = await loader.load({ id: 'model', src: url, edges: true });
-  // _viewer.cameraFlight.flyTo(model);
-  // bus.dispatchEvent(new CustomEvent('model-loaded', { detail: { url, model } }));
+  bus.dispatchEvent(new CustomEvent('model-loaded', { detail: { url, model } }));
+  console.info('[viewer] XKT affiché');
+  return model;
 }
 
-// --- Compat (répare l'import de DFMOrchestrator.js) ---
+// --- Compat pour DFMOrchestrator (no-op sûr) ---
 export function loadCameraPresetOptional(preset) {
   try {
-    const v = (typeof _viewer !== 'undefined') ? _viewer : null;
-    if (!v) return; // no-op si le viewer n'est pas prêt
-    // Adapte si tu utilises xeokit : cameraFlight / zoomTo / fitAll
-    if (v.cameraFlight && preset?.aabb) {
-      v.cameraFlight.flyTo(preset.aabb);
-    } else if (v.fitAll) {
-      v.fitAll();
-    }
-  } catch (e) {
-    console.warn('[viewer] camera preset ignoré', e);
-  }
+    if (!_viewer) return;
+    if (_viewer.cameraFlight && preset?.aabb) _viewer.cameraFlight.flyTo(preset.aabb);
+    else if (_viewer.fitAll) _viewer.fitAll();
+  } catch (e) { console.warn('[viewer] camera preset ignoré', e); }
 }
