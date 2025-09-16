@@ -135,7 +135,7 @@ def logout():
     """Déconnexion"""
     logout_user()
     flash('Vous êtes déconnecté', 'info')
-    return redirect(url_for('landing'))
+    return redirect(url_for('site.landing'))
 
 @auth_bp.route('/profile')
 @login_required

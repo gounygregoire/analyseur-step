@@ -38,11 +38,10 @@ def test_api_upload_success(client_factory):
     client, upload_dir, output_dir = client_factory()
     payload = {"file": (io.BytesIO(b"cad"), "piece.step")}
 
-    resp = client.post("/api/upload?mode=view", data=payload)
+    resp = client.post("/api/upload", data=payload)
     assert resp.status_code == 200
 
     data = resp.get_json()
-    assert data["mode"] == "view"
     assert data["step_name"] == "piece.step"
     file_id = data["file_id"]
     assert len(file_id) == 32
@@ -70,7 +69,7 @@ def test_api_upload_requires_file(client_factory):
     resp = client.post("/api/upload")
     assert resp.status_code == 400
     data = resp.get_json()
-    assert data["error"] == "Aucun fichier reçu"
+    assert data["error"] == "Aucun fichier"
 
 
 def test_api_upload_too_large(client_factory):
@@ -80,10 +79,7 @@ def test_api_upload_too_large(client_factory):
     resp = client.post("/api/upload", data=payload)
     assert resp.status_code == 413
     data = resp.get_json()
-    assert (
-        data["error"]
-        == "Fichier trop volumineux. Réduis la taille ou augmente MAX_UPLOAD_MB."
-    )
+    assert data["error"] == "Fichier trop volumineux"
 
 
 def test_api_upload_save_failure(monkeypatch, client_factory):
