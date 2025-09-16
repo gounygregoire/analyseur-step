@@ -8,11 +8,22 @@
 </head>
 <body class="p-3">
   <div id="viewerError" class="alert alert-danger d-none" role="alert"></div>
-  <form id="uploadForm" class="mb-3">
-    <input type="file" id="file" name="file" accept=".step,.stp" class="form-control mb-2" />
-    <button type="submit" class="btn btn-primary">Uploader</button>
-    <span id="modeBadge" class="badge bg-secondary ms-2"></span>
-  </form>
+
+  <div class="card mb-3" data-dropzone>
+    <div class="card-body text-center">
+      <p class="mb-3 text-muted">Sélectionne un fichier STEP à analyser.</p>
+      <input id="fileInput" type="file" accept=".stp,.step" hidden>
+      <button id="btnVisualiser" type="button" class="btn btn-primary w-100">VISUALISER</button>
+    </div>
+  </div>
+
+  <div class="mb-4">
+    <label for="toleranceSelect" class="form-label fw-semibold">Tolérance</label>
+    <select id="toleranceSelect" class="form-select">
+      <option value="standard">Standard</option>
+    </select>
+  </div>
+
   <section class="viewer-wrapper" style="height:600px;">
     <div id="viewerContainer" style="width:100%;height:100%;min-height:360px;position:relative;">
       <canvas id="xktCanvas" class="w-100 h-100"></canvas>
@@ -21,9 +32,10 @@
       </div>
     </div>
   </section>
-    <script>
-      const MAX_UPLOAD_MB = {{ max_upload_mb }};
-    </script>
-    <script type="module" src="{{ url_for('static', filename='js/main.js') }}" defer></script>
-  </body>
+
+  <script>
+    const MAX_UPLOAD_MB = {{ max_upload_mb }};
+  </script>
+  <script type="module" src="/static/dist/main.js" defer></script>
+</body>
 </html>
