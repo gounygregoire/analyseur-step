@@ -411,15 +411,13 @@ function renderHistory(entries) {
   });
 }
 
-async function refreshHistory() {
-  try {
-    const res = await fetch('/api/simple/history');
-    const data = await res.json().catch(() => []);
-    renderHistory(data);
-  } catch (err) {
-    console.warn('history load failed', err);
-    renderHistory([]);
+function refreshHistory(entries) {
+  let data = Array.isArray(entries) ? entries : null;
+  if (!data && typeof window !== 'undefined' && Array.isArray(window.__historyEntries)) {
+    data = window.__historyEntries;
   }
+  if (!data) data = [];
+  renderHistory(data);
 }
 
 if (typeof window !== 'undefined') {
