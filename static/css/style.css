@@ -111,9 +111,6 @@ body {
 /* État fichier détecté (vert) */
 .dropzone.has-file { border-color: #0a0; background: rgba(0,160,0,.06); }
 
-[data-dropzone].is-success { outline:2px solid #38a169; box-shadow:0 0 0 4px rgba(56,161,105,.18); }
-[data-dropzone].is-ready   { outline:2px solid #2b6cb0; box-shadow:0 0 0 4px rgba(43,108,176,.18); }
-[data-dropzone].is-error   { outline:2px solid #e53e3e; box-shadow:0 0 0 4px rgba(229,62,62,.18); }
 .viewer-tools, .viewerToolsPanel, .viewer-side-tools, #viewerToolsPanel, #viewerSideTools { display:none!important; }
 
 /* === STYLES DFM MODERNES === */
@@ -1453,3 +1450,6 @@ body {
   height: 100%;
 }
 
+[data-dropzone].is-success{outline:2px solid #38a169;box-shadow:0 0 0 4px rgba(56,161,105,.18)}
+[data-dropzone].is-ready  {outline:2px solid #2b6cb0;box-shadow:0 0 0 4px rgba(43,108,176,.18)}
+[data-dropzone].is-error  {outline:2px solid #e53e3e;box-shadow:0 0 0 4px rgba(229,62,62,.18)}
