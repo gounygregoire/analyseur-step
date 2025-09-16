@@ -1,39 +1,35 @@
-"""Routes publiques : landing marketing, shell viewer et diffusion des exports."""
+"""Routes publiques : landing marketing, viewer Xeokit et exports statiques."""
 
-from __future__ import annotations
+import os
 
-from pathlib import Path
-
-from flask import Blueprint, abort, current_app, render_template, send_from_directory
+from flask import Blueprint, abort, current_app as app, render_template, send_from_directory
+from werkzeug.utils import safe_join
 
 site_bp = Blueprint("site", __name__)
 
 
-@site_bp.route("/", endpoint="landing")
-def marketing_index():
+@site_bp.route("/")
+def index():
     """Landing marketing principale."""
     return render_template("marketing_index.html")
 
 
-@site_bp.route("/app", endpoint="app_shell")
-def app_shell():
-    """Shell du viewer web dédié au viewer Xeokit."""
+@site_bp.route("/app")
+def app_page():
+    """Page dédiée au viewer Xeokit."""
     return render_template("app_viewer.html")
 
 
 @site_bp.route("/outputs/<path:fname>")
-def outputs(fname: str):
-    """Expose les fichiers générés (rapports, XKT…) de manière sécurisée."""
-    folder = Path(current_app.config["OUTPUT_FOLDER"]).resolve()
-    candidate = (folder / fname).resolve(strict=False)
-
-    try:
-        candidate.relative_to(folder)
-    except ValueError:
+def public_outputs(fname: str):
+    """Expose les fichiers générés (rapports, XKT…) en lecture seule."""
+    base_dir = app.config["OUTPUT_FOLDER"]
+    target = safe_join(base_dir, fname)
+    if target is None:
         abort(404)
 
-    if not candidate.is_file():
+    if not os.path.isfile(target):
         abort(404)
 
-    relative_name = str(candidate.relative_to(folder))
-    return send_from_directory(folder, relative_name)
+    relative_name = os.path.relpath(target, base_dir)
+    return send_from_directory(base_dir, relative_name)

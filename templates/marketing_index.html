@@ -11,11 +11,11 @@
   <body>
     <header class="nav">
       <div class="wrap">
-        <a class="brand" href="{{ url_for('site.landing') }}">Cadlytics</a>
+        <a class="brand" href="{{ url_for('site.index') }}">Cadlytics</a>
         <nav>
           <a href="#benefices">Bénéfices</a>
           <a href="#pricing">Tarifs</a>
-          <a href="{{ url_for('site.app_shell') }}">Démo Viewer</a>
+          <a href="{{ url_for('site.app_page') }}">Démo Viewer</a>
           <a href="{{ url_for('auth.login') }}">Connexion</a>
           <a class="btn" href="{{ url_for('auth.register') }}">Créer un compte</a>
         </nav>
@@ -32,7 +32,7 @@
           </p>
           <div class="cta">
             <a class="btn primary" href="{{ url_for('auth.register') }}">Commencer gratuitement</a>
-            <a class="btn ghost" href="{{ url_for('site.app_shell') }}">Essayer le viewer</a>
+            <a class="btn ghost" href="{{ url_for('site.app_page') }}">Essayer le viewer</a>
           </div>
           <ul class="hero-metrics">
             <li><strong>50&nbsp;MB</strong> par upload</li>
