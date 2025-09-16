@@ -3,6 +3,9 @@ import os
 from flask import Flask, jsonify, render_template, request
 from werkzeug.exceptions import RequestEntityTooLarge
 
+from site_views import site_bp
+from api_views import api_bp
+
 
 def create_app():
     app = Flask(__name__, static_folder='static', template_folder='templates')
@@ -14,8 +17,6 @@ def create_app():
 
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
-    from site_views import site_bp
-    from api_views import api_bp
     app.register_blueprint(site_bp)
     app.register_blueprint(api_bp, url_prefix='/api')
 
@@ -40,11 +41,12 @@ def create_app():
             return jsonify(error='Erreur interne du serveur'), 500
         return render_template('500.html'), 500
 
-    @app.route('/__routes')
-    def routes():
-        return "<pre>" + "\n".join(sorted(str(r) for r in app.url_map.iter_rules())) + "</pre>"
-
     return app
 
 
 app = create_app()
+
+
+@app.route('/__routes')
+def __routes():
+    return "<pre>" + "\n".join(sorted(str(r) for r in app.url_map.iter_rules())) + "</pre>"

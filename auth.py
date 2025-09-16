@@ -63,7 +63,7 @@ def login():
             next_page = request.args.get('next')
             if next_page and is_safe_url(next_page):
                 return redirect(next_page)
-            return redirect(url_for('index'))
+            return redirect(url_for('site.index'))
         else:
             flash('Email ou mot de passe incorrect', 'danger')
     
@@ -125,7 +125,7 @@ def register():
         # Connecter automatiquement
         login_user(user, remember=True)
         flash(welcome_message, 'success')
-        return redirect(url_for('index'))
+        return redirect(url_for('site.index'))
     
     return render_template('auth/register.html')
 
@@ -135,7 +135,7 @@ def logout():
     """Déconnexion"""
     logout_user()
     flash('Vous êtes déconnecté', 'info')
-    return redirect(url_for('site.landing'))
+    return redirect(url_for('site.index'))
 
 @auth_bp.route('/profile')
 @login_required
