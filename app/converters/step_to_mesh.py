@@ -1,11 +1,5 @@
 """STEP -> STL mesh conversion utilities."""
 
-from OCP.STEPControl import STEPControl_Reader
-from OCP.IFSelect import IFSelect_RetDone
-from OCP.BRepMesh import BRepMesh_IncrementalMesh
-from OCP.StlAPI import StlAPI_Writer
-
-
 def step_to_mesh(step_path: str, mesh_path: str, *, linear_defl: float, angular_defl: float) -> None:
     """Convert a STEP file to an STL mesh using OpenCascade.
 
@@ -20,6 +14,11 @@ def step_to_mesh(step_path: str, mesh_path: str, *, linear_defl: float, angular_
     angular_defl: float
         Angular deflection for tessellation in radians.
     """
+
+    from OCP.STEPControl import STEPControl_Reader
+    from OCP.IFSelect import IFSelect_RetDone
+    from OCP.BRepMesh import BRepMesh_IncrementalMesh
+    from OCP.StlAPI import StlAPI_Writer
 
     reader = STEPControl_Reader()
     status = reader.ReadFile(step_path)
