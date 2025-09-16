@@ -1,12 +1,34 @@
 services:
   - type: web
     name: cadlytics-web
+    plan: starter
     env: python
     envVars:
       - key: NODE_VERSION
         value: 20
-      - key: PIP_DEFAULT_TIMEOUT
-        value: "600"
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: cadlytics-redis
+          property: connectionString
+      - key: UPLOAD_FOLDER
+        value: /tmp/uploads
+      - key: OUTPUT_FOLDER
+        value: /tmp/converted
+      - key: MAX_UPLOAD_MB
+        value: "50"
+      - key: OMP_NUM_THREADS
+        value: "1"
+    buildCommand: |
+      npm ci && npm run build || true
+      pip install --no-cache-dir -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers=1 --threads=2 --timeout=600
+
+  - type: worker
+    name: cadlytics-worker
+    plan: starter
+    env: python
+    envVars:
       - key: REDIS_URL
         fromService:
           type: redis
@@ -17,33 +39,8 @@ services:
       - key: OUTPUT_FOLDER
         value: /tmp/converted
     buildCommand: |
-      npm ci
-      npm run build
-      python -m pip install --upgrade pip setuptools wheel
-      python -m pip install --no-cache-dir --timeout 600 --retries 10 -r requirements-web.txt
-    startCommand: gunicorn web:app --workers 2 --threads 8 --timeout 120
-
-  - type: worker
-    name: cadlytics-worker
-    env: python
-    envVars:
-      - key: PIP_DEFAULT_TIMEOUT
-        value: "600"
-      - key: REDIS_URL
-        fromService:
-          type: redis
-          name: cadlytics-redis
-          property: connectionString
-    buildCommand: |
-      python -m pip install --upgrade pip setuptools wheel
-      python -m pip install --no-cache-dir --timeout 600 --retries 10 -r requirements-worker.txt
-    startCommand: |
-      python - <<'PY'
-      import os, redis
-      from rq import Worker, Queue, Connection
-      r = redis.from_url(os.environ['REDIS_URL'])
-      with Connection(r): Worker([Queue(os.environ.get('RQ_QUEUE','default'))]).work(burst=False)
-      PY
+      pip install --no-cache-dir -r requirements.txt
+    startCommand: python worker.py
 
 databases:
   - name: cadlytics-redis

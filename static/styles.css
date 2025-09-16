@@ -1,0 +1,58 @@
+:root {
+  color-scheme: light;
+  font-family: "Segoe UI", Roboto, system-ui, -apple-system, sans-serif;
+}
+
+body {
+  margin: 0;
+  padding: 24px;
+  background: #f7f5ef;
+  color: #1f1b16;
+}
+
+#app {
+  max-width: 960px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 2.2rem;
+}
+
+.tagline {
+  margin: 0;
+  font-size: 1rem;
+  color: #5b5344;
+}
+
+.card {
+  background: #fff;
+  border: 1px solid #d1cfbf;
+  border-radius: 14px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  padding: 20px;
+}
+
+.viewer {
+  min-height: 60vh;
+  border: 1px dashed #c9c6b8;
+  position: relative;
+  background: #1e1f22;
+  overflow: hidden;
+}
+
+button {
+  padding: 0.6rem 1rem;
+  border-radius: 10px;
+  border: 1px solid #c9c6b8;
+  background: #f4f1e6;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #ebe4d4;
+}

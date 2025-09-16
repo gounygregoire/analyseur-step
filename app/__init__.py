@@ -1,22 +1,43 @@
 from typing import Any, Tuple
 
+import importlib.util
+import pathlib
+import sys
 
-try:
-    from .app import app  # type: ignore
-except Exception:  # pragma: no cover
-    # >>> CADLYTICS PATCH: FALLBACK-APP (BEGIN)
-    from flask import Flask, request
-    from tus_upload import tus_bp
-    app = Flask(__name__)
-    app.register_blueprint(tus_bp, url_prefix="/tus")
 
-    @app.post("/api/upload")
-    def _upload_api():
-        payload = request.get_json(silent=True) or {}
-        if not payload.get("upload_id"):
-            return {"error": "upload_id missing"}, 400
-        return {}, 201
-    # >>> CADLYTICS PATCH: FALLBACK-APP (END)
+app = None
+_entrypoint_path = pathlib.Path(__file__).resolve().parent.parent / "app.py"
+
+if _entrypoint_path.exists():
+    try:  # pragma: no cover - best effort pour l'entrée unique
+        spec = importlib.util.spec_from_file_location(
+            "cadlytics_app_entrypoint", _entrypoint_path
+        )
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            sys.modules.setdefault(spec.name, module)
+            spec.loader.exec_module(module)
+            app = getattr(module, "app", None)
+    except Exception:  # pragma: no cover - fallback si l'import échoue
+        app = None
+
+if app is None:
+    try:
+        from .app import app  # type: ignore
+    except Exception:  # pragma: no cover
+        # >>> CADLYTICS PATCH: FALLBACK-APP (BEGIN)
+        from flask import Flask, request
+        from tus_upload import tus_bp
+        app = Flask(__name__)
+        app.register_blueprint(tus_bp, url_prefix="/tus")
+
+        @app.post("/api/upload")
+        def _upload_api():
+            payload = request.get_json(silent=True) or {}
+            if not payload.get("upload_id"):
+                return {"error": "upload_id missing"}, 400
+            return {}, 201
+        # >>> CADLYTICS PATCH: FALLBACK-APP (END)
 
 # >>> CADLYTICS PATCH: DB SHIM IMPORT (BEGIN)
 from .db import db  # shim pour tests
