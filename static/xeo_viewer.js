@@ -2,9 +2,9 @@ let viewer, xktLoader;
 window.addEventListener('DOMContentLoaded', () => {
   viewer = new xeokit.Viewer({ canvasId: "xeokitCanvas", transparent: false });
   viewer.scene.clearLights();
-  new xeokit.AmbientLight(viewer,{ color:[1,1,1], intensity:1 });
-  new xeokit.DirLight(viewer,{ dir:[-1,-1,-1], color:[1,1,1], intensity:.8 });
-  new xeokit.AxisGizmo(viewer,{ containerId:"viewerHost" });
+  new xeokit.AmbientLight(viewer, { color:[1,1,1], intensity:1.0 });
+  new xeokit.DirLight(viewer, { dir:[-1,-1,-1], color:[1,1,1], intensity:0.8 });
+  new xeokit.AxisGizmo(viewer, { containerId: "viewerHost" });
   xktLoader = new xeokit.XKTLoaderPlugin(viewer, { edges:true });
 });
 async function loadXKT(url){
