@@ -6,13 +6,18 @@
     <title>Analyse & Visualisation 3D • CADlytics</title>
     <link rel="stylesheet" href="/static/css/style.css" />
     <style>
-      .wrap{max-width:1200px;margin:24px auto;padding:0 16px;}
+      :root{--green:#3b5b39;--card: #fff;}
+      body{background:#f6f4ef;color:#283327;font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif}
+      .wrap{max-width:1200px;margin:24px auto;padding:0 16px}
       .grid{display:grid;grid-template-columns:360px 1fr;gap:24px;align-items:start}
-      .card{background:#fff;border-radius:12px;padding:16px;box-shadow:0 6px 24px rgba(0,0,0,.06)}
-      #viewerContainer{width:100%;min-height:420px;position:relative}
+      .card{background:var(--card);border-radius:14px;padding:16px;box-shadow:0 8px 32px rgba(0,0,0,.06)}
+      #viewerContainer{width:100%;min-height:420px;position:relative;border-radius:14px;overflow:hidden}
       .btn{padding:10px 16px;border:0;border-radius:10px;cursor:pointer}
-      .btn-primary{background:#3b5b39;color:#fff}
+      .btn-primary{background:var(--green);color:#fff}
       .muted{opacity:.75}
+      [data-dropzone].is-success{outline:2px solid #38a169;box-shadow:0 0 0 4px rgba(56,161,105,.18)}
+      [data-dropzone].is-ready  {outline:2px solid #2b6cb0;box-shadow:0 0 0 4px rgba(43,108,176,.18)}
+      [data-dropzone].is-error  {outline:2px solid #e53e3e;box-shadow:0 0 0 4px rgba(229,62,62,.18)}
     </style>
   </head>
   <body>
@@ -21,7 +26,7 @@
       <div class="grid">
         <div class="card" data-dropzone>
           <h3>Télécharger un fichier</h3>
-          <p class="muted">Formats : <code>.stp</code>, <code>.step</code> (≤ 50&nbsp;MB)</p>
+          <p class="muted">Formats : <code>.stp</code>, <code>.step</code> (≤ 50 MB)</p>
           <div style="display:flex;gap:8px;align-items:center;margin:12px 0;">
             <input id="fileInput" type="file" accept=".stp,.step" hidden />
             <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">CHOISIR UN FICHIER</button>
@@ -32,13 +37,19 @@
             <option value="standard">Standard (0.1 mm)</option>
           </select>
         </div>
-        
+
         <div class="card" style="padding:0">
           <div id="viewerContainer"></div>
         </div>
       </div>
     </div>
-    
-    <script type="module" src="/static/dist/main.js" defer></script>
+
+    <!-- Fallback : tente le bundle /static/dist/main.js, sinon charge /static/js/main.js -->
+    <script type="module">
+      (async ()=>{
+        try{ await import('/static/dist/main.js'); }
+        catch(e){ console.warn('[bundle] fallback main.js', e); await import('/static/js/main.js'); }
+      })();
+    </script>
   </body>
 </html>
