@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Cadlytics – Viewer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}" />
+    <script src="https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk/dist/xeokit-sdk.min.js"></script>
+  </head>
+  <body>
+    <header class="bar wrap">
+      <a href="{{ url_for('site.landing') }}">← Retour</a>
+      <h1>Analyse &amp; Visualisation 3D</h1>
+    </header>
+
+    <section class="wrap">
+      <div class="card">
+        <h3>Télécharger un fichier</h3>
+        <p>Formats : .stp / .step / .stl (≤ {{ (config['MAX_CONTENT_LENGTH'] // (1024 * 1024)) | int }} MB)</p>
+        <div class="row">
+          <input type="file" id="fileInput" accept=".stp,.step,.stl" />
+          <button id="btnView">Visualiser</button>
+          <button id="btnConvert" class="ghost">Forcer conversion (debug)</button>
+          <span id="status"></span>
+        </div>
+      </div>
+    </section>
+
+    <section class="wrap">
+      <div id="viewerHost" class="viewer">
+        <canvas id="xeokitCanvas"></canvas>
+      </div>
+    </section>
+
+    <script src="{{ url_for('static', filename='uploader_app.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='xeo_viewer.js') }}" defer></script>
+  </body>
+</html>

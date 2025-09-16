@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Cadlytics – Analyse DFM pour pièces plastiques</title>
+    <meta name="description" content="Analyse DFM rapide des fichiers STEP pour l'injection plastique." />
+    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/marketing.css') }}" />
+  </head>
+  <body>
+    <header class="nav">
+      <div class="wrap">
+        <a class="brand" href="{{ url_for('site.landing') }}">Cadlytics</a>
+        <nav>
+          <a href="#benefices">Bénéfices</a>
+          <a href="#pricing">Tarifs</a>
+          <a href="{{ url_for('site.app_shell') }}">Démo Viewer</a>
+          <a href="{{ url_for('auth.login') }}">Connexion</a>
+          <a class="btn" href="{{ url_for('auth.register') }}">Créer un compte</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="wrap">
+          <h1>Analyse DFM rapide pour vos pièces plastiques</h1>
+          <p>
+            Cadlytics inspecte automatiquement vos fichiers STEP : épaisseurs critiques, dépouilles,
+            contre-dépouilles et surfaces projetées. Générez un rapport opérationnel en quelques minutes.
+          </p>
+          <div class="cta">
+            <a class="btn primary" href="{{ url_for('auth.register') }}">Commencer gratuitement</a>
+            <a class="btn ghost" href="{{ url_for('site.app_shell') }}">Essayer le viewer</a>
+          </div>
+          <ul class="hero-metrics">
+            <li><strong>50&nbsp;MB</strong> par upload</li>
+            <li><strong>Rapport PDF</strong> automatisé</li>
+            <li><strong>Heatmaps</strong> interactives</li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="benefices" class="features">
+        <div class="wrap grid">
+          <article class="card">
+            <h3>Détection DFM</h3>
+            <p>Cartographie des épaisseurs, dépouilles, rayons et contre-dépouilles avec alertes priorisées.</p>
+          </article>
+          <article class="card">
+            <h3>Viewer 3D</h3>
+            <p>Visualisation Xeokit (XKT) fluide avec axes, annotations et contrôle de matière.</p>
+          </article>
+          <article class="card">
+            <h3>Exports prêts</h3>
+            <p>Rapport PDF, STEP nettoyé et heatmaps partageables pour l'atelier et les fournisseurs.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="pricing" class="pricing">
+        <div class="wrap">
+          <h2>Tarifs</h2>
+          <div class="grid">
+            <article class="card">
+              <h3>Free</h3>
+              <p>5 crédits inclus, uploads ≤ 50&nbsp;MB, viewer Xeokit.</p>
+              <div class="price">0€</div>
+              <a class="btn block" href="{{ url_for('auth.register') }}">Créer un compte</a>
+            </article>
+            <article class="card featured">
+              <h3>Pro</h3>
+              <p>Analyses DFM complètes, rapports PDF, priorisation support.</p>
+              <div class="price">29€/mois</div>
+              <a class="btn block primary" href="{{ url_for('auth.register') }}">Démarrer</a>
+            </article>
+            <article class="card">
+              <h3>Team</h3>
+              <p>Collaborateurs multiples, quotas mutualisés, export API.</p>
+              <div class="price">Sur devis</div>
+              <a class="btn block" href="/contact">Nous contacter</a>
+            </article>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="wrap">
+        <span>© 2024 Cadlytics</span>
+        <nav>
+          <a href="/legal">Mentions légales</a>
+          <a href="/privacy">Confidentialité</a>
+          <a href="/contact">Contact</a>
+        </nav>
+      </div>
+    </footer>
+  </body>
+</html>
