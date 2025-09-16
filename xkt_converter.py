@@ -20,10 +20,18 @@ import shutil
 import subprocess
 import tempfile
 import logging
+import importlib
 from pathlib import Path
 from typing import Optional
 
-import cadquery as cq  # STEP -> STL
+_CQ = None
+
+
+def _cadquery():
+    global _CQ
+    if _CQ is None:
+        _CQ = importlib.import_module("cadquery")
+    return _CQ
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +65,8 @@ def _step_to_stl(step_path: str, stl_path: str, tolerance: float = 0.6) -> None:
     if not step.exists():
         raise FileNotFoundError(step)
     out.parent.mkdir(parents=True, exist_ok=True)
+
+    cq = _cadquery()
 
     logger.info("CadQuery import: %s", step)
     shape = cq.importers.importStep(str(step))

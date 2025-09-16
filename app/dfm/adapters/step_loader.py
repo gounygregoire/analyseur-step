@@ -2,29 +2,46 @@
 
 from __future__ import annotations
 
+import importlib
 import os
 import tempfile
-from typing import Iterable, Tuple
+from functools import lru_cache
+from typing import Iterable, Tuple, TYPE_CHECKING
 
-import cadquery as cq
 import numpy as np
-import trimesh
+
+if TYPE_CHECKING:  # pragma: no cover
+    import cadquery
+    import trimesh
 
 
-def load_mesh(step_path: str, max_bytes: int = 100 * 1024 * 1024) -> Tuple[trimesh.Trimesh, bool]:
+@lru_cache(maxsize=1)
+def _cadquery():
+    return importlib.import_module("cadquery")
+
+
+@lru_cache(maxsize=1)
+def _trimesh():
+    return importlib.import_module("trimesh")
+
+
+def load_mesh(step_path: str, max_bytes: int = 100 * 1024 * 1024) -> Tuple["trimesh.Trimesh", bool]:
     """Charge un STEP et retourne un mesh Trimesh.
 
     Si le fichier dépasse ``max_bytes`` alors une décimation contrôlée est
     appliquée et le booléen ``low_res`` est positionné à ``True``.
     """
 
+    cq = _cadquery()
+    tm = _trimesh()
+
     workplane = cq.importers.importStep(step_path)
     with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as tmp:
         cq.exporters.export(workplane, tmp.name)
         stl_path = tmp.name
     try:
-        mesh = trimesh.load(stl_path, force="mesh")
-        if isinstance(mesh, trimesh.Scene):
+        mesh = tm.load(stl_path, force="mesh")
+        if isinstance(mesh, tm.Scene):
             if mesh.geometry:
                 mesh = next(iter(mesh.geometry.values()))
             else:  # pragma: no cover - STEP vide
@@ -41,10 +58,12 @@ def load_mesh(step_path: str, max_bytes: int = 100 * 1024 * 1024) -> Tuple[trime
             os.unlink(stl_path)
 
 
-def compute_thickness(mesh: trimesh.Trimesh, samples: int = 1000) -> Tuple[float, float, Iterable[Tuple[float, float, int]], list]:
+def compute_thickness(mesh: "trimesh.Trimesh", samples: int = 1000) -> Tuple[float, float, Iterable[Tuple[float, float, int]], list]:
     """Évalue l'épaisseur moyenne et minimale du maillage."""
 
-    points, faces = trimesh.sample.sample_surface(mesh, samples)
+    tm = _trimesh()
+
+    points, faces = tm.sample.sample_surface(mesh, samples)
     normals = mesh.face_normals[faces]
     origins = points - normals * 1e-3
     hits, ray_idx, _ = mesh.ray.intersects_location(origins, -normals, multiple_hits=False)
@@ -70,7 +89,7 @@ def compute_thickness(mesh: trimesh.Trimesh, samples: int = 1000) -> Tuple[float
     return avg, min_th, histogram, per_face_avg
 
 
-def compute_projected_area(mesh: trimesh.Trimesh, axis: Tuple[float, float, float]) -> float:
+def compute_projected_area(mesh: "trimesh.Trimesh", axis: Tuple[float, float, float]) -> float:
     """Surface projetée sur le plan perpendiculaire à ``axis``."""
 
     axis_v = np.asarray(axis, dtype=float)
@@ -81,7 +100,7 @@ def compute_projected_area(mesh: trimesh.Trimesh, axis: Tuple[float, float, floa
     return float(0.5 * np.linalg.norm(areas, axis=1).sum())
 
 
-def compute_draft(mesh: trimesh.Trimesh, axis: Tuple[float, float, float], min_deg: float) -> Tuple[float, list]:
+def compute_draft(mesh: "trimesh.Trimesh", axis: Tuple[float, float, float], min_deg: float) -> Tuple[float, list]:
     """Calcule le ratio de dépouille valide et retourne les faces hors tolérance."""
 
     axis_v = np.asarray(axis, dtype=float)
@@ -104,10 +123,12 @@ def compute_draft(mesh: trimesh.Trimesh, axis: Tuple[float, float, float], min_d
     return ok_ratio, issues
 
 
-def find_small_radii(mesh: trimesh.Trimesh, min_radius: float = 0.5) -> Tuple[float, list]:
+def find_small_radii(mesh: "trimesh.Trimesh", min_radius: float = 0.5) -> Tuple[float, list]:
     """Détecte les zones à faible rayon de courbure."""
 
-    curv = trimesh.curvature.discrete_gaussian_curvature_measure(
+    tm = _trimesh()
+
+    curv = tm.curvature.discrete_gaussian_curvature_measure(
         mesh, np.arange(len(mesh.vertices)), 1.0
     )
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -127,7 +148,7 @@ def find_small_radii(mesh: trimesh.Trimesh, min_radius: float = 0.5) -> Tuple[fl
     return min_r, issues
 
 
-def detect_undercuts(mesh: trimesh.Trimesh, axis: Tuple[float, float, float]) -> list:
+def detect_undercuts(mesh: "trimesh.Trimesh", axis: Tuple[float, float, float]) -> list:
     """Renvoie les faces orientées contre l'axe de démoulage."""
 
     axis_v = np.asarray(axis, dtype=float)

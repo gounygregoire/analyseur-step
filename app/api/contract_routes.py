@@ -10,7 +10,14 @@ from werkzeug.utils import secure_filename
 
 from app.storage.storage import Storage
 from app.storage import history as History
-import xkt_converter
+from functools import lru_cache
+
+
+@lru_cache(maxsize=1)
+def _convert_step_to_xkt():
+    from xkt_converter import convert_step_to_xkt
+
+    return convert_step_to_xkt
 
 UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
 OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
@@ -95,7 +102,8 @@ def convert_step() -> tuple[Any, int]:
             return jsonify({"file_id": file_id, "xkt_url": f"/models/{file_id}.xkt"}), 200
 
         try:
-            xkt_converter.convert_step_to_xkt(
+            convert = _convert_step_to_xkt()
+            convert(
                 step_in_path,
                 xkt_out_path,
                 stl_tolerance=float(data.get("tolerance", 0.1)),
