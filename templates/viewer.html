@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Visualisation 3D</title>
+    <link rel="stylesheet" href="/static/css/style.css" />
+    <style>
+      #viewerContainer { width:100%; min-height:420px; position:relative; }
+      .wrap { max-width:1200px; margin:24px auto; padding:0 16px; }
+      .grid { display:grid; grid-template-columns:360px 1fr; gap:24px; align-items:start; }
+      .card { background:#fff; border-radius:12px; padding:16px; box-shadow:0 6px 24px rgba(0,0,0,.06); }
+      .btn { padding:10px 16px; border:0; border-radius:10px; cursor:pointer; }
+      .btn-primary { background:#3b5b39; color:#fff; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Analyse & Visualisation 3D</h1>
+
+      <div class="grid">
+        <!-- Upload -->
+        <div class="card" data-dropzone>
+          <h3>Télécharger un fichier</h3>
+          <p>Formats : <code>.stp</code>, <code>.step</code> (max 50MB)</p>
+          <div style="display:flex; gap:8px; align-items:center; margin:12px 0;">
+            <input id="fileInput" type="file" accept=".stp,.step" hidden />
+            <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">CHOISIR UN FICHIER</button>
+            <button id="btnVisualiser" class="btn">VISUALISER</button>
+          </div>
+
+          <label for="toleranceSelect">Tolérance</label>
+          <select id="toleranceSelect" style="display:block; margin-top:6px;">
+            <option value="standard">Standard (0.1 mm)</option>
+          </select>
+        </div>
+
+        <!-- Viewer -->
+        <div class="card" style="padding:0;">
+          <div id="viewerContainer"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bundle front (produit par ton build) -->
+    <script type="module" src="/static/dist/main.js" defer></script>
+  </body>
+</html>
