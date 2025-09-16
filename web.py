@@ -1,12 +1,30 @@
 # web.py — service WEB léger
 import os, uuid, shlex, subprocess
-from flask import Flask, request, jsonify, send_from_directory, abort
+from flask import Flask, request, jsonify, send_from_directory, abort, render_template
 from flask_cors import CORS
 from redis import Redis
 from rq import Queue
 
 app = Flask(__name__)
 CORS(app)
+
+
+@app.get("/")
+def index():
+    """Serve la page front compilée."""
+    return render_template("index.html")
+
+
+@app.get("/app")
+def app_viewer():
+    """Expose la page Viewer (upload + visualisation 3D)."""
+    return render_template("viewer.html")
+
+
+@app.get("/favicon.ico")
+def favicon():
+    """Retourne un statut vide pour éviter les 404 dans la console."""
+    return "", 204
 
 UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
 OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
