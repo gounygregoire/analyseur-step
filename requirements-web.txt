@@ -38,3 +38,5 @@ Flask-Compress==1.18
 gunicorn==23.0.0
 Pillow==11.2.1
 reportlab==4.4.2
+OCP==7.7.2
+
