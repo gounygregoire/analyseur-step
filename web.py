@@ -7,7 +7,17 @@ app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
 
 # ---------- Limites & dossiers ----------
-MAX_UPLOAD_MB = int(float(os.environ.get("MAX_UPLOAD_MB", "50")))
+def env_int(name: str, default: int) -> int:
+    """Parse un int d'une env var, en tolérant les guillemets et espaces."""
+    v = os.environ.get(name)
+    if v is None or v == "":
+        return default
+    try:
+        return int(float(str(v).strip().strip('"').strip("'")))
+    except Exception:
+        return default
+
+MAX_UPLOAD_MB = env_int("MAX_UPLOAD_MB", 50)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024  # 50 MB par défaut
 
 UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
@@ -36,23 +46,18 @@ def run_xkt_convert(step_path: str, xkt_path: str):
       xeokit-convert <INPUT> --output <OUTPUT>
     (INPUT en positionnel, pas d'option --input)
     """
-    # 1) Binaire local si présent (recommandé)
     local_bin = os.path.join(app.root_path, "node_modules", ".bin", "xeokit-convert")
     if os.path.exists(local_bin):
         cmd = f"{shlex.quote(local_bin)} {shlex.quote(step_path)} --output {shlex.quote(xkt_path)}"
     else:
-        # 2) Fallback via npx (moins fiable)
         cmd = f"npx -y @xeokit/xeokit-convert@latest {shlex.quote(step_path)} --output {shlex.quote(xkt_path)}"
 
     proc = subprocess.run(
         cmd, shell=True, env=_with_node_path(os.environ),
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
-
-    # Logs utiles (visibles dans Render)
     print(f"[xeokit] CMD: {cmd}", flush=True)
     print(f"[xeokit] RC={proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}", flush=True)
-
     if proc.returncode != 0:
         raise RuntimeError(f"xeokit-convert failed ({proc.returncode})\nSTDERR:\n{proc.stderr}")
 
@@ -65,14 +70,6 @@ def _first_existing(paths):
 # ---------- Pages ----------
 @app.get("/")
 def landing():
-    """
-    Essaie dans cet ordre pour la landing :
-      1) templates/index.html
-      2) templates/home.html / templates/landing.html
-      3) static/index.html
-      4) static/dist/index.html
-      5) static/app/index.html
-    """
     candidates = [
         os.path.join(app.root_path, "templates", "index.html"),
         os.path.join(app.root_path, "templates", "home.html"),
@@ -84,7 +81,6 @@ def landing():
     found = _first_existing(candidates)
     if not found:
         return "Landing non trouvée (ajoute templates/index.html ou static/index.html)", 200
-
     rel = os.path.relpath(found, app.root_path)
     parts = rel.split(os.sep)
     if parts[0] == "templates":
@@ -93,7 +89,6 @@ def landing():
 
 @app.get("/app")
 def app_view():
-    # Page viewer Xeokit
     return render_template("app.html", max_upload_mb=MAX_UPLOAD_MB)
 
 @app.get("/favicon.ico")
@@ -125,7 +120,6 @@ def upload():
     try:
         run_xkt_convert(step_path, xkt_path)
     except Exception as e:
-        # On renvoie le détail pour debug rapide côté client
         return jsonify(error="convert_fail", detail=str(e)), 500
 
     if not os.path.exists(xkt_path):
@@ -149,7 +143,7 @@ def serve_xkt(fname):
         abort(404)
     return send_from_directory(OUTPUT_FOLDER, fname, as_attachment=False)
 
-# ---------- Routes de diag (pratiques) ----------
+# ---------- Diag ----------
 @app.get("/__routes")
 def __routes():
     lines = [f"{sorted(r.methods)}  {r.rule}" for r in app.url_map.iter_rules()]
