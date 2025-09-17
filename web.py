@@ -38,16 +38,19 @@ def _with_node_path(env: dict) -> dict:
     env["PATH"] = os.pathsep.join([env.get("PATH", "")] + extra)
     return env
 
-def run_xkt_convert(step_path: str, out_dir: str):
+def run_xkt_convert(step_path: str, out_xkt: str):
     """
-    xeokit-convert (récent) => sort dans un DOSSIER.
-    usage: xeokit-convert <INPUT> --output <OUTPUT_DIR>
+    Versions récentes :
+      xeokit-convert <INPUT> --output <OUTPUT_XKT_FILE>
+    (INPUT en positionnel. OUTPUT = chemin de FICHIER .xkt attendu)
     """
+    os.makedirs(os.path.dirname(out_xkt), exist_ok=True)
+
     local_bin = os.path.join(app.root_path, "node_modules", ".bin", "xeokit-convert")
     if os.path.exists(local_bin):
-        cmd = f"{shlex.quote(local_bin)} {shlex.quote(step_path)} --output {shlex.quote(out_dir)}"
+        cmd = f"{shlex.quote(local_bin)} {shlex.quote(step_path)} --output {shlex.quote(out_xkt)}"
     else:
-        cmd = f"npx -y @xeokit/xeokit-convert@latest {shlex.quote(step_path)} --output {shlex.quote(out_dir)}"
+        cmd = f"npx -y @xeokit/xeokit-convert@latest {shlex.quote(step_path)} --output {shlex.quote(out_xkt)}"
 
     proc = subprocess.run(
         cmd, shell=True, env=_with_node_path(os.environ),
@@ -57,6 +60,21 @@ def run_xkt_convert(step_path: str, out_dir: str):
     print(f"[xeokit] RC={proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}", flush=True)
     if proc.returncode != 0:
         raise RuntimeError(f"xeokit-convert failed ({proc.returncode})\nSTDERR:\n{proc.stderr}")
+
+    # Si la CLI a quand même créé un DOSSIER (comportement vu sur certaines builds),
+    # on récupère le premier .xkt et on le déplace vers out_xkt.
+    if not os.path.exists(out_xkt) and os.path.isdir(out_xkt):
+        for dp, _, fns in os.walk(out_xkt):
+            for fn in fns:
+                if fn.lower().endswith(".xkt"):
+                    src = os.path.join(dp, fn)
+                    try:
+                        shutil.move(src, out_xkt)
+                    except Exception:
+                        shutil.copyfile(src, out_xkt)
+                        os.remove(src)
+                    break
+
 
 def _first_existing(paths):
     for p in paths:
@@ -112,15 +130,9 @@ def upload():
     if not allowed(f.filename):
         return jsonify(error="bad_ext", detail="Seuls .stp / .step sont acceptés."), 400
 
-    file_id = str(uuid.uuid4())
+    file_id  = str(uuid.uuid4())
     step_path = os.path.join(UPLOAD_FOLDER, f"{file_id}.step")
-
-    # Dossier où xeokit-convert va écrire ses fichiers
-    out_dir   = os.path.join(OUTPUT_FOLDER, file_id)
-    os.makedirs(out_dir, exist_ok=True)
-
-    # Chemin final que l'UI attend
-    final_xkt = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+    out_xkt   = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
 
     try:
         f.save(step_path)
@@ -128,28 +140,42 @@ def upload():
         return jsonify(error="save_fail", detail=str(e)), 500
 
     try:
-        run_xkt_convert(step_path, out_dir)
+        run_xkt_convert(step_path, out_xkt)
     except Exception as e:
         return jsonify(error="convert_fail", detail=str(e)), 500
 
-    # Cherche le premier .xkt produit, puis le déplace/renomme au bon endroit
-    produced = _find_first_xkt(out_dir)
-    if not produced or not os.path.exists(produced):
-        # Log minimal pour debug
-        try:
-            tree = "\n".join(
-                [os.path.join(dp, fn) for dp,_,fns in os.walk(out_dir) for fn in fns][:20]
-            )
-        except Exception:
-            tree = "(listing error)"
-        return jsonify(error="no_xkt", detail=f".xkt introuvable dans {out_dir}. Files:\n{tree}"), 500
+    # Fallback ultime : si out_xkt est un dossier (bug de CLI), on retente une fois le scan ici.
+    if not os.path.exists(out_xkt):
+        produced = None
+        if os.path.isdir(out_xkt):
+            for dp, _, fns in os.walk(out_xkt):
+                for fn in fns:
+                    if fn.lower().endswith(".xkt"):
+                        produced = os.path.join(dp, fn); break
+                if produced: break
+            if produced:
+                try:
+                    shutil.move(produced, out_xkt)
+                except Exception:
+                    shutil.copyfile(produced, out_xkt)
+                    os.remove(produced)
 
-    try:
-        shutil.move(produced, final_xkt)
-    except Exception:
-        # Si move échoue (cross-device), copie puis supprime
-        shutil.copyfile(produced, final_xkt)
-        os.remove(produced)
+    if not os.path.exists(out_xkt):
+        # Diagnostic : liste (max 40) des fichiers autour de OUTPUT_FOLDER
+        try:
+            listing = []
+            for dp, _, fns in os.walk(OUTPUT_FOLDER):
+                for fn in fns:
+                    listing.append(os.path.join(dp, fn))
+                    if len(listing) >= 40:
+                        break
+                if len(listing) >= 40:
+                    break
+            listing_text = "\n".join(listing)
+        except Exception:
+            listing_text = "(listing error)"
+        return jsonify(error="no_xkt",
+                       detail=f".xkt introuvable. Attendu: {out_xkt}\nFiles around:\n{listing_text}"), 500
 
     return jsonify(file_id=file_id, status="ready", xkt_url=f"/xkt/{file_id}.xkt")
 
