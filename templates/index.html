@@ -1,5 +1,94 @@
-{#
-  Legacy entrypoint retained to serve the marketing landing without the old viewer markup.
-  We simply include the canonical marketing template.
-#}
-{% include 'marketing_index.html' %}
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CADlytics — Analyse DFM pour l'injection plastique</title>
+  <meta name="description" content="Vérifiez instantanément si vos pièces 3D sont prêtes pour l'injection plastique." />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <style>
+    :root{--accent:#2b6cb0;}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif;}
+    .navbar{background:#0b1320;}
+    .hero{padding:96px 0;background:linear-gradient(180deg,#0b1320 0%,#0e1a33 100%);color:#fff;text-align:center}
+    .hero .btn{background:var(--accent);border:none}
+    .features i{font-size:32px;color:var(--accent)}
+    footer{background:#0b1320;color:#b9c2d0}
+  </style>
+</head>
+<body>
+  <nav class="navbar navbar-dark">
+    <div class="container d-flex justify-content-between align-items-center">
+      <a class="navbar-brand fw-bold" href="/">CADlytics</a>
+      <div class="d-flex gap-2">
+        <a class="btn btn-sm btn-outline-light" href="/app">Essayer le viewer</a>
+      </div>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <div class="container">
+      <h1 class="display-5 fw-bold">L’analyse DFM réinventée pour l’injection plastique</h1>
+      <p class="lead mt-3">Uploadez vos fichiers STEP et obtenez une pré-analyse de fabricabilité en quelques secondes.</p>
+      <a href="/app" class="btn btn-lg text-white mt-3">Démarrer gratuitement</a>
+    </div>
+  </header>
+
+  <section class="features py-5">
+    <div class="container">
+      <div class="row g-4 text-center">
+        <div class="col-md-4">
+          <i class="bi bi-shield-check"></i>
+          <h3 class="mt-2">Bonnes pratiques</h3>
+          <p>Épaisseurs, dépouilles, congés… des contrôles pensés pour l’injection.</p>
+        </div>
+        <div class="col-md-4">
+          <i class="bi bi-speedometer2"></i>
+          <h3 class="mt-2">Rapide</h3>
+          <p>Conversion STEP → XKT et visualisation 3D en un clin d’œil.</p>
+        </div>
+        <div class="col-md-4">
+          <i class="bi bi-magic"></i>
+          <h3 class="mt-2">Orienté industriel</h3>
+          <p>Prêt à l’emploi pour CTO, fondateurs et BE en surcharge.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="pricing" class="py-5 bg-light">
+    <div class="container">
+      <h2 class="text-center mb-4">Tarifs</h2>
+      <div class="row justify-content-center g-4">
+        <div class="col-md-4">
+          <div class="card text-center h-100">
+            <div class="card-body">
+              <h3 class="card-title">Starter</h3>
+              <p class="display-6 fw-bold mb-1">0€</p>
+              <p class="text-muted">3 analyses / mois</p>
+              <a href="/app" class="btn btn-primary">Essayer</a>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="card text-center h-100 border-primary">
+            <div class="card-body">
+              <h3 class="card-title">Pro</h3>
+              <p class="display-6 fw-bold mb-1">29€/mois</p>
+              <p class="text-muted">Analyses illimitées</p>
+              <a href="/app" class="btn btn-primary">Commencer</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="py-4 text-center">
+    <div class="container"><small>© CADlytics</small></div>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+</body>
+</html>
