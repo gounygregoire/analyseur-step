@@ -16,5 +16,5 @@ ocp-linux-amd64==0.1.9
 OCP==0.1.9
 ezdxf==1.4.2
 nptyping==2.0.1
-nlopt==2.9.1
+nlopt==2.8.0
 casadi==3.7.0
