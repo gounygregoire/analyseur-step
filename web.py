@@ -35,18 +35,34 @@ def _with_node_path(env: dict) -> dict:
     return env
 
 def run_xkt_convert(step_path: str, xkt_path: str):
-    npx = _npx_bin()
-    cmd = f"""{shlex.quote(npx)} -y @xeokit/xeokit-convert@latest \
-      --input {shlex.quote(step_path)} --output {shlex.quote(xkt_path)}"""
+    """
+    xeokit-convert (versions récentes) => usage:
+      xeokit-convert <INPUT> --output <OUTPUT>
+    (INPUT en positionnel, pas d'option --input)
+    """
+    # 1) Si on a le binaire local, on l'utilise
+    local_bin = os.path.join(app.root_path, "node_modules", ".bin", "xeokit-convert")
+    if os.path.exists(local_bin):
+        cmd = f"{shlex.quote(local_bin)} {shlex.quote(step_path)} --output {shlex.quote(xkt_path)}"
+    else:
+        # 2) Fallback via npx (moins fiable)
+        cmd = f"npx -y @xeokit/xeokit-convert@latest {shlex.quote(step_path)} --output {shlex.quote(xkt_path)}"
+
     proc = subprocess.run(
-        cmd, shell=True, env=_with_node_path(os.environ),
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        cmd,
+        shell=True,
+        env=_with_node_path(os.environ),  # garde ta fonction qui ajoute le PATH Node
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
     )
+
+    # Logs utiles en prod
+    print(f"[xeokit] CMD: {cmd}", flush=True)
+    print(f"[xeokit] RC={proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}", flush=True)
+
     if proc.returncode != 0:
-        raise RuntimeError(
-            f"xeokit-convert failed ({proc.returncode})\n"
-            f"STDOUT:\n{proc.stdout}\n\nSTDERR:\n{proc.stderr}"
-        )
+        raise RuntimeError("xeokit-convert failed ({})".format(proc.returncode))
 
 def _first_existing(paths):
     for p in paths:
