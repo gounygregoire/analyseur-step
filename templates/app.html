@@ -39,17 +39,93 @@
         </div>
 
         <div class="card" style="padding:0">
-          <div id="viewerContainer"></div>
+          <div id="viewerContainer"><
+          <canvas id="xktCanvas" style="width:100%;height:100%"></canvas>
+          </div>
         </div>
       </div>
     </div>
 
     <!-- Fallback : tente le bundle /static/dist/main.js, sinon charge /static/js/main.js -->
-    <script type="module">
-      (async ()=>{
-        try{ await import('/static/dist/main.js'); }
-        catch(e){ console.warn('[bundle] fallback main.js', e); await import('/static/js/main.js'); }
-      })();
-    </script>
+<!-- Fallback : tente le bundle /static/dist/main.js, sinon charge /static/js/main.js -->
+<script type="module">
+  // 1) Import Xeokit depuis un CDN
+  import { Viewer, XKTLoaderPlugin, CameraControl } 
+    from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk/dist/xeokit-sdk.es.min.js";
+
+  // 2) Récupère les éléments UI
+  const fileInput   = document.getElementById("fileInput");
+  const btnVisual   = document.getElementById("btnVisualiser");
+  const dropzone    = document.querySelector("[data-dropzone]");
+  const canvasId    = "xktCanvas";
+
+  // 3) Instancie le viewer
+  const viewer = new Viewer({ canvasId });
+  new CameraControl(viewer, { doublePickFlyTo: true });
+  const xktLoader = new XKTLoaderPlugin(viewer);
+
+  // 4) État du fichier sélectionné
+  let selectedFile = null;
+  fileInput.addEventListener("change", (e) => {
+    selectedFile = e.target.files?.[0] || null;
+    dropzone?.classList.remove("is-error","is-success");
+    dropzone?.classList.add("is-ready");
+  });
+
+  // 5) Helper upload + polling
+  async function uploadAndGetXKT(file) {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch("/upload", { method: "POST", body: fd });
+    const j = await res.json();
+    if (!res.ok || j.error) throw new Error(j.detail || j.error || "upload_failed");
+
+    let url = j.xkt_url;
+    const id = j.file_id;
+    while (!url) {
+      await new Promise(r => setTimeout(r, 1200));
+      const s  = await fetch(`/convert/status?file_id=${encodeURIComponent(id)}`);
+      const sj = await s.json();
+      if (sj.status === "ready") url = sj.xkt_url;
+    }
+    return url;
+  }
+
+  // 6) Action “VISUALISER”
+  btnVisual.addEventListener("click", async () => {
+    if (!selectedFile) { alert("Choisis un fichier .stp / .step"); return; }
+    try {
+      dropzone?.classList.add("is-ready");
+      const xktURL = await uploadAndGetXKT(selectedFile);
+
+      // Nettoie l'ancienne scène puis charge la nouvelle
+      viewer.scene.clear();
+      xktLoader.load({ id: "model1", src: xktURL, edges: true });
+      viewer.cameraControl.fitAll();
+      dropzone?.classList.remove("is-ready","is-error");
+      dropzone?.classList.add("is-success");
+    } catch (err) {
+      console.error(err);
+      dropzone?.classList.remove("is-ready");
+      dropzone?.classList.add("is-error");
+      alert("Erreur de conversion ou de chargement. Regarde la console pour le détail.");
+    }
+  });
+
+  // (optionnel) Drag & Drop
+  const dz = dropzone;
+  if (dz) {
+    ["dragenter","dragover"].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add("is-ready"); }));
+    ["dragleave","drop"].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove("is-ready"); }));
+    dz.addEventListener("drop", (e) => {
+      const f = e.dataTransfer?.files?.[0];
+      if (f) {
+        selectedFile = f;
+        fileInput.files = e.dataTransfer.files;
+        dz.classList.add("is-ready");
+      }
+    });
+  }
+</script>
   </body>
 </html>
