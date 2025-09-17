@@ -49,22 +49,19 @@
     <!-- Fallback : tente le bundle /static/dist/main.js, sinon charge /static/js/main.js -->
 <!-- Fallback : tente le bundle /static/dist/main.js, sinon charge /static/js/main.js -->
 <script type="module">
-  // 1) Import Xeokit depuis un CDN
-  import { Viewer, XKTLoaderPlugin, CameraControl } 
+  // 1) Importer SANS CameraControl
+  import { Viewer, XKTLoaderPlugin }
     from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk/dist/xeokit-sdk.es.min.js";
 
-  // 2) Récupère les éléments UI
-  const fileInput   = document.getElementById("fileInput");
-  const btnVisual   = document.getElementById("btnVisualiser");
-  const dropzone    = document.querySelector("[data-dropzone]");
-  const canvasId    = "xktCanvas";
+  // 2) Sélecteurs
+  const fileInput = document.getElementById("fileInput");
+  const btnVisual = document.getElementById("btnVisualiser");
+  const dropzone  = document.querySelector("[data-dropzone]");
 
-  // 3) Instancie le viewer
-  const viewer = new Viewer({ canvasId });
-  new CameraControl(viewer, { doublePickFlyTo: true });
-  const xktLoader = new XKTLoaderPlugin(viewer);
+  // 3) Viewer (le viewer expose déjà viewer.cameraControl)
+  const viewer     = new Viewer({ canvasId: "xktCanvas" });
+  const xktLoader  = new XKTLoaderPlugin(viewer);
 
-  // 4) État du fichier sélectionné
   let selectedFile = null;
   fileInput.addEventListener("change", (e) => {
     selectedFile = e.target.files?.[0] || null;
@@ -72,12 +69,11 @@
     dropzone?.classList.add("is-ready");
   });
 
-  // 5) Helper upload + polling
   async function uploadAndGetXKT(file) {
     const fd = new FormData();
     fd.append("file", file);
     const res = await fetch("/upload", { method: "POST", body: fd });
-    const j = await res.json();
+    const j   = await res.json();
     if (!res.ok || j.error) throw new Error(j.detail || j.error || "upload_failed");
 
     let url = j.xkt_url;
@@ -91,28 +87,31 @@
     return url;
   }
 
-  // 6) Action “VISUALISER”
   btnVisual.addEventListener("click", async () => {
     if (!selectedFile) { alert("Choisis un fichier .stp / .step"); return; }
     try {
       dropzone?.classList.add("is-ready");
+
       const xktURL = await uploadAndGetXKT(selectedFile);
 
-      // Nettoie l'ancienne scène puis charge la nouvelle
+      // Reset scène et chargement du XKT
       viewer.scene.clear();
-      xktLoader.load({ id: "model1", src: xktURL, edges: true });
-      viewer.cameraControl.fitAll();
+      await xktLoader.load({ id: `model_${Date.now()}`, src: xktURL, edges: true });
+
+      // Fit caméra si dispo
+      try { viewer.cameraControl?.fitAll(); } catch(_) {}
+
       dropzone?.classList.remove("is-ready","is-error");
       dropzone?.classList.add("is-success");
     } catch (err) {
       console.error(err);
       dropzone?.classList.remove("is-ready");
       dropzone?.classList.add("is-error");
-      alert("Erreur de conversion ou de chargement. Regarde la console pour le détail.");
+      alert("Erreur de conversion ou de chargement. Ouvre ‘Network’ pour le détail.");
     }
   });
 
-  // (optionnel) Drag & Drop
+  // Drag & drop (optionnel)
   const dz = dropzone;
   if (dz) {
     ["dragenter","dragover"].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add("is-ready"); }));
@@ -127,5 +126,6 @@
     });
   }
 </script>
+
   </body>
 </html>
