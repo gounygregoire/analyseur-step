@@ -1,6 +1,8 @@
 # app.py
 import os, uuid, shlex, subprocess, pathlib
 import sys
+import shutil
+
 from flask import Flask, request, jsonify, send_from_directory, abort, render_template
 from pathlib import Path
 
@@ -32,14 +34,16 @@ def _with_node_path(env: dict) -> dict:
 
 def _resolve_converter_cmd(step_path: str, xkt_path: str) -> str:
     """
-    1) Si 'node_modules/.bin/xeokit-convert' existe -> on l'utilise
-    2) sinon fallback npx (télécharge à la volée, moins fiable)
+    Versions récentes de xeokit-convert :
+    usage: xeokit-convert <INPUT> --output <OUTPUT>
+    (INPUT en positionnel, pas de --input)
     """
     local_bin = Path(app.root_path) / "node_modules" / ".bin" / "xeokit-convert"
     if local_bin.exists():
-        return f"{shlex.quote(str(local_bin))} --input {shlex.quote(step_path)} --output {shlex.quote(xkt_path)}"
-    # fallback
-    return f"npx -y @xeokit/xeokit-convert@latest --input {shlex.quote(step_path)} --output {shlex.quote(xkt_path)}"
+        # input en positionnel
+        return f"{shlex.quote(str(local_bin))} {shlex.quote(step_path)} --output {shlex.quote(xkt_path)}"
+    # fallback npx
+    return f"npx -y @xeokit/xeokit-convert@latest {shlex.quote(step_path)} --output {shlex.quote(xkt_path)}"
 
 def run_xkt_convert(step_path: str, xkt_path: str):
     cmd = _resolve_converter_cmd(step_path, xkt_path)
