@@ -8,7 +8,6 @@ CORS(app)
 
 # ---------- Limites & dossiers ----------
 def env_int(name: str, default: int) -> int:
-    """Parse un int d'une env var, en tolérant les guillemets et espaces."""
     v = os.environ.get(name)
     if v is None or v == "":
         return default
@@ -18,7 +17,7 @@ def env_int(name: str, default: int) -> int:
         return default
 
 MAX_UPLOAD_MB = env_int("MAX_UPLOAD_MB", 50)
-app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024  # 50 MB par défaut
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
 
 UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
 OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
@@ -31,26 +30,24 @@ def allowed(name: str) -> bool:
 
 # ---------- Helpers ----------
 def _with_node_path(env: dict) -> dict:
-    """Ajoute les chemins Node usuels (local + Render)."""
     env = env.copy()
     extra = [
         os.path.join(app.root_path, "node_modules", ".bin"),
-        "/opt/render/project/nodes/node-20.19.5/bin",  # inoffensif si absent
+        "/opt/render/project/nodes/node-20.19.5/bin",
     ]
     env["PATH"] = os.pathsep.join([env.get("PATH", "")] + extra)
     return env
 
-def run_xkt_convert(step_path: str, xkt_path: str):
+def run_xkt_convert(step_path: str, out_dir: str):
     """
-    xeokit-convert (versions récentes) :
-      xeokit-convert <INPUT> --output <OUTPUT>
-    (INPUT en positionnel, pas d'option --input)
+    xeokit-convert (récent) => sort dans un DOSSIER.
+    usage: xeokit-convert <INPUT> --output <OUTPUT_DIR>
     """
     local_bin = os.path.join(app.root_path, "node_modules", ".bin", "xeokit-convert")
     if os.path.exists(local_bin):
-        cmd = f"{shlex.quote(local_bin)} {shlex.quote(step_path)} --output {shlex.quote(xkt_path)}"
+        cmd = f"{shlex.quote(local_bin)} {shlex.quote(step_path)} --output {shlex.quote(out_dir)}"
     else:
-        cmd = f"npx -y @xeokit/xeokit-convert@latest {shlex.quote(step_path)} --output {shlex.quote(xkt_path)}"
+        cmd = f"npx -y @xeokit/xeokit-convert@latest {shlex.quote(step_path)} --output {shlex.quote(out_dir)}"
 
     proc = subprocess.run(
         cmd, shell=True, env=_with_node_path(os.environ),
@@ -65,6 +62,13 @@ def _first_existing(paths):
     for p in paths:
         if os.path.exists(p):
             return p
+    return None
+
+def _find_first_xkt(root_dir: str) -> str | None:
+    for dirpath, _, filenames in os.walk(root_dir):
+        for name in filenames:
+            if name.lower().endswith(".xkt"):
+                return os.path.join(dirpath, name)
     return None
 
 # ---------- Pages ----------
@@ -110,7 +114,13 @@ def upload():
 
     file_id = str(uuid.uuid4())
     step_path = os.path.join(UPLOAD_FOLDER, f"{file_id}.step")
-    xkt_path  = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+
+    # Dossier où xeokit-convert va écrire ses fichiers
+    out_dir   = os.path.join(OUTPUT_FOLDER, file_id)
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Chemin final que l'UI attend
+    final_xkt = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
 
     try:
         f.save(step_path)
@@ -118,12 +128,28 @@ def upload():
         return jsonify(error="save_fail", detail=str(e)), 500
 
     try:
-        run_xkt_convert(step_path, xkt_path)
+        run_xkt_convert(step_path, out_dir)
     except Exception as e:
         return jsonify(error="convert_fail", detail=str(e)), 500
 
-    if not os.path.exists(xkt_path):
-        return jsonify(error="no_xkt", detail="Conversion OK mais .xkt introuvable."), 500
+    # Cherche le premier .xkt produit, puis le déplace/renomme au bon endroit
+    produced = _find_first_xkt(out_dir)
+    if not produced or not os.path.exists(produced):
+        # Log minimal pour debug
+        try:
+            tree = "\n".join(
+                [os.path.join(dp, fn) for dp,_,fns in os.walk(out_dir) for fn in fns][:20]
+            )
+        except Exception:
+            tree = "(listing error)"
+        return jsonify(error="no_xkt", detail=f".xkt introuvable dans {out_dir}. Files:\n{tree}"), 500
+
+    try:
+        shutil.move(produced, final_xkt)
+    except Exception:
+        # Si move échoue (cross-device), copie puis supprime
+        shutil.copyfile(produced, final_xkt)
+        os.remove(produced)
 
     return jsonify(file_id=file_id, status="ready", xkt_url=f"/xkt/{file_id}.xkt")
 
@@ -132,8 +158,8 @@ def convert_status():
     file_id = request.args.get("file_id")
     if not file_id:
         return jsonify(error="no_file_id"), 400
-    xkt_path = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
-    if os.path.exists(xkt_path):
+    final_xkt = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+    if os.path.exists(final_xkt):
         return jsonify(status="ready", xkt_url=f"/xkt/{file_id}.xkt")
     return jsonify(status="processing")
 
