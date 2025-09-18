@@ -11,9 +11,8 @@ import {
 
 const $ = (s) => document.querySelector(s);
 
-// --- UI refs
+// --- Réfs UI (toutes optionnelles : le code s'adapte)
 const fileInput     = $("#fileInput");
-const btnPick       = $("#btnPick");              // présent si tu l'as ajouté, sinon ignoré
 const btnVisualiser = $("#btnVisualiser");
 const chkAdditive   = $("#chkAdditive");
 const fileNameLbl   = $("#fileName");
@@ -49,71 +48,65 @@ const btnClip      = $("#btnClip");
 const explodeRange = $("#explodeRange");
 const btnShot      = $("#btnShot");
 
-// --- Viewer & plugins
+// ---------- Viewer & Plugins ----------
 const viewer = new Viewer({
   canvasId: "xeokit-canvas",
   transparent: true,
   dtxEnabled: true
 });
-
 new FastNavPlugin(viewer, { flyToDuration: 0.9 });
-
-// ===== Axes (cube + légende) =====
-(() => {
-  const cube = document.createElement("canvas");
-  cube.width = cube.height = 96;
-  Object.assign(cube.style, {
-    position: "absolute",
-    left: "12px",
-    top: "12px",
-    zIndex: "5",
-    borderRadius: "12px",
-    boxShadow: "0 6px 18px rgba(0,0,0,.25)",
-    background: "rgba(255,255,255,.06)",
-    backdropFilter: "blur(2px)"
-  });
-  viewerContainer.appendChild(cube);
-  new NavCubePlugin(viewer, { canvasElement: cube, cameraFlyToDuration: 0.9 });
-
-  // petite légende X/Y/Z
-  const legend = document.createElement("div");
-  legend.innerHTML =
-    `<span style="color:#ef4444;font-weight:600">X</span>
-     <span style="color:#22c55e;font-weight:600;margin:0 6px">Y</span>
-     <span style="color:#60a5fa;font-weight:600">Z</span>`;
-  Object.assign(legend.style, {
-    position: "absolute",
-    left: "12px",
-    top: "114px",
-    zIndex: "6",
-    font: "12px/1 Inter,system-ui,Segoe UI,Roboto,Arial",
-    padding: "4px 8px",
-    background: "rgba(0,0,0,.35)",
-    color: "#fff",
-    borderRadius: "8px",
-    boxShadow: "0 4px 12px rgba(0,0,0,.2)"
-  });
-  viewerContainer.appendChild(legend);
-})();
 
 const xktLoader = new XKTLoaderPlugin(viewer, {
   dracoDecompressorPath:
     "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/resources/draco/"
 });
-
 const sections     = new SectionPlanesPlugin(viewer, {});
 const measurements = new DistanceMeasurementsPlugin(viewer, { defaultDistancePrecision: 2 });
 const annotations  = new AnnotationsPlugin(viewer, {
   markerHTML: "<div style='width:10px;height:10px;border-radius:999px;background:#ef4444;border:2px solid #fff;box-shadow:0 0 0 2px rgba(0,0,0,.2)'></div>"
 });
 
-// --- state
-const models = new Map();  // id -> { model, name, src }
+// ---------- Axes jolis (cube + pastille XYZ) ----------
+(() => {
+  if (!viewerContainer) return;
+  const cube = document.createElement("canvas");
+  cube.width = cube.height = 96;
+  Object.assign(cube.style, {
+    position: "absolute", left: "12px", top: "12px", zIndex: "5",
+    borderRadius: "12px", boxShadow: "0 6px 18px rgba(0,0,0,.25)",
+    background: "rgba(255,255,255,.06)", backdropFilter: "blur(2px)"
+  });
+  viewerContainer.appendChild(cube);
+  new NavCubePlugin(viewer, { canvasElement: cube, cameraFlyToDuration: 0.9 });
+
+  const legend = document.createElement("div");
+  legend.innerHTML =
+    `<span style="color:#ef4444;font-weight:600">X</span>
+     <span style="color:#22c55e;font-weight:600;margin:0 6px">Y</span>
+     <span style="color:#60a5fa;font-weight:600">Z</span>`;
+  Object.assign(legend.style, {
+    position: "absolute", left: "12px", top: "114px", zIndex: "6",
+    font: "12px/1 Inter,system-ui,Segoe UI,Roboto,Arial",
+    padding: "4px 8px", background: "rgba(0,0,0,.35)", color: "#fff",
+    borderRadius: "8px", boxShadow: "0 4px 12px rgba(0,0,0,.2)"
+  });
+  viewerContainer.appendChild(legend);
+})();
+
+// ---------- État ----------
+const models = new Map(); // id -> { model, name, src }
 let lastModelId = null;
 let selectedIds = new Set();
-let oneSectionPlane = null;
+let onePlane = null;
+let appMode = "select"; // "select" | "measure" | "annotate"
 
-// --- utils
+function setMode(m) {
+  appMode = (appMode === m) ? "select" : m;
+  btnMeasure?.classList.toggle("btn-primary", appMode === "measure");
+  btnAnnot?.classList.toggle("btn-primary",   appMode === "annotate");
+}
+
+// ---------- Utils ----------
 const setProgress = (p)=> progressBar && (progressBar.style.width = `${Math.max(0,Math.min(100,p))}%`);
 const allIds = ()=> viewer.scene?.objectIds ?? [];
 
@@ -167,16 +160,14 @@ function refreshModelsList(){
 
 const flyToAll = ()=> viewer.cameraFlight.flyTo(viewer.scene);
 
-// --- fichier
-if (btnPick) btnPick.addEventListener("click", ()=> fileInput?.click());
-fileInput?.addEventListener("change", e=>{
+// ---------- Upload / Load ----------
+fileInput?.addEventListener("change", (e)=>{
   const f = e.target.files?.[0];
   if (fileNameLbl) fileNameLbl.textContent = f ? f.name : "Aucun fichier sélectionné";
-  const dz = document.querySelector("[data-dropzone]");
-  if (f){ dz?.classList.remove("is-error","is-success"); dz?.classList.add("is-ready"); }
+  // Auto-visualisation dès la sélection
+  if (f) uploadAndShow();
 });
 
-// --- chargement
 async function loadXKT(xktUrl, nameHint){
   const id = "m"+Date.now();
   const model = xktLoader.load({ id, src: xktUrl, edges: !!chkEdges?.checked });
@@ -185,7 +176,7 @@ async function loadXKT(xktUrl, nameHint){
   model.on("loaded", ()=>{
     setProgress(100); setTimeout(()=>setProgress(0),350);
     viewer.cameraFlight.flyTo(model);
-    models.set(id, { model, name: nameHint||id, src: xktUrl }); // <— on mémorise l’URL
+    models.set(id, { model, name: nameHint||id, src: xktUrl });
     lastModelId = id;
     refreshModelsList();
   });
@@ -195,7 +186,7 @@ async function loadXKT(xktUrl, nameHint){
 
 async function uploadAndShow(){
   const f = fileInput?.files?.[0]; if(!f){ alert("Choisis un fichier .step/.stp/.stl"); return; }
-  if (btnVisualiser){ btnVisualiser.disabled = true; btnVisualiser.textContent = "Conversion…"; }
+  btnVisualiser && (btnVisualiser.disabled = true, btnVisualiser.textContent = "Conversion…");
   setProgress(8);
   try{
     const fd = new FormData(); fd.append("file", f);
@@ -209,20 +200,22 @@ async function uploadAndShow(){
       models.clear(); selectedIds.clear();
     }
     await loadXKT(xktUrl, f.name);
+
     const dz = document.querySelector("[data-dropzone]");
-    dz?.classList.remove("is-ready"); dz?.classList.add("is-success");
+    dz?.classList.remove("is-error");
+    dz?.classList.add("is-success");
   }catch(e){
     console.error(e);
     const dz = document.querySelector("[data-dropzone]");
-    dz?.classList.remove("is-ready"); dz?.classList.add("is-error");
+    dz?.classList.remove("is-success"); dz?.classList.add("is-error");
     alert("Erreur de conversion/chargement (voir Console).");
   }finally{
-    if (btnVisualiser){ btnVisualiser.disabled = false; btnVisualiser.textContent = "VISUALISER"; }
+    btnVisualiser && (btnVisualiser.disabled = false, btnVisualiser.textContent = "VISUALISER");
   }
 }
-btnVisualiser?.addEventListener("click", e=>{ e.preventDefault(); uploadAndShow(); });
+btnVisualiser?.addEventListener("click", (e)=>{ e.preventDefault(); uploadAndShow(); });
 
-// --- navigation
+// ---------- Navigation & rendu ----------
 btnFit?.addEventListener("click", flyToAll);
 
 let proj="perspective";
@@ -232,7 +225,7 @@ btnProj?.addEventListener("click", ()=>{
   btnProj.textContent = proj==="perspective" ? "Perspective" : "Orthographique";
 });
 
-// remap pan -> planView
+// Remap pan -> planView
 (() => {
   if (!navMode) return;
   const opt = [...navMode.options].find(o=>o.value==="pan");
@@ -242,49 +235,22 @@ const setNavMode = (m)=> viewer.cameraControl.navMode = (m==="pan" ? "planView" 
 navMode?.addEventListener("change", ()=> setNavMode(navMode.value));
 if (navMode) setNavMode(navMode.value);
 
-// --- rendu
 chkEdges?.addEventListener("change", ()=> viewer.scene.edgeMaterial.edgesEnabled = !!chkEdges.checked);
+chkXray?.addEventListener("change", ()=>{ setAllProp("xrayed", !!chkXray.checked); if (selectedIds.size) setIdsProp([...selectedIds], "xrayed", false); });
+chkGhost?.addEventListener("change", ()=>{ setAllProp("ghosted", !!chkGhost.checked); if (selectedIds.size) setIdsProp([...selectedIds], "ghosted", false); });
 
-chkXray?.addEventListener("change", ()=>{
-  setAllProp("xrayed", !!chkXray.checked);
-  if (selectedIds.size) setIdsProp([...selectedIds], "xrayed", false);
-});
-chkGhost?.addEventListener("change", ()=>{
-  setAllProp("ghosted", !!chkGhost.checked);
-  if (selectedIds.size) setIdsProp([...selectedIds], "ghosted", false);
-});
-
-// thème sombre : **uniquement le viewer**
+// Thème sombre => uniquement le viewer
 chkTheme?.addEventListener("change", ()=>{
   viewerContainer?.classList.toggle("dark", !!chkTheme.checked);
   viewer.scene.clearColor = chkTheme.checked ? [0.06,0.07,0.08] : [0.965,0.957,0.937];
 });
+opacityRange?.addEventListener("input", ()=> setAllProp("opacity", parseFloat(opacityRange.value)||1));
 
-// opacité globale
-opacityRange?.addEventListener("input", ()=>{
-  const a = parseFloat(opacityRange.value);
-  setAllProp("opacity", a);
-});
+// ---------- Modes outillage ----------
+btnMeasure?.addEventListener("click", ()=> setMode("measure"));
+btnAnnot?.addEventListener("click",   ()=> setMode("annotate"));
 
-// --- sélection & modes outillage (1 seul handler)
-// modes
-let measureMode=false, measurePts=[];
-let annotMode=false;
-
-btnMeasure?.addEventListener("click", ()=>{
-  measureMode=!measureMode;
-  btnMeasure.classList.toggle("btn-primary", measureMode);
-  if (measureMode){ annotMode=false; btnAnnot?.classList.remove("btn-primary"); }
-  measurePts.length=0;
-});
-btnAnnot?.addEventListener("click", ()=>{
-  annotMode=!annotMode;
-  btnAnnot.classList.toggle("btn-primary", annotMode);
-  if (annotMode){ measureMode=false; btnMeasure?.classList.remove("btn-primary"); }
-});
-
-// coupe (toggle)
-let clippingOn=false, onePlane=null;
+let clippingOn=false;
 btnClip?.addEventListener("click", ()=>{
   clippingOn=!clippingOn;
   btnClip.classList.toggle("btn-primary", clippingOn);
@@ -295,34 +261,42 @@ btnClip?.addEventListener("click", ()=>{
   viewer.cameraFlight.flyTo(onePlane);
 });
 
-// clic unique : mesure/annotation/sélection/clear
+// ---------- Clic unique : route par mode actif ----------
 viewer.scene.input.on("mouseclicked", (coords)=>{
   const hit = viewer.scene.pick({ canvasPos: [coords[0], coords[1]] });
 
-  // 1) aucun hit => clear (supprime le jaune)
-  if (!hit || !hit.entity){
-    clearSelection();
+  // Pas de hit : en mode SELECT on désélectionne, sinon on ignore
+  if (!hit || !hit.entity) {
+    if (appMode === "select") clearSelection();
     return;
   }
 
-  // 2) mesure active
-  if (measureMode && hit.worldPos){
-    measurePts.push(hit.worldPos);
-    if (measurePts.length===2){
-      try{ measurements.createMeasurement({ positions:[measurePts[0],measurePts[1]] }); }
-      catch(e){ console.error(e); alert("Mesure indisponible"); }
-      measurePts.length=0;
+  if (appMode === "measure") {
+    if (hit.worldPos) {
+      // 2 clics = 1 mesure
+      if (!viewer.__mPts) viewer.__mPts = [];
+      viewer.__mPts.push(hit.worldPos);
+      if (viewer.__mPts.length === 2) {
+        measurements.createMeasurement({ positions: [viewer.__mPts[0], viewer.__mPts[1]] });
+        viewer.__mPts = [];
+      }
     }
-    return;
+    return; // on ne sélectionne pas en mode mesure
   }
 
-  // 3) annotation active
-  if (annotMode && hit.worldPos){
-    annotations.createAnnotation({ id:"a"+Date.now(), worldPos:hit.worldPos, occludable:true, label:"Note" });
-    return;
+  if (appMode === "annotate") {
+    if (hit.worldPos) {
+      annotations.createAnnotation({
+        id: "a"+Date.now(),
+        worldPos: hit.worldPos,
+        occludable: true,
+        label: "Note"
+      });
+    }
+    return; // pas de sélection en mode annotation
   }
 
-  // 4) sélection simple
+  // Mode SELECT
   const id = hit.entity.id;
   setIdsProp(allIds(), "highlighted", false);
   selectedIds = new Set([id]);
@@ -331,28 +305,13 @@ viewer.scene.input.on("mouseclicked", (coords)=>{
   showProps(meta || { id });
 });
 
-// --- iso / cacher / montrer
-btnIsolate?.addEventListener("click", ()=>{
-  if (!selectedIds.size){ console.log("Sélectionne un objet"); return; }
-  setAllProp("visible", false);
-  setIdsProp([...selectedIds], "visible", true);
-});
-btnHide?.addEventListener("click", ()=>{
-  if (!selectedIds.size){ console.log("Sélectionne un objet"); return; }
-  setIdsProp([...selectedIds], "visible", false);
-});
-btnShowOnly?.addEventListener("click", ()=>{
-  if (!selectedIds.size){ console.log("Sélectionne un objet"); return; }
-  setAllProp("visible", false);
-  setIdsProp([...selectedIds], "visible", true);
-});
-btnClearSel?.addEventListener("click", ()=>{
-  setAllProp("visible", true);
-  setIdsProp(allIds(), "highlighted", false);
-  selectedIds.clear(); propsPanel && (propsPanel.innerHTML="");
-});
+// ---------- Iso / cacher / montrer ----------
+btnIsolate?.addEventListener("click", ()=>{ if (!selectedIds.size) return; setAllProp("visible", false); setIdsProp([...selectedIds], "visible", true); });
+btnHide?.addEventListener("click",    ()=>{ if (!selectedIds.size) return; setIdsProp([...selectedIds], "visible", false); });
+btnShowOnly?.addEventListener("click",()=>{ if (!selectedIds.size) return; setAllProp("visible", false); setIdsProp([...selectedIds], "visible", true); });
+btnClearSel?.addEventListener("click",()=>{ setAllProp("visible", true); setIdsProp(allIds(), "highlighted", false); clearSelection(); });
 
-// --- recherche
+// ---------- Recherche ----------
 btnSearch?.addEventListener("click", ()=>{
   const q = (searchInput?.value||"").toLowerCase().trim();
   if (!resultsBox) return;
@@ -379,7 +338,7 @@ btnSearch?.addEventListener("click", ()=>{
   });
 });
 
-// --- reload / unload (utilise l'URL mémorisée)
+// ---------- Reload / Unload ----------
 btnReload?.addEventListener("click", ()=>{
   if (!lastModelId) return;
   const info=models.get(lastModelId); if(!info) return;
@@ -396,7 +355,7 @@ btnUnload?.addEventListener("click", ()=>{
   refreshModelsList();
 });
 
-// --- explode (sécurisé)
+// ---------- Explode (sécurisé) ----------
 explodeRange?.addEventListener("input", ()=>{
   if (!allIds().length) return;
   const k = parseFloat(explodeRange.value)||0;
@@ -411,7 +370,7 @@ explodeRange?.addEventListener("input", ()=>{
   });
 });
 
-// --- screenshot
+// ---------- Screenshot ----------
 btnShot?.addEventListener("click", ()=>{
   try{
     const canvas = document.getElementById("xeokit-canvas");
@@ -420,7 +379,7 @@ btnShot?.addEventListener("click", ()=>{
   }catch(e){ console.error(e); alert("Capture impossible."); }
 });
 
-// --- drag & drop
+// ---------- Drag & drop ----------
 const dz = document.querySelector("[data-dropzone]");
 if (dz){
   ["dragenter","dragover"].forEach(ev=>dz.addEventListener(ev, e=>{ e.preventDefault(); dz.classList.add("is-ready"); }));
@@ -432,6 +391,7 @@ if (dz){
       if (fileInput) fileInput.files=dt.files;
       if (fileNameLbl) fileNameLbl.textContent=f.name;
       dz.classList.add("is-ready");
+      uploadAndShow(); // auto-visualisation aussi en DnD
     }
   });
 }
