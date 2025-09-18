@@ -1,3 +1,4 @@
+// /static/js/main.js — Mesure stable sans project(), sortie auto des outils
 import {
   Viewer,
   XKTLoaderPlugin,
@@ -9,7 +10,7 @@ import {
 
 const $ = (s) => document.querySelector(s);
 
-// ---------- UI refs ----------
+/* ---------- UI refs ---------- */
 const fileInput     = $("#fileInput");
 const btnVisualiser = $("#btnVisualiser");
 const btnChoose     = $("#btnChoose");
@@ -47,7 +48,7 @@ const btnClip      = $("#btnClip");
 const explodeRange = $("#explodeRange");
 const btnShot      = $("#btnShot");
 
-// ---------- Viewer & plugins ----------
+/* ---------- Viewer & plugins ---------- */
 const viewer = new Viewer({
   canvasId: "xeokit-canvas",
   transparent: true,
@@ -72,7 +73,7 @@ const annotations = new AnnotationsPlugin(viewer, {
     "<div style='width:10px;height:10px;border-radius:999px;background:#ef4444;border:2px solid #fff;box-shadow:0 0 0 2px rgba(0,0,0,.2)'></div>"
 });
 
-// ---------- Axe/cube ----------
+/* ---------- Cube + légende axes ---------- */
 (() => {
   if (!viewerContainer) return;
   const cube = document.createElement("canvas");
@@ -99,36 +100,7 @@ const annotations = new AnnotationsPlugin(viewer, {
   viewerContainer.appendChild(legend);
 })();
 
-// ---------- Overlay de mesure (canvas 2D) ----------
-const overlay = document.createElement("canvas");
-const octx    = overlay.getContext("2d");
-Object.assign(overlay.style, {
-  position:"absolute", inset:"0", pointerEvents:"none", zIndex:"4"
-});
-viewerContainer.appendChild(overlay);
-
-function resizeOverlay(){
-  const dpr = Math.max(1, window.devicePixelRatio || 1);
-  const rect = viewerContainer.getBoundingClientRect();
-  overlay.width  = Math.round(rect.width * dpr);
-  overlay.height = Math.round(rect.height * dpr);
-  overlay.style.width  = rect.width + "px";
-  overlay.style.height = rect.height + "px";
-}
-resizeOverlay();
-new ResizeObserver(resizeOverlay).observe(viewerContainer);
-
-// util projete (world->pixels overlay)
-function worldToOverlay(p){
-  const ndc = viewer.camera.project(p, []);
-  if (!ndc) return null;
-  // NDC -> pixels overlay
-  const x = (ndc[0] * 0.5 + 0.5) * overlay.width;
-  const y = (1 - (ndc[1] * 0.5 + 0.5)) * overlay.height;
-  return [x,y];
-}
-
-// ---------- État ----------
+/* ---------- Etat ---------- */
 const models = new Map(); // id -> { model, name, src }
 let lastModelId = null;
 let selectedIds = new Set();
@@ -180,7 +152,7 @@ function refreshModelsList(){
 }
 const flyToAll = ()=> viewer.cameraFlight.flyTo(viewer.scene);
 
-// ---------- Chargements ----------
+/* ---------- Chargements ---------- */
 async function loadXKT(xktUrl, nameHint){
   const id = "m"+Date.now();
   const model = xktLoader.load({
@@ -232,7 +204,7 @@ fileInput?.addEventListener("change", ()=>{
 });
 btnVisualiser?.addEventListener("click", (e)=>{ e.preventDefault(); uploadAndShow(); });
 
-// ---------- Navigation & rendu ----------
+/* ---------- Navigation & rendu ---------- */
 btnFit?.addEventListener("click", flyToAll);
 
 let proj="perspective";
@@ -289,7 +261,7 @@ chkTheme?.addEventListener("change", ()=>{
 });
 opacityRange?.addEventListener("input", ()=> setAllProp("opacity", parseFloat(opacityRange.value)||1));
 
-// ---------- OUTILS ----------
+/* ---------- OUTILS (modes) ---------- */
 let toolMode = "none"; // "none" | "measure" | "annot" | "clip"
 let measurePts = [];   // 0..2 world positions
 let clipPlane  = null; // SectionPlane
@@ -318,74 +290,34 @@ function setToolMode(next){
 btnMeasure?.addEventListener("click", ()=> setToolMode("measure"));
 btnAnnot?.addEventListener("click",   ()=> setToolMode("annot"));
 btnClip?.addEventListener("click",    ()=> setToolMode("clip"));
+window.addEventListener("keydown", (e)=>{ if (e.key === "Escape") setToolMode("none"); });
 
-// Déplacement du plan à la molette / X Y Z pour l’axe
-window.addEventListener("wheel", (e)=>{
-  if (toolMode!=="clip" || !clipPlane) return;
-  e.preventDefault();
-  const step = (e.deltaY>0 ? 1 : -1) * 0.02;
-  const d = clipPlane.dir, p = clipPlane.pos;
-  clipPlane.pos = [p[0]+d[0]*step, p[1]+d[1]*step, p[2]+d[2]*step];
-}, { passive:false });
-window.addEventListener("keydown", (e)=>{
-  if (toolMode!=="clip" || !clipPlane) return;
-  if (e.key==="x"||e.key==="X") clipPlane.dir = [1,0,0];
-  if (e.key==="y"||e.key==="Y") clipPlane.dir = [0,1,0];
-  if (e.key==="z"||e.key==="Z") clipPlane.dir = [0,0,1];
-});
-
-// ---------- Mesures custom (sans plugin instable) ----------
-const measures = []; // { p1,p2, labelId, endAId, endBId, color }
-function formatDist(d){
-  // heuristique: si >1 => m, sinon => mm
-  if (d >= 1)  return d.toFixed(3) + " m";
-  return (d*1000).toFixed(1) + " mm";
+/* ---------- Mesures custom v2 (sans projection 2D) ----------
+   On place deux pastilles + un label (AnnotationsPlugin).
+   Après 2 clics, on crée la mesure et on QUITTE l’outil (retour navigation). */
+function formatDist3D(p1,p2){
+  const d = Math.hypot(p2[0]-p1[0], p2[1]-p1[1], p2[2]-p1[2]);
+  return d >= 1 ? d.toFixed(3)+" m" : (d*1000).toFixed(1)+" mm";
 }
 function addMeasurement(p1, p2){
   const mid = [(p1[0]+p2[0])/2,(p1[1]+p2[1])/2,(p1[2]+p2[2])/2];
-  const d = Math.hypot(p2[0]-p1[0], p2[1]-p1[1], p2[2]-p1[2]);
-
-  const endAId = "mEndA_"+Date.now();
-  const endBId = "mEndB_"+(Date.now()+1);
-  const labelId= "mLbl_"+(Date.now()+2);
-
-  annotations.createAnnotation({ id:endAId, worldPos:p1, label:"" });
-  annotations.createAnnotation({ id:endBId, worldPos:p2, label:"" });
-  annotations.createAnnotation({ id:labelId, worldPos:mid, label:formatDist(d) });
-
-  measures.push({ p1:[...p1], p2:[...p2], labelId, endAId, endBId, color:"#22d3ee" });
-  redrawOverlay(); // dessine tout de suite
+  const label = formatDist3D(p1,p2);
+  annotations.createAnnotation({ id:"mEndA_"+Date.now(),   worldPos:p1, label:"" });
+  annotations.createAnnotation({ id:"mEndB_"+(Date.now()+1), worldPos:p2, label:"" });
+  annotations.createAnnotation({ id:"mLbl_"+(Date.now()+2),  worldPos:mid, label });
 }
 
-function redrawOverlay(){
-  const dpr = Math.max(1, window.devicePixelRatio||1);
-  octx.setTransform(1,0,0,1,0,0);
-  octx.clearRect(0,0, overlay.width, overlay.height);
-  octx.lineWidth = 2 * dpr;
-  octx.strokeStyle = "#22d3ee";
-  measures.forEach(m=>{
-    const a = worldToOverlay(m.p1);
-    const b = worldToOverlay(m.p2);
-    if (!a || !b) return;
-    octx.beginPath();
-    octx.moveTo(a[0], a[1]);
-    octx.lineTo(b[0], b[1]);
-    octx.stroke();
-  });
-}
-viewer.scene.on("tick", redrawOverlay);
-
-// ---------- Clic unique : route selon l’outil actif ----------
 viewer.scene.input.on("mouseclicked", (coords)=>{
   const hit = viewer.scene.pick({ canvasPos: [coords[0], coords[1]], pickSurface: true });
 
-  // Mesure : 2 clics -> ajout
+  // Mesure : 2 clics -> mesure + sortie de l’outil
   if (toolMode==="measure"){
     if (hit && hit.worldPos){
       measurePts.push(hit.worldPos);
       if (measurePts.length===2){
         addMeasurement(measurePts[0], measurePts[1]);
         measurePts = [];
+        setToolMode("none"); // << retour navigation immédiat
       }
     }
     return;
@@ -421,13 +353,13 @@ viewer.scene.input.on("mouseclicked", (coords)=>{
   showProps(meta || { id });
 });
 
-// ---------- Iso / cacher / montrer ----------
+/* ---------- Iso / cacher / montrer ---------- */
 btnIsolate?.addEventListener("click", ()=>{ if (!selectedIds.size) return; setAllProp("visible", false); setIdsProp([...selectedIds], "visible", true); });
 btnHide?.addEventListener("click",    ()=>{ if (!selectedIds.size) return; setIdsProp([...selectedIds], "visible", false); });
 btnShowOnly?.addEventListener("click",()=>{ if (!selectedIds.size) return; setAllProp("visible", false); setIdsProp([...selectedIds], "visible", true); });
 btnClearSel?.addEventListener("click",()=>{ setAllProp("visible", true); setIdsProp(allIds(), "highlighted", false); clearSelection(); });
 
-// ---------- Recherche ----------
+/* ---------- Recherche ---------- */
 btnSearch?.addEventListener("click", ()=>{
   const q = (searchInput?.value||"").toLowerCase().trim();
   if (!resultsBox) return;
@@ -454,7 +386,7 @@ btnSearch?.addEventListener("click", ()=>{
   });
 });
 
-// ---------- Reload / Unload ----------
+/* ---------- Reload / Unload ---------- */
 btnReload?.addEventListener("click", ()=>{
   if (!lastModelId) return;
   const info=models.get(lastModelId); if(!info) return;
@@ -471,7 +403,7 @@ btnUnload?.addEventListener("click", ()=>{
   refreshModelsList();
 });
 
-// ---------- Explode ----------
+/* ---------- Explode ---------- */
 explodeRange?.addEventListener("input", ()=>{
   if (!allIds().length) return;
   const k = parseFloat(explodeRange.value)||0;
@@ -486,7 +418,7 @@ explodeRange?.addEventListener("input", ()=>{
   });
 });
 
-// ---------- Screenshot ----------
+/* ---------- Screenshot ---------- */
 btnShot?.addEventListener("click", ()=>{
   try{
     const dataURL = canvasEl.toDataURL("image/png");
@@ -494,7 +426,7 @@ btnShot?.addEventListener("click", ()=>{
   }catch(e){ console.error(e); alert("Capture impossible."); }
 });
 
-// ---------- Drag & drop ----------
+/* ---------- Drag & drop ---------- */
 const dz = document.querySelector("[data-dropzone]");
 if (dz){
   ["dragenter","dragover"].forEach(ev=>dz.addEventListener(ev, e=>{ e.preventDefault(); dz.classList.add("is-ready"); }));
