@@ -10,7 +10,7 @@ import {
 
 const $ = (s) => document.querySelector(s);
 
-// --- UI (toutes optionnelles)
+// --- UI
 const fileInput     = $("#fileInput");
 const btnVisualiser = $("#btnVisualiser");
 const btnChoose     = $("#btnChoose");
@@ -58,7 +58,6 @@ const viewer = new Viewer({
 // Navigation rapide SANS masquage d’arêtes
 const fast = new FastNavPlugin(viewer, {
   flyToDuration: 0.9,
-  // suivant les versions ces options existent ou sont ignorées (sans erreur) :
   autoHideEdges: false,
   hideEdges: false
 });
@@ -167,7 +166,6 @@ async function loadXKT(xktUrl, nameHint){
   const model = xktLoader.load({
     id,
     src: xktUrl,
-    // au chargement : edges selon l’état du bouton
     edges: !!chkEdges?.checked
   });
   setProgress(10);
@@ -177,8 +175,7 @@ async function loadXKT(xktUrl, nameHint){
     viewer.cameraFlight.flyTo(model);
     models.set(id, { model, name: nameHint||id, src: xktUrl });
     lastModelId=id; refreshModelsList();
-    // si le bouton Arêtes était coché au moment du load : force global
-    if (chkEdges?.checked) viewer.scene.edgeMaterial.edgesEnabled = true;
+    if (chkEdges?.checked) setEdges(true);
   });
   model.on("error", e=>{ setProgress(0); console.error(e); alert("Erreur chargement XKT."); });
   return id;
@@ -209,11 +206,11 @@ async function uploadAndShow(){
   }
 }
 
-// --- Fichier : label ou fallback JS
+// --- Fichier : label + auto-visualisation
 btnChoose?.addEventListener("click", (e)=>{ e.preventDefault(); fileInput?.click(); });
 fileInput?.addEventListener("change", ()=>{
   const f=fileInput.files?.[0]; if (f && fileNameLbl) fileNameLbl.textContent=f.name;
-  if (f) uploadAndShow(); // auto-visualisation immédiate
+  if (f) uploadAndShow();
 });
 btnVisualiser?.addEventListener("click", (e)=>{ e.preventDefault(); uploadAndShow(); });
 
@@ -225,6 +222,7 @@ btnProj?.addEventListener("click", ()=>{
   viewer.camera.projection = proj;
   btnProj.textContent = proj==="perspective" ? "Perspective" : "Orthographique";
 });
+// Renomme l’option Pan -> Plan si présente
 (() => {
   if (!navMode) return;
   const opt = [...navMode.options].find(o=>o.value==="pan");
@@ -234,22 +232,37 @@ const setNavMode = (m)=> viewer.cameraControl.navMode = (m==="pan" ? "planView" 
 navMode?.addEventListener("change", ()=> setNavMode(navMode.value));
 if (navMode) setNavMode(navMode.value);
 
-// --- Arêtes : toggle global + verrouillage pendant la nav
-chkEdges?.addEventListener("change", ()=>{
-  const on = !!chkEdges.checked;
-  viewer.scene.edgeMaterial.edgesEnabled = on;
-});
+// --- Arêtes (robuste) : global + par mesh + verrouillage pendant la nav
+function setEdges(on) {
+  viewer.scene.edgeMaterial.edgesEnabled = !!on;
+  const ids = viewer.scene.objectIds || [];
+  ids.forEach(id => {
+    const o = viewer.scene.objects[id];
+    if (o) {
+      if ("edges" in o) o.edges = !!on;
+      if (o.mesh && ("edges" in o.mesh)) o.mesh.edges = !!on;
+    }
+  });
+  for (const [, info] of models) {
+    if ("edges" in info.model) info.model.edges = !!on;
+  }
+}
+chkEdges?.addEventListener("change", ()=> setEdges(!!chkEdges.checked));
 viewer.scene.on("tick", ()=>{
-  // si la case est cochée, on s'assure que rien ne les "cache"
   if (chkEdges?.checked && !viewer.scene.edgeMaterial.edgesEnabled) {
     viewer.scene.edgeMaterial.edgesEnabled = true;
   }
 });
 
-chkXray?.addEventListener("change", ()=>{ setAllProp("xrayed", !!chkXray.checked); if (selectedIds.size) setIdsProp([...selectedIds], "xrayed", false); });
-chkGhost?.addEventListener("change", ()=>{ setAllProp("ghosted", !!chkGhost.checked); if (selectedIds.size) setIdsProp([...selectedIds], "ghosted", false); });
-
-// Thème sombre limité au viewer
+// --- X-ray / Ghost / Thème / Opacité
+chkXray?.addEventListener("change", ()=>{
+  setAllProp("xrayed", !!chkXray.checked);
+  if (selectedIds.size) setIdsProp([...selectedIds], "xrayed", false);
+});
+chkGhost?.addEventListener("change", ()=>{
+  setAllProp("ghosted", !!chkGhost.checked);
+  if (selectedIds.size) setIdsProp([...selectedIds], "ghosted", false);
+});
 chkTheme?.addEventListener("change", ()=>{
   viewerContainer?.classList.toggle("dark", !!chkTheme.checked);
   viewer.scene.clearColor = chkTheme.checked ? [0.06,0.07,0.08] : [0.965,0.957,0.937];
@@ -264,20 +277,22 @@ let clippingOn=false;
 btnClip?.addEventListener("click", ()=>{
   clippingOn=!clippingOn;
   btnClip.classList.toggle("btn-primary", clippingOn);
-  if (!clippingOn){ if(onePlane){ onePlane.destroy(); onePlane=null; } viewer.scene.sectionPlanesEnabled=false; return; }
+  if (!clippingOn){
+    if(onePlane){ onePlane.destroy(); onePlane=null; }
+    viewer.scene.sectionPlanesEnabled=false;
+    return;
+  }
   if (onePlane) onePlane.destroy();
   const center = viewer.scene?.aabbCenter || [0,0,0];
   onePlane = sections.createSectionPlane({ id:"cut", pos:center, dir:[0,1,0] });
-  viewer.scene.sectionPlanesEnabled = true; // << indispensable
+  viewer.scene.sectionPlanesEnabled = true;
   viewer.cameraFlight.flyTo(onePlane);
 });
 
 // --- Clic unique : route par mode actif
 viewer.scene.input.on("mouseclicked", (coords)=>{
-  // Indispensable pour récupérer worldPos !
   const hit = viewer.scene.pick({ canvasPos: [coords[0], coords[1]], pickSurface: true });
 
-  // Pas de hit : en mode SELECT on désélectionne
   if (!hit || !hit.entity) { if (appMode === "select") clearSelection(); return; }
 
   if (appMode === "measure") {
@@ -289,7 +304,7 @@ viewer.scene.input.on("mouseclicked", (coords)=>{
         viewer.__mPts = [];
       }
     }
-    return; // pas de sélection en mode mesure
+    return;
   }
 
   if (appMode === "annotate") {
@@ -301,7 +316,7 @@ viewer.scene.input.on("mouseclicked", (coords)=>{
         label: "Note"
       });
     }
-    return; // pas de sélection en mode annotation
+    return;
   }
 
   // Mode SELECT
@@ -363,7 +378,7 @@ btnUnload?.addEventListener("click", ()=>{
   refreshModelsList();
 });
 
-// --- Explode (sécurisé)
+// --- Explode
 explodeRange?.addEventListener("input", ()=>{
   if (!allIds().length) return;
   const k = parseFloat(explodeRange.value)||0;
