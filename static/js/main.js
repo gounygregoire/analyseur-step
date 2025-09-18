@@ -4,11 +4,8 @@ import {
   NavCubePlugin,
   FastNavPlugin,
   SectionPlanesPlugin,
-  SectionPlanesMouseControl,
   DistanceMeasurementsPlugin,
-  DistanceMeasurementsMouseControl,
-  AnnotationsPlugin,
-  AnnotationsMouseControl
+  AnnotationsPlugin
 } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
 
 const $ = (s) => document.querySelector(s);
@@ -69,27 +66,12 @@ const xktLoader = new XKTLoaderPlugin(viewer, {
     "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/resources/draco/"
 });
 
-// Coupe
-const sections   = new SectionPlanesPlugin(viewer, {});
-const secCtl     = new SectionPlanesMouseControl(sections);
-secCtl.active    = false;
-
-// Mesure
-const measurements = new DistanceMeasurementsPlugin(viewer, { defaultDistancePrecision: 2 });
-const measureCtl   = new DistanceMeasurementsMouseControl(measurements, {
-  // quelques options utiles si disponibles dans ta build :
-  // snapToEdge: true,
-  // snapToVertex: true
-});
-measureCtl.active  = false;
-
-// Annotations
-const annotations = new AnnotationsPlugin(viewer, {
+const sections      = new SectionPlanesPlugin(viewer, {});
+const measurements  = new DistanceMeasurementsPlugin(viewer, { defaultDistancePrecision: 2 });
+const annotations   = new AnnotationsPlugin(viewer, {
   markerHTML:
     "<div style='width:10px;height:10px;border-radius:999px;background:#ef4444;border:2px solid #fff;box-shadow:0 0 0 2px rgba(0,0,0,.2)'></div>"
 });
-const annotCtl   = new AnnotationsMouseControl(annotations);
-annotCtl.active  = false;
 
 // ---------- Axe/cube ----------
 (() => {
@@ -280,43 +262,92 @@ chkTheme?.addEventListener("change", ()=>{
 });
 opacityRange?.addEventListener("input", ()=> setAllProp("opacity", parseFloat(opacityRange.value)||1));
 
-// ---------- Outils (modes) ----------
-function setToolMode(mode){ // "none" | "measure" | "annot" | "clip"
-  // reset boutons
-  btnMeasure?.classList.toggle("btn-primary", mode==="measure");
-  btnAnnot?.classList.toggle("btn-primary",   mode==="annot");
-  btnClip?.classList.toggle("btn-primary",    mode==="clip");
+// ---------- OUTILS (sans *MouseControl) ----------
+let toolMode = "none"; // "none" | "measure" | "annot" | "clip"
+let measurePts = [];   // 0..2 world positions
+let clipPlane  = null; // SectionPlane
 
-  // activer/désactiver contrôleurs
-  measureCtl.active = (mode==="measure");
-  annotCtl.active   = (mode==="annot");
-  secCtl.active     = (mode==="clip");
+function setToolMode(next){
+  toolMode = next;
+  btnMeasure?.classList.toggle("btn-primary", toolMode==="measure");
+  btnAnnot?.classList.toggle("btn-primary",   toolMode==="annot");
+  btnClip?.classList.toggle("btn-primary",    toolMode==="clip");
+  viewer.canvas.style.cursor =
+    (toolMode==="measure"||toolMode==="annot"||toolMode==="clip") ? "crosshair" : "";
 
-  // plans actifs seulement en mode coupe
-  viewer.scene.sectionPlanesEnabled = (mode==="clip");
+  if (toolMode!=="measure") measurePts = [];
 
-  // curseur
-  viewer.canvas.style.cursor = (mode==="measure"||mode==="annot"||mode==="clip") ? "crosshair" : "";
+  // coupe: (dé)ployer le plan et activer le clipping
+  if (toolMode!=="clip"){
+    viewer.scene.sectionPlanesEnabled = false;
+    if (clipPlane){ clipPlane.destroy(); clipPlane=null; }
+  } else {
+    if (!clipPlane){
+      const c = viewer.scene?.aabbCenter || [0,0,0];
+      clipPlane = sections.createSectionPlane({ id:"cut", pos:c, dir:[0,1,0] }); // plan Y
+    }
+    viewer.scene.sectionPlanesEnabled = true;
+  }
 }
 
-btnMeasure?.addEventListener("click", ()=>{
-  const next = measureCtl.active ? "none" : "measure";
-  setToolMode(next);
-});
-btnAnnot?.addEventListener("click", ()=>{
-  const next = annotCtl.active ? "none" : "annot";
-  setToolMode(next);
-});
-btnClip?.addEventListener("click", ()=>{
-  const next = secCtl.active ? "none" : "clip";
-  if (next==="none"){ sections.clear(); } // retire toutes les coupes
-  setToolMode(next);
+btnMeasure?.addEventListener("click", ()=> setToolMode(toolMode==="measure" ? "none" : "measure"));
+btnAnnot?.addEventListener("click",   ()=> setToolMode(toolMode==="annot"   ? "none" : "annot"));
+btnClip?.addEventListener("click",    ()=> setToolMode(toolMode==="clip"    ? "none" : "clip"));
+
+// Déplacement du plan de coupe à la molette (+/- normal)
+window.addEventListener("wheel", (e)=>{
+  if (toolMode!=="clip" || !clipPlane) return;
+  e.preventDefault();
+  const step = (e.deltaY>0 ? 1 : -1) * 0.02; // vitesse
+  const d = clipPlane.dir, p = clipPlane.pos;
+  clipPlane.pos = [p[0]+d[0]*step, p[1]+d[1]*step, p[2]+d[2]*step];
+}, { passive:false });
+
+// X / Y / Z pour réorienter le plan de coupe
+window.addEventListener("keydown", (e)=>{
+  if (toolMode!=="clip" || !clipPlane) return;
+  if (e.key==="x"||e.key==="X") clipPlane.dir = [1,0,0];
+  if (e.key==="y"||e.key==="Y") clipPlane.dir = [0,1,0];
+  if (e.key==="z"||e.key==="Z") clipPlane.dir = [0,0,1];
 });
 
-// ---------- Sélection simple (uniquement hors outils actifs) ----------
+// Clic unique : route selon l’outil actif
 viewer.scene.input.on("mouseclicked", (coords)=>{
-  if (measureCtl.active || annotCtl.active || secCtl.active) return;
   const hit = viewer.scene.pick({ canvasPos: [coords[0], coords[1]], pickSurface: true });
+
+  // Mesure : on collecte 2 points sur la surface puis on crée la mesure
+  if (toolMode==="measure"){
+    if (hit && hit.worldPos){
+      measurePts.push(hit.worldPos);
+      if (measurePts.length===2){
+        measurements.createMeasurement({ positions: [measurePts[0], measurePts[1]] });
+        measurePts = [];
+      }
+    }
+    return; // pas de sélection/jaune en mode mesure
+  }
+
+  // Annotation : 1 click = 1 annotation
+  if (toolMode==="annot"){
+    if (hit && hit.worldPos){
+      annotations.createAnnotation({
+        id: "a"+Date.now(),
+        worldPos: hit.worldPos,
+        label: "Note"
+      });
+    }
+    return;
+  }
+
+  // Coupe : un clic positionne le plan (centre sous le curseur), pas de sélection
+  if (toolMode==="clip"){
+    if (hit && hit.worldPos && clipPlane){
+      clipPlane.pos = hit.worldPos.slice();
+    }
+    return;
+  }
+
+  // Mode SELECT (aucun outil)
   if (!hit || !hit.entity) { clearSelection(); return; }
   const id = hit.entity.id;
   setIdsProp(allIds(), "highlighted", false);
