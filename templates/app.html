@@ -65,9 +65,19 @@
             <h3 style="margin:0 0 6px">Fichiers</h3>
             <p class="muted mini">Formats : <code>.stp</code>, <code>.step</code>, <code>.stl</code> (≤ 50&nbsp;MB)</p>
             <div class="row" style="margin:8px 0 6px">
-              <input id="fileInput" type="file" accept=".stl,.stp,.step" hidden />
-              <button id="btnPick" class="btn btn-ghost">Choisir</button>
-              <button id="btnVisualiser" class="btn btn-primary">Visualiser</button>
+              <!-- cache l'input proprement mais il reste cliquable via le label -->
+              <style>
+                .visually-hidden{
+                  position:absolute;
+                  left:-9999px;
+                  width:1px;height:1px;
+                  opacity:0; pointer-events:none;
+                }
+              </style>
+
+              <input id="fileInput" type="file" accept=".stp,.step,.stl" class="visually-hidden" />
+              <label for="fileInput" id="btnChoose" class="btn btn-primary" type="button">CHOISIR</label>
+              <button id="btnVisualiser" class="btn" type="button">VISUALISER</button>
               <label class="row mini pill"><input id="chkAdditive" type="checkbox" style="margin-right:6px">Ajouter (multi-modèles)</label>
             </div>
             <div class="row mini"><span id="fileName" class="file-name">Aucun fichier sélectionné</span></div>

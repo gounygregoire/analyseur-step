@@ -337,6 +337,12 @@ btnSearch?.addEventListener("click", ()=>{
     });
   });
 });
+const btnChoose = $("#btnChoose");
+btnChoose?.addEventListener("click", (e) => {
+  e.preventDefault();  // évite un submit si jamais
+  fileInput?.click();  // fallback si le label n’est pas utilisé
+});
+
 
 // ---------- Reload / Unload ----------
 btnReload?.addEventListener("click", ()=>{
