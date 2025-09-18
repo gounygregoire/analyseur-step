@@ -1,12 +1,16 @@
 # web.py
-import os, uuid, shlex, subprocess, pathlib, shutil, importlib
+import os
+import uuid
+import pathlib
+import requests
 from flask import Flask, request, jsonify, send_from_directory, abort, render_template
 from flask_cors import CORS
 
+# ---------- App & CORS ----------
 app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
 
-# ---------- Limites & dossiers ----------
+# ---------- Config ----------
 def env_int(name: str, default: int) -> int:
     v = os.environ.get(name)
     if v is None or v == "":
@@ -16,7 +20,7 @@ def env_int(name: str, default: int) -> int:
     except Exception:
         return default
 
-MAX_UPLOAD_MB = env_int("MAX_UPLOAD_MB", 50)
+MAX_UPLOAD_MB = env_int("MAX_UPLOAD_MB", 50)  # 50 Mo par défaut
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
 
 UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
@@ -24,103 +28,17 @@ OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-ALLOWED_STEP = {".stp", ".step"}
-ALLOWED_STL  = {".stl"}
-def _ext(path: str) -> str:
-    return pathlib.Path(path.lower()).suffix
-def allowed(name: str) -> bool:
-    e = _ext(name)
-    return (e in ALLOWED_STEP) or (e in ALLOWED_STL)
+# URL du converter (env > fallback hardcodé demandé)
+CONVERTER_URL = os.environ.get("CONVERTER_URL", "https://cadlytics-converter.onrender.com").rstrip("/")
+
+# Extensions acceptées (le converter gère .stl et .step/.stp)
+ALLOWED_EXTS = {".stl", ".step", ".stp"}
+def _ext(name: str) -> str:
+    return pathlib.Path(name.lower()).suffix
+def _allowed(name: str) -> bool:
+    return _ext(name) in ALLOWED_EXTS
 
 # ---------- Helpers ----------
-def _with_node_path(env: dict) -> dict:
-    env = env.copy()
-    extra = [
-        os.path.join(app.root_path, "node_modules", ".bin"),
-        "/opt/render/project/nodes/node-20.19.5/bin",
-    ]
-    env["PATH"] = os.pathsep.join([env.get("PATH", "")] + extra)
-    return env
-
-def _run(cmd: str):
-    proc = subprocess.run(
-        cmd, shell=True, env=_with_node_path(os.environ),
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-    )
-    print(f"[xeokit] CMD: {cmd}", flush=True)
-    print(f"[xeokit] RC={proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}", flush=True)
-    return proc
-
-def has_occ() -> tuple[bool, str]:
-    """Détecte pythonocc-core et retourne (ok, version)."""
-    try:
-        import pkg_resources
-        ver = pkg_resources.get_distribution("pythonocc-core").version
-        return True, ver
-    except Exception:
-        try:
-            import OCC
-            ver = getattr(OCC, "__version__", "unknown")
-            return True, ver
-        except Exception:
-            return False, ""
-
-def step_to_stl(step_path: str, stl_path: str, linear_def=0.1, angular_def=0.5):
-    """STEP -> STL via pythonocc-core (OCC.Core)."""
-    try:
-        from OCC.Core.STEPControl import STEPControl_Reader
-        from OCC.Core.IFSelect import IFSelect_RetDone
-        from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
-        from OCC.Core.StlAPI import StlAPI_Writer
-    except Exception as e:
-        raise RuntimeError(
-            "pythonocc-core n'est pas installé. Ajoute 'pythonocc-core==7.7.2' à requirements-web.txt."
-        ) from e
-
-    reader = STEPControl_Reader()
-    status = reader.ReadFile(step_path)
-    if status != IFSelect_RetDone:
-        raise RuntimeError("Lecture STEP échouée (fichier invalide ?).")
-
-    reader.TransferRoots()
-    shape = reader.OneShape()
-
-    # Tessellation
-    BRepMesh_IncrementalMesh(shape, linear_def, True, angular_def, True)
-
-    os.makedirs(os.path.dirname(stl_path), exist_ok=True)
-    writer = StlAPI_Writer()
-    if not writer.Write(shape, stl_path):
-        raise RuntimeError("Écriture STL échouée.")
-
-def run_xkt_convert(src_mesh_path: str, out_xkt: str):
-    """
-    STL/IFC/GLTF -> XKT, 2 syntaxes. Succès = fichier .xkt réellement présent.
-    On force -f stl si l'entrée est .stl, pour lever toute ambiguïté.
-    """
-    os.makedirs(os.path.dirname(out_xkt), exist_ok=True)
-    local_bin = os.path.join(app.root_path, "node_modules", ".bin", "xeokit-convert")
-    bin_cmd   = shlex.quote(local_bin) if os.path.exists(local_bin) else "npx -y @xeokit/xeokit-convert@latest"
-
-    fmt_flag = " -f stl" if _ext(src_mesh_path) == ".stl" else ""
-
-    # try 1: avec --source
-    cmd1 = f"{bin_cmd} -s {shlex.quote(src_mesh_path)}{fmt_flag} --output {shlex.quote(out_xkt)}"
-    p1 = _run(cmd1)
-    if os.path.isfile(out_xkt):
-        return
-
-    # try 2: positionnel
-    cmd2 = f"{bin_cmd} {shlex.quote(src_mesh_path)}{fmt_flag} --output {shlex.quote(out_xkt)}"
-    p2 = _run(cmd2)
-    if os.path.isfile(out_xkt):
-        return
-
-    raise RuntimeError(
-        "xeokit-convert did not produce XKT.\n"
-        f"OUT expected: {out_xkt}\nCMD1 RC={p1.returncode}\nCMD2 RC={p2.returncode}"
-    )
-
 def _first_existing(paths):
     for p in paths:
         if os.path.exists(p):
@@ -130,6 +48,9 @@ def _first_existing(paths):
 # ---------- Pages ----------
 @app.get("/")
 def landing():
+    """
+    Cherche un index dans templates/ puis dans static/
+    """
     candidates = [
         os.path.join(app.root_path, "templates", "index.html"),
         os.path.join(app.root_path, "templates", "home.html"),
@@ -149,6 +70,7 @@ def landing():
 
 @app.get("/app")
 def app_view():
+    # Ta page viewer (templates/app.html)
     return render_template("app.html", max_upload_mb=MAX_UPLOAD_MB)
 
 @app.get("/favicon.ico")
@@ -159,47 +81,56 @@ def favicon():
 def healthz():
     return "ok"
 
-# ---------- API conversion ----------
+# ---------- API : upload -> forward au converter ----------
 @app.post("/upload")
 def upload():
     f = request.files.get("file")
     if not f or not f.filename:
         return jsonify(error="no_file"), 400
-    if not allowed(f.filename):
-        return jsonify(error="bad_ext", detail="Formats acceptés : .stp, .step, .stl"), 400
+    if not _allowed(f.filename):
+        return jsonify(error="bad_ext", detail="Formats acceptés : .stl, .step, .stp"), 400
 
-    file_id   = str(uuid.uuid4())
-    in_path   = os.path.join(UPLOAD_FOLDER, f"{file_id}{_ext(f.filename) or '.step'}")
-    out_xkt   = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+    file_id = str(uuid.uuid4())
+    in_path  = os.path.join(UPLOAD_FOLDER, f"{file_id}{_ext(f.filename) or '.step'}")
+    out_xkt  = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
 
+    # On sauvegarde localement (utile pour debug et pour rejouer si besoin)
     try:
         f.save(in_path)
     except Exception as e:
         return jsonify(error="save_fail", detail=str(e)), 500
 
+    # Envoi au converter privé (ou public si tu préfères) et récupération du XKT
     try:
-        ext = _ext(in_path)
-        occ_ok, occ_ver = has_occ()
-        print(f"[conv] ext={ext} has_occ={occ_ok} occ_ver={occ_ver} in={in_path}", flush=True)
+        # On renvoie le nom d'origine au converter (ça ne change rien, mais c’est propre)
+        with open(in_path, "rb") as fh:
+            resp = requests.post(
+                f"{CONVERTER_URL}/convert",
+                files={"file": (f.filename, fh, f.mimetype or "application/octet-stream")},
+                timeout=600,  # la conversion peut être longue
+            )
+        if resp.status_code != 200:
+            # Essaye d’extraire un message utile si JSON
+            detail = resp.text
+            try:
+                detail = resp.json()
+            except Exception:
+                pass
+            return jsonify(error="convert_fail", detail=detail, status_code=resp.status_code), 500
 
-        if ext in ALLOWED_STEP:
-            if not occ_ok:
-                return jsonify(error="missing_occ", detail="Installe pythonocc-core==7.7.2 pour convertir STEP->STL."), 500
-            stl_path = os.path.join(OUTPUT_FOLDER, f"{file_id}.stl")
-            step_to_stl(in_path, stl_path)
-            src_mesh = stl_path
-        else:
-            src_mesh = in_path  # .stl direct
+        # Sauvegarde le XKT renvoyé
+        with open(out_xkt, "wb") as out:
+            out.write(resp.content)
 
-        print(f"[conv] src_mesh_for_xeokit={src_mesh}", flush=True)
-        run_xkt_convert(src_mesh, out_xkt)
+        if not os.path.isfile(out_xkt):
+            return jsonify(error="no_xkt", detail=f".xkt introuvable après conversion: {out_xkt}"), 500
+
+        return jsonify(file_id=file_id, status="ready", xkt_url=f"/xkt/{file_id}.xkt")
+
+    except requests.Timeout:
+        return jsonify(error="convert_timeout", detail="Converter timeout (>=600s)"), 504
     except Exception as e:
         return jsonify(error="convert_fail", detail=str(e)), 500
-
-    if not os.path.isfile(out_xkt):
-        return jsonify(error="no_xkt", detail=f".xkt introuvable. Attendu: {out_xkt}"), 500
-
-    return jsonify(file_id=file_id, status="ready", xkt_url=f"/xkt/{file_id}.xkt")
 
 @app.get("/convert/status")
 def convert_status():
@@ -225,17 +156,18 @@ def __routes():
 
 @app.get("/__diag")
 def __diag():
-    occ_ok, occ_ver = has_occ()
     info = {
         "cwd": os.getcwd(),
-        "node": shutil.which("node"),
-        "npx": shutil.which("npx"),
-        "local_xeokit": os.path.join(app.root_path, "node_modules", ".bin", "xeokit-convert"),
         "UPLOAD_FOLDER": UPLOAD_FOLDER,
         "OUTPUT_FOLDER": OUTPUT_FOLDER,
         "MAX_UPLOAD_MB": MAX_UPLOAD_MB,
-        "occ_ok": occ_ok,
-        "occ_ver": occ_ver,
+        "converter_url": CONVERTER_URL,
     }
+    # ping rapide du converter (optionnel)
+    try:
+        r = requests.get(f"{CONVERTER_URL}/healthz", timeout=2)
+        info["converter_health"] = {"ok": (r.status_code == 200), "code": r.status_code}
+    except Exception as e:
+        info["converter_health"] = {"ok": False, "error": str(e)}
     return jsonify(info)
 # --- fin web.py ---
