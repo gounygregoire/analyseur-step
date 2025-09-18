@@ -1,4 +1,3 @@
-// /static/js/main.js
 import {
   Viewer,
   XKTLoaderPlugin,
@@ -11,20 +10,21 @@ import {
 
 const $ = (s) => document.querySelector(s);
 
-// --- Réfs UI (toutes optionnelles : le code s'adapte)
+// --- UI (toutes optionnelles)
 const fileInput     = $("#fileInput");
 const btnVisualiser = $("#btnVisualiser");
+const btnChoose     = $("#btnChoose");
 const chkAdditive   = $("#chkAdditive");
 const fileNameLbl   = $("#fileName");
 
-const btnFit  = $("#btnFit");
-const btnProj = $("#btnProj");
-const navMode = $("#navMode");
-const chkEdges= $("#chkEdges");
-const chkXray = $("#chkXray");
-const chkGhost= $("#chkGhost");
-const chkTheme= $("#chkTheme");
 const viewerContainer = $("#viewerContainer");
+const btnFit   = $("#btnFit");
+const btnProj  = $("#btnProj");
+const navMode  = $("#navMode");
+const chkEdges = $("#chkEdges");
+const chkXray  = $("#chkXray");
+const chkGhost = $("#chkGhost");
+const chkTheme = $("#chkTheme");
 
 const modelsList   = $("#modelsList");
 const btnReload    = $("#btnReload");
@@ -48,14 +48,22 @@ const btnClip      = $("#btnClip");
 const explodeRange = $("#explodeRange");
 const btnShot      = $("#btnShot");
 
-// ---------- Viewer & Plugins ----------
+// --- Viewer
 const viewer = new Viewer({
   canvasId: "xeokit-canvas",
   transparent: true,
   dtxEnabled: true
 });
-new FastNavPlugin(viewer, { flyToDuration: 0.9 });
 
+// Navigation rapide SANS masquage d’arêtes
+const fast = new FastNavPlugin(viewer, {
+  flyToDuration: 0.9,
+  // suivant les versions ces options existent ou sont ignorées (sans erreur) :
+  autoHideEdges: false,
+  hideEdges: false
+});
+
+// chargeur + plugins outils
 const xktLoader = new XKTLoaderPlugin(viewer, {
   dracoDecompressorPath:
     "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/resources/draco/"
@@ -63,10 +71,11 @@ const xktLoader = new XKTLoaderPlugin(viewer, {
 const sections     = new SectionPlanesPlugin(viewer, {});
 const measurements = new DistanceMeasurementsPlugin(viewer, { defaultDistancePrecision: 2 });
 const annotations  = new AnnotationsPlugin(viewer, {
-  markerHTML: "<div style='width:10px;height:10px;border-radius:999px;background:#ef4444;border:2px solid #fff;box-shadow:0 0 0 2px rgba(0,0,0,.2)'></div>"
+  markerHTML:
+    "<div style='width:10px;height:10px;border-radius:999px;background:#ef4444;border:2px solid #fff;box-shadow:0 0 0 2px rgba(0,0,0,.2)'></div>"
 });
 
-// ---------- Axes jolis (cube + pastille XYZ) ----------
+// Axes (cube + badge)
 (() => {
   if (!viewerContainer) return;
   const cube = document.createElement("canvas");
@@ -93,7 +102,7 @@ const annotations  = new AnnotationsPlugin(viewer, {
   viewerContainer.appendChild(legend);
 })();
 
-// ---------- État ----------
+// --- État
 const models = new Map(); // id -> { model, name, src }
 let lastModelId = null;
 let selectedIds = new Set();
@@ -106,33 +115,26 @@ function setMode(m) {
   btnAnnot?.classList.toggle("btn-primary",   appMode === "annotate");
 }
 
-// ---------- Utils ----------
-const setProgress = (p)=> progressBar && (progressBar.style.width = `${Math.max(0,Math.min(100,p))}%`);
+const setProgress = (p)=>
+  progressBar && (progressBar.style.width = `${Math.max(0,Math.min(100,p))}%`);
+
 const allIds = ()=> viewer.scene?.objectIds ?? [];
-
-function setIdsProp(ids, prop, val){
-  ids.forEach(id => { const o = viewer.scene.objects[id]; if (o) o[prop] = val; });
-}
-function setAllProp(prop, val){ allIds().forEach(id => { const o = viewer.scene.objects[id]; if (o) o[prop] = val; }); }
-
-function clearSelection(){
-  setIdsProp([...selectedIds], "highlighted", false);
-  selectedIds.clear();
-  propsPanel && (propsPanel.innerHTML = "");
-}
+function setIdsProp(ids, prop, val){ ids.forEach(id=>{ const o=viewer.scene.objects[id]; if(o) o[prop]=val; }); }
+function setAllProp(prop,val){ allIds().forEach(id=>{ const o=viewer.scene.objects[id]; if(o) o[prop]=val; }); }
+function clearSelection(){ setIdsProp([...selectedIds],"highlighted",false); selectedIds.clear(); propsPanel && (propsPanel.innerHTML=""); }
 
 function showProps(meta){
   if (!propsPanel) return;
   propsPanel.innerHTML = "";
   if (!meta) return;
-  const add = (k,v)=>{ const a=document.createElement("div");a.textContent=k;
-                       const b=document.createElement("div");b.textContent=String(v);
-                       propsPanel.append(a,b); };
-  const base = { id: meta.id, type: meta.type||meta.ifcType||"", name: meta.name||meta.displayName||"" };
+  const add=(k,v)=>{const a=document.createElement("div");a.textContent=k;
+                    const b=document.createElement("div");b.textContent=String(v);
+                    propsPanel.append(a,b);};
+  const base={ id:meta.id, type:meta.type||meta.ifcType||"", name:meta.name||meta.displayName||"" };
   Object.entries(base).forEach(([k,v])=> (v!==undefined && v!=="") && add(k,v));
-  const psets = meta.properties||meta.props;
-  if (psets && typeof psets==="object")
-    Object.entries(psets).forEach(([k,v])=> add(k, typeof v==="object"? JSON.stringify(v): v));
+  const p=meta.properties||meta.props;
+  if (p && typeof p==="object")
+    Object.entries(p).forEach(([k,v])=> add(k, typeof v==="object"? JSON.stringify(v): v));
 }
 
 function refreshModelsList(){
@@ -153,37 +155,36 @@ function refreshModelsList(){
     b.addEventListener("click",()=>{
       const id = b.dataset.id; const info = models.get(id); if(!info) return;
       if (b.dataset.act==="fly") viewer.cameraFlight.flyTo(info.model);
-      else { info.model.visible = !info.model.visible; refreshModelsList(); }
+      else { info.model.visible=!info.model.visible; refreshModelsList(); }
     });
   });
 }
-
 const flyToAll = ()=> viewer.cameraFlight.flyTo(viewer.scene);
 
-// ---------- Upload / Load ----------
-fileInput?.addEventListener("change", (e)=>{
-  const f = e.target.files?.[0];
-  if (fileNameLbl) fileNameLbl.textContent = f ? f.name : "Aucun fichier sélectionné";
-  // Auto-visualisation dès la sélection
-  if (f) uploadAndShow();
-});
-
+// --- LOAD
 async function loadXKT(xktUrl, nameHint){
   const id = "m"+Date.now();
-  const model = xktLoader.load({ id, src: xktUrl, edges: !!chkEdges?.checked });
+  const model = xktLoader.load({
+    id,
+    src: xktUrl,
+    // au chargement : edges selon l’état du bouton
+    edges: !!chkEdges?.checked
+  });
   setProgress(10);
   model.on("progress", p=> setProgress(10 + Math.round(p*80)));
   model.on("loaded", ()=>{
     setProgress(100); setTimeout(()=>setProgress(0),350);
     viewer.cameraFlight.flyTo(model);
     models.set(id, { model, name: nameHint||id, src: xktUrl });
-    lastModelId = id;
-    refreshModelsList();
+    lastModelId=id; refreshModelsList();
+    // si le bouton Arêtes était coché au moment du load : force global
+    if (chkEdges?.checked) viewer.scene.edgeMaterial.edgesEnabled = true;
   });
   model.on("error", e=>{ setProgress(0); console.error(e); alert("Erreur chargement XKT."); });
   return id;
 }
 
+// --- Upload
 async function uploadAndShow(){
   const f = fileInput?.files?.[0]; if(!f){ alert("Choisis un fichier .step/.stp/.stl"); return; }
   btnVisualiser && (btnVisualiser.disabled = true, btnVisualiser.textContent = "Conversion…");
@@ -195,37 +196,35 @@ async function uploadAndShow(){
     if (!res.ok || !json.xkt_url) throw new Error(JSON.stringify(json));
     const xktUrl = new URL(json.xkt_url, location.origin).toString();
 
-    if (!chkAdditive?.checked){
-      for (const [, info] of models){ try{ info.model.destroy(); }catch{} }
-      models.clear(); selectedIds.clear();
-    }
+    if (!chkAdditive?.checked){ for (const [,i] of models){ try{i.model.destroy();}catch{} } models.clear(); selectedIds.clear(); }
     await loadXKT(xktUrl, f.name);
 
-    const dz = document.querySelector("[data-dropzone]");
-    dz?.classList.remove("is-error");
-    dz?.classList.add("is-success");
+    document.querySelector("[data-dropzone]")?.classList.add("is-success");
   }catch(e){
     console.error(e);
-    const dz = document.querySelector("[data-dropzone]");
-    dz?.classList.remove("is-success"); dz?.classList.add("is-error");
+    const dz=document.querySelector("[data-dropzone]"); dz?.classList.remove("is-success"); dz?.classList.add("is-error");
     alert("Erreur de conversion/chargement (voir Console).");
   }finally{
     btnVisualiser && (btnVisualiser.disabled = false, btnVisualiser.textContent = "VISUALISER");
   }
 }
+
+// --- Fichier : label ou fallback JS
+btnChoose?.addEventListener("click", (e)=>{ e.preventDefault(); fileInput?.click(); });
+fileInput?.addEventListener("change", ()=>{
+  const f=fileInput.files?.[0]; if (f && fileNameLbl) fileNameLbl.textContent=f.name;
+  if (f) uploadAndShow(); // auto-visualisation immédiate
+});
 btnVisualiser?.addEventListener("click", (e)=>{ e.preventDefault(); uploadAndShow(); });
 
-// ---------- Navigation & rendu ----------
+// --- Navigation & rendu
 btnFit?.addEventListener("click", flyToAll);
-
 let proj="perspective";
 btnProj?.addEventListener("click", ()=>{
   proj = (proj==="perspective") ? "ortho" : "perspective";
   viewer.camera.projection = proj;
   btnProj.textContent = proj==="perspective" ? "Perspective" : "Orthographique";
 });
-
-// Remap pan -> planView
 (() => {
   if (!navMode) return;
   const opt = [...navMode.options].find(o=>o.value==="pan");
@@ -235,18 +234,29 @@ const setNavMode = (m)=> viewer.cameraControl.navMode = (m==="pan" ? "planView" 
 navMode?.addEventListener("change", ()=> setNavMode(navMode.value));
 if (navMode) setNavMode(navMode.value);
 
-chkEdges?.addEventListener("change", ()=> viewer.scene.edgeMaterial.edgesEnabled = !!chkEdges.checked);
+// --- Arêtes : toggle global + verrouillage pendant la nav
+chkEdges?.addEventListener("change", ()=>{
+  const on = !!chkEdges.checked;
+  viewer.scene.edgeMaterial.edgesEnabled = on;
+});
+viewer.scene.on("tick", ()=>{
+  // si la case est cochée, on s'assure que rien ne les "cache"
+  if (chkEdges?.checked && !viewer.scene.edgeMaterial.edgesEnabled) {
+    viewer.scene.edgeMaterial.edgesEnabled = true;
+  }
+});
+
 chkXray?.addEventListener("change", ()=>{ setAllProp("xrayed", !!chkXray.checked); if (selectedIds.size) setIdsProp([...selectedIds], "xrayed", false); });
 chkGhost?.addEventListener("change", ()=>{ setAllProp("ghosted", !!chkGhost.checked); if (selectedIds.size) setIdsProp([...selectedIds], "ghosted", false); });
 
-// Thème sombre => uniquement le viewer
+// Thème sombre limité au viewer
 chkTheme?.addEventListener("change", ()=>{
   viewerContainer?.classList.toggle("dark", !!chkTheme.checked);
   viewer.scene.clearColor = chkTheme.checked ? [0.06,0.07,0.08] : [0.965,0.957,0.937];
 });
 opacityRange?.addEventListener("input", ()=> setAllProp("opacity", parseFloat(opacityRange.value)||1));
 
-// ---------- Modes outillage ----------
+// --- Modes outils
 btnMeasure?.addEventListener("click", ()=> setMode("measure"));
 btnAnnot?.addEventListener("click",   ()=> setMode("annotate"));
 
@@ -254,26 +264,24 @@ let clippingOn=false;
 btnClip?.addEventListener("click", ()=>{
   clippingOn=!clippingOn;
   btnClip.classList.toggle("btn-primary", clippingOn);
-  if (!clippingOn){ if(onePlane){ onePlane.destroy(); onePlane=null; } return; }
+  if (!clippingOn){ if(onePlane){ onePlane.destroy(); onePlane=null; } viewer.scene.sectionPlanesEnabled=false; return; }
   if (onePlane) onePlane.destroy();
   const center = viewer.scene?.aabbCenter || [0,0,0];
   onePlane = sections.createSectionPlane({ id:"cut", pos:center, dir:[0,1,0] });
+  viewer.scene.sectionPlanesEnabled = true; // << indispensable
   viewer.cameraFlight.flyTo(onePlane);
 });
 
-// ---------- Clic unique : route par mode actif ----------
+// --- Clic unique : route par mode actif
 viewer.scene.input.on("mouseclicked", (coords)=>{
-  const hit = viewer.scene.pick({ canvasPos: [coords[0], coords[1]] });
+  // Indispensable pour récupérer worldPos !
+  const hit = viewer.scene.pick({ canvasPos: [coords[0], coords[1]], pickSurface: true });
 
-  // Pas de hit : en mode SELECT on désélectionne, sinon on ignore
-  if (!hit || !hit.entity) {
-    if (appMode === "select") clearSelection();
-    return;
-  }
+  // Pas de hit : en mode SELECT on désélectionne
+  if (!hit || !hit.entity) { if (appMode === "select") clearSelection(); return; }
 
   if (appMode === "measure") {
     if (hit.worldPos) {
-      // 2 clics = 1 mesure
       if (!viewer.__mPts) viewer.__mPts = [];
       viewer.__mPts.push(hit.worldPos);
       if (viewer.__mPts.length === 2) {
@@ -281,7 +289,7 @@ viewer.scene.input.on("mouseclicked", (coords)=>{
         viewer.__mPts = [];
       }
     }
-    return; // on ne sélectionne pas en mode mesure
+    return; // pas de sélection en mode mesure
   }
 
   if (appMode === "annotate") {
@@ -305,20 +313,20 @@ viewer.scene.input.on("mouseclicked", (coords)=>{
   showProps(meta || { id });
 });
 
-// ---------- Iso / cacher / montrer ----------
+// --- Iso / cacher / montrer
 btnIsolate?.addEventListener("click", ()=>{ if (!selectedIds.size) return; setAllProp("visible", false); setIdsProp([...selectedIds], "visible", true); });
 btnHide?.addEventListener("click",    ()=>{ if (!selectedIds.size) return; setIdsProp([...selectedIds], "visible", false); });
 btnShowOnly?.addEventListener("click",()=>{ if (!selectedIds.size) return; setAllProp("visible", false); setIdsProp([...selectedIds], "visible", true); });
 btnClearSel?.addEventListener("click",()=>{ setAllProp("visible", true); setIdsProp(allIds(), "highlighted", false); clearSelection(); });
 
-// ---------- Recherche ----------
+// --- Recherche
 btnSearch?.addEventListener("click", ()=>{
   const q = (searchInput?.value||"").toLowerCase().trim();
   if (!resultsBox) return;
   resultsBox.innerHTML=""; if (!q) return;
   const found = [];
   allIds().forEach(id=>{
-    const o = viewer.scene.objects[id]; const m=o?.metaObject||{};
+    const o=viewer.scene.objects[id]; const m=o?.metaObject||{};
     const hay=[id,m.type,m.name,m.ifcType,m.displayName].join(" ").toLowerCase();
     if (hay.includes(q)) found.push({id,meta:m});
   });
@@ -337,14 +345,8 @@ btnSearch?.addEventListener("click", ()=>{
     });
   });
 });
-const btnChoose = $("#btnChoose");
-btnChoose?.addEventListener("click", (e) => {
-  e.preventDefault();  // évite un submit si jamais
-  fileInput?.click();  // fallback si le label n’est pas utilisé
-});
 
-
-// ---------- Reload / Unload ----------
+// --- Reload / Unload
 btnReload?.addEventListener("click", ()=>{
   if (!lastModelId) return;
   const info=models.get(lastModelId); if(!info) return;
@@ -361,7 +363,7 @@ btnUnload?.addEventListener("click", ()=>{
   refreshModelsList();
 });
 
-// ---------- Explode (sécurisé) ----------
+// --- Explode (sécurisé)
 explodeRange?.addEventListener("input", ()=>{
   if (!allIds().length) return;
   const k = parseFloat(explodeRange.value)||0;
@@ -376,7 +378,7 @@ explodeRange?.addEventListener("input", ()=>{
   });
 });
 
-// ---------- Screenshot ----------
+// --- Screenshot
 btnShot?.addEventListener("click", ()=>{
   try{
     const canvas = document.getElementById("xeokit-canvas");
@@ -385,7 +387,7 @@ btnShot?.addEventListener("click", ()=>{
   }catch(e){ console.error(e); alert("Capture impossible."); }
 });
 
-// ---------- Drag & drop ----------
+// --- Drag & drop
 const dz = document.querySelector("[data-dropzone]");
 if (dz){
   ["dragenter","dragover"].forEach(ev=>dz.addEventListener(ev, e=>{ e.preventDefault(); dz.classList.add("is-ready"); }));
@@ -397,7 +399,7 @@ if (dz){
       if (fileInput) fileInput.files=dt.files;
       if (fileNameLbl) fileNameLbl.textContent=f.name;
       dz.classList.add("is-ready");
-      uploadAndShow(); // auto-visualisation aussi en DnD
+      uploadAndShow();
     }
   });
 }
