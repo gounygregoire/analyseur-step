@@ -1,5 +1,5 @@
 # web.py
-import os, uuid, shlex, subprocess, pathlib, shutil
+import os, uuid, shlex, subprocess, pathlib, shutil, importlib
 from flask import Flask, request, jsonify, send_from_directory, abort, render_template
 from flask_cors import CORS
 
@@ -51,38 +51,16 @@ def _run(cmd: str):
     print(f"[xeokit] RC={proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}", flush=True)
     return proc
 
-def run_xkt_convert(src_mesh_path: str, out_xkt: str):
-    """
-    Convertit un STL (ou GLTF/IFC) en XKT.
-    1) tente: xeokit-convert -s <SRC> --output <OUT.xkt>
-    2) sinon: xeokit-convert <SRC> --output <OUT.xkt>
-    Valide UNIQUEMENT si le fichier .xkt final existe.
-    """
-    os.makedirs(os.path.dirname(out_xkt), exist_ok=True)
-    local_bin = os.path.join(app.root_path, "node_modules", ".bin", "xeokit-convert")
-    bin_cmd   = shlex.quote(local_bin) if os.path.exists(local_bin) else "npx -y @xeokit/xeokit-convert@latest"
-
-    # try 1: avec --source
-    cmd1 = f"{bin_cmd} -s {shlex.quote(src_mesh_path)} --output {shlex.quote(out_xkt)}"
-    p1 = _run(cmd1)
-
-    if os.path.isfile(out_xkt):
-        return
-
-    # try 2: positionnel
-    cmd2 = f"{bin_cmd} {shlex.quote(src_mesh_path)} --output {shlex.quote(out_xkt)}"
-    p2 = _run(cmd2)
-
-    if not os.path.isfile(out_xkt):
-        raise RuntimeError(
-            "xeokit-convert did not produce XKT.\n"
-            f"OUT expected: {out_xkt}\nCMD1 RC={p1.returncode}\nCMD2 RC={p2.returncode}"
-        )
+def has_ocp() -> tuple[bool,str]:
+    try:
+        mod = importlib.import_module("OCP")
+        ver = getattr(mod, "__version__", "unknown")
+        return True, ver
+    except Exception:
+        return False, ""
 
 def step_to_stl(step_path: str, stl_path: str, linear_def=0.1, angular_def=0.5):
-    """
-    STEP -> STL via OpenCascade (pip: OCP).
-    """
+    """STEP -> STL via OCP (OpenCascade)."""
     try:
         from OCP.STEPControl import STEPControl_Reader
         from OCP.IFSelect import IFSelect_RetDone
@@ -90,25 +68,46 @@ def step_to_stl(step_path: str, stl_path: str, linear_def=0.1, angular_def=0.5):
         from OCP.StlAPI import StlAPI_Writer
     except Exception as e:
         raise RuntimeError(
-            "Le module OCP (OpenCascade) est requis pour convertir STEP->STL. "
-            "Ajoute 'OCP==7.7.2' à requirements-web.txt."
+            "OCP (OpenCascade) n'est pas installé. Ajoute 'OCP==7.7.2' à requirements-web.txt."
         ) from e
 
     reader = STEPControl_Reader()
     status = reader.ReadFile(step_path)
     if status != IFSelect_RetDone:
-        raise RuntimeError("Lecture STEP échouée (format/corruption).")
+        raise RuntimeError("Lecture STEP échouée (fichier invalide ?).")
 
     reader.TransferRoots()
     shape = reader.OneShape()
 
-    # maillage (tessellation)
     BRepMesh_IncrementalMesh(shape, linear_def, True, angular_def, True)
 
     os.makedirs(os.path.dirname(stl_path), exist_ok=True)
     writer = StlAPI_Writer()
     if not writer.Write(shape, stl_path):
         raise RuntimeError("Écriture STL échouée.")
+
+def run_xkt_convert(src_mesh_path: str, out_xkt: str):
+    """STL/IFC/GLTF -> XKT, 2 syntaxes, succès = fichier XKT réellement présent."""
+    os.makedirs(os.path.dirname(out_xkt), exist_ok=True)
+    local_bin = os.path.join(app.root_path, "node_modules", ".bin", "xeokit-convert")
+    bin_cmd   = shlex.quote(local_bin) if os.path.exists(local_bin) else "npx -y @xeokit/xeokit-convert@latest"
+
+    # try 1: avec --source
+    cmd1 = f"{bin_cmd} -s {shlex.quote(src_mesh_path)} --output {shlex.quote(out_xkt)}"
+    p1 = _run(cmd1)
+    if os.path.isfile(out_xkt):
+        return
+
+    # try 2: positionnel
+    cmd2 = f"{bin_cmd} {shlex.quote(src_mesh_path)} --output {shlex.quote(out_xkt)}"
+    p2 = _run(cmd2)
+    if os.path.isfile(out_xkt):
+        return
+
+    raise RuntimeError(
+        "xeokit-convert did not produce XKT.\n"
+        f"OUT expected: {out_xkt}\nCMD1 RC={p1.returncode}\nCMD2 RC={p2.returncode}"
+    )
 
 def _first_existing(paths):
     for p in paths:
@@ -158,23 +157,29 @@ def upload():
         return jsonify(error="bad_ext", detail="Formats acceptés : .stp, .step, .stl"), 400
 
     file_id   = str(uuid.uuid4())
-    step_path = os.path.join(UPLOAD_FOLDER, f"{file_id}{_ext(f.filename) or '.step'}")
+    in_path   = os.path.join(UPLOAD_FOLDER, f"{file_id}{_ext(f.filename) or '.step'}")
     out_xkt   = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
 
     try:
-        f.save(step_path)
+        f.save(in_path)
     except Exception as e:
         return jsonify(error="save_fail", detail=str(e)), 500
 
     try:
-        # Si STEP : convertir d'abord en STL
-        if _ext(step_path) in ALLOWED_STEP:
+        ext = _ext(in_path)
+        ocp_ok, ocp_ver = has_ocp()
+        print(f"[conv] ext={ext} has_ocp={ocp_ok} ocp_ver={ocp_ver} in={in_path}", flush=True)
+
+        if ext in ALLOWED_STEP:
+            if not ocp_ok:
+                return jsonify(error="missing_ocp", detail="Installe OCP==7.7.2 pour convertir STEP->STL."), 500
             stl_path = os.path.join(OUTPUT_FOLDER, f"{file_id}.stl")
-            step_to_stl(step_path, stl_path)
+            step_to_stl(in_path, stl_path)
             src_mesh = stl_path
         else:
-            src_mesh = step_path  # déjà STL
+            src_mesh = in_path  # .stl direct
 
+        print(f"[conv] src_mesh_for_xeokit={src_mesh}", flush=True)
         run_xkt_convert(src_mesh, out_xkt)
     except Exception as e:
         return jsonify(error="convert_fail", detail=str(e)), 500
@@ -208,6 +213,7 @@ def __routes():
 
 @app.get("/__diag")
 def __diag():
+    ocp_ok, ocp_ver = has_ocp()
     info = {
         "cwd": os.getcwd(),
         "node": shutil.which("node"),
@@ -216,6 +222,8 @@ def __diag():
         "UPLOAD_FOLDER": UPLOAD_FOLDER,
         "OUTPUT_FOLDER": OUTPUT_FOLDER,
         "MAX_UPLOAD_MB": MAX_UPLOAD_MB,
+        "ocp_ok": ocp_ok,
+        "ocp_ver": ocp_ver,
     }
     return jsonify(info)
 # --- fin web.py ---
