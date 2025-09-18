@@ -3,12 +3,13 @@ import {
   XKTLoaderPlugin,
   NavCubePlugin,
   FastNavPlugin,
-  SectionPlanesPlugin
+  SectionPlanesPlugin,
+  AnnotationsPlugin
 } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
 
 const $ = (s) => document.querySelector(s);
 
-/* ====== UI refs ====== */
+/* ====== UI refs (inchangé) ====== */
 const fileInput     = $("#fileInput");
 const btnVisualiser = $("#btnVisualiser");
 const btnChoose     = $("#btnChoose");
@@ -46,27 +47,47 @@ const btnClip      = $("#btnClip");
 const explodeRange = $("#explodeRange");
 const btnShot      = $("#btnShot");
 
-/* ====== Viewer ====== */
+/* ====== Viewer/Plugins ====== */
 const viewer = new Viewer({
   canvasId: "xeokit-canvas",
   transparent: true,
   dtxEnabled: true
 });
-
 const xktLoader = new XKTLoaderPlugin(viewer, {
   dracoDecompressorPath:
     "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/resources/draco/"
 });
-
 const fast = new FastNavPlugin(viewer, {
   flyToDuration: 0.9,
   autoHideEdges: false,
   hideEdges: false
 });
-
 const sections = new SectionPlanesPlugin(viewer, {});
+const ann = new AnnotationsPlugin(viewer, {
+  container: viewerContainer // ancre les overlays au conteneur du canvas
+});
 
-/* ====== HUD Mesure + Coupe ====== */
+/* ====== Style (injection) ====== */
+{
+  const css = `
+  .anno-dot{width:10px;height:10px;border-radius:999px;border:2px solid #fff;
+            box-shadow:0 0 0 2px rgba(0,0,0,.2)}
+  .anno-dot.red{background:#ef4444}.anno-dot.blue{background:#3b82f6}
+  .anno-bubble{padding:6px 8px;border-radius:8px;background:rgba(0,0,0,.6);
+               color:#fff;font:12px/1.2 Inter,system-ui,Segoe UI,Roboto,Arial;
+               box-shadow:0 6px 20px rgba(0,0,0,.25)}
+  .plane-hint{width:140px;height:140px;border-radius:8px;
+              background:rgba(0,153,255,.16);border:1px dashed rgba(0,153,255,.6)}
+  .plane-x{background:rgba(239,68,68,.16);border-color:rgba(239,68,68,.7)}
+  .plane-y{background:rgba(34,197,94,.16);border-color:rgba(34,197,94,.7)}
+  .plane-z{background:rgba(96,165,250,.16);border-color:rgba(96,165,250,.7)}
+  `;
+  const style = document.createElement("style");
+  style.textContent = css;
+  document.head.appendChild(style);
+}
+
+/* ====== HUD (Mesures + Coupe) ====== */
 const hud = document.createElement("div");
 Object.assign(hud.style, {
   position: "absolute",
@@ -150,24 +171,22 @@ const clipRange = clipPanel.querySelector("#clipRange");
   viewerContainer.appendChild(legend);
 })();
 
-/* ====== Etat & helpers ====== */
+/* ====== Etat/Helpers ====== */
 const models = new Map();
 let lastModelId = null;
 let selectedIds = new Set();
 
 const allIds = ()=> viewer.scene?.objectIds ?? [];
-const setAll = (prop,val)=> allIds().forEach(id=>{ const o=viewer.scene.objects[id]; if(o) o[prop]=val; });
-const setSome= (ids,prop,val)=> ids.forEach(id=>{ const o=viewer.scene.objects[id]; if(o) o[prop]=val; });
+const setAll  = (prop,val)=> allIds().forEach(id=>{ const o=viewer.scene.objects[id]; if(o) o[prop]=val; });
+const setSome = (ids,prop,val)=> ids.forEach(id=>{ const o=viewer.scene.objects[id]; if(o) o[prop]=val; });
 
 function setProgress(p){ if(progressBar) progressBar.style.width = `${Math.max(0,Math.min(100,p))}%`; }
 function clearSelection(){ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); propsPanel&&(propsPanel.innerHTML=""); }
 
-function aabb(){
-  const bb = viewer.scene.aabb; // [xmin,ymin,zmin,xmax,ymax,zmax]
-  return bb && bb.length===6 ? bb : [-1,-1,-1, 1,1,1];
-}
+const aabb = ()=> viewer.scene.aabb && viewer.scene.aabb.length===6
+  ? viewer.scene.aabb : [-1,-1,-1,1,1,1];
 
-/* ====== Modes (none/measure/annot/clip) ====== */
+/* ====== Modes ====== */
 let mode = "none";
 function setMode(m){
   mode = (mode===m) ? "none" : m;
@@ -175,24 +194,65 @@ function setMode(m){
   btnAnnot?.classList.toggle("btn-primary",   mode==="annot");
   btnClip?.classList.toggle("btn-primary",    mode==="clip");
   viewerContainer.style.cursor = (mode==="measure"||mode==="annot"||mode==="clip")? "crosshair":"";
-  // HUD coupe visible uniquement en mode clip
   clipPanel.style.display = mode==="clip" ? "block" : "none";
-  if (mode!=="clip"){
-    // sort de coupe => désactive tout
-    viewer.scene.sectionPlanesEnabled = false;
-    activeAxis=null;
-    updateClipButtonsState();
-    clipRange.disabled = true;
-  }
+  if (mode!=="clip"){ disableClipping(); }
 }
 window.addEventListener("keydown",(e)=>{ if (e.key==="Escape") setMode("none"); });
 
-/* ====== MESURE : 2 clics -> HUD ====== */
+/* ====== Annotations util ====== */
+const annoRefs = new Set(); // pour pouvoir nettoyer facilement
+
+function createDot(worldPos, color="red"){
+  const a = ann.createAnnotation({
+    worldPos,
+    occludable: true,
+    markerHTML: `<div class="anno-dot ${color}"></div>`
+  });
+  annoRefs.add(a);
+  return a;
+}
+function createBubble(worldPos, text){
+  const a = ann.createAnnotation({
+    worldPos,
+    occludable: true,
+    markerHTML: `<div class="anno-bubble">${text}</div>`
+  });
+  annoRefs.add(a);
+  return a;
+}
+function createPlaneHint(worldPos, axis){ // axis: x|y|z
+  const a = ann.createAnnotation({
+    worldPos,
+    occludable: false,
+    markerHTML: `<div class="plane-hint plane-${axis}"></div>`
+  });
+  annoRefs.add(a);
+  return a;
+}
+function clearMeasureAnnotations(){
+  [...annoRefs].forEach(a=>{
+    // on ne supprime que dots et bulles (pas les éventuelles autres annots de l’utilisateur)
+    const m = a.markerElement?.querySelector?.(".anno-dot, .anno-bubble");
+    if (m){ ann.destroyAnnotation(a); annoRefs.delete(a); }
+  });
+}
+function clearPlaneHints(){
+  [...annoRefs].forEach(a=>{
+    const m = a.markerElement?.querySelector?.(".plane-hint");
+    if (m){ ann.destroyAnnotation(a); annoRefs.delete(a); }
+  });
+}
+
+/* ====== MESURE ====== */
 let firstPoint = null;
 function pushMeasure(p1,p2){
   const d = Math.hypot(p2[0]-p1[0], p2[1]-p1[1], p2[2]-p1[2]);
   const label = d>=1 ? `${d.toFixed(3)} m` : `${(d*1000).toFixed(1)} mm`;
-
+  // Overlays
+  createDot(p1,"red"); createDot(p2,"blue");
+  const mid=[(p1[0]+p2[0])/2,(p1[1]+p2[1])/2,(p1[2]+p2[2])/2];
+  createBubble(mid,label);
+  // HUD list
   const row = document.createElement("div");
   row.textContent = label;
   Object.assign(row.style,{padding:"4px 6px",background:"rgba(255,255,255,.06)",borderRadius:"6px",marginTop:"4px",color:"#fff"});
@@ -203,30 +263,31 @@ function pushMeasure(p1,p2){
   row.appendChild(del);
   measureList.appendChild(row);
 }
-btnMeasure?.addEventListener("click", ()=> setMode("measure"));
+btnMeasure?.addEventListener("click", ()=> { clearMeasureAnnotations(); firstPoint=null; setMode("measure"); });
 
-/* ====== ANNOTATION : mémorise le point, bouton “Voir” ====== */
+/* ====== ANNOTATION ====== */
 btnAnnot?.addEventListener("click", ()=> setMode("annot"));
-function addAnnotation(worldPos, text="Note"){
-  if (!propsPanel) return;
-  const row=document.createElement("div");
-  row.className="row";
-  row.style.justifyContent="space-between";
-  row.innerHTML = `<span>${text}</span><button class="btn btn-outline mini">Voir</button>`;
-  row.querySelector("button").onclick=()=> viewer.cameraFlight.flyTo({
-    aabb: [worldPos[0],worldPos[1],worldPos[2], worldPos[0],worldPos[1],worldPos[2]]
-  });
-  propsPanel.appendChild(row);
-}
 
-/* ====== CLIP : aucun axe au départ, un seul à la fois ====== */
+/* ====== COUPE ====== */
 let planeX=null, planeY=null, planeZ=null, activeAxis=null;
+
 function ensurePlanes(){
   if (planeX && planeY && planeZ) return;
   const c = viewer.scene?.aabbCenter || [0,0,0];
   planeX = sections.createSectionPlane({ id:"cutX", pos:c.slice(), dir:[1,0,0] });
   planeY = sections.createSectionPlane({ id:"cutY", pos:c.slice(), dir:[0,1,0] });
   planeZ = sections.createSectionPlane({ id:"cutZ", pos:c.slice(), dir:[0,0,1] });
+}
+function disableClipping(){
+  viewer.scene.sectionPlanesEnabled = false;
+  activeAxis=null; clipRange.disabled=true; updateClipButtonsState();
+  clearPlaneHints();
+}
+function updateClipButtonsState(){
+  clipPanel.querySelectorAll(".clipBtn").forEach(b=>{
+    const on = b.dataset.axis === activeAxis;
+    b.style.background = on ? "rgba(255,255,255,.2)" : "transparent";
+  });
 }
 function setPlaneFromSlider(){
   if (!activeAxis) return;
@@ -235,33 +296,35 @@ function setPlaneFromSlider(){
   const half=[(bb[3]-bb[0])/2,(bb[4]-bb[1])/2,(bb[5]-bb[2])/2];
   const t = (parseFloat(clipRange.value)||0)/100; // -1..1
   ensurePlanes();
-  if (activeAxis==="x") planeX.pos=[center[0]+t*half[0], center[1], center[2]];
-  if (activeAxis==="y") planeY.pos=[center[0], center[1]+t*half[1], center[2]];
-  if (activeAxis==="z") planeZ.pos=[center[0], center[1], center[2]+t*half[2]];
+  clearPlaneHints();
+  if (activeAxis==="x"){
+    planeX.pos=[center[0]+t*half[0], center[1], center[2]];
+    createPlaneHint(planeX.pos,"x");
+  }
+  if (activeAxis==="y"){
+    planeY.pos=[center[0], center[1]+t*half[1], center[2]];
+    createPlaneHint(planeY.pos,"y");
+  }
+  if (activeAxis==="z"){
+    planeZ.pos=[center[0], center[1], center[2]+t*half[2]];
+    createPlaneHint(planeZ.pos,"z");
+  }
   viewer.scene.sectionPlanesEnabled = true;
 }
-function updateClipButtonsState(){
-  clipPanel.querySelectorAll(".clipBtn").forEach(b=>{
-    const on = b.dataset.axis === activeAxis;
-    b.style.background = on ? "rgba(255,255,255,.2)" : "transparent";
-  });
-}
-btnClip?.addEventListener("click", ()=>{ setMode("clip"); /* aucun axe sélectionné au départ */ });
+btnClip?.addEventListener("click", ()=>{ setMode("clip"); /* aucun axe sélectionné par défaut */ });
 clipPanel.querySelectorAll(".clipBtn").forEach(b=>{
   b.addEventListener("click", ()=>{
     const axis = b.dataset.axis;
-    // toggle exclusif
     if (activeAxis === axis){
-      activeAxis = null;
-      viewer.scene.sectionPlanesEnabled = false;
-      clipRange.disabled = true;
+      // toggle off
+      disableClipping();
     } else {
       activeAxis = axis;
       ensurePlanes();
       clipRange.disabled = false;
       setPlaneFromSlider();
+      updateClipButtonsState();
     }
-    updateClipButtonsState();
   });
 });
 clipRange.addEventListener("input", setPlaneFromSlider);
@@ -277,24 +340,34 @@ viewer.scene.input.on("mouseclicked", (coords)=>{
 
   if (mode==="measure"){
     if (hit && hit.worldPos){
-      if (!firstPoint){ firstPoint = hit.worldPos.slice(); }
+      if (!firstPoint){ firstPoint = hit.worldPos.slice(); createDot(firstPoint,"red"); }
       else { pushMeasure(firstPoint, hit.worldPos.slice()); firstPoint=null; setMode("none"); }
     }
     return;
   }
 
   if (mode==="annot"){
-    if (hit && hit.worldPos){ addAnnotation(hit.worldPos.slice()); setMode("none"); }
+    if (hit && hit.worldPos){
+      createDot(hit.worldPos.slice(),"blue");
+      createBubble(hit.worldPos.slice(),"Annotation");
+      // on log la position dans le panneau propriétés pour info
+      if (propsPanel){
+        const row=document.createElement("div");
+        row.textContent=`Annotation @ ${hit.worldPos.map(n=>n.toFixed(2)).join(", ")}`;
+        propsPanel.appendChild(row);
+      }
+      setMode("none");
+    }
     return;
   }
 
   if (mode==="clip"){
-    // si un axe est actif : clic repositionne ce plan
     if (activeAxis && hit && hit.worldPos){
       ensurePlanes();
       if (activeAxis==="x") planeX.pos=hit.worldPos.slice();
       if (activeAxis==="y") planeY.pos=hit.worldPos.slice();
       if (activeAxis==="z") planeZ.pos=hit.worldPos.slice();
+      clearPlaneHints(); createPlaneHint(hit.worldPos.slice(), activeAxis);
       viewer.scene.sectionPlanesEnabled = true;
     }
     return;
@@ -313,13 +386,11 @@ viewer.scene.input.on("mouseclicked", (coords)=>{
     if (meta){
       const base={ id:meta.id, type:meta.type||meta.ifcType||"", name:meta.name||meta.displayName||"" };
       Object.entries(base).forEach(([k,v])=> (v!==undefined && v!=="") && add(k,v));
-    } else {
-      add("id", id);
-    }
+    } else add("id", id);
   }
 });
 
-/* ====== Rendu / Nav ====== */
+/* ====== Rendu/Nav (identique) ====== */
 btnFit?.addEventListener("click", ()=> viewer.cameraFlight.flyTo(viewer.scene));
 
 let proj="perspective";
@@ -328,7 +399,6 @@ btnProj?.addEventListener("click", ()=>{
   viewer.camera.projection = proj;
   btnProj.textContent = proj==="perspective" ? "Perspective" : "Orthographique";
 });
-
 (() => {
   if (!navMode) return;
   const opt = [...navMode.options].find(o=>o.value==="pan");
@@ -336,7 +406,7 @@ btnProj?.addEventListener("click", ()=>{
 })();
 navMode?.addEventListener("change", ()=> viewer.cameraControl.navMode = navMode.value);
 
-/* Arêtes : global + verrouillage pendant la nav */
+/* Arêtes */
 function applyEdges(on){
   viewer.scene.edgeMaterial.edgesEnabled = !!on;
   (viewer.scene.objectIds||[]).forEach(id=>{
@@ -356,7 +426,7 @@ chkTheme?.addEventListener("change", ()=>{
 });
 opacityRange?.addEventListener("input", ()=> setAll("opacity", parseFloat(opacityRange.value)||1));
 
-/* ====== Upload & load ====== */
+/* ====== Upload/Load (identique) ====== */
 async function loadXKT(xktUrl, nameHint){
   const id = "m"+Date.now();
   const model = xktLoader.load({ id, src:xktUrl, edges:!!chkEdges?.checked });
@@ -419,33 +489,12 @@ btnChoose?.addEventListener("click", (e)=>{ e.preventDefault(); fileInput?.click
 fileInput?.addEventListener("change", ()=>{ const f=fileInput.files?.[0]; if (f && fileNameLbl) fileNameLbl.textContent=f.name; if (f) uploadAndShow(); });
 btnVisualiser?.addEventListener("click", (e)=>{ e.preventDefault(); uploadAndShow(); });
 
-/* ====== Recherche, iso/cacher, explode, screenshot, reload/unload ====== */
-btnSearch?.addEventListener("click", ()=>{
-  const q=(searchInput?.value||"").toLowerCase().trim();
-  if (!resultsBox) return;
-  resultsBox.innerHTML=""; if (!q) return;
-  const found=[];
-  allIds().forEach(id=>{
-    const o=viewer.scene.objects[id]; const m=o?.metaObject||{};
-    const hay=[id,m.type,m.name,m.ifcType,m.displayName].join(" ").toLowerCase();
-    if (hay.includes(q)) found.push({id,meta:m});
-  });
-  if (!found.length){ resultsBox.textContent="Aucun résultat"; return; }
-  found.slice(0,200).forEach(({id,meta})=>{
-    const div=document.createElement("div");
-    div.className="row"; div.style.justifyContent="space-between";
-    div.innerHTML=`<span>${meta?.name||meta?.displayName||meta?.type||id}</span>
-                   <button class="btn btn-outline mini" data-id="${id}">Voir</button>`;
-    resultsBox.appendChild(div);
-  });
-  resultsBox.querySelectorAll("button").forEach(b=>{
-    b.onclick=()=>{ const id=b.dataset.id; const obj=viewer.scene.objects[id]; if(obj){ viewer.cameraFlight.flyTo(obj); setSome([id],"highlighted",true); } };
-  });
-});
+/* ====== Divers ====== */
 btnIsolate?.addEventListener("click", ()=>{ if (!selectedIds.size) return; setAll("visible", false); setSome([...selectedIds],"visible", true); });
 btnHide?.addEventListener("click",    ()=>{ if (!selectedIds.size) return; setSome([...selectedIds],"visible", false); });
 btnShowOnly?.addEventListener("click",()=>{ if (!selectedIds.size) return; setAll("visible", false); setSome([...selectedIds],"visible", true); });
 btnClearSel?.addEventListener("click",()=>{ setAll("visible", true); setSome(allIds(),"highlighted", false); clearSelection(); });
+
 explodeRange?.addEventListener("input", ()=>{
   const ids = allIds(); if (!ids.length) return;
   const k = parseFloat(explodeRange.value)||0;
