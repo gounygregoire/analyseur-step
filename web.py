@@ -51,24 +51,30 @@ def _run(cmd: str):
     print(f"[xeokit] RC={proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}", flush=True)
     return proc
 
-def has_ocp() -> tuple[bool,str]:
+def has_occ() -> tuple[bool, str]:
+    """Détecte pythonocc-core et retourne (ok, version)."""
     try:
-        mod = importlib.import_module("OCP")
-        ver = getattr(mod, "__version__", "unknown")
+        import pkg_resources
+        ver = pkg_resources.get_distribution("pythonocc-core").version
         return True, ver
     except Exception:
-        return False, ""
+        try:
+            import OCC
+            ver = getattr(OCC, "__version__", "unknown")
+            return True, ver
+        except Exception:
+            return False, ""
 
 def step_to_stl(step_path: str, stl_path: str, linear_def=0.1, angular_def=0.5):
-    """STEP -> STL via OCP (OpenCascade)."""
+    """STEP -> STL via pythonocc-core (OCC.Core)."""
     try:
-        from OCP.STEPControl import STEPControl_Reader
-        from OCP.IFSelect import IFSelect_RetDone
-        from OCP.BRepMesh import BRepMesh_IncrementalMesh
-        from OCP.StlAPI import StlAPI_Writer
+        from OCC.Core.STEPControl import STEPControl_Reader
+        from OCC.Core.IFSelect import IFSelect_RetDone
+        from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
+        from OCC.Core.StlAPI import StlAPI_Writer
     except Exception as e:
         raise RuntimeError(
-            "OCP (OpenCascade) n'est pas installé. Ajoute 'OCP==7.7.2' à requirements-web.txt."
+            "pythonocc-core n'est pas installé. Ajoute 'pythonocc-core==7.7.2' à requirements-web.txt."
         ) from e
 
     reader = STEPControl_Reader()
@@ -79,6 +85,7 @@ def step_to_stl(step_path: str, stl_path: str, linear_def=0.1, angular_def=0.5):
     reader.TransferRoots()
     shape = reader.OneShape()
 
+    # Tessellation
     BRepMesh_IncrementalMesh(shape, linear_def, True, angular_def, True)
 
     os.makedirs(os.path.dirname(stl_path), exist_ok=True)
@@ -87,19 +94,24 @@ def step_to_stl(step_path: str, stl_path: str, linear_def=0.1, angular_def=0.5):
         raise RuntimeError("Écriture STL échouée.")
 
 def run_xkt_convert(src_mesh_path: str, out_xkt: str):
-    """STL/IFC/GLTF -> XKT, 2 syntaxes, succès = fichier XKT réellement présent."""
+    """
+    STL/IFC/GLTF -> XKT, 2 syntaxes. Succès = fichier .xkt réellement présent.
+    On force -f stl si l'entrée est .stl, pour lever toute ambiguïté.
+    """
     os.makedirs(os.path.dirname(out_xkt), exist_ok=True)
     local_bin = os.path.join(app.root_path, "node_modules", ".bin", "xeokit-convert")
     bin_cmd   = shlex.quote(local_bin) if os.path.exists(local_bin) else "npx -y @xeokit/xeokit-convert@latest"
 
+    fmt_flag = " -f stl" if _ext(src_mesh_path) == ".stl" else ""
+
     # try 1: avec --source
-    cmd1 = f"{bin_cmd} -s {shlex.quote(src_mesh_path)} --output {shlex.quote(out_xkt)}"
+    cmd1 = f"{bin_cmd} -s {shlex.quote(src_mesh_path)}{fmt_flag} --output {shlex.quote(out_xkt)}"
     p1 = _run(cmd1)
     if os.path.isfile(out_xkt):
         return
 
     # try 2: positionnel
-    cmd2 = f"{bin_cmd} {shlex.quote(src_mesh_path)} --output {shlex.quote(out_xkt)}"
+    cmd2 = f"{bin_cmd} {shlex.quote(src_mesh_path)}{fmt_flag} --output {shlex.quote(out_xkt)}"
     p2 = _run(cmd2)
     if os.path.isfile(out_xkt):
         return
@@ -167,12 +179,12 @@ def upload():
 
     try:
         ext = _ext(in_path)
-        ocp_ok, ocp_ver = has_ocp()
-        print(f"[conv] ext={ext} has_ocp={ocp_ok} ocp_ver={ocp_ver} in={in_path}", flush=True)
+        occ_ok, occ_ver = has_occ()
+        print(f"[conv] ext={ext} has_occ={occ_ok} occ_ver={occ_ver} in={in_path}", flush=True)
 
         if ext in ALLOWED_STEP:
-            if not ocp_ok:
-                return jsonify(error="missing_ocp", detail="Installe OCP==7.7.2 pour convertir STEP->STL."), 500
+            if not occ_ok:
+                return jsonify(error="missing_occ", detail="Installe pythonocc-core==7.7.2 pour convertir STEP->STL."), 500
             stl_path = os.path.join(OUTPUT_FOLDER, f"{file_id}.stl")
             step_to_stl(in_path, stl_path)
             src_mesh = stl_path
@@ -213,7 +225,7 @@ def __routes():
 
 @app.get("/__diag")
 def __diag():
-    ocp_ok, ocp_ver = has_ocp()
+    occ_ok, occ_ver = has_occ()
     info = {
         "cwd": os.getcwd(),
         "node": shutil.which("node"),
@@ -222,8 +234,8 @@ def __diag():
         "UPLOAD_FOLDER": UPLOAD_FOLDER,
         "OUTPUT_FOLDER": OUTPUT_FOLDER,
         "MAX_UPLOAD_MB": MAX_UPLOAD_MB,
-        "ocp_ok": ocp_ok,
-        "ocp_ver": ocp_ver,
+        "occ_ok": occ_ok,
+        "occ_ver": occ_ver,
     }
     return jsonify(info)
 # --- fin web.py ---
