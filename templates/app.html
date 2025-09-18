@@ -9,72 +9,140 @@
       :root{
         --bg:#f6f4ef; --ink:#283327; --muted:#5a675d;
         --brand:#3b5b39; --brand-2:#476a45; --card:#fff; --ring:rgba(59,91,57,.18);
+        --shadow:0 8px 32px rgba(0,0,0,.06);
       }
       *{box-sizing:border-box}
       body{margin:0;background:var(--bg);color:var(--ink);
            font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif}
-      .wrap{max-width:1200px;margin:24px auto;padding:0 16px}
-      .headline{display:flex;align-items:baseline;gap:12px;margin:8px 0 18px}
-      .headline h1{font-size:26px;margin:0}
-      .headline .badge{font-size:12px;background:#e7efe6;color:var(--brand);
-                       padding:4px 8px;border-radius:999px}
-      .grid{display:grid;grid-template-columns:360px 1fr;gap:24px;align-items:start}
-      .card{background:var(--card);border-radius:14px;padding:16px;box-shadow:0 8px 32px rgba(0,0,0,.06)}
+      .wrap{max-width:1280px;margin:18px auto;padding:0 16px}
+      .headline{display:flex;align-items:baseline;gap:12px;margin:6px 0 14px}
+      .headline h1{font-size:24px;margin:0}
+      .badge{font-size:12px;background:#e7efe6;color:var(--brand);
+             padding:4px 8px;border-radius:999px}
+      .grid{display:grid;grid-template-columns:380px 1fr;gap:18px;align-items:start}
+      .card{background:var(--card);border-radius:14px;padding:14px;box-shadow:var(--shadow)}
       .muted{color:var(--muted)}
-      .row{display:flex;gap:8px;align-items:center;margin:12px 0}
-      .btn{padding:10px 16px;border:0;border-radius:10px;cursor:pointer;transition:.15s}
+      .row{display:flex;gap:8px;align-items:center}
+      .btn{padding:9px 14px;border:0;border-radius:10px;cursor:pointer;transition:.15s}
       .btn:disabled{opacity:.6;cursor:not-allowed}
       .btn-primary{background:var(--brand);color:#fff}
       .btn-primary:hover{background:var(--brand-2)}
       .btn-ghost{background:#eef2ee;color:var(--brand)}
-      #viewerCard{padding:0}
-      #viewerContainer{width:100%;height:56vh;min-height:420px;position:relative;border-radius:14px;overflow:hidden}
+      .btn-outline{background:transparent;border:1px solid #cfcabf}
+      .toolbar{display:flex;flex-wrap:wrap;gap:6px}
+      .hr{height:1px;background:#ecebe6;margin:10px -14px}
+      #viewerCard{padding:0;overflow:hidden}
+      #viewerContainer{width:100%;height:64vh;min-height:440px;position:relative}
       #xeokit-canvas{width:100%;height:100%;display:block}
       .file-name{font-size:12px;color:var(--muted);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       [data-dropzone]{transition:.2s}
       [data-dropzone].is-ready{outline:2px solid #2b6cb0;box-shadow:0 0 0 4px rgba(43,108,176,.18)}
       [data-dropzone].is-success{outline:2px solid #38a169;box-shadow:0 0 0 4px rgba(56,161,105,.18)}
       [data-dropzone].is-error{outline:2px solid #e53e3e;box-shadow:0 0 0 4px rgba(229,62,62,.18)}
-      .hint{font-size:12px;color:var(--muted)}
-      .hr{height:1px;background:#ecebe6;margin:12px -16px}
+      .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+      .mini{font-size:12px}
+      .pill{padding:6px 10px;border-radius:999px;background:#eef2ee}
+      .panel{max-height:28vh;overflow:auto;border:1px solid #e6e2d9;border-radius:10px;padding:8px}
+      .kv{display:grid;grid-template-columns:120px 1fr;gap:6px 10px}
+      .stack{display:flex;flex-direction:column;gap:8px}
+      .right-toolbar{position:absolute;top:10px;right:10px;display:flex;gap:6px;z-index:5}
+      .progress{position:absolute;left:0;top:0;height:4px;background:#2b6cb0;width:0%;transition:width .2s;z-index:6}
+      .theme-dark{--bg:#1b1e1a; --ink:#e6e7e3; --card:#21251f; --muted:#99a39a; --shadow:0 8px 32px rgba(0,0,0,.35)}
+      .theme-dark body{background:var(--bg);color:var(--ink)}
     </style>
   </head>
   <body>
     <div class="wrap">
       <div class="headline">
         <h1>Analyse & Visualisation 3D</h1>
-        <span class="badge">XKT • xeokit</span>
+        <span class="badge">xeokit • XKT</span>
       </div>
 
       <div class="grid">
         <!-- Panneau gauche -->
-        <div class="card" data-dropzone>
-          <h3 style="margin:4px 0 6px">Télécharger un fichier</h3>
-          <p class="muted">Formats : <code>.stp</code>, <code>.step</code>, <code>.stl</code> (≤ 50&nbsp;MB)</p>
-
-          <div class="row">
-            <input id="fileInput" type="file" accept=".stl,.stp,.step" hidden />
-            <button id="btnPick" class="btn btn-ghost">CHOISIR UN FICHIER</button>
-            <button id="btnVisualiser" class="btn btn-primary">VISUALISER</button>
-          </div>
-          <div class="row" style="margin-top:-4px">
-            <span id="fileName" class="file-name">Aucun fichier sélectionné</span>
+        <div class="card stack" data-dropzone>
+          <div>
+            <h3 style="margin:0 0 6px">Fichiers</h3>
+            <p class="muted mini">Formats : <code>.stp</code>, <code>.step</code>, <code>.stl</code> (≤ 50&nbsp;MB)</p>
+            <div class="row" style="margin:8px 0 6px">
+              <input id="fileInput" type="file" accept=".stl,.stp,.step" hidden />
+              <button id="btnPick" class="btn btn-ghost">Choisir</button>
+              <button id="btnVisualiser" class="btn btn-primary">Visualiser</button>
+              <label class="row mini pill"><input id="chkAdditive" type="checkbox" style="margin-right:6px">Ajouter (multi-modèles)</label>
+            </div>
+            <div class="row mini"><span id="fileName" class="file-name">Aucun fichier sélectionné</span></div>
           </div>
 
           <div class="hr"></div>
 
-          <label for="toleranceSelect" class="muted" style="display:block;margin-top:6px;">Tolérance de conversion</label>
-          <select id="toleranceSelect" style="display:block;margin-top:6px;padding:8px 10px;border-radius:10px;border:1px solid #dcd9cf;outline:none">
-            <option value="standard" selected>Standard (0.1 mm)</option>
-          </select>
+          <div class="stack">
+            <h3 style="margin:0">Navigation</h3>
+            <div class="toolbar">
+              <button id="btnFit" class="btn btn-outline">Fit</button>
+              <button id="btnProj" class="btn btn-outline">Perspective</button>
+              <select id="navMode" class="btn btn-outline">
+                <option value="orbit" selected>Orbit</option>
+                <option value="pan">Pan</option>
+                <option value="firstPerson">First-person</option>
+              </select>
+              <label class="pill mini"><input id="chkEdges" type="checkbox" style="margin-right:6px" checked>Arêtes</label>
+              <label class="pill mini"><input id="chkXray" type="checkbox" style="margin-right:6px">X-ray</label>
+              <label class="pill mini"><input id="chkGhost" type="checkbox" style="margin-right:6px">Ghost</label>
+              <label class="pill mini"><input id="chkTheme" type="checkbox" style="margin-right:6px">Thème sombre</label>
+            </div>
+          </div>
 
-          <p class="hint" style="margin-top:12px">
-            Astuce : vous pouvez aussi <strong>glisser-déposer</strong> un fichier sur ce panneau.
-          </p>
+          <div class="grid-2">
+            <div>
+              <h3 style="margin:8px 0 6px">Modèles</h3>
+              <div id="modelsList" class="panel mini"></div>
+              <div class="row mini">
+                <button id="btnReload" class="btn btn-outline mini">Recharger</button>
+                <button id="btnUnload" class="btn btn-outline mini">Décharger</button>
+              </div>
+            </div>
+
+            <div>
+              <h3 style="margin:8px 0 6px">Sélection</h3>
+              <div class="toolbar">
+                <button id="btnIsolate" class="btn btn-outline mini">Isoler</button>
+                <button id="btnHide" class="btn btn-outline mini">Cacher</button>
+                <button id="btnShowOnly" class="btn btn-outline mini">Montrer seul</button>
+                <button id="btnClearSel" class="btn btn-outline mini">Tout montrer</button>
+              </div>
+              <div class="row mini" style="margin-top:8px">
+                Opacité&nbsp;<input id="opacityRange" type="range" min="0.1" max="1" step="0.05" value="1">
+              </div>
+            </div>
+          </div>
+
+          <div class="stack">
+            <h3 style="margin:8px 0 4px">Recherche</h3>
+            <div class="row">
+              <input id="searchInput" class="btn btn-outline" placeholder="id / type / nom…" style="width:100%">
+              <button id="btnSearch" class="btn btn-ghost">Rechercher</button>
+            </div>
+            <div id="results" class="panel mini"></div>
+          </div>
+
+          <div class="stack">
+            <h3 style="margin:8px 0 6px">Propriétés</h3>
+            <div id="propsPanel" class="panel kv mini"></div>
+          </div>
         </div>
 
         <!-- Viewer -->
         <div id="viewerCard" class="card">
+          <div class="progress" id="progressBar"></div>
+
+          <div class="right-toolbar">
+            <button id="btnMeasure" class="btn btn-ghost mini">Mesure</button>
+            <button id="btnAnnot"   class="btn btn-ghost mini">Annotation</button>
+            <button id="btnClip"    class="btn btn-ghost mini">Coupe</button>
+            <label class="pill mini">Explode&nbsp;<input id="explodeRange" type="range" min="0" max="1" step="0.02" value="0"></label>
+            <button id="btnShot"    class="btn btn-ghost mini">Screenshot</button>
+          </div>
+
           <div id="viewerContainer">
             <canvas id="xeokit-canvas"></canvas>
           </div>
@@ -82,7 +150,6 @@
       </div>
     </div>
 
-    <!-- Script du viewer (module) -->
     <script type="module" src="/static/js/main.js" defer></script>
   </body>
 </html>
