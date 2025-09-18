@@ -4,7 +4,6 @@ import {
   NavCubePlugin,
   FastNavPlugin,
   SectionPlanesPlugin,
-  DistanceMeasurementsPlugin,
   AnnotationsPlugin
 } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
 
@@ -54,6 +53,7 @@ const viewer = new Viewer({
   transparent: true,
   dtxEnabled: true
 });
+const canvasEl = document.getElementById("xeokit-canvas");
 
 const fast = new FastNavPlugin(viewer, {
   flyToDuration: 0.9,
@@ -66,9 +66,8 @@ const xktLoader = new XKTLoaderPlugin(viewer, {
     "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/resources/draco/"
 });
 
-const sections      = new SectionPlanesPlugin(viewer, {});
-const measurements  = new DistanceMeasurementsPlugin(viewer, { defaultDistancePrecision: 2 });
-const annotations   = new AnnotationsPlugin(viewer, {
+const sections    = new SectionPlanesPlugin(viewer, {});
+const annotations = new AnnotationsPlugin(viewer, {
   markerHTML:
     "<div style='width:10px;height:10px;border-radius:999px;background:#ef4444;border:2px solid #fff;box-shadow:0 0 0 2px rgba(0,0,0,.2)'></div>"
 });
@@ -99,6 +98,35 @@ const annotations   = new AnnotationsPlugin(viewer, {
   });
   viewerContainer.appendChild(legend);
 })();
+
+// ---------- Overlay de mesure (canvas 2D) ----------
+const overlay = document.createElement("canvas");
+const octx    = overlay.getContext("2d");
+Object.assign(overlay.style, {
+  position:"absolute", inset:"0", pointerEvents:"none", zIndex:"4"
+});
+viewerContainer.appendChild(overlay);
+
+function resizeOverlay(){
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  const rect = viewerContainer.getBoundingClientRect();
+  overlay.width  = Math.round(rect.width * dpr);
+  overlay.height = Math.round(rect.height * dpr);
+  overlay.style.width  = rect.width + "px";
+  overlay.style.height = rect.height + "px";
+}
+resizeOverlay();
+new ResizeObserver(resizeOverlay).observe(viewerContainer);
+
+// util projete (world->pixels overlay)
+function worldToOverlay(p){
+  const ndc = viewer.camera.project(p, []);
+  if (!ndc) return null;
+  // NDC -> pixels overlay
+  const x = (ndc[0] * 0.5 + 0.5) * overlay.width;
+  const y = (1 - (ndc[1] * 0.5 + 0.5)) * overlay.height;
+  return [x,y];
+}
 
 // ---------- État ----------
 const models = new Map(); // id -> { model, name, src }
@@ -197,7 +225,6 @@ async function uploadAndShow(){
   }
 }
 
-// Fichier → ouvrir / auto-visualiser
 btnChoose?.addEventListener("click", (e)=>{ e.preventDefault(); fileInput?.click(); });
 fileInput?.addEventListener("change", ()=>{
   const f=fileInput.files?.[0]; if (f && fileNameLbl) fileNameLbl.textContent=f.name;
@@ -262,48 +289,44 @@ chkTheme?.addEventListener("change", ()=>{
 });
 opacityRange?.addEventListener("input", ()=> setAllProp("opacity", parseFloat(opacityRange.value)||1));
 
-// ---------- OUTILS (sans *MouseControl) ----------
+// ---------- OUTILS ----------
 let toolMode = "none"; // "none" | "measure" | "annot" | "clip"
 let measurePts = [];   // 0..2 world positions
 let clipPlane  = null; // SectionPlane
 
 function setToolMode(next){
-  toolMode = next;
+  toolMode = (toolMode===next) ? "none" : next;
   btnMeasure?.classList.toggle("btn-primary", toolMode==="measure");
   btnAnnot?.classList.toggle("btn-primary",   toolMode==="annot");
   btnClip?.classList.toggle("btn-primary",    toolMode==="clip");
-  viewer.canvas.style.cursor =
+  if (canvasEl) canvasEl.style.cursor =
     (toolMode==="measure"||toolMode==="annot"||toolMode==="clip") ? "crosshair" : "";
 
   if (toolMode!=="measure") measurePts = [];
 
-  // coupe: (dé)ployer le plan et activer le clipping
   if (toolMode!=="clip"){
     viewer.scene.sectionPlanesEnabled = false;
     if (clipPlane){ clipPlane.destroy(); clipPlane=null; }
   } else {
     if (!clipPlane){
       const c = viewer.scene?.aabbCenter || [0,0,0];
-      clipPlane = sections.createSectionPlane({ id:"cut", pos:c, dir:[0,1,0] }); // plan Y
+      clipPlane = sections.createSectionPlane({ id:"cut", pos:c, dir:[0,1,0] });
     }
     viewer.scene.sectionPlanesEnabled = true;
   }
 }
+btnMeasure?.addEventListener("click", ()=> setToolMode("measure"));
+btnAnnot?.addEventListener("click",   ()=> setToolMode("annot"));
+btnClip?.addEventListener("click",    ()=> setToolMode("clip"));
 
-btnMeasure?.addEventListener("click", ()=> setToolMode(toolMode==="measure" ? "none" : "measure"));
-btnAnnot?.addEventListener("click",   ()=> setToolMode(toolMode==="annot"   ? "none" : "annot"));
-btnClip?.addEventListener("click",    ()=> setToolMode(toolMode==="clip"    ? "none" : "clip"));
-
-// Déplacement du plan de coupe à la molette (+/- normal)
+// Déplacement du plan à la molette / X Y Z pour l’axe
 window.addEventListener("wheel", (e)=>{
   if (toolMode!=="clip" || !clipPlane) return;
   e.preventDefault();
-  const step = (e.deltaY>0 ? 1 : -1) * 0.02; // vitesse
+  const step = (e.deltaY>0 ? 1 : -1) * 0.02;
   const d = clipPlane.dir, p = clipPlane.pos;
   clipPlane.pos = [p[0]+d[0]*step, p[1]+d[1]*step, p[2]+d[2]*step];
 }, { passive:false });
-
-// X / Y / Z pour réorienter le plan de coupe
 window.addEventListener("keydown", (e)=>{
   if (toolMode!=="clip" || !clipPlane) return;
   if (e.key==="x"||e.key==="X") clipPlane.dir = [1,0,0];
@@ -311,23 +334,64 @@ window.addEventListener("keydown", (e)=>{
   if (e.key==="z"||e.key==="Z") clipPlane.dir = [0,0,1];
 });
 
-// Clic unique : route selon l’outil actif
+// ---------- Mesures custom (sans plugin instable) ----------
+const measures = []; // { p1,p2, labelId, endAId, endBId, color }
+function formatDist(d){
+  // heuristique: si >1 => m, sinon => mm
+  if (d >= 1)  return d.toFixed(3) + " m";
+  return (d*1000).toFixed(1) + " mm";
+}
+function addMeasurement(p1, p2){
+  const mid = [(p1[0]+p2[0])/2,(p1[1]+p2[1])/2,(p1[2]+p2[2])/2];
+  const d = Math.hypot(p2[0]-p1[0], p2[1]-p1[1], p2[2]-p1[2]);
+
+  const endAId = "mEndA_"+Date.now();
+  const endBId = "mEndB_"+(Date.now()+1);
+  const labelId= "mLbl_"+(Date.now()+2);
+
+  annotations.createAnnotation({ id:endAId, worldPos:p1, label:"" });
+  annotations.createAnnotation({ id:endBId, worldPos:p2, label:"" });
+  annotations.createAnnotation({ id:labelId, worldPos:mid, label:formatDist(d) });
+
+  measures.push({ p1:[...p1], p2:[...p2], labelId, endAId, endBId, color:"#22d3ee" });
+  redrawOverlay(); // dessine tout de suite
+}
+
+function redrawOverlay(){
+  const dpr = Math.max(1, window.devicePixelRatio||1);
+  octx.setTransform(1,0,0,1,0,0);
+  octx.clearRect(0,0, overlay.width, overlay.height);
+  octx.lineWidth = 2 * dpr;
+  octx.strokeStyle = "#22d3ee";
+  measures.forEach(m=>{
+    const a = worldToOverlay(m.p1);
+    const b = worldToOverlay(m.p2);
+    if (!a || !b) return;
+    octx.beginPath();
+    octx.moveTo(a[0], a[1]);
+    octx.lineTo(b[0], b[1]);
+    octx.stroke();
+  });
+}
+viewer.scene.on("tick", redrawOverlay);
+
+// ---------- Clic unique : route selon l’outil actif ----------
 viewer.scene.input.on("mouseclicked", (coords)=>{
   const hit = viewer.scene.pick({ canvasPos: [coords[0], coords[1]], pickSurface: true });
 
-  // Mesure : on collecte 2 points sur la surface puis on crée la mesure
+  // Mesure : 2 clics -> ajout
   if (toolMode==="measure"){
     if (hit && hit.worldPos){
       measurePts.push(hit.worldPos);
       if (measurePts.length===2){
-        measurements.createMeasurement({ positions: [measurePts[0], measurePts[1]] });
+        addMeasurement(measurePts[0], measurePts[1]);
         measurePts = [];
       }
     }
-    return; // pas de sélection/jaune en mode mesure
+    return;
   }
 
-  // Annotation : 1 click = 1 annotation
+  // Annotation : 1 clic = 1 note
   if (toolMode==="annot"){
     if (hit && hit.worldPos){
       annotations.createAnnotation({
@@ -339,7 +403,7 @@ viewer.scene.input.on("mouseclicked", (coords)=>{
     return;
   }
 
-  // Coupe : un clic positionne le plan (centre sous le curseur), pas de sélection
+  // Coupe : clic repositionne le plan
   if (toolMode==="clip"){
     if (hit && hit.worldPos && clipPlane){
       clipPlane.pos = hit.worldPos.slice();
@@ -347,7 +411,7 @@ viewer.scene.input.on("mouseclicked", (coords)=>{
     return;
   }
 
-  // Mode SELECT (aucun outil)
+  // SELECT (aucun outil)
   if (!hit || !hit.entity) { clearSelection(); return; }
   const id = hit.entity.id;
   setIdsProp(allIds(), "highlighted", false);
@@ -425,8 +489,7 @@ explodeRange?.addEventListener("input", ()=>{
 // ---------- Screenshot ----------
 btnShot?.addEventListener("click", ()=>{
   try{
-    const canvas = document.getElementById("xeokit-canvas");
-    const dataURL = canvas.toDataURL("image/png");
+    const dataURL = canvasEl.toDataURL("image/png");
     const a=document.createElement("a"); a.href=dataURL; a.download="cadlytics_view.png"; a.click();
   }catch(e){ console.error(e); alert("Capture impossible."); }
 });
