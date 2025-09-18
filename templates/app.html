@@ -6,126 +6,83 @@
     <title>Analyse & Visualisation 3D • CADlytics</title>
     <link rel="stylesheet" href="/static/css/style.css" />
     <style>
-      :root{--green:#3b5b39;--card: #fff;}
-      body{background:#f6f4ef;color:#283327;font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif}
+      :root{
+        --bg:#f6f4ef; --ink:#283327; --muted:#5a675d;
+        --brand:#3b5b39; --brand-2:#476a45; --card:#fff; --ring:rgba(59,91,57,.18);
+      }
+      *{box-sizing:border-box}
+      body{margin:0;background:var(--bg);color:var(--ink);
+           font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif}
       .wrap{max-width:1200px;margin:24px auto;padding:0 16px}
+      .headline{display:flex;align-items:baseline;gap:12px;margin:8px 0 18px}
+      .headline h1{font-size:26px;margin:0}
+      .headline .badge{font-size:12px;background:#e7efe6;color:var(--brand);
+                       padding:4px 8px;border-radius:999px}
       .grid{display:grid;grid-template-columns:360px 1fr;gap:24px;align-items:start}
       .card{background:var(--card);border-radius:14px;padding:16px;box-shadow:0 8px 32px rgba(0,0,0,.06)}
-      #viewerContainer{width:100%;min-height:420px;position:relative;border-radius:14px;overflow:hidden}
-      .btn{padding:10px 16px;border:0;border-radius:10px;cursor:pointer}
-      .btn-primary{background:var(--green);color:#fff}
-      .muted{opacity:.75}
+      .muted{color:var(--muted)}
+      .row{display:flex;gap:8px;align-items:center;margin:12px 0}
+      .btn{padding:10px 16px;border:0;border-radius:10px;cursor:pointer;transition:.15s}
+      .btn:disabled{opacity:.6;cursor:not-allowed}
+      .btn-primary{background:var(--brand);color:#fff}
+      .btn-primary:hover{background:var(--brand-2)}
+      .btn-ghost{background:#eef2ee;color:var(--brand)}
+      #viewerCard{padding:0}
+      #viewerContainer{width:100%;height:56vh;min-height:420px;position:relative;border-radius:14px;overflow:hidden}
+      #xeokit-canvas{width:100%;height:100%;display:block}
+      .file-name{font-size:12px;color:var(--muted);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      [data-dropzone]{transition:.2s}
+      [data-dropzone].is-ready{outline:2px solid #2b6cb0;box-shadow:0 0 0 4px rgba(43,108,176,.18)}
       [data-dropzone].is-success{outline:2px solid #38a169;box-shadow:0 0 0 4px rgba(56,161,105,.18)}
-      [data-dropzone].is-ready  {outline:2px solid #2b6cb0;box-shadow:0 0 0 4px rgba(43,108,176,.18)}
-      [data-dropzone].is-error  {outline:2px solid #e53e3e;box-shadow:0 0 0 4px rgba(229,62,62,.18)}
+      [data-dropzone].is-error{outline:2px solid #e53e3e;box-shadow:0 0 0 4px rgba(229,62,62,.18)}
+      .hint{font-size:12px;color:var(--muted)}
+      .hr{height:1px;background:#ecebe6;margin:12px -16px}
     </style>
   </head>
   <body>
     <div class="wrap">
-      <h1>Analyse & Visualisation 3D</h1>
+      <div class="headline">
+        <h1>Analyse & Visualisation 3D</h1>
+        <span class="badge">XKT • xeokit</span>
+      </div>
+
       <div class="grid">
+        <!-- Panneau gauche -->
         <div class="card" data-dropzone>
-          <h3>Télécharger un fichier</h3>
-          <p class="muted">Formats : <code>.stp</code>, <code>.step</code> (≤ 50 MB)</p>
-          <div style="display:flex;gap:8px;align-items:center;margin:12px 0;">
+          <h3 style="margin:4px 0 6px">Télécharger un fichier</h3>
+          <p class="muted">Formats : <code>.stp</code>, <code>.step</code>, <code>.stl</code> (≤ 50&nbsp;MB)</p>
+
+          <div class="row">
             <input id="fileInput" type="file" accept=".stl,.stp,.step" hidden />
-            <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">CHOISIR UN FICHIER</button>
-            <button id="btnVisualiser" class="btn">VISUALISER</button>
+            <button id="btnPick" class="btn btn-ghost">CHOISIR UN FICHIER</button>
+            <button id="btnVisualiser" class="btn btn-primary">VISUALISER</button>
           </div>
+          <div class="row" style="margin-top:-4px">
+            <span id="fileName" class="file-name">Aucun fichier sélectionné</span>
+          </div>
+
+          <div class="hr"></div>
+
           <label for="toleranceSelect" class="muted" style="display:block;margin-top:6px;">Tolérance de conversion</label>
-          <select id="toleranceSelect" style="display:block;margin-top:6px;">
-            <option value="standard">Standard (0.1 mm)</option>
+          <select id="toleranceSelect" style="display:block;margin-top:6px;padding:8px 10px;border-radius:10px;border:1px solid #dcd9cf;outline:none">
+            <option value="standard" selected>Standard (0.1 mm)</option>
           </select>
+
+          <p class="hint" style="margin-top:12px">
+            Astuce : vous pouvez aussi <strong>glisser-déposer</strong> un fichier sur ce panneau.
+          </p>
         </div>
 
-        <div class="card" style="padding:0">
+        <!-- Viewer -->
+        <div id="viewerCard" class="card">
           <div id="viewerContainer">
-            <canvas id="xeokit-canvas" style="width:100%;height:100%;display:block"></canvas>
+            <canvas id="xeokit-canvas"></canvas>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Fallback : tente le bundle /static/dist/main.js, sinon charge /static/js/main.js -->
-<!-- Fallback : tente le bundle /static/dist/main.js, sinon charge /static/js/main.js -->
-<script type="module">
-  // 1) Importer SANS CameraControl
-  import { Viewer, XKTLoaderPlugin }
-    from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk/dist/xeokit-sdk.es.min.js";
-
-  // 2) Sélecteurs
-  const fileInput = document.getElementById("fileInput");
-  const btnVisual = document.getElementById("btnVisualiser");
-  const dropzone  = document.querySelector("[data-dropzone]");
-
-  // 3) Viewer (le viewer expose déjà viewer.cameraControl)
-  const viewer     = new Viewer({ canvasId: "xktCanvas" });
-  const xktLoader  = new XKTLoaderPlugin(viewer);
-
-  let selectedFile = null;
-  fileInput.addEventListener("change", (e) => {
-    selectedFile = e.target.files?.[0] || null;
-    dropzone?.classList.remove("is-error","is-success");
-    dropzone?.classList.add("is-ready");
-  });
-
-  async function uploadAndGetXKT(file) {
-    const fd = new FormData();
-    fd.append("file", file);
-    const res = await fetch("/upload", { method: "POST", body: fd });
-    const j   = await res.json();
-    if (!res.ok || j.error) throw new Error(j.detail || j.error || "upload_failed");
-
-    let url = j.xkt_url;
-    const id = j.file_id;
-    while (!url) {
-      await new Promise(r => setTimeout(r, 1200));
-      const s  = await fetch(`/convert/status?file_id=${encodeURIComponent(id)}`);
-      const sj = await s.json();
-      if (sj.status === "ready") url = sj.xkt_url;
-    }
-    return url;
-  }
-
-  btnVisual.addEventListener("click", async () => {
-    if (!selectedFile) { alert("Choisis un fichier .stp / .step"); return; }
-    try {
-      dropzone?.classList.add("is-ready");
-
-      const xktURL = await uploadAndGetXKT(selectedFile);
-
-      // Reset scène et chargement du XKT
-      viewer.scene.clear();
-      await xktLoader.load({ id: `model_${Date.now()}`, src: xktURL, edges: true });
-
-      // Fit caméra si dispo
-      try { viewer.cameraControl?.fitAll(); } catch(_) {}
-
-      dropzone?.classList.remove("is-ready","is-error");
-      dropzone?.classList.add("is-success");
-    } catch (err) {
-      console.error(err);
-      dropzone?.classList.remove("is-ready");
-      dropzone?.classList.add("is-error");
-      alert("Erreur de conversion ou de chargement. Ouvre ‘Network’ pour le détail.");
-    }
-  });
-
-  // Drag & drop (optionnel)
-  const dz = dropzone;
-  if (dz) {
-    ["dragenter","dragover"].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add("is-ready"); }));
-    ["dragleave","drop"].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove("is-ready"); }));
-    dz.addEventListener("drop", (e) => {
-      const f = e.dataTransfer?.files?.[0];
-      if (f) {
-        selectedFile = f;
-        fileInput.files = e.dataTransfer.files;
-        dz.classList.add("is-ready");
-      }
-    });
-  }
-</script>
-
+    <!-- Script du viewer (module) -->
+    <script type="module" src="/static/js/main.js" defer></script>
   </body>
 </html>
