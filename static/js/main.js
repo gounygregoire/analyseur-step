@@ -4,13 +4,16 @@ import {
   NavCubePlugin,
   FastNavPlugin,
   SectionPlanesPlugin,
+  SectionPlanesMouseControl,
   DistanceMeasurementsPlugin,
-  AnnotationsPlugin
+  DistanceMeasurementsMouseControl,
+  AnnotationsPlugin,
+  AnnotationsMouseControl
 } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
 
 const $ = (s) => document.querySelector(s);
 
-// --- UI
+// ---------- UI refs ----------
 const fileInput     = $("#fileInput");
 const btnVisualiser = $("#btnVisualiser");
 const btnChoose     = $("#btnChoose");
@@ -48,33 +51,47 @@ const btnClip      = $("#btnClip");
 const explodeRange = $("#explodeRange");
 const btnShot      = $("#btnShot");
 
-// --- Viewer
+// ---------- Viewer & plugins ----------
 const viewer = new Viewer({
   canvasId: "xeokit-canvas",
   transparent: true,
   dtxEnabled: true
 });
 
-// Navigation rapide SANS masquage d’arêtes
 const fast = new FastNavPlugin(viewer, {
   flyToDuration: 0.9,
   autoHideEdges: false,
   hideEdges: false
 });
 
-// chargeur + plugins outils
 const xktLoader = new XKTLoaderPlugin(viewer, {
   dracoDecompressorPath:
     "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/resources/draco/"
 });
-const sections     = new SectionPlanesPlugin(viewer, {});
+
+// Coupe
+const sections   = new SectionPlanesPlugin(viewer, {});
+const secCtl     = new SectionPlanesMouseControl(sections);
+secCtl.active    = false;
+
+// Mesure
 const measurements = new DistanceMeasurementsPlugin(viewer, { defaultDistancePrecision: 2 });
-const annotations  = new AnnotationsPlugin(viewer, {
+const measureCtl   = new DistanceMeasurementsMouseControl(measurements, {
+  // quelques options utiles si disponibles dans ta build :
+  // snapToEdge: true,
+  // snapToVertex: true
+});
+measureCtl.active  = false;
+
+// Annotations
+const annotations = new AnnotationsPlugin(viewer, {
   markerHTML:
     "<div style='width:10px;height:10px;border-radius:999px;background:#ef4444;border:2px solid #fff;box-shadow:0 0 0 2px rgba(0,0,0,.2)'></div>"
 });
+const annotCtl   = new AnnotationsMouseControl(annotations);
+annotCtl.active  = false;
 
-// Axes (cube + badge)
+// ---------- Axe/cube ----------
 (() => {
   if (!viewerContainer) return;
   const cube = document.createElement("canvas");
@@ -101,18 +118,10 @@ const annotations  = new AnnotationsPlugin(viewer, {
   viewerContainer.appendChild(legend);
 })();
 
-// --- État
+// ---------- État ----------
 const models = new Map(); // id -> { model, name, src }
 let lastModelId = null;
 let selectedIds = new Set();
-let onePlane = null;
-let appMode = "select"; // "select" | "measure" | "annotate"
-
-function setMode(m) {
-  appMode = (appMode === m) ? "select" : m;
-  btnMeasure?.classList.toggle("btn-primary", appMode === "measure");
-  btnAnnot?.classList.toggle("btn-primary",   appMode === "annotate");
-}
 
 const setProgress = (p)=>
   progressBar && (progressBar.style.width = `${Math.max(0,Math.min(100,p))}%`);
@@ -137,8 +146,9 @@ function showProps(meta){
 }
 
 function refreshModelsList(){
-  if (!modelsList) return;
-  modelsList.innerHTML = "";
+  const list = modelsList;
+  if (!list) return;
+  list.innerHTML = "";
   for (const [id, info] of models) {
     const row = document.createElement("div");
     row.className = "row mini";
@@ -148,9 +158,9 @@ function refreshModelsList(){
         <button class="btn btn-outline mini" data-act="fly" data-id="${id}">Voir</button>
         <button class="btn btn-outline mini" data-act="toggle" data-id="${id}">${info.model.visible?"Cacher":"Montrer"}</button>
       </span>`;
-    modelsList.appendChild(row);
+    list.appendChild(row);
   }
-  modelsList.querySelectorAll("button").forEach(b=>{
+  list.querySelectorAll("button").forEach(b=>{
     b.addEventListener("click",()=>{
       const id = b.dataset.id; const info = models.get(id); if(!info) return;
       if (b.dataset.act==="fly") viewer.cameraFlight.flyTo(info.model);
@@ -160,7 +170,7 @@ function refreshModelsList(){
 }
 const flyToAll = ()=> viewer.cameraFlight.flyTo(viewer.scene);
 
-// --- LOAD
+// ---------- Chargements ----------
 async function loadXKT(xktUrl, nameHint){
   const id = "m"+Date.now();
   const model = xktLoader.load({
@@ -181,7 +191,6 @@ async function loadXKT(xktUrl, nameHint){
   return id;
 }
 
-// --- Upload
 async function uploadAndShow(){
   const f = fileInput?.files?.[0]; if(!f){ alert("Choisis un fichier .step/.stp/.stl"); return; }
   btnVisualiser && (btnVisualiser.disabled = true, btnVisualiser.textContent = "Conversion…");
@@ -206,7 +215,7 @@ async function uploadAndShow(){
   }
 }
 
-// --- Fichier : label + auto-visualisation
+// Fichier → ouvrir / auto-visualiser
 btnChoose?.addEventListener("click", (e)=>{ e.preventDefault(); fileInput?.click(); });
 fileInput?.addEventListener("change", ()=>{
   const f=fileInput.files?.[0]; if (f && fileNameLbl) fileNameLbl.textContent=f.name;
@@ -214,15 +223,17 @@ fileInput?.addEventListener("change", ()=>{
 });
 btnVisualiser?.addEventListener("click", (e)=>{ e.preventDefault(); uploadAndShow(); });
 
-// --- Navigation & rendu
+// ---------- Navigation & rendu ----------
 btnFit?.addEventListener("click", flyToAll);
+
 let proj="perspective";
 btnProj?.addEventListener("click", ()=>{
   proj = (proj==="perspective") ? "ortho" : "perspective";
   viewer.camera.projection = proj;
   btnProj.textContent = proj==="perspective" ? "Perspective" : "Orthographique";
 });
-// Renomme l’option Pan -> Plan si présente
+
+// Pan => Plan
 (() => {
   if (!navMode) return;
   const opt = [...navMode.options].find(o=>o.value==="pan");
@@ -232,7 +243,7 @@ const setNavMode = (m)=> viewer.cameraControl.navMode = (m==="pan" ? "planView" 
 navMode?.addEventListener("change", ()=> setNavMode(navMode.value));
 if (navMode) setNavMode(navMode.value);
 
-// --- Arêtes (robuste) : global + par mesh + verrouillage pendant la nav
+// Arêtes (global + par mesh + verrouillage)
 function setEdges(on) {
   viewer.scene.edgeMaterial.edgesEnabled = !!on;
   const ids = viewer.scene.objectIds || [];
@@ -254,7 +265,7 @@ viewer.scene.on("tick", ()=>{
   }
 });
 
-// --- X-ray / Ghost / Thème / Opacité
+// X-ray / Ghost / Thème / Opacité
 chkXray?.addEventListener("change", ()=>{
   setAllProp("xrayed", !!chkXray.checked);
   if (selectedIds.size) setIdsProp([...selectedIds], "xrayed", false);
@@ -269,57 +280,44 @@ chkTheme?.addEventListener("change", ()=>{
 });
 opacityRange?.addEventListener("input", ()=> setAllProp("opacity", parseFloat(opacityRange.value)||1));
 
-// --- Modes outils
-btnMeasure?.addEventListener("click", ()=> setMode("measure"));
-btnAnnot?.addEventListener("click",   ()=> setMode("annotate"));
+// ---------- Outils (modes) ----------
+function setToolMode(mode){ // "none" | "measure" | "annot" | "clip"
+  // reset boutons
+  btnMeasure?.classList.toggle("btn-primary", mode==="measure");
+  btnAnnot?.classList.toggle("btn-primary",   mode==="annot");
+  btnClip?.classList.toggle("btn-primary",    mode==="clip");
 
-let clippingOn=false;
+  // activer/désactiver contrôleurs
+  measureCtl.active = (mode==="measure");
+  annotCtl.active   = (mode==="annot");
+  secCtl.active     = (mode==="clip");
+
+  // plans actifs seulement en mode coupe
+  viewer.scene.sectionPlanesEnabled = (mode==="clip");
+
+  // curseur
+  viewer.canvas.style.cursor = (mode==="measure"||mode==="annot"||mode==="clip") ? "crosshair" : "";
+}
+
+btnMeasure?.addEventListener("click", ()=>{
+  const next = measureCtl.active ? "none" : "measure";
+  setToolMode(next);
+});
+btnAnnot?.addEventListener("click", ()=>{
+  const next = annotCtl.active ? "none" : "annot";
+  setToolMode(next);
+});
 btnClip?.addEventListener("click", ()=>{
-  clippingOn=!clippingOn;
-  btnClip.classList.toggle("btn-primary", clippingOn);
-  if (!clippingOn){
-    if(onePlane){ onePlane.destroy(); onePlane=null; }
-    viewer.scene.sectionPlanesEnabled=false;
-    return;
-  }
-  if (onePlane) onePlane.destroy();
-  const center = viewer.scene?.aabbCenter || [0,0,0];
-  onePlane = sections.createSectionPlane({ id:"cut", pos:center, dir:[0,1,0] });
-  viewer.scene.sectionPlanesEnabled = true;
-  viewer.cameraFlight.flyTo(onePlane);
+  const next = secCtl.active ? "none" : "clip";
+  if (next==="none"){ sections.clear(); } // retire toutes les coupes
+  setToolMode(next);
 });
 
-// --- Clic unique : route par mode actif
+// ---------- Sélection simple (uniquement hors outils actifs) ----------
 viewer.scene.input.on("mouseclicked", (coords)=>{
+  if (measureCtl.active || annotCtl.active || secCtl.active) return;
   const hit = viewer.scene.pick({ canvasPos: [coords[0], coords[1]], pickSurface: true });
-
-  if (!hit || !hit.entity) { if (appMode === "select") clearSelection(); return; }
-
-  if (appMode === "measure") {
-    if (hit.worldPos) {
-      if (!viewer.__mPts) viewer.__mPts = [];
-      viewer.__mPts.push(hit.worldPos);
-      if (viewer.__mPts.length === 2) {
-        measurements.createMeasurement({ positions: [viewer.__mPts[0], viewer.__mPts[1]] });
-        viewer.__mPts = [];
-      }
-    }
-    return;
-  }
-
-  if (appMode === "annotate") {
-    if (hit.worldPos) {
-      annotations.createAnnotation({
-        id: "a"+Date.now(),
-        worldPos: hit.worldPos,
-        occludable: true,
-        label: "Note"
-      });
-    }
-    return;
-  }
-
-  // Mode SELECT
+  if (!hit || !hit.entity) { clearSelection(); return; }
   const id = hit.entity.id;
   setIdsProp(allIds(), "highlighted", false);
   selectedIds = new Set([id]);
@@ -328,13 +326,13 @@ viewer.scene.input.on("mouseclicked", (coords)=>{
   showProps(meta || { id });
 });
 
-// --- Iso / cacher / montrer
+// ---------- Iso / cacher / montrer ----------
 btnIsolate?.addEventListener("click", ()=>{ if (!selectedIds.size) return; setAllProp("visible", false); setIdsProp([...selectedIds], "visible", true); });
 btnHide?.addEventListener("click",    ()=>{ if (!selectedIds.size) return; setIdsProp([...selectedIds], "visible", false); });
 btnShowOnly?.addEventListener("click",()=>{ if (!selectedIds.size) return; setAllProp("visible", false); setIdsProp([...selectedIds], "visible", true); });
 btnClearSel?.addEventListener("click",()=>{ setAllProp("visible", true); setIdsProp(allIds(), "highlighted", false); clearSelection(); });
 
-// --- Recherche
+// ---------- Recherche ----------
 btnSearch?.addEventListener("click", ()=>{
   const q = (searchInput?.value||"").toLowerCase().trim();
   if (!resultsBox) return;
@@ -361,7 +359,7 @@ btnSearch?.addEventListener("click", ()=>{
   });
 });
 
-// --- Reload / Unload
+// ---------- Reload / Unload ----------
 btnReload?.addEventListener("click", ()=>{
   if (!lastModelId) return;
   const info=models.get(lastModelId); if(!info) return;
@@ -378,7 +376,7 @@ btnUnload?.addEventListener("click", ()=>{
   refreshModelsList();
 });
 
-// --- Explode
+// ---------- Explode ----------
 explodeRange?.addEventListener("input", ()=>{
   if (!allIds().length) return;
   const k = parseFloat(explodeRange.value)||0;
@@ -393,7 +391,7 @@ explodeRange?.addEventListener("input", ()=>{
   });
 });
 
-// --- Screenshot
+// ---------- Screenshot ----------
 btnShot?.addEventListener("click", ()=>{
   try{
     const canvas = document.getElementById("xeokit-canvas");
@@ -402,7 +400,7 @@ btnShot?.addEventListener("click", ()=>{
   }catch(e){ console.error(e); alert("Capture impossible."); }
 });
 
-// --- Drag & drop
+// ---------- Drag & drop ----------
 const dz = document.querySelector("[data-dropzone]");
 if (dz){
   ["dragenter","dragover"].forEach(ev=>dz.addEventListener(ev, e=>{ e.preventDefault(); dz.classList.add("is-ready"); }));
