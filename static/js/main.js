@@ -1,5 +1,3 @@
-// main.js — outils stables sans APIs internes variables
-
 import {
   Viewer,
   XKTLoaderPlugin,
@@ -10,7 +8,7 @@ import {
 
 const $ = (s) => document.querySelector(s);
 
-/* ====== Références UI ====== */
+/* ====== UI refs ====== */
 const fileInput     = $("#fileInput");
 const btnVisualiser = $("#btnVisualiser");
 const btnChoose     = $("#btnChoose");
@@ -48,7 +46,7 @@ const btnClip      = $("#btnClip");
 const explodeRange = $("#explodeRange");
 const btnShot      = $("#btnShot");
 
-/* ====== Viewer + Plugins de base ====== */
+/* ====== Viewer ====== */
 const viewer = new Viewer({
   canvasId: "xeokit-canvas",
   transparent: true,
@@ -68,7 +66,7 @@ const fast = new FastNavPlugin(viewer, {
 
 const sections = new SectionPlanesPlugin(viewer, {});
 
-/* ====== HUD léger (mesures + clip UI) ====== */
+/* ====== HUD Mesure + Coupe ====== */
 const hud = document.createElement("div");
 Object.assign(hud.style, {
   position: "absolute",
@@ -81,9 +79,8 @@ Object.assign(hud.style, {
 });
 viewerContainer.appendChild(hud);
 
-// panneau Mesures
 const measurePanel = document.createElement("div");
-measurePanel.innerHTML = "<strong>Mesures</strong>";
+measurePanel.innerHTML = "<strong style='color:#fff'>Mesures</strong>";
 Object.assign(measurePanel.style, {
   background: "rgba(0,0,0,.45)",
   color: "#fff",
@@ -95,7 +92,6 @@ const measureList = document.createElement("div");
 measurePanel.appendChild(measureList);
 hud.appendChild(measurePanel);
 
-// panneau Clip (boutons + slider)
 const clipPanel = document.createElement("div");
 clipPanel.innerHTML = `
   <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
@@ -104,7 +100,7 @@ clipPanel.innerHTML = `
     <button data-axis="y" class="clipBtn">Y</button>
     <button data-axis="z" class="clipBtn">Z</button>
   </div>
-  <input type="range" min="-100" max="100" value="0" id="clipRange" />
+  <input type="range" min="-100" max="100" value="0" id="clipRange" disabled />
 `;
 Object.assign(clipPanel.style, {
   background: "rgba(15,15,20,.55)",
@@ -116,7 +112,6 @@ Object.assign(clipPanel.style, {
 });
 hud.appendChild(clipPanel);
 
-// style boutons HUD
 clipPanel.querySelectorAll(".clipBtn").forEach(b=>{
   Object.assign(b.style,{
     border:"1px solid rgba(255,255,255,.5)",
@@ -129,7 +124,7 @@ clipPanel.querySelectorAll(".clipBtn").forEach(b=>{
 });
 const clipRange = clipPanel.querySelector("#clipRange");
 
-/* ====== Axes UI (cube + légende) ====== */
+/* ====== Axes (cube + légende) ====== */
 (() => {
   const cube = document.createElement("canvas");
   cube.width = cube.height = 96;
@@ -155,8 +150,8 @@ const clipRange = clipPanel.querySelector("#clipRange");
   viewerContainer.appendChild(legend);
 })();
 
-/* ====== Etat ====== */
-const models = new Map(); // id -> {model, name, src}
+/* ====== Etat & helpers ====== */
+const models = new Map();
 let lastModelId = null;
 let selectedIds = new Set();
 
@@ -167,109 +162,65 @@ const setSome= (ids,prop,val)=> ids.forEach(id=>{ const o=viewer.scene.objects[i
 function setProgress(p){ if(progressBar) progressBar.style.width = `${Math.max(0,Math.min(100,p))}%`; }
 function clearSelection(){ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); propsPanel&&(propsPanel.innerHTML=""); }
 
-/* ====== Géométries utilitaires (lignes/pastilles) ====== */
-// On crée des “entities” simples: 2 sphères (pastilles) + une ligne (3 segments courts)
-function makeSphere(id, center=[0,0,0], radius=0.0025, color=[1,0.2,0.2]){
-  return viewer.scene.createEntity({
-    id,
-    geometry: viewer.scene.createSphereGeometry({center, radius}),
-    material: viewer.scene.createPhongMaterial({ambient:color, diffuse:color, emissive:color}),
-    pickable:false,
-    collidable:false,
-    edges:false
-  });
-}
-function makeLine(id, p1, p2, color=[0.1,0.7,1]){
-  // On simule la ligne par un cylindre très fin
-  const v = [p2[0]-p1[0], p2[1]-p1[1], p2[2]-p1[2]];
-  const len = Math.hypot(v[0],v[1],v[2]) || 1;
-  const mid = [ (p1[0]+p2[0])/2, (p1[1]+p2[1])/2, (p1[2]+p2[2])/2 ];
-  // axe unitaire
-  const u = [v[0]/len, v[1]/len, v[2]/len];
-  // matrice orientée : xeokit fournit cylinderGeometry aligné sur +Y ; on oriente via rotationFromDir
-  const geo = viewer.scene.createCylinderGeometry({radiusTop:0.0008, radiusBottom:0.0008, height:len});
-  const mat = viewer.scene.createPhongMaterial({ambient:color, diffuse:color});
-  const e   = viewer.scene.createEntity({ id, geometry: geo, material: mat, pickable:false, collidable:false, edges:false });
-  // Oriente / place
-  const up=[0,1,0];
-  // rotation quaternion pour aligner up -> u
-  function cross(a,b){return [a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];}
-  function dot(a,b){return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];}
-  function norm(a){const l=Math.hypot(a[0],a[1],a[2])||1; return [a[0]/l,a[1]/l,a[2]/l];}
-  const axis = norm(cross(up,u));
-  const cos  = dot(up,u);
-  const ang  = Math.acos(Math.max(-1,Math.min(1,cos)));
-  // quaternion
-  const s=Math.sin(ang/2), c=Math.cos(ang/2);
-  const q=[axis[0]*s, axis[1]*s, axis[2]*s, c];
-  e.rotation = viewer.scene.math.quaternionToEuler(q);
-  e.position = mid;
-  return e;
+function aabb(){
+  const bb = viewer.scene.aabb; // [xmin,ymin,zmin,xmax,ymax,zmax]
+  return bb && bb.length===6 ? bb : [-1,-1,-1, 1,1,1];
 }
 
-/* ====== MESURE : 2 clics -> pastilles + trait + HUD ====== */
-let mode = "none"; // none | measure | annot | clip
-let tmpPt = null;  // premier point
+/* ====== Modes (none/measure/annot/clip) ====== */
+let mode = "none";
 function setMode(m){
   mode = (mode===m) ? "none" : m;
   btnMeasure?.classList.toggle("btn-primary", mode==="measure");
   btnAnnot?.classList.toggle("btn-primary",   mode==="annot");
   btnClip?.classList.toggle("btn-primary",    mode==="clip");
   viewerContainer.style.cursor = (mode==="measure"||mode==="annot"||mode==="clip")? "crosshair":"";
-  // clip HUD
+  // HUD coupe visible uniquement en mode clip
   clipPanel.style.display = mode==="clip" ? "block" : "none";
-  if (mode!=="clip") viewer.scene.sectionPlanesEnabled = false;
+  if (mode!=="clip"){
+    // sort de coupe => désactive tout
+    viewer.scene.sectionPlanesEnabled = false;
+    activeAxis=null;
+    updateClipButtonsState();
+    clipRange.disabled = true;
+  }
 }
 window.addEventListener("keydown",(e)=>{ if (e.key==="Escape") setMode("none"); });
 
-function addMeasure(p1,p2){
-  // entités
-  const id = "meas_"+Date.now();
-  const s1 = makeSphere(id+"_a", p1);
-  const s2 = makeSphere(id+"_b", p2);
-  const ln = makeLine(id+"_l", p1, p2);
-  // distance
+/* ====== MESURE : 2 clics -> HUD ====== */
+let firstPoint = null;
+function pushMeasure(p1,p2){
   const d = Math.hypot(p2[0]-p1[0], p2[1]-p1[1], p2[2]-p1[2]);
   const label = d>=1 ? `${d.toFixed(3)} m` : `${(d*1000).toFixed(1)} mm`;
-  // HUD list
+
   const row = document.createElement("div");
   row.textContent = label;
-  Object.assign(row.style,{padding:"4px 6px",background:"rgba(255,255,255,.06)",borderRadius:"6px",marginTop:"4px"});
+  Object.assign(row.style,{padding:"4px 6px",background:"rgba(255,255,255,.06)",borderRadius:"6px",marginTop:"4px",color:"#fff"});
   const del = document.createElement("button");
   del.textContent="×";
   Object.assign(del.style,{float:"right",background:"transparent",border:"0",color:"#fff",cursor:"pointer"});
-  del.onclick=()=>{
-    try{s1.destroy();}catch{}
-    try{s2.destroy();}catch{}
-    try{ln.destroy();}catch{}
-    row.remove();
-  };
+  del.onclick=()=> row.remove();
   row.appendChild(del);
   measureList.appendChild(row);
 }
-
 btnMeasure?.addEventListener("click", ()=> setMode("measure"));
 
-/* ====== ANNOTATION : pin 3D (sphère) + liste dans props ====== */
-const annotations = []; // {id, pos, text}
+/* ====== ANNOTATION : mémorise le point, bouton “Voir” ====== */
 btnAnnot?.addEventListener("click", ()=> setMode("annot"));
-
-function addPin(worldPos, text="Note"){
-  const id = "pin_"+Date.now();
-  const pin = makeSphere(id, worldPos, 0.0035, [1,0.4,0]);
-  annotations.push({id, pos: worldPos.slice(), text});
-  // affiche en bas du panneau propriétés
-  if (propsPanel){
-    const row=document.createElement("div");
-    row.className="row";
-    row.innerHTML = `<span>${text}</span><button class="btn btn-outline mini">Voir</button>`;
-    row.querySelector("button").onclick=()=> viewer.cameraFlight.flyTo(pin);
-    propsPanel.appendChild(row);
-  }
+function addAnnotation(worldPos, text="Note"){
+  if (!propsPanel) return;
+  const row=document.createElement("div");
+  row.className="row";
+  row.style.justifyContent="space-between";
+  row.innerHTML = `<span>${text}</span><button class="btn btn-outline mini">Voir</button>`;
+  row.querySelector("button").onclick=()=> viewer.cameraFlight.flyTo({
+    aabb: [worldPos[0],worldPos[1],worldPos[2], worldPos[0],worldPos[1],worldPos[2]]
+  });
+  propsPanel.appendChild(row);
 }
 
-/* ====== CLIP : 3 plans + slider ====== */
-let planeX=null, planeY=null, planeZ=null, activeAxis="x";
+/* ====== CLIP : aucun axe au départ, un seul à la fois ====== */
+let planeX=null, planeY=null, planeZ=null, activeAxis=null;
 function ensurePlanes(){
   if (planeX && planeY && planeZ) return;
   const c = viewer.scene?.aabbCenter || [0,0,0];
@@ -277,11 +228,8 @@ function ensurePlanes(){
   planeY = sections.createSectionPlane({ id:"cutY", pos:c.slice(), dir:[0,1,0] });
   planeZ = sections.createSectionPlane({ id:"cutZ", pos:c.slice(), dir:[0,0,1] });
 }
-function aabb(){
-  const bb = viewer.scene.aabb; // [xmin,ymin,zmin, xmax,ymax,zmax]
-  return bb && bb.length===6 ? bb : [-1,-1,-1, 1,1,1];
-}
 function setPlaneFromSlider(){
+  if (!activeAxis) return;
   const bb=aabb();
   const center=[(bb[0]+bb[3])/2,(bb[1]+bb[4])/2,(bb[2]+bb[5])/2];
   const half=[(bb[3]-bb[0])/2,(bb[4]-bb[1])/2,(bb[5]-bb[2])/2];
@@ -292,40 +240,67 @@ function setPlaneFromSlider(){
   if (activeAxis==="z") planeZ.pos=[center[0], center[1], center[2]+t*half[2]];
   viewer.scene.sectionPlanesEnabled = true;
 }
-btnClip?.addEventListener("click", ()=>{ setMode("clip"); ensurePlanes(); setPlaneFromSlider(); });
+function updateClipButtonsState(){
+  clipPanel.querySelectorAll(".clipBtn").forEach(b=>{
+    const on = b.dataset.axis === activeAxis;
+    b.style.background = on ? "rgba(255,255,255,.2)" : "transparent";
+  });
+}
+btnClip?.addEventListener("click", ()=>{ setMode("clip"); /* aucun axe sélectionné au départ */ });
 clipPanel.querySelectorAll(".clipBtn").forEach(b=>{
   b.addEventListener("click", ()=>{
-    activeAxis = b.dataset.axis;
-    setPlaneFromSlider();
+    const axis = b.dataset.axis;
+    // toggle exclusif
+    if (activeAxis === axis){
+      activeAxis = null;
+      viewer.scene.sectionPlanesEnabled = false;
+      clipRange.disabled = true;
+    } else {
+      activeAxis = axis;
+      ensurePlanes();
+      clipRange.disabled = false;
+      setPlaneFromSlider();
+    }
+    updateClipButtonsState();
   });
 });
 clipRange.addEventListener("input", setPlaneFromSlider);
 window.addEventListener("keydown",(e)=>{
-  if (mode!=="clip") return;
+  if (mode!=="clip" || !activeAxis) return;
   if (e.key==="ArrowLeft"){ clipRange.value = (+clipRange.value-1).toString(); setPlaneFromSlider(); }
   if (e.key==="ArrowRight"){ clipRange.value = (+clipRange.value+1).toString(); setPlaneFromSlider(); }
 });
 
-/* ====== Picking global (route selon le mode) ====== */
+/* ====== Picking (route par mode) ====== */
 viewer.scene.input.on("mouseclicked", (coords)=>{
   const hit = viewer.scene.pick({ canvasPos:[coords[0],coords[1]], pickSurface:true });
+
   if (mode==="measure"){
     if (hit && hit.worldPos){
-      if (!tmpPt){ tmpPt = hit.worldPos.slice(); }
-      else { addMeasure(tmpPt, hit.worldPos.slice()); tmpPt=null; setMode("none"); }
+      if (!firstPoint){ firstPoint = hit.worldPos.slice(); }
+      else { pushMeasure(firstPoint, hit.worldPos.slice()); firstPoint=null; setMode("none"); }
     }
     return;
   }
+
   if (mode==="annot"){
-    if (hit && hit.worldPos){ addPin(hit.worldPos.slice()); setMode("none"); }
+    if (hit && hit.worldPos){ addAnnotation(hit.worldPos.slice()); setMode("none"); }
     return;
   }
+
   if (mode==="clip"){
-    // clic repositionne le plan actif
-    if (hit && hit.worldPos){ ensurePlanes(); if (activeAxis==="x") planeX.pos=hit.worldPos; if (activeAxis==="y") planeY.pos=hit.worldPos; if (activeAxis==="z") planeZ.pos=hit.worldPos; }
+    // si un axe est actif : clic repositionne ce plan
+    if (activeAxis && hit && hit.worldPos){
+      ensurePlanes();
+      if (activeAxis==="x") planeX.pos=hit.worldPos.slice();
+      if (activeAxis==="y") planeY.pos=hit.worldPos.slice();
+      if (activeAxis==="z") planeZ.pos=hit.worldPos.slice();
+      viewer.scene.sectionPlanesEnabled = true;
+    }
     return;
   }
-  // SELECT
+
+  // SELECT par défaut
   if (!hit || !hit.entity){ clearSelection(); return; }
   const id = hit.entity.id;
   setSome(allIds(),"highlighted",false);
@@ -344,7 +319,7 @@ viewer.scene.input.on("mouseclicked", (coords)=>{
   }
 });
 
-/* ====== Reste des contrôles ====== */
+/* ====== Rendu / Nav ====== */
 btnFit?.addEventListener("click", ()=> viewer.cameraFlight.flyTo(viewer.scene));
 
 let proj="perspective";
@@ -354,7 +329,6 @@ btnProj?.addEventListener("click", ()=>{
   btnProj.textContent = proj==="perspective" ? "Perspective" : "Orthographique";
 });
 
-// Pan => Plan
 (() => {
   if (!navMode) return;
   const opt = [...navMode.options].find(o=>o.value==="pan");
@@ -362,6 +336,7 @@ btnProj?.addEventListener("click", ()=>{
 })();
 navMode?.addEventListener("change", ()=> viewer.cameraControl.navMode = navMode.value);
 
+/* Arêtes : global + verrouillage pendant la nav */
 function applyEdges(on){
   viewer.scene.edgeMaterial.edgesEnabled = !!on;
   (viewer.scene.objectIds||[]).forEach(id=>{
@@ -440,15 +415,13 @@ async function uploadAndShow(){
     btnVisualiser && (btnVisualiser.disabled=false, btnVisualiser.textContent="VISUALISER");
   }
 }
-
-// Choisir => ouvre l’explorateur de fichiers + auto-visualise
 btnChoose?.addEventListener("click", (e)=>{ e.preventDefault(); fileInput?.click(); });
 fileInput?.addEventListener("change", ()=>{ const f=fileInput.files?.[0]; if (f && fileNameLbl) fileNameLbl.textContent=f.name; if (f) uploadAndShow(); });
 btnVisualiser?.addEventListener("click", (e)=>{ e.preventDefault(); uploadAndShow(); });
 
-/* ====== Recherche / Voir propriétés déjà en place ====== */
+/* ====== Recherche, iso/cacher, explode, screenshot, reload/unload ====== */
 btnSearch?.addEventListener("click", ()=>{
-  const q = (searchInput?.value||"").toLowerCase().trim();
+  const q=(searchInput?.value||"").toLowerCase().trim();
   if (!resultsBox) return;
   resultsBox.innerHTML=""; if (!q) return;
   const found=[];
@@ -469,14 +442,10 @@ btnSearch?.addEventListener("click", ()=>{
     b.onclick=()=>{ const id=b.dataset.id; const obj=viewer.scene.objects[id]; if(obj){ viewer.cameraFlight.flyTo(obj); setSome([id],"highlighted",true); } };
   });
 });
-
-/* ====== Iso / cacher / montrer ====== */
 btnIsolate?.addEventListener("click", ()=>{ if (!selectedIds.size) return; setAll("visible", false); setSome([...selectedIds],"visible", true); });
 btnHide?.addEventListener("click",    ()=>{ if (!selectedIds.size) return; setSome([...selectedIds],"visible", false); });
 btnShowOnly?.addEventListener("click",()=>{ if (!selectedIds.size) return; setAll("visible", false); setSome([...selectedIds],"visible", true); });
 btnClearSel?.addEventListener("click",()=>{ setAll("visible", true); setSome(allIds(),"highlighted", false); clearSelection(); });
-
-/* ====== Explode / Screenshot ====== */
 explodeRange?.addEventListener("input", ()=>{
   const ids = allIds(); if (!ids.length) return;
   const k = parseFloat(explodeRange.value)||0;
@@ -494,8 +463,6 @@ btnShot?.addEventListener("click", ()=>{
     const a=document.createElement("a"); a.href=dataURL; a.download="cadlytics_view.png"; a.click();
   }catch(e){ console.error(e); alert("Capture impossible."); }
 });
-
-/* ====== Reload / Unload ====== */
 btnReload?.addEventListener("click", ()=>{
   if (!lastModelId) return;
   const info=models.get(lastModelId); if(!info) return;
