@@ -5,7 +5,7 @@ import {
   FastNavPlugin,
   NavCubePlugin,
   SectionPlanesPlugin,
-  AnnotationsPlugin,
+  AnnotationsPlugin,               // gardé si tu veux encore t'en servir ailleurs
   DistanceMeasurementsPlugin,
   DistanceMeasurementsMouseControl
 } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
@@ -64,7 +64,7 @@ const xktLoader = new XKTLoaderPlugin(viewer, {
 });
 const sections = new SectionPlanesPlugin(viewer);
 
-// Overlays HTML (annotations)
+// (on garde une instance, mais on ne s'appuie plus dessus pour placer les annotations)
 const annotations = new AnnotationsPlugin(viewer, { container: overlayHost });
 
 /* ========= Canvas & overlay sizing — DPR sûr ========= */
@@ -73,6 +73,12 @@ function resizeCanvasAndOverlay() {
   const w = Math.max(1, viewerContainer.clientWidth);
   const h = Math.max(1, viewerContainer.clientHeight);
   const dpr = 1;
+
+  // Calque HTML bien superposé au canvas
+  viewerContainer.style.position = "relative";
+  overlayHost.style.position = "absolute";
+  overlayHost.style.left = "0";
+  overlayHost.style.top  = "0";
 
   canvasEl.style.width  = w + "px";
   canvasEl.style.height = h + "px";
@@ -113,7 +119,7 @@ const setSome=(ids,prop,val)=> ids.forEach(id=>{const o=viewer.scene.objects[id]
 const setAll=(prop,val)=> allIds().forEach(id=>{const o=viewer.scene.objects[id]; if(o) o[prop]=val;});
 const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); if (propsPanel) propsPanel.innerHTML=""; };
 
-/* ---------- Mesures natives Xeokit (affiche “mm” sans conversion) ---------- */
+/* ---------- Mesures xeokit (affiche “mm” sans conversion) ---------- */
 const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
   container: overlayHost,
   labelsShown: true,
@@ -186,7 +192,7 @@ btnClearMeas.addEventListener("click", ()=>{
   measureListEl.innerHTML = ""; measMap.clear(); measCounter = 0; allHidden = false;
 });
 
-/* ============ Gestion MUTUELLEMENT EXCLUSIVE des modes ============ */
+/* ============ Modes exclusifs ============ */
 function deactivateMeasure() {
   if (distanceCtrl.active) distanceCtrl.deactivate();
   btnMeasure?.classList.remove("btn-primary");
@@ -216,8 +222,6 @@ function toggleAnnot() {
 }
 btnMeasure?.addEventListener("click", toggleMeasure);
 btnAnnot  ?.addEventListener("click", toggleAnnot);
-
-// Echap quitte la mesure
 window.addEventListener("keydown", (e)=>{ if (e.key==="Escape" && distanceCtrl.active) deactivateMeasure(); });
 
 /* ---------- chargement XKT ---------- */
@@ -272,8 +276,7 @@ btnProj?.addEventListener("click",()=>{ proj = proj==="perspective" ? "ortho" : 
 chkEdges?.addEventListener("change",()=> viewer.scene.edgeMaterial.edgesEnabled=!!chkEdges.checked);
 viewer.scene.on("tick",()=>{ 
   if (chkEdges?.checked && !viewer.scene.edgeMaterial.edgesEnabled) viewer.scene.edgeMaterial.edgesEnabled=true;
-  // force le recalcul des positions d'annotations si nécessaire selon la version
-  annotations.update?.(); 
+  // (les annotations manuelles seront mises à jour plus bas)
 });
 
 chkXray ?.addEventListener("change",()=>{ setAll("xrayed", !!chkXray.checked);  setSome([...selectedIds],"xrayed",false); });
@@ -281,7 +284,8 @@ chkGhost?.addEventListener("change",()=>{ setAll("ghosted",!!chkGhost.checked); 
 chkTheme?.addEventListener("change",()=> viewerShell?.classList.toggle("dark",!!chkTheme.checked));
 opacityRange?.addEventListener("input",()=> setAll("opacity", parseFloat(opacityRange.value)||1));
 
-/* ================= ANNOTATIONS ================= */
+/* ===================== ANNOTATIONS MANUELLES (fiables) ===================== */
+
 const annotPane = document.createElement("div");
 annotPane.className = "pane";
 annotPane.innerHTML = `
@@ -297,33 +301,64 @@ const annotListEl  = annotPane.querySelector("#annotList");
 const btnHideAllAnn= annotPane.querySelector("#btnHideAllAnn");
 const btnClearAnn  = annotPane.querySelector("#btnClearAnn");
 
-const annMap = new Map(); // id -> { ann, name }
 let annCounter = 0;
-const getAnnId = (ann) => ann.id || (ann.__uiId ?? (ann.__uiId = "a"+Date.now().toString(36)+Math.random().toString(36).slice(2,6)));
+const manualAnns = []; // {id, world:[x,y,z], el, visible, name}
 
-function setAnnotationLabel(ann, text){
-  const safe = (text || "").trim();
-  const html = `<div class="xk-badge">${safe || "Annotation"}</div>`;
-  ann.setLabelHTML?.(html) || (ann.labelHTML = html);
+function worldToCanvas(world){
+  // 1) chemin le plus fiable : project() si dispo
+  if (typeof viewer.camera.project === "function") {
+    const out = viewer.camera.project(world, new Float32Array(4)); // clip coords
+    const w = out[3] || 1;
+    const nx = out[0] / w;     // NDC -1..+1
+    const ny = out[1] / w;
+    const x = (nx * 0.5 + 0.5) * overlayHost.clientWidth;
+    const y = (1 - (ny * 0.5 + 0.5)) * overlayHost.clientHeight;
+    return { x, y };
+  }
+  // 2) fallback: projection 4x4 (si la méthode n'existe pas)
+  const mV = viewer.camera.viewMatrix;
+  const mP = viewer.camera.projMatrix || viewer.camera.projectionMatrix;
+  if (!mV || !mP) return null;
+  const x = world[0], y = world[1], z = world[2];
+  // v = V * [x,y,z,1]
+  const vx = mV[0]*x + mV[4]*y + mV[8]*z  + mV[12];
+  const vy = mV[1]*x + mV[5]*y + mV[9]*z  + mV[13];
+  const vz = mV[2]*x + mV[6]*y + mV[10]*z + mV[14];
+  const vw = mV[3]*x + mV[7]*y + mV[11]*z + mV[15];
+  // c = P * v
+  const cx = mP[0]*vx + mP[4]*vy + mP[8]*vz + mP[12]*vw;
+  const cy = mP[1]*vx + mP[5]*vy + mP[9]*vz + mP[13]*vw;
+  const cw = mP[3]*vx + mP[7]*vy + mP[11]*vz + mP[15]*vw;
+  const nx = cx / cw, ny = cy / cw;
+  return {
+    x: (nx * 0.5 + 0.5) * overlayHost.clientWidth,
+    y: (1 - (ny * 0.5 + 0.5)) * overlayHost.clientHeight
+  };
 }
-function updateAnnotationListName(id, text){
-  const row = annotListEl.querySelector(`[data-aid="${id}"]`);
-  if (!row) return;
-  const title = row.querySelector(".annot-name");
-  title.textContent = text && text.trim() ? text.trim() : (annMap.get(id)?.name || "Annotation");
-}
-function addAnnotationRow(ann){
-  const id = getAnnId(ann);
-  if (!annMap.has(id)) { annCounter += 1; annMap.set(id, { ann, name: `Annotation ${annCounter}` }); }
-  if (annotListEl.querySelector(`[data-aid="${id}"]`)) return;
 
-  const { name } = annMap.get(id);
+function place(el, p){
+  if (!p) { el.style.display = "none"; return; }
+  el.style.display = "block";
+  // centrer le marqueur
+  el.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px) translate(-50%, -50%)`;
+}
+
+function setAnnotationLabelEl(el, text){
+  const badge = document.createElement("div");
+  badge.className = "xk-badge";
+  badge.textContent = (text && text.trim()) || "Annotation";
+  const label = el.querySelector(".ann-label");
+  label.innerHTML = "";
+  label.appendChild(badge);
+}
+
+function addAnnotationRow(entry){
   const row = document.createElement("div");
   row.className = "row mini";
-  row.dataset.aid = id;
   row.style.justifyContent = "space-between";
+  row.dataset.aid = entry.id;
   row.innerHTML = `
-    <span class="annot-name" style="font-size:12px">${name}</span>
+    <span class="annot-name" style="font-size:12px">${entry.name}</span>
     <span>
       <button class="btn btn-outline mini" data-act="edit">Éditer</button>
       <button class="btn btn-outline mini" data-act="toggle">Cacher</button>
@@ -331,75 +366,103 @@ function addAnnotationRow(ann){
     </span>`;
   annotListEl.appendChild(row);
 
-  const btnE = row.querySelector('[data-act="edit"]');
-  const btnT = row.querySelector('[data-act="toggle"]');
-  const btnD = row.querySelector('[data-act="del"]');
-
-  btnE.addEventListener("click", ()=>{
+  row.querySelector('[data-act="edit"]').addEventListener("click", ()=>{
     const current = row.querySelector(".annot-name").textContent.trim();
     const nv = prompt("Texte de l’annotation :", current);
     if (nv != null){
-      setAnnotationLabel(ann, nv);
-      updateAnnotationListName(id, nv);
-      const entry = annMap.get(id); if (entry) entry.name = nv.trim() || entry.name;
+      setAnnotationLabelEl(entry.el, nv);
+      row.querySelector(".annot-name").textContent = nv.trim() || entry.name;
+      entry.name = nv.trim() || entry.name;
     }
   });
-  btnT.addEventListener("click", ()=>{ ann.visible = !ann.visible; btnT.textContent = ann.visible ? "Cacher" : "Montrer"; });
-  btnD.addEventListener("click", ()=>{ try { ann.destroy?.(); } catch {} annMap.delete(id); row.remove(); });
+  row.querySelector('[data-act="toggle"]').addEventListener("click", ()=>{
+    entry.visible = !entry.visible;
+    entry.el.style.display = entry.visible ? "block" : "none";
+    row.querySelector('[data-act="toggle"]').textContent = entry.visible ? "Cacher" : "Montrer";
+  });
+  row.querySelector('[data-act="del"]').addEventListener("click", ()=>{
+    entry.el.remove();
+    const i = manualAnns.findIndex(a=>a.id===entry.id);
+    if (i>=0) manualAnns.splice(i,1);
+    row.remove();
+  });
 }
 
 let allAnnHidden = false;
 btnHideAllAnn.addEventListener("click", ()=>{
   allAnnHidden = !allAnnHidden;
-  for (const {ann} of annMap.values()) ann.visible = !allAnnHidden;
+  manualAnns.forEach(a=>{
+    a.visible = !allAnnHidden;
+    a.el.style.display = a.visible ? "block" : "none";
+  });
 });
 btnClearAnn.addEventListener("click", ()=>{
-  for (const {ann} of annMap.values()) { try { ann.destroy?.(); } catch {} }
-  annMap.clear(); annCounter = 0; allAnnHidden = false; annotListEl.innerHTML = "";
+  manualAnns.splice(0).forEach(a=> a.el.remove());
+  annotListEl.innerHTML = "";
+  allAnnHidden = false;
+  annCounter = 0;
 });
 
-/* Création annotation : on passe le pickResult COMPLET + worldPos + entity */
-function handleAnnotClick(pickResult){
-  const tempId="a"+Date.now();
-  const ann = annotations.createAnnotation({
-    id: tempId,
-    pickResult,                         // si ta version le supporte, c’est suffisant
-    entity: pickResult.entity,          // sinon on lui donne la cible explicitement
-    worldPos: pickResult.worldPos.slice(),
-    occludable: false,
-    markerHTML:`<div class="dot"></div>`,
-    labelHTML:`<input class="annot-input" placeholder="Texte…" />`,
-    markerShown:true,
-    labelShown:true
+function createManualAnnotation(world){
+  const id = "ann" + (++annCounter);
+  const wrapper = document.createElement("div");
+  wrapper.className = "ann";
+  Object.assign(wrapper.style, {
+    position:"absolute",
+    transform:"translate(-9999px, -9999px)",
+    willChange:"transform",
+    pointerEvents:"auto",
+    zIndex: "5"
   });
-  // fallback “ceinture & bretelles”
-  ann.setWorldPos?.(pickResult.worldPos);
-  if (!ann.entity && pickResult.entity) ann.entity = pickResult.entity;
 
-  addAnnotationRow(ann);
-  const id = getAnnId(ann);
+  // dot
+  const dot = document.createElement("div");
+  dot.className = "dot";
+  wrapper.appendChild(dot);
 
-  const input = overlayHost.querySelector(`[data-annotation_id="${tempId}"] .annot-input`) ||
-                overlayHost.querySelector(".annot-input:last-child");
-  if (!input) return;
+  // label (input d'abord)
+  const label = document.createElement("div");
+  label.className = "ann-label";
+  const input = document.createElement("input");
+  input.className = "annot-input";
+  input.placeholder = "Texte…";
+  label.appendChild(input);
+  wrapper.appendChild(label);
+
+  overlayHost.appendChild(wrapper);
   input.focus();
 
-  const commit=()=>{
-    const val=(input.value||"").trim();
-    setAnnotationLabel(ann, val || "Annotation");
-    updateAnnotationListName(id, val);
-    const entry = annMap.get(id); if (entry && val) entry.name = val;
+  const entry = { id, world: world.slice(), el: wrapper, visible: true, name: `Annotation ${annCounter}` };
+  manualAnns.push(entry);
+  addAnnotationRow(entry);
+
+  const commit = ()=>{
+    const val = (input.value||"").trim();
+    setAnnotationLabelEl(wrapper, val);
+    const row = annotListEl.querySelector(`[data-aid="${id}"] .annot-name`);
+    if (row) row.textContent = val || entry.name;
   };
   input.addEventListener("keydown",(e)=>{ if (e.key==="Enter"){ e.preventDefault(); input.blur(); } });
   input.addEventListener("blur", commit, {once:true});
+
+  // placer tout de suite
+  place(wrapper, worldToCanvas(entry.world));
 }
+
+/* — mise à jour des annotations à chaque frame — */
+viewer.scene.on("tick", ()=>{
+  for (const a of manualAnns){
+    if (!a.visible) continue;
+    place(a.el, worldToCanvas(a.world));
+  }
+});
 
 /* ---------- clic scène ---------- */
 viewer.scene.input.on("mouseclicked", (coords)=>{
   if (distanceCtrl.active) return; // mesure consomme le clic
   const hit = viewer.scene.pick({ canvasPos: coords, pickSurface: true });
   if (!hit || !hit.entity) { if (appMode==="select") clearSelection(); return; }
-  if (appMode==="annotate"){ handleAnnotClick(hit); return; }
+  if (appMode==="annotate"){ createManualAnnotation(hit.worldPos); return; }
 
   const id = hit.entity.id;
   setSome(allIds(),"highlighted",false);
@@ -426,7 +489,6 @@ function showProps(meta){
 /* ---------- COUPE ---------- */
 function setClipAxis(axis){
   const same=(clipAxis===axis); clipAxis = same ? null : axis;
-
   clipButtons.forEach(b=> b.classList.toggle("btn-primary", !same && b.dataset.axis===clipAxis));
 
   if (clipPlane){ try{ clipPlane.destroy(); }catch{} clipPlane=null; }
@@ -441,7 +503,8 @@ function setClipAxis(axis){
   clipPlane = sections.createSectionPlane({ id:"cut", pos:center, dir });
   viewer.scene.sectionPlanesEnabled=true;
 
-  clipPlateAnn = annotations.createAnnotation({
+  // petite plaque visuelle (on peut garder l'annotation plugin ici, ce n'est qu'un label flottant)
+  annotations.createAnnotation({
     id:"cutplate", worldPos:center, markerShown:false, labelShown:true,
     labelHTML:`<div class="cutplate" title="Plan ${clipAxis.toUpperCase()}"></div>`, occludable:false
   });
@@ -458,7 +521,6 @@ clipRange?.addEventListener("input",()=>{
   const shift=(clipAxis==="x"?half[0]:clipAxis==="y"?half[1]:half[2])*(k/100);
   const pos=[...center]; if (clipAxis==="x") pos[0]+=shift; else if (clipAxis==="y") pos[1]+=shift; else pos[2]+=shift;
   clipPlane.pos=pos;
-  if (clipPlateAnn?.setWorldPos) clipPlateAnn.setWorldPos(pos); else clipPlateAnn.worldPos=pos;
 });
 
 /* ---------- Screenshot ---------- */
