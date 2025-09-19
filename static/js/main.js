@@ -176,7 +176,10 @@ distancePlugin.on?.("measurementDestroyed", (ev)=>{
 });
 
 let allHidden = false;
-btnHideAll.addEventListener("click", ()=>{ allHidden = !allHidden; for (const {m} of measMap.values()) m.visible = !allHidden; });
+btnHideAll.addEventListener("click", ()=>{
+  allHidden = !allHidden;
+  for (const {m} of measMap.values()) m.visible = !allHidden;
+});
 btnClearMeas.addEventListener("click", ()=>{
   if (typeof distancePlugin.clear === "function") distancePlugin.clear();
   else if (typeof distancePlugin.destroyAll === "function") distancePlugin.destroyAll();
@@ -345,27 +348,35 @@ function addAnnotationRow(ann){
 }
 
 let allAnnHidden = false;
-btnHideAllAnn.addEventListener("click", ()=>{ allAnnHidden = !allAnnHidden; for (const {ann} of annMap.values()) ann.visible = !allAnnHidden; });
+btnHideAllAnn.addEventListener("click", ()=>{
+  allAnnHidden = !allAnnHidden;
+  for (const {ann} of annMap.values()) ann.visible = !allAnnHidden;
+});
 btnClearAnn.addEventListener("click", ()=>{
   for (const {ann} of annMap.values()) { try { ann.destroy?.(); } catch {} }
   annMap.clear(); annCounter = 0; allAnnHidden = false; annotListEl.innerHTML = "";
 });
 
-/* Création annotation au clic + saisie inline synchronisée */
-function handleAnnotClick(worldPos){
+/* Création annotation au clic + saisie inline synchronisée
+   -> Correction: on passe le pickResult complet pour ancrer sur la pièce */
+function handleAnnotClick(pickResult){
   // on reste exclusif : si mesure était active on l’a déjà coupée via toggleAnnot()
   const tempId="a"+Date.now();
   const ann = annotations.createAnnotation({
     id: tempId,
-    worldPos,
+    pickResult,                       // <<— clé : ancre correctement l’annotation
+    occludable: false,
     markerHTML:`<div class="dot"></div>`,
     labelHTML:`<input class="annot-input" placeholder="Texte…" />`,
+    markerShown:true,
     labelShown:true
   });
   addAnnotationRow(ann);
   const id = getAnnId(ann);
 
-  const input = overlayHost.querySelector(`[data-annotation_id="${tempId}"] .annot-input`);
+  // récupérer l'input nouvellement ajouté
+  const input = overlayHost.querySelector(`[data-annotation_id="${tempId}"] .annot-input`) ||
+                overlayHost.querySelector(".annot-input:last-child");
   if (!input) return;
   input.focus();
 
@@ -384,7 +395,7 @@ viewer.scene.input.on("mouseclicked", (coords)=>{
   if (distanceCtrl.active) return; // mesure consomme le clic
   const hit = viewer.scene.pick({ canvasPos: coords, pickSurface: true });
   if (!hit || !hit.entity) { if (appMode==="select") clearSelection(); return; }
-  if (appMode==="annotate"){ handleAnnotClick(hit.worldPos); return; }
+  if (appMode==="annotate"){ handleAnnotClick(hit); return; }
 
   const id = hit.entity.id;
   setSome(allIds(),"highlighted",false);
