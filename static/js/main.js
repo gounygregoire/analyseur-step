@@ -113,25 +113,16 @@ const setSome=(ids,prop,val)=> ids.forEach(id=>{const o=viewer.scene.objects[id]
 const setAll=(prop,val)=> allIds().forEach(id=>{const o=viewer.scene.objects[id]; if(o) o[prop]=val;});
 const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); if (propsPanel) propsPanel.innerHTML=""; };
 
-/* ---------- Mesures natives Xeokit (mm) + panneau de gestion ---------- */
+/* ---------- Mesures natives Xeokit (libellé "mm" sans conversion) ---------- */
 const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
   container: overlayHost,
   labelsShown: true,
-  // mm souhaités
-  labelFormat: (meters) => `${(meters * 1000).toFixed(2)} mm`
+  // Tu as demandé : pas de conversion → on garde la valeur et on affiche "mm"
+  labelFormat: (meters) => `${meters.toFixed(2)} mm`
 });
 const distanceCtrl = new DistanceMeasurementsMouseControl(distancePlugin, { snapping: true });
 
-/* Dédup & noms “Mesure 1/2/3” */
-const seenMeas = new Set();        // ids déjà listés UI
-const measMap  = new Map();        // id -> {m, name}
-let measCounter = 0;
-
-function getMeasId(m){
-  return m.id || m._id || (m.__uiId ?? (m.__uiId = "m"+Date.now().toString(36)+Math.random().toString(36).slice(2,6)));
-}
-
-/* Panneau "Mesures" */
+/* ====== Panneau "Mesures" ====== */
 const leftCard = document.querySelector(".grid > .card:first-child");
 const measPane = document.createElement("div");
 measPane.className = "pane";
@@ -148,37 +139,22 @@ const measureListEl = measPane.querySelector("#measureList");
 const btnHideAll    = measPane.querySelector("#btnHideAll");
 const btnClearMeas  = measPane.querySelector("#btnClearMeas");
 
-let allHidden = false;
-btnHideAll.addEventListener("click", ()=>{
-  allHidden = !allHidden;
-  for (const {m} of measMap.values()) { m.visible = !allHidden; }
-});
+const measMap  = new Map();  // id -> { m, name }
+let measCounter = 0;
+const getMeasId = (m)=> m.id || m._id || (m.__uiId ?? (m.__uiId = "m"+Date.now().toString(36)+Math.random().toString(36).slice(2,6)));
 
-btnClearMeas.addEventListener("click", ()=>{
-  if (typeof distancePlugin.clear === "function") distancePlugin.clear();
-  else if (typeof distancePlugin.destroyAll === "function") distancePlugin.destroyAll();
-  measureListEl.innerHTML = "";
-  seenMeas.clear(); measMap.clear(); measCounter = 0;
-});
-
-/* UI par mesure */
 function addMeasurementRow(m){
   const id = getMeasId(m);
-  if (seenMeas.has(id)) return;      // évite les doublons
-  seenMeas.add(id);
-
-  if (!measMap.has(id)) {
-    measCounter += 1;
-    measMap.set(id, { m, name: `Mesure ${measCounter}` });
-  }
+  if (!measMap.has(id)) { measCounter += 1; measMap.set(id, { m, name: `Mesure ${measCounter}` }); }
   const { name } = measMap.get(id);
+  if (measureListEl.querySelector(`[data-mid="${id}"]`)) return;
 
   const row = document.createElement("div");
   row.className = "row mini";
   row.dataset.mid = id;
   row.style.justifyContent = "space-between";
   row.innerHTML = `
-    <span style="font-size:12px">${name}</span>
+    <span class="measure-name" style="font-size:12px">${name}</span>
     <span>
       <button class="btn btn-outline mini" data-act="toggle">Cacher</button>
       <button class="btn btn-outline mini btn-danger" data-act="del">Suppr.</button>
@@ -187,62 +163,28 @@ function addMeasurementRow(m){
 
   const btnT = row.querySelector('[data-act="toggle"]');
   const btnD = row.querySelector('[data-act="del"]');
-
-  btnT.addEventListener("click", ()=>{
-    m.visible = !m.visible;
-    btnT.textContent = m.visible ? "Cacher" : "Montrer";
-  });
-  btnD.addEventListener("click", ()=>{
-    try { m.destroy ? m.destroy() : distancePlugin.destroyMeasurement?.(m.id); } catch {}
-    measMap.delete(id);
-    seenMeas.delete(id);
-    row.remove();
-  });
+  btnT.addEventListener("click", ()=>{ m.visible = !m.visible; btnT.textContent = m.visible ? "Cacher" : "Montrer"; });
+  btnD.addEventListener("click", ()=>{ try { m.destroy ? m.destroy() : distancePlugin.destroyMeasurement?.(m.id); } catch {} measMap.delete(id); row.remove(); });
 }
-
-/* Branchements (différentes versions émettent des noms d’événements différents) */
-const addRowFromEvent = (ev)=> addMeasurementRow(ev.measurement || ev);
 ["measurementCreated","newMeasurement","measurementAdded"].forEach(evt=>{
-  distancePlugin.on?.(evt, addRowFromEvent);
+  distancePlugin.on?.(evt, (ev)=> addMeasurementRow(ev.measurement || ev));
 });
 distancePlugin.on?.("measurementDestroyed", (ev)=>{
   const m = ev.measurement || ev;
   const id = getMeasId(m);
-  const row = measureListEl.querySelector(`[data-mid="${id}"]`);
-  if (row) row.remove();
+  measureListEl.querySelector(`[data-mid="${id}"]`)?.remove();
   measMap.delete(id);
-  seenMeas.delete(id);
+});
+let allHidden = false;
+btnHideAll.addEventListener("click", ()=>{ allHidden = !allHidden; for (const {m} of measMap.values()) m.visible = !allHidden; });
+btnClearMeas.addEventListener("click", ()=>{
+  if (typeof distancePlugin.clear === "function") distancePlugin.clear();
+  else if (typeof distancePlugin.destroyAll === "function") distancePlugin.destroyAll();
+  measureListEl.innerHTML = ""; measMap.clear(); measCounter = 0; allHidden = false;
 });
 
-/* Conversion robuste des labels “m” -> “mm” (fallback DOM) */
-function convertLabelsIn(node){
-  if (!node || node.nodeType !== 1) return;
-  const tw = document.createTreeWalker(node, NodeFilter.SHOW_TEXT, null);
-  const re = /(-?\d+(?:\.\d+)?)\s*m\b/;
-  const reGlobal = /(-?\d+(?:\.\d+)?)\s*m\b/g;
-  const toUpdate = [];
-  while (tw.nextNode()){
-    const t = tw.currentNode;
-    if (re.test(t.nodeValue)) toUpdate.push(t);
-  }
-  for (const t of toUpdate){
-    t.nodeValue = t.nodeValue.replace(reGlobal, (_, num)=> `${(parseFloat(num)*1000).toFixed(2)} mm`);
-  }
-}
-const mo = new MutationObserver((mutations)=>{
-  for (const m of mutations){
-    m.addedNodes?.forEach(n=> convertLabelsIn(n));
-    if (m.type === "characterData") convertLabelsIn(m.target.parentNode);
-  }
-});
-mo.observe(overlayHost, { childList:true, subtree:true, characterData:true });
-convertLabelsIn(overlayHost); // premier passage
-
-/* Toggle mesure (activate/deactivate) */
-function setMeasureActive(on){
-  if (on) { distanceCtrl.activate();  btnMeasure?.classList.add("btn-primary"); }
-  else    { distanceCtrl.deactivate();btnMeasure?.classList.remove("btn-primary"); }
-}
+/* Toggle mesure */
+function setMeasureActive(on){ if (on){ distanceCtrl.activate(); btnMeasure?.classList.add("btn-primary"); } else { distanceCtrl.deactivate(); btnMeasure?.classList.remove("btn-primary"); } }
 btnMeasure?.addEventListener("click", ()=> setMeasureActive(!distanceCtrl.active));
 window.addEventListener("keydown", (e)=>{ if (e.key==="Escape" && distanceCtrl.active) setMeasureActive(false); });
 
@@ -287,21 +229,13 @@ async function uploadAndShow(){
 
 /* ---------- fichiers UI ---------- */
 btnChoose?.addEventListener("click",(e)=>{ e.preventDefault(); fileInput?.click(); });
-fileInput?.addEventListener("change",()=>{
-  const f=fileInput.files?.[0];
-  if (f && fileNameLbl) fileNameLbl.textContent=f.name;
-  if (f) uploadAndShow();
-});
+fileInput?.addEventListener("change",()=>{ const f=fileInput.files?.[0]; if (f && fileNameLbl) fileNameLbl.textContent=f.name; if (f) uploadAndShow(); });
 btnVisualiser?.addEventListener("click",(e)=>{ e.preventDefault(); uploadAndShow(); });
 
 /* ---------- nav & rendu ---------- */
 btnFit?.addEventListener("click", ()=> viewer.cameraFlight.flyTo(viewer.scene));
 let proj="perspective";
-btnProj?.addEventListener("click",()=>{
-  proj = proj==="perspective" ? "ortho" : "perspective";
-  viewer.camera.projection=proj;
-  btnProj.textContent = proj==="perspective" ? "PERSPECTIVE" : "ORTHOGRAPHIQUE";
-});
+btnProj?.addEventListener("click",()=>{ proj = proj==="perspective" ? "ortho" : "perspective"; viewer.camera.projection=proj; btnProj.textContent = proj==="perspective" ? "PERSPECTIVE" : "ORTHOGRAPHIQUE"; });
 
 chkEdges?.addEventListener("change",()=> viewer.scene.edgeMaterial.edgesEnabled=!!chkEdges.checked);
 viewer.scene.on("tick",()=>{ if (chkEdges?.checked && !viewer.scene.edgeMaterial.edgesEnabled) viewer.scene.edgeMaterial.edgesEnabled=true; });
@@ -343,22 +277,117 @@ btnHide    ?.addEventListener("click",()=>{ if (!selectedIds.size) return; setSo
 btnShowOnly?.addEventListener("click",()=>{ if (!selectedIds.size) return; setAll("visible",false); setSome([...selectedIds],"visible",true); });
 btnClearSel?.addEventListener("click",()=>{ setAll("visible",true); setSome(allIds(),"highlighted",false); clearSelection(); });
 
-/* ---------- modes / clic scène ---------- */
-function setMode(m){
-  appMode = (appMode===m) ? "select" : m;
-  btnAnnot?.classList.toggle("btn-primary", appMode==="annotate");
+/* ================= ANNOTATIONS (plugin xeokit) =================
+   — panneau “Annotations” + synchro du texte avec la liste
+=================================================================*/
+const annotPane = document.createElement("div");
+annotPane.className = "pane";
+annotPane.innerHTML = `
+  <h4 style="margin:12px 0 10px">Annotations</h4>
+  <div id="annotList" style="display:flex;flex-direction:column;gap:6px"></div>
+  <div class="row mini" style="margin-top:6px; gap:8px">
+    <button id="btnHideAllAnn" class="btn btn-outline mini">Tout cacher/montrer</button>
+    <button id="btnClearAnn"   class="btn btn-danger mini">Tout supprimer</button>
+  </div>`;
+leftCard.appendChild(annotPane);
+
+const annotListEl  = annotPane.querySelector("#annotList");
+const btnHideAllAnn= annotPane.querySelector("#btnHideAllAnn");
+const btnClearAnn  = annotPane.querySelector("#btnClearAnn");
+
+const annMap = new Map(); // id -> { ann, name }
+let annCounter = 0;
+const getAnnId = (ann) => ann.id || (ann.__uiId ?? (ann.__uiId = "a"+Date.now().toString(36)+Math.random().toString(36).slice(2,6)));
+
+function setAnnotationLabel(ann, text){
+  const safe = (text || "").trim();
+  const html = `<div class="xk-badge">${safe || "Annotation"}</div>`;
+  ann.setLabelHTML?.(html) || (ann.labelHTML = html);
 }
-btnAnnot?.addEventListener("click",()=> setMode("annotate"));
 
+function updateAnnotationListName(id, text){
+  const row = annotListEl.querySelector(`[data-aid="${id}"]`);
+  if (!row) return;
+  const title = row.querySelector(".annot-name");
+  title.textContent = text && text.trim() ? text.trim() : (annMap.get(id)?.name || "Annotation");
+}
+
+function addAnnotationRow(ann){
+  const id = getAnnId(ann);
+  if (!annMap.has(id)) { annCounter += 1; annMap.set(id, { ann, name: `Annotation ${annCounter}` }); }
+  if (annotListEl.querySelector(`[data-aid="${id}"]`)) return;
+
+  const { name } = annMap.get(id);
+  const row = document.createElement("div");
+  row.className = "row mini";
+  row.dataset.aid = id;
+  row.style.justifyContent = "space-between";
+  row.innerHTML = `
+    <span class="annot-name" style="font-size:12px">${name}</span>
+    <span>
+      <button class="btn btn-outline mini" data-act="edit">Éditer</button>
+      <button class="btn btn-outline mini" data-act="toggle">Cacher</button>
+      <button class="btn btn-outline mini btn-danger" data-act="del">Suppr.</button>
+    </span>`;
+  annotListEl.appendChild(row);
+
+  const btnE = row.querySelector('[data-act="edit"]');
+  const btnT = row.querySelector('[data-act="toggle"]');
+  const btnD = row.querySelector('[data-act="del"]');
+
+  btnE.addEventListener("click", ()=>{
+    const current = row.querySelector(".annot-name").textContent.trim();
+    const nv = prompt("Texte de l’annotation :", current);
+    if (nv != null){
+      setAnnotationLabel(ann, nv);
+      updateAnnotationListName(id, nv);
+      const entry = annMap.get(id); if (entry) entry.name = nv.trim() || entry.name;
+    }
+  });
+  btnT.addEventListener("click", ()=>{ ann.visible = !ann.visible; btnT.textContent = ann.visible ? "Cacher" : "Montrer"; });
+  btnD.addEventListener("click", ()=>{ try { ann.destroy?.(); } catch {} annMap.delete(id); row.remove(); });
+}
+
+let allAnnHidden = false;
+btnHideAllAnn.addEventListener("click", ()=>{ allAnnHidden = !allAnnHidden; for (const {ann} of annMap.values()) ann.visible = !allAnnHidden; });
+btnClearAnn.addEventListener("click", ()=>{
+  for (const {ann} of annMap.values()) { try { ann.destroy?.(); } catch {} }
+  annMap.clear(); annCounter = 0; allAnnHidden = false; annotListEl.innerHTML = "";
+});
+
+/* Création annotation au clic + saisie inline synchronisée */
+function handleAnnotClick(worldPos){
+  setMode("select");
+  const id="a"+Date.now();
+  const ann = annotations.createAnnotation({
+    id,
+    worldPos,
+    markerHTML:`<div class="dot"></div>`,
+    labelHTML:`<input class="annot-input" placeholder="Texte…" />`,
+    labelShown:true
+  });
+  addAnnotationRow(ann); // ajout dans la liste immédiatement
+  const listId = getAnnId(ann);     // id réel pour la liste
+
+  const input = overlayHost.querySelector(`[data-annotation_id="${id}"] .annot-input`);
+  if (!input) return;
+  input.focus();
+
+  const commit=()=>{
+    const val=(input.value||"").trim();
+    setAnnotationLabel(ann, val || "Annotation");
+    updateAnnotationListName(listId, val);
+    const entry = annMap.get(listId); if (entry && val) entry.name = val; // mémorise le titre
+  };
+  input.addEventListener("keydown",(e)=>{ if (e.key==="Enter"){ e.preventDefault(); input.blur(); } });
+  input.addEventListener("blur", commit, {once:true});
+}
+
+/* ---------- clic scène ---------- */
 viewer.scene.input.on("mouseclicked", (coords)=>{
-  if (distanceCtrl.active) return; // la mesure consomme le clic
-
+  if (distanceCtrl.active) return; // mesure consomme le clic
   const hit = viewer.scene.pick({ canvasPos: coords, pickSurface: true });
-  if (!hit || !hit.entity) {
-    if (appMode==="select") clearSelection();
-    return;
-  }
-
+  if (!hit || !hit.entity) { if (appMode==="select") clearSelection(); return; }
   if (appMode==="annotate"){ handleAnnotClick(hit.worldPos); return; }
 
   const id = hit.entity.id;
@@ -383,31 +412,10 @@ function showProps(meta){
     Object.entries(p).forEach(([k,v])=> add(k, typeof v==="object"? JSON.stringify(v): v));
 }
 
-/* ---------- ANNOTATION : saisie inline ---------- */
-function handleAnnotClick(worldPos){
-  setMode("select");
-  const id="a"+Date.now();
-  const ann = annotations.createAnnotation({
-    id,
-    worldPos,
-    markerHTML:`<div class="dot"></div>`,
-    labelHTML:`<input class="annot-input" placeholder="Texte…" />`,
-    labelShown:true
-  });
-  const input = overlayHost.querySelector(`[data-annotation_id="${id}"] .annot-input`);
-  if (!input) return;
-  input.focus();
-  const commit=()=>{
-    const val=(input.value||"Note");
-    ann.setLabelHTML?.(`<div class="xk-badge">${val}</div>`) || (ann.labelHTML=`<div class="xk-badge">${val}</div>`);
-  };
-  input.addEventListener("keydown",(e)=>{ if (e.key==="Enter"){ e.preventDefault(); input.blur(); } });
-  input.addEventListener("blur", commit, {once:true});
-}
-
 /* ---------- COUPE ---------- */
 function setClipAxis(axis){
   const same=(clipAxis===axis); clipAxis = same ? null : axis;
+
   clipButtons.forEach(b=> b.classList.toggle("btn-primary", !same && b.dataset.axis===clipAxis));
 
   if (clipPlane){ try{ clipPlane.destroy(); }catch{} clipPlane=null; }
