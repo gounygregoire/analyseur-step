@@ -290,7 +290,6 @@ viewer.scene.input.on("mouseclicked",(coords)=>{
   if (appMode==="annotate"){
     setMode("select");
     const id="a"+Date.now();
-    // annotation provisoire avec input
     const ann = annotations.createAnnotation({
       id, worldPos: hit.worldPos, markerHTML:`<div class="dot"></div>`,
       labelHTML:`<input class="annot-input" placeholder="Texte…" />`,
@@ -302,7 +301,6 @@ viewer.scene.input.on("mouseclicked",(coords)=>{
       const commit = ()=>{
         const val=(input.value||"Note");
         ann.setLabelHTML?.(`<div class="xk-badge">${val}</div>`) || (ann.labelHTML=`<div class="xk-badge">${val}</div>`);
-        // Propriétés
         if (propsPanel){
           const row=document.createElement("div");
           row.className="row"; row.style.gap="8px"; row.innerHTML=`
