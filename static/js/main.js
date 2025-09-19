@@ -5,7 +5,8 @@ import {
   FastNavPlugin,
   NavCubePlugin,
   SectionPlanesPlugin,
-  AnnotationsPlugin
+  AnnotationsPlugin,
+  DistanceMeasurementsPlugin           // <-- mesure native
 } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
 
 /* ---------- utils DOM ---------- */
@@ -64,20 +65,29 @@ const xktLoader = new XKTLoaderPlugin(viewer, {
 const sections = new SectionPlanesPlugin(viewer);
 
 // Overlays HTML (pastilles / bulles / plaques) dans #overlayHost
-const annotations = new AnnotationsPlugin(viewer, {
-  container: overlayHost
+const annotations = new AnnotationsPlugin(viewer, { container: overlayHost });
+
+// Mesures distance (plugin natif xeokit)
+const distanceMeasurements = new DistanceMeasurementsPlugin(viewer, {
+  container: overlayHost,
+  labelsShown: true,
+  labelFormat: (meters) => `${(meters * 1000).toFixed(2)} mm`
 });
+const distanceControl = distanceMeasurements.control || distanceMeasurements.createControl?.();
+if (distanceControl) {
+  distanceControl.snapToVertex = true;
+  distanceControl.snapToEdge   = true;
+  distanceControl.keyboardEnabled = false;
+}
 
-/* ========= Canvas & overlay sizing — FIX DPR ========= */
+/* ========= Canvas & overlay sizing — DPR sûr ========= */
 const canvasEl = document.getElementById("xeokit-canvas");
-
 function resizeCanvasAndOverlay() {
   const w = Math.max(1, viewerContainer.clientWidth);
   const h = Math.max(1, viewerContainer.clientHeight);
 
-  // Option la plus fiable : verrouiller à DPR=1 (évite tout décalage de pastilles)
+  // Simple & fiable : DPR=1 pour éviter tout décalage visible
   const dpr = 1;
-  // Variante haute densité possible : const dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
 
   // Taille CSS identique pour canvas & overlay
   canvasEl.style.width  = w + "px";
@@ -89,7 +99,6 @@ function resizeCanvasAndOverlay() {
   canvasEl.width  = Math.floor(w * dpr);
   canvasEl.height = Math.floor(h * dpr);
 
-  // Notifier le viewer
   if (viewer.resize) viewer.resize();
   if (viewer.scene?.setDirty) viewer.scene.setDirty(true);
 }
@@ -110,7 +119,7 @@ resizeCanvasAndOverlay();
 const models = new Map();
 let lastModelId = null;
 let selectedIds = new Set();
-let appMode = "select";            // "select" | "measure" | "annotate"
+let appMode = "select";            // "select" | "annotate"
 let clipAxis = null;
 let clipPlane = null;
 let clipPlateAnn = null;
@@ -219,24 +228,36 @@ btnHide    ?.addEventListener("click",()=>{ if (!selectedIds.size) return; setSo
 btnShowOnly?.addEventListener("click",()=>{ if (!selectedIds.size) return; setAll("visible",false); setSome([...selectedIds],"visible",true); });
 btnClearSel?.addEventListener("click",()=>{ setAll("visible",true); setSome(allIds(),"highlighted",false); clearSelection(); });
 
-/* ---------- sélection au clic (modes) ---------- */
+/* ---------- modes ---------- */
 function setMode(m){
+  // on ne gère plus "measure" ici (plugin s’en charge) ; on garde "annotate"
   appMode = (appMode===m) ? "select" : m;
-  btnMeasure?.classList.toggle("btn-primary", appMode==="measure");
-  btnAnnot  ?.classList.toggle("btn-primary", appMode==="annotate");
+  btnAnnot?.classList.toggle("btn-primary", appMode==="annotate");
 }
-btnMeasure?.addEventListener("click",()=> setMode("measure"));
-btnAnnot  ?.addEventListener("click",()=> setMode("annotate"));
+btnAnnot?.addEventListener("click",()=> setMode("annotate"));
 
+// Toggle mesure native
+btnMeasure?.addEventListener("click", ()=>{
+  if (!distanceControl) return;
+  const active = !distanceControl.active;
+  distanceControl.active = active;
+  btnMeasure.classList.toggle("btn-primary", active);
+  // sortir d'un éventuel mode "annotate"
+  if (active) { appMode = "select"; btnAnnot?.classList.remove("btn-primary"); }
+});
+
+/* ---------- sélection & clic scène ---------- */
 viewer.scene.input.on("mouseclicked", (coords)=>{
+  // si le mode mesure natif est actif, on laisse le plugin consommer le clic
+  if (distanceControl?.active) return;
+
   const hit = viewer.scene.pick({ canvasPos: coords, pickSurface: true });
   if (!hit || !hit.entity) {
     if (appMode==="select") clearSelection();
     return;
   }
 
-  if (appMode==="measure"){ handleMeasureClick(hit.worldPos); return; }
-  if (appMode==="annotate"){ handleAnnotClick(hit.worldPos);  return; }
+  if (appMode==="annotate"){ handleAnnotClick(hit.worldPos); return; }
 
   // mode select
   const id = hit.entity.id;
@@ -260,75 +281,6 @@ function showProps(meta){
   if (p && typeof p==="object")
     Object.entries(p).forEach(([k,v])=> add(k, typeof v==="object"? JSON.stringify(v): v));
 }
-
-/* =========================================================
- *  MESURE (pastilles + segment 2D + label mm)
- * =======================================================*/
-const measures = []; // {id, annA, annB, labelAnn, lineEl}
-let measureBuffer = []; // 0..2 worldPos
-
-function centerOf(el){
-  const r=el.getBoundingClientRect(), p=overlayHost.getBoundingClientRect();
-  return { x:r.left-p.left + r.width/2, y:r.top-p.top + r.height/2 };
-}
-function placeLine(line, p1, p2){
-  const dx=p2.x-p1.x, dy=p2.y-p1.y, L=Math.hypot(dx,dy) || 0;
-  const a=Math.atan2(dy,dx)*180/Math.PI;
-  line.style.width = `${L}px`;
-  line.style.transform = `translate(${p1.x}px,${p1.y}px) rotate(${a}deg)`;
-}
-const mm=(m)=> (m*1000).toFixed(2);
-
-function handleMeasureClick(worldPos){
-  if (!worldPos) return;
-  measureBuffer.push(worldPos.slice());
-  if (measureBuffer.length<2) return;
-
-  const [A,B] = measureBuffer.splice(0,2);
-  setMode("select");
-
-  // Pastilles ancrées scène (AnnotationsPlugin)
-  const annA = annotations.createAnnotation({ id:"ma"+Date.now(), worldPos:A, markerHTML:`<div class="dot"></div>`, labelShown:false });
-  const annB = annotations.createAnnotation({ id:"mb"+Date.now(), worldPos:B, markerHTML:`<div class="dot"></div>`, labelShown:false });
-
-  const M=[ (A[0]+B[0])/2,(A[1]+B[1])/2,(A[2]+B[2])/2 ];
-  const d = Math.hypot(B[0]-A[0], B[1]-A[1], B[2]-A[2]);
-  const labelAnn = annotations.createAnnotation({
-    id:"ml"+Date.now(), worldPos:M, labelHTML:`<div class="xk-badge"><b>${mm(d)}</b> mm</div>`, markerShown:false, labelShown:true
-  });
-
-  // Ligne 2D (overlay)
-  const line=document.createElement("div"); line.className="measure-line"; overlayHost.appendChild(line);
-  const mId="M"+Date.now();
-  measures.push({id:mId, annA, annB, labelAnn, lineEl:line});
-
-  if (propsPanel){
-    const row=document.createElement("div");
-    row.className="row mini"; row.style.gap="8px"; row.innerHTML=`
-      <span style="flex:1;font-size:12px">Mesure ${mId}</span>
-      <button class="btn btn-outline mini" data-act="hide">Cacher/Montrer</button>
-      <button class="btn btn-outline mini" data-act="del">Suppr.</button>`;
-    propsPanel.append(row);
-    row.querySelector('[data-act="hide"]').addEventListener("click",()=>{
-      const v=!annA.visible; annA.visible=v; annB.visible=v; labelAnn.visible=v; line.style.display=v?"block":"none";
-    });
-    row.querySelector('[data-act="del"]').addEventListener("click",()=>{
-      try{ annA.destroy(); annB.destroy(); labelAnn.destroy(); }catch{}
-      line.remove(); row.remove();
-    });
-  }
-}
-
-/* Mise à jour (tick) — recalcule la ligne en partant de la position DOM des pastilles */
-viewer.scene.on("tick",()=>{
-  for (const m of measures){
-    const elA = overlayHost.querySelector(`[data-annotation_id="${m.annA.id}"]`);
-    const elB = overlayHost.querySelector(`[data-annotation_id="${m.annB.id}"]`);
-    if (!elA || !elB) continue;
-    const p1=centerOf(elA), p2=centerOf(elB);
-    placeLine(m.lineEl, p1, p2);
-  }
-});
 
 /* =========================================================
  *  ANNOTATION : saisie inline
