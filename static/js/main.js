@@ -6,7 +6,8 @@ import {
   NavCubePlugin,
   SectionPlanesPlugin,
   AnnotationsPlugin,
-  DistanceMeasurementsPlugin           // <-- mesure native
+  DistanceMeasurementsPlugin,
+  DistanceMeasurementsMouseControl
 } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
 
 /* ---------- utils DOM ---------- */
@@ -64,43 +65,29 @@ const xktLoader = new XKTLoaderPlugin(viewer, {
 });
 const sections = new SectionPlanesPlugin(viewer);
 
-// Overlays HTML (pastilles / bulles / plaques) dans #overlayHost
+// Overlays HTML (pour vos annotations custom)
 const annotations = new AnnotationsPlugin(viewer, { container: overlayHost });
 
-// Mesures distance (plugin natif xeokit)
-const distanceMeasurements = new DistanceMeasurementsPlugin(viewer, {
-  container: overlayHost,
-  labelsShown: true,
-  labelFormat: (meters) => `${(meters * 1000).toFixed(2)} mm`
-});
-const distanceControl = distanceMeasurements.control || distanceMeasurements.createControl?.();
-if (distanceControl) {
-  distanceControl.snapToVertex = true;
-  distanceControl.snapToEdge   = true;
-  distanceControl.keyboardEnabled = false;
-}
-
-/* ========= Canvas & overlay sizing — DPR sûr ========= */
+/* ========= Canvas & overlay sizing — FIX DPR ========= */
 const canvasEl = document.getElementById("xeokit-canvas");
+
 function resizeCanvasAndOverlay() {
   const w = Math.max(1, viewerContainer.clientWidth);
   const h = Math.max(1, viewerContainer.clientHeight);
 
-  // Simple & fiable : DPR=1 pour éviter tout décalage visible
+  // le plus sûr pour les pastilles : DPR=1
   const dpr = 1;
 
-  // Taille CSS identique pour canvas & overlay
   canvasEl.style.width  = w + "px";
   canvasEl.style.height = h + "px";
   overlayHost.style.width  = w + "px";
   overlayHost.style.height = h + "px";
 
-  // Taille bitmap du canvas
   canvasEl.width  = Math.floor(w * dpr);
   canvasEl.height = Math.floor(h * dpr);
 
-  if (viewer.resize) viewer.resize();
-  if (viewer.scene?.setDirty) viewer.scene.setDirty(true);
+  viewer.resize?.();
+  viewer.scene?.setDirty?.(true);
 }
 new ResizeObserver(resizeCanvasAndOverlay).observe(viewerContainer);
 addEventListener("resize", resizeCanvasAndOverlay, { passive: true });
@@ -109,8 +96,11 @@ resizeCanvasAndOverlay();
 /* ---------- NavCube ---------- */
 (()=>{
   const cube=document.createElement("canvas"); cube.width=cube.height=96;
-  Object.assign(cube.style,{position:"absolute",left:"12px",top:"12px",zIndex:"5",
-    borderRadius:"12px",boxShadow:"0 6px 18px rgba(0,0,0,.25)",background:"rgba(255,255,255,.06)",backdropFilter:"blur(2px)"});
+  Object.assign(cube.style,{
+    position:"absolute",left:"12px",top:"12px",zIndex:"5",
+    borderRadius:"12px",boxShadow:"0 6px 18px rgba(0,0,0,.25)",
+    background:"rgba(255,255,255,.06)",backdropFilter:"blur(2px)"
+  });
   viewerContainer.appendChild(cube);
   new NavCubePlugin(viewer,{canvasElement:cube,cameraFlyToDuration:0.9});
 })();
@@ -119,7 +109,7 @@ resizeCanvasAndOverlay();
 const models = new Map();
 let lastModelId = null;
 let selectedIds = new Set();
-let appMode = "select";            // "select" | "annotate"
+let appMode = "select";            // "select" | "measure" | "annotate"
 let clipAxis = null;
 let clipPlane = null;
 let clipPlateAnn = null;
@@ -129,6 +119,28 @@ const allIds=()=> viewer.scene?.objectIds ?? [];
 const setSome=(ids,prop,val)=> ids.forEach(id=>{const o=viewer.scene.objects[id]; if(o) o[prop]=val;});
 const setAll=(prop,val)=> allIds().forEach(id=>{const o=viewer.scene.objects[id]; if(o) o[prop]=val;});
 const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); if (propsPanel) propsPanel.innerHTML=""; };
+
+/* ---------- Distance measurements natifs Xeokit ---------- */
+const distancePlugin = new DistanceMeasurementsPlugin(viewer);
+const distanceCtrl   = new DistanceMeasurementsMouseControl(distancePlugin, { snapping: true });
+
+function setMeasureActive(on){
+  if (on) {
+    distanceCtrl.activate();   // <-- API correcte (active est un getter uniquement)
+    appMode = "measure";
+    btnMeasure?.classList.add("btn-primary");
+  } else {
+    distanceCtrl.deactivate();
+    appMode = "select";
+    btnMeasure?.classList.remove("btn-primary");
+  }
+}
+btnMeasure?.addEventListener("click", () => setMeasureActive(!distanceCtrl.active));
+
+// petite sécurité : Echap pour quitter la mesure
+window.addEventListener("keydown", (e)=>{
+  if (e.key === "Escape" && distanceCtrl.active) setMeasureActive(false);
+});
 
 /* ---------- chargement XKT ---------- */
 async function loadXKT(url, nameHint){
@@ -228,28 +240,17 @@ btnHide    ?.addEventListener("click",()=>{ if (!selectedIds.size) return; setSo
 btnShowOnly?.addEventListener("click",()=>{ if (!selectedIds.size) return; setAll("visible",false); setSome([...selectedIds],"visible",true); });
 btnClearSel?.addEventListener("click",()=>{ setAll("visible",true); setSome(allIds(),"highlighted",false); clearSelection(); });
 
-/* ---------- modes ---------- */
+/* ---------- sélection au clic (modes) ---------- */
 function setMode(m){
-  // on ne gère plus "measure" ici (plugin s’en charge) ; on garde "annotate"
   appMode = (appMode===m) ? "select" : m;
-  btnAnnot?.classList.toggle("btn-primary", appMode==="annotate");
+  btnAnnot  ?.classList.toggle("btn-primary", appMode==="annotate");
 }
+// note: on n'utilise plus l’ancien handleMeasureClick — c’est le contrôle Xeokit qui gère tout
 btnAnnot?.addEventListener("click",()=> setMode("annotate"));
 
-// Toggle mesure native
-btnMeasure?.addEventListener("click", ()=>{
-  if (!distanceControl) return;
-  const active = !distanceControl.active;
-  distanceControl.active = active;
-  btnMeasure.classList.toggle("btn-primary", active);
-  // sortir d'un éventuel mode "annotate"
-  if (active) { appMode = "select"; btnAnnot?.classList.remove("btn-primary"); }
-});
-
-/* ---------- sélection & clic scène ---------- */
 viewer.scene.input.on("mouseclicked", (coords)=>{
-  // si le mode mesure natif est actif, on laisse le plugin consommer le clic
-  if (distanceControl?.active) return;
+  // si l’outil de mesure natif est actif, on laisse faire
+  if (distanceCtrl.active) return;
 
   const hit = viewer.scene.pick({ canvasPos: coords, pickSurface: true });
   if (!hit || !hit.entity) {
@@ -257,7 +258,7 @@ viewer.scene.input.on("mouseclicked", (coords)=>{
     return;
   }
 
-  if (appMode==="annotate"){ handleAnnotClick(hit.worldPos); return; }
+  if (appMode==="annotate"){ handleAnnotClick(hit.worldPos);  return; }
 
   // mode select
   const id = hit.entity.id;
@@ -283,7 +284,7 @@ function showProps(meta){
 }
 
 /* =========================================================
- *  ANNOTATION : saisie inline
+ *  ANNOTATION : saisie inline (vous gardez vos pastilles)
  * =======================================================*/
 function handleAnnotClick(worldPos){
   setMode("select");
