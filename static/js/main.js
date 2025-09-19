@@ -61,6 +61,37 @@ const viewer = new Viewer({
   transparent: true
 });
 
+/* --- Canvas & overlay : resize pixel-perfect + DPR --- */
+const canvasEl = document.getElementById("xeokit-canvas");
+
+function resizeCanvasAndOverlay() {
+  // Taille CSS du container
+  const w = Math.max(1, viewerContainer.clientWidth);
+  const h = Math.max(1, viewerContainer.clientHeight);
+
+  // Taille "pixel" du canvas (DPR) pour un rendu net
+  const dpr = Math.min(window.devicePixelRatio || 1, 2); // cap à 2 pour éviter les canvases énormes
+  canvasEl.style.width  = w + "px";
+  canvasEl.style.height = h + "px";
+  canvasEl.width  = Math.floor(w * dpr);
+  canvasEl.height = Math.floor(h * dpr);
+
+  // L’overlay suit la même taille (utile si tu lis ses width/height)
+  overlayHost.style.width  = w + "px";
+  overlayHost.style.height = h + "px";
+
+  // Demande au viewer de repeindre si besoin (APIs selon versions)
+  if (viewer.resize) viewer.resize();
+  if (viewer.scene?.setDirty) viewer.scene.setDirty(true);
+}
+
+// Observe toute variation de taille du container
+const ro = new ResizeObserver(resizeCanvasAndOverlay);
+ro.observe(viewerContainer);
+window.addEventListener("resize", resizeCanvasAndOverlay);
+resizeCanvasAndOverlay();
+
+
 new FastNavPlugin(viewer, { flyToDuration: 0.9, hideEdges:false, autoHideEdges:false });
 
 const xktLoader = new XKTLoaderPlugin(viewer, {
