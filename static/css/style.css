@@ -64,3 +64,53 @@ body{background:linear-gradient(135deg,var(--cream),var(--cream-dark));font-fami
   .grid{grid-template-columns:1fr}
   .props-grid{grid-template-columns:1fr}
 }
+
+/* ==== Viewer + Overlay (minimal requis) ==== */
+#viewerContainer { position: relative; }
+#xeokit-canvas { display: block; width: 100%; height: 100%; }
+
+/* L’overlay doit être superposé au canvas et ne pas capter la souris */
+#overlayHost {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+}
+
+/* Marqueurs & labels (mesure/annotation) */
+.dot{
+  width:10px;height:10px;border-radius:999px;
+  background:#10b981;border:2px solid #fff;
+  box-shadow:0 0 0 2px rgba(0,0,0,.15);
+}
+.xk-badge{
+  font:12px/1.3 Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;
+  color:#0f172a;background:#fff;
+  padding:.35rem .5rem;border-radius:.5rem;
+  border:1px solid rgba(2,6,23,.06);
+  box-shadow:0 8px 24px rgba(2,6,23,.12);
+  white-space:nowrap;
+}
+
+/* Segment 2D entre deux pastilles de mesure */
+.measure-line{
+  position:absolute;height:2px;background:#14b8a6;
+  transform-origin:0 50%;pointer-events:none;
+}
+
+/* Saisie inline pour l’annotation (doit accepter les clics) */
+.annot-input{
+  pointer-events:auto;
+  font:12px/1.2 Inter,system-ui;
+  min-width:140px;padding:.28rem .4rem;
+  border-radius:.4rem;border:1px solid rgba(2,6,23,.15);
+  box-shadow:0 8px 24px rgba(2,6,23,.08);
+}
+
+/* Plaque translucide pour la coupe */
+.cutplate{
+  width:140px;height:140px;transform:translate(-50%,-50%);
+  background:rgba(59,130,246,.12);
+  border:1px dashed rgba(59,130,246,.6);
+  border-radius:8px;pointer-events:none;
+}

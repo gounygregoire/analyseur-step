@@ -3,128 +3,145 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Analyse & Visualisation 3D · xeokit · XKT</title>
+  <title>Analyse & Visualisation 3D — xeokit</title>
 
-  <!-- Styles -->
+  <!-- Ton style global éventuel -->
   <link rel="stylesheet" href="/static/css/style.css" />
+
+  <!-- Mini-CSS requis pour le viewer / overlay (sûr et non-invasif) -->
+  <style>
+    /* Container viewer */
+    #viewerShell{min-height:620px;}
+    #viewerContainer{position:relative;width:100%;min-height:560px;border-radius:14px;overflow:hidden;background:#fff;}
+    #xeokit-canvas{display:block;width:100%;height:100%;}
+    /* Overlay HTML superposé au canvas */
+    #overlayHost{position:absolute;inset:0;z-index:10;pointer-events:none;}
+
+    /* Marqueurs/labels et segment 2D (mesure/annotation) */
+    .dot{width:10px;height:10px;border-radius:999px;background:#10b981;border:2px solid #fff;box-shadow:0 0 0 2px rgba(0,0,0,.15);}
+    .xk-badge{font:12px/1.3 Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;color:#0f172a;background:#fff;padding:.35rem .5rem;border-radius:.5rem;border:1px solid rgba(2,6,23,.06);box-shadow:0 8px 24px rgba(2,6,23,.12);white-space:nowrap;}
+    .measure-line{position:absolute;height:2px;background:#14b8a6;transform-origin:0 50%;pointer-events:none;}
+    .annot-input{pointer-events:auto;font:12px/1.2 Inter,system-ui;min-width:140px;padding:.28rem .4rem;border-radius:.4rem;border:1px solid rgba(2,6,23,.15);box-shadow:0 8px 24px rgba(2,6,23,.08);}
+
+    /* Plaque translucide (coupe) */
+    .cutplate{width:140px;height:140px;transform:translate(-50%,-50%);background:rgba(59,130,246,.12);border:1px dashed rgba(59,130,246,.6);border-radius:8px;pointer-events:none;}
+
+    /* Un peu de mise en page simple */
+    body{margin:0;background:#f6f5ef;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#333;}
+    .wrap{max-width:1280px;margin:24px auto;padding:0 16px;}
+    .grid{display:grid;grid-template-columns:320px 1fr;gap:12px;align-items:start;}
+    .card{background:#fff;border:1px solid #ddd;border-radius:12px;box-shadow:0 10px 24px rgba(0,0,0,.06);}
+    .card .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+    .card .row.mini{gap:6px}
+    .card .pane{padding:12px}
+    .btn{border:1px solid #cfd2d6;background:#fafafa;border-radius:8px;padding:6px 10px;cursor:pointer}
+    .btn:active{transform:translateY(1px)}
+    .btn-outline{background:#fff}
+    .btn-primary{background:#2e7d32;color:#fff;border-color:#2e7d32}
+    .btn.mini{padding:4px 8px;font-size:12px}
+    input[type="range"]{width:160px}
+    input[type="text"],input[type="search"]{border:1px solid #cfd2d6;border-radius:8px;padding:6px 10px}
+    label{font-size:12px;color:#666}
+  </style>
 </head>
 <body>
   <div class="wrap">
-    <h1 class="sr-only">Analyse & Visualisation 3D</h1>
+    <h2>Analyse & Visualisation 3D <small style="opacity:.6">xeokit + XKT</small></h2>
 
     <div class="grid">
-      <!-- ====== Panneau gauche ====== -->
-      <div class="card sidebar">
-        <div class="card-section">
-          <h2 class="card-title">Fichiers</h2>
-          <div class="row g8">
-            <input id="fileInput" type="file" accept=".stp,.step,.stl" hidden />
-            <button id="btnChoose" class="btn btn-outline mini">CHOISIR</button>
-            <button id="btnVisualiser" class="btn btn-outline mini">VISUALISER</button>
-            <label class="row g6 ai-center">
-              <input id="chkAdditive" type="checkbox" />
-              <span>Ajouter (multi-modèles)</span>
-            </label>
+      <!-- Panneau gauche -->
+      <div class="card">
+        <div class="pane">
+          <h4 style="margin:6px 0 10px">Fichiers</h4>
+          <div class="row mini">
+            <button id="btnChoose" class="btn mini">CHOISIR</button>
+            <button id="btnVisualiser" class="btn mini">VISUALISER</button>
+            <label class="row mini" style="margin-left:auto"><input id="chkAdditive" type="checkbox" /> <span>Ajouter (multi-modèles)</span></label>
           </div>
-          <div id="fileName" class="muted" style="margin-top:.5rem"></div>
+          <input id="fileInput" type="file" style="display:none" accept=".stp,.step,.stl,.xkt" />
+          <div id="fileName" style="font-size:12px;color:#777;margin-top:6px"></div>
         </div>
 
-        <div class="card-section">
-          <h2 class="card-title">Navigation</h2>
-          <div class="row g6">
-            <button id="btnFit" class="btn btn-outline mini">FIT</button>
-            <button id="btnProj" class="btn btn-outline mini">PERSPECTIVE</button>
-            <select id="navMode" class="select mini" style="min-width:120px">
-              <option value="orbit">ORBIT</option>
-              <option value="firstPerson">FIRST-PERSON</option>
-              <option value="pan">PAN</option>
-            </select>
+        <div class="pane">
+          <h4 style="margin:6px 0 10px">Navigation</h4>
+          <div class="row mini">
+            <button id="btnFit" class="btn mini">FIT</button>
+            <button id="btnProj" class="btn mini">PERSPECTIVE</button>
           </div>
-
-          <div class="row g14" style="margin-top:.5rem">
-            <label class="row g6 ai-center"><input id="chkEdges" type="checkbox" checked /> <span>Arêtes</span></label>
-            <label class="row g6 ai-center"><input id="chkXray"  type="checkbox" /> <span>X-ray</span></label>
-            <label class="row g6 ai-center"><input id="chkGhost" type="checkbox" /> <span>Ghost</span></label>
+          <div class="row mini" style="margin-top:6px">
+            <label><input id="chkEdges" type="checkbox" checked /> Arêtes</label>
+            <label><input id="chkXray" type="checkbox" /> X-ray</label>
+            <label><input id="chkGhost" type="checkbox" /> Ghost</label>
           </div>
-
-          <label class="row g6 ai-center" style="margin-top:.5rem">
-            <input id="chkTheme" type="checkbox" />
-            <span>Thème sombre (viewer)</span>
-          </label>
-        </div>
-
-        <div class="card-section">
-          <h2 class="card-title">Modèles</h2>
-          <div id="modelsList" class="stack g6"></div>
-          <div class="row g8" style="margin-top:.5rem">
-            <button id="btnReload" class="btn btn-outline mini">RECHARGER</button>
-            <button id="btnUnload" class="btn btn-outline mini">DÉCHARGER</button>
+          <div class="row mini">
+            <label><input id="chkTheme" type="checkbox" /> Thème sombre</label>
           </div>
         </div>
 
-        <div class="card-section">
-          <h2 class="card-title">Sélection</h2>
-          <div class="row g8">
-            <button id="btnIsolate"   class="btn btn-outline mini">ISOLER</button>
-            <button id="btnHide"      class="btn btn-outline mini">CACHER</button>
-            <button id="btnShowOnly"  class="btn btn-outline mini">MONTRER SEUL</button>
-            <button id="btnClearSel"  class="btn btn-outline mini">TOUT MONTRER</button>
+        <div class="pane">
+          <h4 style="margin:6px 0 10px">Sélection</h4>
+          <div class="row mini">
+            <button id="btnIsolate" class="btn mini">ISOLER</button>
+            <button id="btnHide" class="btn mini">CACHER</button>
           </div>
-          <label class="row g8 ai-center" style="margin-top:.6rem">
-            <span class="muted" style="min-width:60px">Opacité</span>
-            <input id="opacityRange" type="range" min="0.05" max="1" step="0.01" value="1" style="flex:1" />
-          </label>
+          <div class="row mini">
+            <button id="btnShowOnly" class="btn mini">MONTRER SEUL</button>
+            <button id="btnClearSel" class="btn mini">TOUT MONTRER</button>
+          </div>
+          <div class="row mini" style="margin-top:8px">
+            <label>Opacité</label>
+            <input id="opacityRange" type="range" min="0.05" max="1" step="0.05" value="1" />
+          </div>
         </div>
 
-        <div class="card-section">
-          <h2 class="card-title">Recherche</h2>
-          <div class="row g8">
-            <input id="searchInput" class="input mini" placeholder="ID / TYPE / NOM…" />
-            <button id="btnSearch" class="btn btn-outline mini">RECHERCHER</button>
+        <div class="pane">
+          <h4 style="margin:6px 0 10px">Recherche</h4>
+          <div class="row mini">
+            <input id="searchInput" type="search" placeholder="ID / TYPE / NOM..." />
+            <button id="btnSearch" class="btn mini">RECHERCHER</button>
           </div>
-          <div id="results" class="stack g6" style="margin-top:.5rem;max-height:180px;overflow:auto"></div>
+          <div id="results" style="font-size:12px;margin-top:6px"></div>
         </div>
 
-        <div class="card-section">
-          <h2 class="card-title">Propriétés</h2>
-          <div id="propsPanel" class="props-grid"></div>
+        <div class="pane">
+          <h4 style="margin:6px 0 10px">Propriétés</h4>
+          <div id="propsPanel" style="display:grid;grid-template-columns:120px 1fr;gap:6px;font-size:12px"></div>
         </div>
       </div>
 
-      <!-- ====== Viewer ====== -->
-      <div class="card viewer">
-        <div class="row mini toolbar">
+      <!-- Viewer -->
+      <div class="card">
+        <div class="pane row mini" style="margin-bottom:0">
           <button id="btnMeasure" class="btn btn-outline mini">MESURE</button>
-          <button id="btnAnnot"   class="btn btn-outline mini">ANNOTATION</button>
+          <button id="btnAnnot" class="btn btn-outline mini">ANNOTATION</button>
 
           <button class="btn btn-outline mini clipAxis" data-axis="x">COUPE X</button>
           <button class="btn btn-outline mini clipAxis" data-axis="y">COUPE Y</button>
           <button class="btn btn-outline mini clipAxis" data-axis="z">COUPE Z</button>
-          <input id="clipRange" type="range" min="-100" max="100" value="0" style="margin-left:8px;flex:1" />
-
+          <input id="clipRange" type="range" min="-100" max="100" value="0" />
+          <div style="flex:1"></div>
           <button id="btnShot" class="btn btn-outline mini">SCREENSHOT</button>
         </div>
 
-        <div id="viewerShell" class="viewerShell">
+        <div id="viewerShell" class="pane" style="padding-top:8px">
           <div id="viewerContainer">
-            <canvas id="xeokit-canvas" class="xkt-canvas"></canvas>
-            <!-- IMPORTANT: les overlays sont dans le container du viewer -->
+            <canvas id="xeokit-canvas"></canvas>
             <div id="overlayHost"></div>
           </div>
 
-          <!-- Barre de progression fine -->
-          <div class="row mini" style="margin-top:10px">
-            <div class="progress">
-              <div id="progressBar" class="progress-bar"></div>
+          <!-- Progression (minimale) -->
+          <div class="row mini" style="margin-top:10px;opacity:.8">
+            <div style="font-size:12px">Progression</div>
+            <div style="flex:1;background:#eef0f3;height:6px;border-radius:4px;overflow:hidden">
+              <div id="progressBar" style="height:100%;background:#c2d6ff;width:0%"></div>
             </div>
-            <span class="muted">Progression</span>
           </div>
         </div>
       </div>
-    </div>
-  </div>
+    </div> <!-- /grid -->
+  </div> <!-- /wrap -->
 
-  <!-- Script -->
+  <!-- Ton code applicatif -->
   <script type="module" src="/static/js/main.js"></script>
 </body>
 </html>
