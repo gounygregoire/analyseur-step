@@ -1,22 +1,28 @@
+// /static/js/main.js
 import {
   Viewer,
   XKTLoaderPlugin,
-  NavCubePlugin,
   FastNavPlugin,
+  NavCubePlugin,
   SectionPlanesPlugin,
   AnnotationsPlugin
 } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
 
-const $ = (s) => document.querySelector(s);
+/* ---------- utilitaires DOM ---------- */
+const $  = (s) => document.querySelector(s);
+const $$ = (s) => Array.from(document.querySelectorAll(s));
 
-/* ====== Références UI (existantes dans app.html) ====== */
+/* ---------- sélecteurs ---------- */
 const fileInput     = $("#fileInput");
-const btnVisualiser = $("#btnVisualiser");
 const btnChoose     = $("#btnChoose");
+const btnVisualiser = $("#btnVisualiser");
 const chkAdditive   = $("#chkAdditive");
 const fileNameLbl   = $("#fileName");
 
+const viewerShell   = $("#viewerShell");
 const viewerContainer = $("#viewerContainer");
+const overlayHost   = $("#overlayHost");
+
 const btnFit   = $("#btnFit");
 const btnProj  = $("#btnProj");
 const navMode  = $("#navMode");
@@ -43,254 +49,83 @@ const propsPanel   = $("#propsPanel");
 const progressBar  = $("#progressBar");
 const btnMeasure   = $("#btnMeasure");
 const btnAnnot     = $("#btnAnnot");
-const btnClip      = $("#btnClip");
+const clipButtons  = $$(".clipAxis");
+const clipRange    = $("#clipRange");
 const explodeRange = $("#explodeRange");
 const btnShot      = $("#btnShot");
 
-/* ====== Viewer & plugins ====== */
+/* ---------- viewer + plugins ---------- */
 const viewer = new Viewer({
   canvasId: "xeokit-canvas",
-  transparent: true,
-  dtxEnabled: true
+  dtxEnabled: true,
+  transparent: true
 });
-const loader = new XKTLoaderPlugin(viewer, {
-  dracoDecompressorPath: "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/resources/draco/"
+
+new FastNavPlugin(viewer, { flyToDuration: 0.9, hideEdges:false, autoHideEdges:false });
+
+const xktLoader = new XKTLoaderPlugin(viewer, {
+  dracoDecompressorPath:
+    "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/resources/draco/"
 });
-new FastNavPlugin(viewer,{ flyToDuration: .9, autoHideEdges: false, hideEdges: false });
 
-/* Annotations (overlays HTML) */
-const ann = new AnnotationsPlugin(viewer);
+const sections = new SectionPlanesPlugin(viewer);
 
-/* Section planes */
-const sections = new SectionPlanesPlugin(viewer,{});
+/* Overlays HTML (pastilles/étiquettes/plaques) */
+const annotations = new AnnotationsPlugin(viewer, {
+  container: overlayHost,
+  markerHTML: `<div class="dot"></div>`,
+  labelHTML:  `<div class="bubble"></div>`
+});
 
-/* ====== petit style pour les overlays ====== */
-{
-  const css = `
-  .anno-dot{width:10px;height:10px;border-radius:999px;border:2px solid #fff;
-            box-shadow:0 0 0 2px rgba(0,0,0,.2)}
-  .anno-dot.red{background:#ef4444}.anno-dot.blue{background:#3b82f6}
-  .anno-bubble{padding:6px 8px;border-radius:8px;background:rgba(0,0,0,.65);
-               color:#fff;font:12px/1.2 Inter,system-ui,Segoe UI,Roboto,Arial;
-               box-shadow:0 6px 20px rgba(0,0,0,.25)}
-  .plane-hint{width:140px;height:140px;border-radius:8px;pointer-events:none;
-              border:1px dashed;opacity:.9}
-  .plane-x{background:rgba(239,68,68,.16);border-color:rgba(239,68,68,.7)}
-  .plane-y{background:rgba(34,197,94,.16);border-color:rgba(34,197,94,.7)}
-  .plane-z{background:rgba(96,165,250,.16);border-color:rgba(96,165,250,.7)}
-  `;
-  const style=document.createElement("style"); style.textContent=css; document.head.appendChild(style);
-}
-
-/* ====== cube d’axes + légende ====== */
+/* Cube d’axes dans le coin */
 (() => {
-  const c = document.createElement("canvas");
-  c.width=c.height=96;
-  Object.assign(c.style,{position:"absolute",left:"12px",top:"12px",zIndex:5,
-    borderRadius:"12px",boxShadow:"0 6px 18px rgba(0,0,0,.25)",background:"rgba(255,255,255,.06)",backdropFilter:"blur(2px)"});
-  viewerContainer.appendChild(c);
-  new NavCubePlugin(viewer,{canvasElement:c,cameraFlyToDuration:.9});
-  const leg=document.createElement("div");
-  leg.innerHTML=`<span style="color:#ef4444;font-weight:600">X</span>
-                 <span style="color:#22c55e;font-weight:600;margin:0 6px">Y</span>
-                 <span style="color:#60a5fa;font-weight:600">Z</span>`;
-  Object.assign(leg.style,{position:"absolute",left:"12px",top:"114px",zIndex:6,
-    padding:"4px 8px",background:"rgba(0,0,0,.35)",color:"#fff",borderRadius:"8px",
-    font:"12px/1 Inter,system-ui,Segoe UI,Roboto,Arial"});
-  viewerContainer.appendChild(leg);
+  const cube = document.createElement("canvas");
+  cube.width = cube.height = 96;
+  Object.assign(cube.style, {
+    position:"absolute",left:"12px",top:"12px",zIndex:"5",
+    borderRadius:"12px",boxShadow:"0 6px 18px rgba(0,0,0,.25)",
+    background:"rgba(255,255,255,.06)",backdropFilter:"blur(2px)"
+  });
+  viewerContainer.appendChild(cube);
+  new NavCubePlugin(viewer, { canvasElement:cube, cameraFlyToDuration:0.9 });
 })();
 
-/* ====== état & helpers ====== */
-const models = new Map();
-let lastModelId=null;
+/* ---------- état appli ---------- */
+const models = new Map(); // id -> { model, name, src }
+let lastModelId = null;
 let selectedIds = new Set();
+let appMode = "select";   // "select" | "measure" | "annotate"
+let clipAxis = null;      // 'x' | 'y' | 'z' | null
+let clipPlane = null;     // SectionPlane
+let clipPlateAnnot = null;// plaque visuelle (overlay)
 
-const allIds = ()=> viewer.scene?.objectIds ?? [];
-const setAll  = (prop,val)=> allIds().forEach(id=>{ const o=viewer.scene.objects[id]; if(o) o[prop]=val; });
-const setSome = (ids,prop,val)=> ids.forEach(id=>{ const o=viewer.scene.objects[id]; if(o) o[prop]=val; });
+const setProgress = (p) => { if (progressBar) progressBar.style.inset = `0 ${100-Math.max(0,Math.min(100,p))}% 0 0`; };
+const allIds =       () => viewer.scene?.objectIds ?? [];
+const setSome = (ids, prop, val) => ids.forEach(id=>{ const o=viewer.scene.objects[id]; if(o) o[prop]=val; });
+const setAll  = (prop, val)     => allIds().forEach(id=>{ const o=viewer.scene.objects[id]; if(o) o[prop]=val; });
+const clearSelection = () => { setSome([...selectedIds], "highlighted", false); selectedIds.clear(); propsPanel.innerHTML=""; };
 
-function setProgress(p){ if(progressBar) progressBar.style.width = `${Math.max(0,Math.min(100,p))}%`; }
-function clearSelection(){ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); propsPanel&&(propsPanel.innerHTML=""); }
-
-/* ====== MODE ====== */
-let mode="none";
-function setMode(m){
-  mode = (mode===m)? "none" : m;
-  btnMeasure?.classList.toggle("btn-primary",mode==="measure");
-  btnAnnot?.classList.toggle("btn-primary",  mode==="annot");
-  btnClip?.classList.toggle("btn-primary",   mode==="clip");
-  viewerContainer.style.cursor = (mode==="measure"||mode==="annot"||mode==="clip")? "crosshair":"";
-  if (mode!=="clip") disableClipping();
+function showProps(meta) {
+  propsPanel.innerHTML = "";
+  if (!meta) return;
+  const add = (k,v)=>{ const a=document.createElement("div"); a.textContent=k;
+                       const b=document.createElement("div"); b.textContent=String(v);
+                       propsPanel.append(a,b); };
+  const base = { id:meta.id, type:meta.type||meta.ifcType||"", name:meta.name||meta.displayName||"" };
+  Object.entries(base).forEach(([k,v])=> (v!==undefined && v!=="") && add(k,v));
+  const p=meta.properties||meta.props;
+  if (p && typeof p==="object")
+    Object.entries(p).forEach(([k,v])=> add(k, typeof v==="object"? JSON.stringify(v): v));
 }
-window.addEventListener("keydown",(e)=>{ if(e.key==="Escape") setMode("none"); });
 
-/* ====== MEASURE (2 clics) ====== */
-let firstPoint = null;
-const overlayMeasures = new Set();
-function addMeasureOverlay(p1,p2){
-  const mid=[(p1[0]+p2[0])/2,(p1[1]+p2[1])/2,(p1[2]+p2[2])/2];
-  const d = Math.hypot(p2[0]-p1[0], p2[1]-p1[1], p2[2]-p1[2]);
-  const txt = d>=1 ? `${d.toFixed(3)} m` : `${(d*1000).toFixed(1)} mm`;
-  const a1 = ann.createAnnotation({ worldPos:p1, occludable:true,  markerHTML:`<div class="anno-dot red"></div>`  });
-  const a2 = ann.createAnnotation({ worldPos:p2, occludable:true,  markerHTML:`<div class="anno-dot blue"></div>` });
-  const lab = ann.createAnnotation({ worldPos:mid, occludable:false, markerHTML:`<div class="anno-bubble">${txt}</div>` });
-  overlayMeasures.add(a1); overlayMeasures.add(a2); overlayMeasures.add(lab);
-}
-btnMeasure?.addEventListener("click",()=>{ firstPoint=null; setMode("measure"); });
-
-/* ====== ANNOTATION (1 clic) ====== */
-btnAnnot?.addEventListener("click",()=> setMode("annot"));
-
-/* ====== COUPE (1 axe à la fois, aucun sélectionné par défaut) ====== */
-let planeX=null, planeY=null, planeZ=null, activeAxis=null, hint=null;
-function ensurePlanes(){
-  if (planeX && planeY && planeZ) return;
-  const c = viewer.scene?.aabbCenter || [0,0,0];
-  planeX = sections.createSectionPlane({ id:"cutX", pos:c.slice(), dir:[ 1,0,0] });
-  planeY = sections.createSectionPlane({ id:"cutY", pos:c.slice(), dir:[ 0,1,0] });
-  planeZ = sections.createSectionPlane({ id:"cutZ", pos:c.slice(), dir:[ 0,0,1] });
-}
-function disableClipping(){
-  viewer.scene.sectionPlanesEnabled=false;
-  activeAxis=null;
-  if (hint){ ann.destroyAnnotation(hint); hint=null; }
-}
-function setPlanePos(axis, t){
-  // t in [-1..1] sur l’étendue de l’AABB
-  const bb=viewer.scene.aabb, c=[(bb[0]+bb[3])/2,(bb[1]+bb[4])/2,(bb[2]+bb[5])/2];
-  const half=[(bb[3]-bb[0])/2,(bb[4]-bb[1])/2,(bb[5]-bb[2])/2];
-  ensurePlanes();
-  if (hint){ ann.destroyAnnotation(hint); hint=null; }
-  if (axis==="x"){ planeX.pos=[c[0]+t*half[0],c[1],c[2]]; hint = ann.createAnnotation({ worldPos:planeX.pos, markerHTML:`<div class="plane-hint plane-x"></div>`, occludable:false }); }
-  if (axis==="y"){ planeY.pos=[c[0],c[1]+t*half[1],c[2]]; hint = ann.createAnnotation({ worldPos:planeY.pos, markerHTML:`<div class="plane-hint plane-y"></div>`, occludable:false }); }
-  if (axis==="z"){ planeZ.pos=[c[0],c[1],c[2]+t*half[2]]; hint = ann.createAnnotation({ worldPos:planeZ.pos, markerHTML:`<div class="plane-hint plane-z"></div>`, occludable:false }); }
-  viewer.scene.sectionPlanesEnabled=true;
-}
-btnClip?.addEventListener("click",()=>{ setMode("clip"); /* aucun axe sélectionné ici */ });
-/* lie ces 3 data-axes dans ton HTML (ex: <button data-axis="x" id="clipX">X</button> etc.)
-   Si tu n’as pas ces boutons, garde le slider/existant et déclenche ci-dessous en conséquence. */
-["x","y","z"].forEach(ax=>{
-  const b = document.querySelector(`[data-axis="${ax}"]`);
-  if (!b) return;
-  b.addEventListener("click",()=>{
-    if (mode!=="clip"){ setMode("clip"); }
-    if (activeAxis===ax){ disableClipping(); return; } // toggle OFF
-    activeAxis=ax;
-    setPlanePos(activeAxis, 0); // centre au départ
-  });
-});
-const clipRange = document.getElementById("clipRange");
-clipRange?.addEventListener("input", ()=>{
-  if (mode!=="clip" || !activeAxis) return;
-  const t = Math.max(-1, Math.min(1, (parseFloat(clipRange.value)||0)/100));
-  setPlanePos(activeAxis,t);
-});
-
-/* ====== PICK ROUTER ====== */
-viewer.scene.input.on("mouseclicked",(coords)=>{
-  const hit = viewer.scene.pick({ canvasPos:[coords[0],coords[1]], pickSurface:true });
-
-  if (mode==="measure"){
-    if (hit?.worldPos){
-      if (!firstPoint){ firstPoint = hit.worldPos.slice(); ann.createAnnotation({worldPos:firstPoint, markerHTML:`<div class="anno-dot red"></div>`, occludable:true}); }
-      else { addMeasureOverlay(firstPoint, hit.worldPos.slice()); firstPoint=null; setMode("none"); }
-    }
-    return;
-  }
-
-  if (mode==="annot"){
-    if (hit?.worldPos){
-      ann.createAnnotation({ worldPos:hit.worldPos.slice(),
-        markerHTML:`<div class="anno-bubble">Annotation</div>`, occludable:false });
-      setMode("none");
-    }
-    return;
-  }
-
-  if (mode==="clip"){
-    if (activeAxis && hit?.worldPos){
-      // repositionne le plan sur le point cliqué
-      ensurePlanes();
-      if (hint){ ann.destroyAnnotation(hint); hint=null; }
-      if (activeAxis==="x"){ planeX.pos=hit.worldPos.slice(); hint=ann.createAnnotation({worldPos:planeX.pos, markerHTML:`<div class="plane-hint plane-x"></div>`, occludable:false}); }
-      if (activeAxis==="y"){ planeY.pos=hit.worldPos.slice(); hint=ann.createAnnotation({worldPos:planeY.pos, markerHTML:`<div class="plane-hint plane-y"></div>`, occludable:false}); }
-      if (activeAxis==="z"){ planeZ.pos=hit.worldPos.slice(); hint=ann.createAnnotation({worldPos:planeZ.pos, markerHTML:`<div class="plane-hint plane-z"></div>`, occludable:false}); }
-      viewer.scene.sectionPlanesEnabled=true;
-    }
-    return;
-  }
-
-  // Sélection simple
-  if (!hit || !hit.entity){ clearSelection(); return; }
-  const id=hit.entity.id;
-  setSome(allIds(),"highlighted",false);
-  selectedIds=new Set([id]);
-  setSome([id],"highlighted",true);
-  const meta = hit.entity.metaObject || hit.entity.meta;
-  if (propsPanel){
-    propsPanel.innerHTML="";
-    const add=(k,v)=>{const a=document.createElement("div");a.textContent=k; const b=document.createElement("div");b.textContent=String(v); propsPanel.append(a,b);};
-    if (meta){
-      const base={ id:meta.id, type:meta.type||meta.ifcType||"", name:meta.name||meta.displayName||"" };
-      Object.entries(base).forEach(([k,v])=> (v!==undefined && v!=="") && add(k,v));
-    } else add("id",id);
-  }
-});
-
-/* ====== NAV & rendu ====== */
-btnFit?.addEventListener("click",()=> viewer.cameraFlight.flyTo(viewer.scene));
-let proj="perspective";
-btnProj?.addEventListener("click",()=>{
-  proj = (proj==="perspective")? "ortho":"perspective";
-  viewer.camera.projection = proj;
-  btnProj.textContent = proj==="perspective" ? "Perspective" : "Orthographique";
-});
-(() => {
-  if (!navMode) return; const opt=[...navMode.options].find(o=>o.value==="pan");
-  if (opt){ opt.value="planView"; opt.textContent="Plan"; }
-})();
-navMode?.addEventListener("change",()=> viewer.cameraControl.navMode = navMode.value);
-
-function applyEdges(on){
-  viewer.scene.edgeMaterial.edgesEnabled=!!on;
-  (viewer.scene.objectIds||[]).forEach(id=>{
-    const o=viewer.scene.objects[id];
-    if (o){ if ("edges" in o) o.edges=!!on; if (o.mesh && ("edges" in o.mesh)) o.mesh.edges=!!on; }
-  });
-}
-chkEdges?.addEventListener("change",()=> applyEdges(!!chkEdges.checked));
-viewer.scene.on("tick",()=>{ if (chkEdges?.checked && !viewer.scene.edgeMaterial.edgesEnabled) viewer.scene.edgeMaterial.edgesEnabled=true; });
-
-chkXray?.addEventListener("change",()=>{ setAll("xrayed", !!chkXray.checked); if (selectedIds.size) setSome([...selectedIds],"xrayed",false); });
-chkGhost?.addEventListener("change",()=>{ setAll("ghosted", !!chkGhost.checked); if (selectedIds.size) setSome([...selectedIds],"ghosted",false); });
-
-chkTheme?.addEventListener("change",()=>{
-  viewerContainer?.classList.toggle("dark",!!chkTheme.checked);
-  viewer.scene.clearColor = chkTheme.checked ? [0.06,0.07,0.08] : [0.965,0.957,0.937];
-});
-opacityRange?.addEventListener("input",()=> setAll("opacity", parseFloat(opacityRange.value)||1));
-
-/* ====== UPLOAD / LOAD ====== */
-async function loadXKT(url,name){
-  const id="m"+Date.now();
-  const model = loader.load({ id, src:url, edges:!!chkEdges?.checked });
-  setProgress(10);
-  model.on("progress",p=> setProgress(10+Math.round(p*80)));
-  model.on("loaded",()=>{
-    setProgress(100); setTimeout(()=>setProgress(0),300);
-    viewer.cameraFlight.flyTo(model);
-    models.set(id,{model,name:name||id,src:url}); lastModelId=id; refreshModelsList();
-    if (chkEdges?.checked) applyEdges(true);
-  });
-  model.on("error",e=>{ setProgress(0); console.error(e); alert("Erreur chargement XKT."); });
-}
 function refreshModelsList(){
-  if (!modelsList) return;
   modelsList.innerHTML="";
-  for (const [id,info] of models){
-    const row=document.createElement("div");
-    row.className="row mini"; row.style.justifyContent="space-between";
-    row.innerHTML=`<span title="${id}">${info.name||id}</span>
+  for (const [id, info] of models) {
+    const row = document.createElement("div");
+    row.className="row mini";
+    row.style.justifyContent="space-between";
+    row.innerHTML = `
+      <span title="${id}">${info.name||id}</span>
       <span>
         <button class="btn btn-outline mini" data-act="fly" data-id="${id}">Voir</button>
         <button class="btn btn-outline mini" data-act="toggle" data-id="${id}">${info.model.visible?"Cacher":"Montrer"}</button>
@@ -298,51 +133,269 @@ function refreshModelsList(){
     modelsList.appendChild(row);
   }
   modelsList.querySelectorAll("button").forEach(b=>{
-    b.onclick=()=>{
-      const id=b.dataset.id, info=models.get(id); if(!info) return;
+    b.addEventListener("click",()=>{
+      const id=b.dataset.id; const info=models.get(id); if(!info) return;
       if (b.dataset.act==="fly") viewer.cameraFlight.flyTo(info.model);
       else { info.model.visible=!info.model.visible; refreshModelsList(); }
-    };
+    });
   });
 }
+
+const flyAll = ()=> viewer.cameraFlight.flyTo(viewer.scene);
+
+/* ---------- chargement XKT ---------- */
+async function loadXKT(url, nameHint){
+  const id = "m"+Date.now();
+  const model = xktLoader.load({ id, src:url, edges:!!chkEdges.checked });
+  setProgress(6);
+  model.on("progress", p=> setProgress(6 + Math.round(p*88)));
+  model.on("loaded", ()=>{
+    setProgress(100); setTimeout(()=>setProgress(0), 350);
+    viewer.cameraFlight.flyTo(model);
+    models.set(id, { model, name:nameHint||id, src:url });
+    lastModelId=id; refreshModelsList();
+    if (chkEdges.checked) viewer.scene.edgeMaterial.edgesEnabled = true;
+  });
+  model.on("error", e=>{ console.error(e); setProgress(0); alert("Erreur chargement XKT."); });
+  return id;
+}
+
+/* ---------- upload ---------- */
 async function uploadAndShow(){
-  const f=fileInput?.files?.[0]; if(!f){ alert("Choisis un fichier .step/.stp/.stl"); return; }
-  btnVisualiser && (btnVisualiser.disabled=true, btnVisualiser.textContent="Conversion…");
-  setProgress(8);
+  const f = fileInput?.files?.[0];
+  if (!f) { alert("Choisis un fichier .step/.stp/.stl"); return; }
+  btnVisualiser.disabled = true; btnVisualiser.textContent = "Conversion…";
+  setProgress(10);
   try{
-    const fd=new FormData(); fd.append("file",f);
-    const res=await fetch("/upload",{method:"POST",body:fd});
-    const j=await res.json();
-    if(!res.ok||!j.xkt_url) throw new Error(JSON.stringify(j));
+    const fd = new FormData(); fd.append("file", f);
+    const res = await fetch("/upload", { method:"POST", body:fd });
+    const j   = await res.json();
+    if (!res.ok || !j.xkt_url) throw new Error(JSON.stringify(j));
     const xktUrl = new URL(j.xkt_url, location.origin).toString();
-    if (!chkAdditive?.checked){ for(const [,m] of models){ try{m.model.destroy();}catch{} } models.clear(); selectedIds.clear(); }
+
+    if (!chkAdditive.checked) { for (const [,i] of models){ try{i.model.destroy();}catch{} } models.clear(); selectedIds.clear(); }
     await loadXKT(xktUrl, f.name);
-    document.querySelector("[data-dropzone]")?.classList.add("is-success");
   }catch(e){
-    console.error(e);
-    const dz=document.querySelector("[data-dropzone]"); dz?.classList.remove("is-success"); dz?.classList.add("is-error");
-    alert("Erreur de conversion/chargement.");
+    console.error(e); alert("Erreur conversion/chargement (voir Console).");
   }finally{
-    btnVisualiser && (btnVisualiser.disabled=false, btnVisualiser.textContent="VISUALISER");
+    btnVisualiser.disabled = false; btnVisualiser.textContent = "VISUALISER";
   }
 }
-btnChoose?.addEventListener("click",(e)=>{ e.preventDefault(); fileInput?.click(); });
-fileInput?.addEventListener("change",()=>{ const f=fileInput.files?.[0]; if(f&&fileNameLbl) fileNameLbl.textContent=f.name; if(f) uploadAndShow(); });
-btnVisualiser?.addEventListener("click",(e)=>{ e.preventDefault(); uploadAndShow(); });
 
-/* ====== Divers ====== */
-btnIsolate?.addEventListener("click",()=>{ if(!selectedIds.size) return; setAll("visible",false); setSome([...selectedIds],"visible",true); });
-btnHide?.addEventListener("click",   ()=>{ if(!selectedIds.size) return; setSome([...selectedIds],"visible",false); });
-btnShowOnly?.addEventListener("click",()=>{ if(!selectedIds.size) return; setAll("visible",false); setSome([...selectedIds],"visible",true); });
-btnClearSel?.addEventListener("click",()=>{ setAll("visible",true); setSome(allIds(),"highlighted",false); clearSelection(); });
-
-explodeRange?.addEventListener("input",()=>{
-  const ids=allIds(); if(!ids.length) return;
-  const k=parseFloat(explodeRange.value)||0, bb=viewer.scene.aabb, c=[(bb[0]+bb[3])/2,(bb[1]+bb[4])/2,(bb[2]+bb[5])/2];
-  ids.forEach(id=>{ const o=viewer.scene.objects[id]; if(!o) return;
-    const p=o.aabbCenter||[0,0,0], v=[p[0]-c[0],p[1]-c[1],p[2]-c[2]], len=Math.hypot(v[0],v[1],v[2])||1,
-          off=[v[0]/len*k*10,v[1]/len*k*10,v[2]/len*k*10]; if("offset" in o) o.offset=off; });
+/* ---------- UI fichiers ---------- */
+btnChoose.addEventListener("click", (e)=>{ e.preventDefault(); fileInput.click(); });
+fileInput.addEventListener("change", ()=>{
+  const f=fileInput.files?.[0]; if (f) fileNameLbl.textContent = f.name;
+  if (f) uploadAndShow(); // visualisation immédiate
 });
-btnReload?.addEventListener("click",()=>{ if(!lastModelId) return; const i=models.get(lastModelId); if(!i) return; try{i.model.destroy();}catch{} models.delete(lastModelId); loadXKT(i.src,i.name); });
-btnUnload?.addEventListener("click",()=>{ if(!lastModelId) return; const i=models.get(lastModelId); if(!i) return; try{i.model.destroy();}catch{} models.delete(lastModelId); lastModelId=[...models.keys()].pop()||null; refreshModelsList(); });
-btnShot?.addEventListener("click",()=>{ try{ const dataURL=document.getElementById("xeokit-canvas").toDataURL("image/png"); const a=document.createElement("a"); a.href=dataURL; a.download="cadlytics_view.png"; a.click(); }catch(e){ console.error(e); alert("Capture impossible."); }});
+btnVisualiser.addEventListener("click", (e)=>{ e.preventDefault(); uploadAndShow(); });
+
+/* ---------- navigation & rendu ---------- */
+btnFit.addEventListener("click", flyAll);
+let proj="perspective";
+btnProj.addEventListener("click", ()=>{
+  proj = proj==="perspective" ? "ortho" : "perspective";
+  viewer.camera.projection = proj;
+  btnProj.textContent = proj==="perspective" ? "PERSPECTIVE" : "ORTHOGRAPHIQUE";
+});
+const setNav = (m)=> viewer.cameraControl.navMode = (m==="pan" ? "planView" : m);
+navMode.addEventListener("change", ()=> setNav(navMode.value)); setNav(navMode.value);
+
+chkEdges.addEventListener("change", ()=> viewer.scene.edgeMaterial.edgesEnabled = !!chkEdges.checked);
+viewer.scene.on("tick", ()=>{ if (chkEdges.checked && !viewer.scene.edgeMaterial.edgesEnabled) viewer.scene.edgeMaterial.edgesEnabled = true; });
+
+chkXray .addEventListener("change", ()=>{ setAll("xrayed",  !!chkXray.checked);  setSome([...selectedIds],"xrayed",false);  });
+chkGhost.addEventListener("change", ()=>{ setAll("ghosted", !!chkGhost.checked); setSome([...selectedIds],"ghosted",false); });
+
+chkTheme.addEventListener("change", ()=> viewerShell.classList.toggle("dark", !!chkTheme.checked));
+opacityRange.addEventListener("input", ()=> setAll("opacity", parseFloat(opacityRange.value)||1));
+
+/* ---------- outils (modes) ---------- */
+function setMode(m){
+  appMode = (appMode===m) ? "select" : m;
+  btnMeasure.classList.toggle("btn-primary", appMode==="measure");
+  btnAnnot.classList.toggle("btn-primary",   appMode==="annotate");
+}
+btnMeasure.addEventListener("click", ()=> setMode("measure"));
+btnAnnot  .addEventListener("click", ()=> setMode("annotate"));
+
+/* Mesures et annotations (via overlays HTML) */
+let measurePts = [];     // [[x,y,z], [x,y,z]]
+let measureAnnots = [];  // ids d'annotations créées pour la dernière mesure
+const fmt = (v)=> new Intl.NumberFormat("fr-FR",{maximumFractionDigits:2}).format(v);
+
+viewer.scene.input.on("mouseclicked", (coords)=>{
+  const hit = viewer.scene.pick({ canvasPos:[coords[0],coords[1]], pickSurface:true });
+
+  if (!hit || !hit.worldPos) { if (appMode==="select") clearSelection(); return; }
+
+  if (appMode === "measure") {
+    // 2 points -> distance + pastilles + étiquette (au milieu)
+    measurePts.push(hit.worldPos);
+    const aId = "mpt"+Date.now()+Math.random();
+    annotations.createAnnotation({ id:aId, worldPos:hit.worldPos, markerShown:true, labelShown:false });
+    measureAnnots.push(aId);
+    if (measurePts.length===2){
+      const [a,b] = measurePts;
+      const d = Math.hypot(a[0]-b[0], a[1]-b[1], a[2]-b[2]);
+      const mid = [(a[0]+b[0])/2,(a[1]+b[1])/2,(a[2]+b[2])/2];
+      const lid = "mlbl"+Date.now();
+      annotations.createAnnotation({
+        id: lid, worldPos: mid, markerShown:false, labelShown:true, label: `${fmt(d)} mm`
+      });
+      measureAnnots.push(lid);
+      measurePts = [];
+    }
+    return;
+  }
+
+  if (appMode === "annotate") {
+    const id = "note"+Date.now();
+    annotations.createAnnotation({
+      id, worldPos: hit.worldPos, markerShown:true, labelShown:true, label: "Annotation"
+    });
+    return;
+  }
+
+  // SELECT
+  const id = hit.entity?.id;
+  if (id){
+    setSome(allIds(), "highlighted", false);
+    selectedIds = new Set([id]);
+    setSome([id], "highlighted", true);
+    showProps(hit.entity.metaObject || hit.entity.meta || { id });
+  }
+});
+
+/* Iso / cacher / montrer */
+btnIsolate .addEventListener("click", ()=>{ if (!selectedIds.size) return; setAll("visible", false); setSome([...selectedIds],"visible",true); });
+btnHide    .addEventListener("click", ()=>{ if (!selectedIds.size) return; setSome([...selectedIds],"visible",false); });
+btnShowOnly.addEventListener("click", ()=>{ if (!selectedIds.size) return; setAll("visible", false); setSome([...selectedIds],"visible",true); });
+btnClearSel.addEventListener("click", ()=>{ setAll("visible", true); setSome(allIds(),"highlighted",false); clearSelection(); });
+
+/* Recherche */
+btnSearch.addEventListener("click", ()=>{
+  const q=(searchInput.value||"").toLowerCase().trim();
+  resultsBox.innerHTML=""; if(!q) return;
+  const found=[];
+  allIds().forEach(id=>{
+    const o=viewer.scene.objects[id]; const m=o?.metaObject||{};
+    const hay=[id,m.type,m.name,m.ifcType,m.displayName].join(" ").toLowerCase();
+    if (hay.includes(q)) found.push({id,meta:m});
+  });
+  if (!found.length){ resultsBox.textContent="Aucun résultat"; return; }
+  found.slice(0,200).forEach(({id,meta})=>{
+    const div=document.createElement("div");
+    div.className="row"; div.style.justifyContent="space-between";
+    div.innerHTML = `<span>${meta?.name||meta?.displayName||meta?.type||id}</span>
+      <button class="btn btn-outline mini" data-id="${id}">Voir</button>`;
+    resultsBox.appendChild(div);
+  });
+  resultsBox.querySelectorAll("button").forEach(b=>{
+    b.addEventListener("click", ()=>{
+      const id=b.dataset.id; const obj=viewer.scene.objects[id];
+      if (obj){ viewer.cameraFlight.flyTo(obj); setSome([id],"highlighted",true); }
+    });
+  });
+});
+
+/* Reload / Unload */
+btnReload.addEventListener("click", ()=>{
+  if (!lastModelId) return;
+  const info = models.get(lastModelId); if(!info) return;
+  try{ info.model.destroy(); }catch{}
+  models.delete(lastModelId);
+  loadXKT(info.src, info.name);
+});
+btnUnload.addEventListener("click", ()=>{
+  if (!lastModelId) return;
+  const info=models.get(lastModelId); if(!info) return;
+  try{ info.model.destroy(); }catch{}
+  models.delete(lastModelId);
+  lastModelId=[...models.keys()].pop()||null;
+  refreshModelsList();
+});
+
+/* Explode simple (offset radiale) */
+explodeRange.addEventListener("input", ()=>{
+  const k = parseFloat(explodeRange.value)||0;
+  const c = viewer.scene?.aabbCenter || [0,0,0];
+  allIds().forEach(id=>{
+    const o = viewer.scene.objects[id]; if (!o) return;
+    const p = o.aabbCenter || [0,0,0];
+    const v = [p[0]-c[0], p[1]-c[1], p[2]-c[2]];
+    const len = Math.hypot(v[0],v[1],v[2]) || 1;
+    const off = [v[0]/len*k*10, v[1]/len*k*10, v[2]/len*k*10];
+    if ("offset" in o) o.offset = off;
+  });
+});
+
+/* Screenshot */
+btnShot.addEventListener("click", ()=>{
+  try{
+    const canvas = document.getElementById("xeokit-canvas");
+    const dataURL = canvas.toDataURL("image/png");
+    const a=document.createElement("a"); a.href=dataURL; a.download="cadlytics_view.png"; a.click();
+  }catch(e){ console.error(e); alert("Capture impossible."); }
+});
+
+/* ---------- coupe : 1 axe à la fois, aucun par défaut ---------- */
+function setClipAxis(axis){
+  // toggle : si on reclique la même -> off
+  const same = (clipAxis===axis);
+  clipAxis = same ? null : axis;
+
+  clipButtons.forEach(b=>{
+    b.classList.toggle("btn-primary", !same && b.dataset.axis===clipAxis);
+  });
+
+  // Plan plugin
+  if (clipPlane) { try{ clipPlane.destroy(); }catch{} clipPlane=null; }
+  if (clipPlateAnnot) { annotations.destroyAnnotation(clipPlateAnnot.id); clipPlateAnnot=null; }
+
+  if (!clipAxis) { viewer.scene.sectionPlanesEnabled = false; return; }
+
+  const aabb = viewer.scene?.aabb || [0,0,0, 0,0,0];
+  const center = [(aabb[0]+aabb[3])/2,(aabb[1]+aabb[4])/2,(aabb[2]+aabb[5])/2];
+  const dir = clipAxis==="x" ? [1,0,0] : clipAxis==="y" ? [0,1,0] : [0,0,1];
+
+  clipPlane = sections.createSectionPlane({ id:"cut", pos:center, dir });
+  viewer.scene.sectionPlanesEnabled = true;
+
+  // Plaque visuelle (overlay) posée au centre
+  clipPlateAnnot = annotations.createAnnotation({
+    id: "cutplate",
+    worldPos: center,
+    markerShown:false,
+    labelShown:false
+  });
+  // on remplace son container par une plaque custom
+  const el = overlayHost.querySelector('[data-annotation_id="cutplate"]');
+  if (el){
+    el.innerHTML = `<div class="cutplate" title="Plan ${clipAxis.toUpperCase()}"></div>`;
+  }
+
+  // reset slider
+  clipRange.value = "0";
+}
+clipButtons.forEach(b=>{
+  b.addEventListener("click", ()=> setClipAxis(b.dataset.axis));
+});
+
+clipRange.addEventListener("input", ()=>{
+  if (!clipPlane || !clipAxis) return;
+  // déplacement relatif +/-100 -> translation de +/- la demi-taille de la scène
+  const k = parseFloat(clipRange.value)||0;
+  const aabb = viewer.scene?.aabb || [0,0,0, 0,0,0];
+  const center = [(aabb[0]+aabb[3])/2,(aabb[1]+aabb[4])/2,(aabb[2]+aabb[5])/2];
+  const half   = [(aabb[3]-aabb[0])/2,(aabb[4]-aabb[1])/2,(aabb[5]-aabb[2])/2];
+  const shift  = (clipAxis==="x"?half[0]:clipAxis==="y"?half[1]:half[2]) * (k/100);
+  const pos = [...center];
+  if (clipAxis==="x") pos[0]+=shift; else if (clipAxis==="y") pos[1]+=shift; else pos[2]+=shift;
+  clipPlane.pos = pos;
+
+  // déplacer la plaque indicative
+  if (clipPlateAnnot) {
+    annotations.setAnnotationWorldPos(clipPlateAnnot.id, pos);
+  }
+});
