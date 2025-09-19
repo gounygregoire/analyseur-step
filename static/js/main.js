@@ -117,7 +117,7 @@ const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); select
 const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
   container: overlayHost,
   labelsShown: true,
-  labelFormat: (meters) => `${meters.toFixed(2)} mm` // pas de conversion, on remplace juste l'unité
+  labelFormat: (meters) => `${meters.toFixed(2)} mm`
 });
 const distanceCtrl = new DistanceMeasurementsMouseControl(distancePlugin, { snapping: true });
 
@@ -196,7 +196,7 @@ function deactivateAnnot() {
   btnAnnot?.classList.remove("btn-primary");
 }
 function activateMeasure() {
-  deactivateAnnot();               // ← désactive ANNOTATION si active
+  deactivateAnnot();
   distanceCtrl.activate();
   btnMeasure?.classList.add("btn-primary");
 }
@@ -205,9 +205,8 @@ function toggleMeasure() {
   else { activateMeasure(); }
 }
 function toggleAnnot() {
-  // activer/désactiver ANNOTATION et rendre exclusif avec MESURE
   const turnOn = appMode !== "annotate";
-  deactivateMeasure();             // ← coupe MESURE si on bascule sur ANNOTATION
+  deactivateMeasure();
   if (turnOn) {
     appMode = "annotate";
     btnAnnot?.classList.add("btn-primary");
@@ -358,23 +357,27 @@ btnClearAnn.addEventListener("click", ()=>{
 });
 
 /* Création annotation au clic + saisie inline synchronisée
-   -> Correction: on passe le pickResult complet pour ancrer sur la pièce */
+   -> on passe le pickResult COMPLET + worldPos + entity pour ancrer sur la pièce */
 function handleAnnotClick(pickResult){
-  // on reste exclusif : si mesure était active on l’a déjà coupée via toggleAnnot()
   const tempId="a"+Date.now();
   const ann = annotations.createAnnotation({
     id: tempId,
-    pickResult,                       // <<— clé : ancre correctement l’annotation
+    pickResult,                         // (si supporté par la version)
+    entity: pickResult.entity,          // ceinture+bretelles
+    worldPos: pickResult.worldPos.slice(),
     occludable: false,
     markerHTML:`<div class="dot"></div>`,
     labelHTML:`<input class="annot-input" placeholder="Texte…" />`,
     markerShown:true,
     labelShown:true
   });
+  // sécurité si l'API ne prend pas pickResult
+  ann.setWorldPos?.(pickResult.worldPos);
+  if (!ann.entity && pickResult.entity) ann.entity = pickResult.entity;
+
   addAnnotationRow(ann);
   const id = getAnnId(ann);
 
-  // récupérer l'input nouvellement ajouté
   const input = overlayHost.querySelector(`[data-annotation_id="${tempId}"] .annot-input`) ||
                 overlayHost.querySelector(".annot-input:last-child");
   if (!input) return;
