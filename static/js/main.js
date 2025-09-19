@@ -68,12 +68,11 @@ const annotations = new AnnotationsPlugin(viewer, {
   container: overlayHost
 });
 
-/* ========= DPR & resizing — CRITIQUE pour que les pastilles collent ========= */
-const canvasEl = document.getElementById("xeokit-canvas");
-function syncCanvasAndOverlaySize() {
-  const w = Math.max(1, viewerContainer.clientWidth);
-  const h = Math.max(1, viewerContainer.clientHeight);
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+// main.js — fonction de resize (syncCanvasAndOverlaySize / resizeCanvasAndOverlay)
+- const dpr = Math.min(window.devicePixelRatio || 1, 2);
++ // Ne jamais descendre sous 1, sinon décalage des annotations (DPR < 1 => bitmap plus petit que la taille CSS)
++ const dprRaw = window.devicePixelRatio || 1;
++ const dpr = Math.max(1, Math.min(dprRaw, 2));
 
   // Taille CSS (en px) identique pour canvas et overlay
   canvasEl.style.width  = w + "px";
