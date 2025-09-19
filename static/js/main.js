@@ -56,7 +56,6 @@ const viewer = new Viewer({
   dtxEnabled: true,
   transparent: true
 });
-
 new FastNavPlugin(viewer, { flyToDuration: 0.9, hideEdges:false, autoHideEdges:false });
 
 const xktLoader = new XKTLoaderPlugin(viewer, {
@@ -118,16 +117,18 @@ const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); select
 const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
   container: overlayHost,
   labelsShown: true,
-  labelFormat: (meters) => `${(meters * 1000).toFixed(2)} mm`  // ← mm
+  // mm souhaités
+  labelFormat: (meters) => `${(meters * 1000).toFixed(2)} mm`
 });
 const distanceCtrl = new DistanceMeasurementsMouseControl(distancePlugin, { snapping: true });
 
-/* Helpers robustes pour itérer les mesures (array | Map | objet) */
-function eachMeasurement(cb){
-  const src = distancePlugin.measurements ?? distancePlugin._measurements ?? [];
-  const arr = Array.isArray(src) ? src
-            : (src instanceof Map ? Array.from(src.values()) : Object.values(src));
-  arr.forEach(m => m && cb(m));
+/* Dédup & noms “Mesure 1/2/3” */
+const seenMeas = new Set();        // ids déjà listés UI
+const measMap  = new Map();        // id -> {m, name}
+let measCounter = 0;
+
+function getMeasId(m){
+  return m.id || m._id || (m.__uiId ?? (m.__uiId = "m"+Date.now().toString(36)+Math.random().toString(36).slice(2,6)));
 }
 
 /* Panneau "Mesures" */
@@ -150,30 +151,34 @@ const btnClearMeas  = measPane.querySelector("#btnClearMeas");
 let allHidden = false;
 btnHideAll.addEventListener("click", ()=>{
   allHidden = !allHidden;
-  eachMeasurement(m => m.visible = !allHidden);
+  for (const {m} of measMap.values()) { m.visible = !allHidden; }
 });
 
 btnClearMeas.addEventListener("click", ()=>{
-  if (typeof distancePlugin.clear === "function") {
-    distancePlugin.clear();
-  } else if (typeof distancePlugin.destroyAll === "function") {
-    distancePlugin.destroyAll();
-  } else {
-    // fallback
-    eachMeasurement(m => m.destroy && m.destroy());
-  }
+  if (typeof distancePlugin.clear === "function") distancePlugin.clear();
+  else if (typeof distancePlugin.destroyAll === "function") distancePlugin.destroyAll();
   measureListEl.innerHTML = "";
+  seenMeas.clear(); measMap.clear(); measCounter = 0;
 });
 
 /* UI par mesure */
 function addMeasurementRow(m){
-  const id = m.id || ("D"+Date.now());
+  const id = getMeasId(m);
+  if (seenMeas.has(id)) return;      // évite les doublons
+  seenMeas.add(id);
+
+  if (!measMap.has(id)) {
+    measCounter += 1;
+    measMap.set(id, { m, name: `Mesure ${measCounter}` });
+  }
+  const { name } = measMap.get(id);
+
   const row = document.createElement("div");
   row.className = "row mini";
   row.dataset.mid = id;
   row.style.justifyContent = "space-between";
   row.innerHTML = `
-    <span style="font-size:12px">Mesure ${id}</span>
+    <span style="font-size:12px">${name}</span>
     <span>
       <button class="btn btn-outline mini" data-act="toggle">Cacher</button>
       <button class="btn btn-outline mini btn-danger" data-act="del">Suppr.</button>
@@ -189,35 +194,54 @@ function addMeasurementRow(m){
   });
   btnD.addEventListener("click", ()=>{
     try { m.destroy ? m.destroy() : distancePlugin.destroyMeasurement?.(m.id); } catch {}
+    measMap.delete(id);
+    seenMeas.delete(id);
     row.remove();
   });
 }
 
-/* Branchements pour capter les nouvelles mesures (versions variées) */
+/* Branchements (différentes versions émettent des noms d’événements différents) */
 const addRowFromEvent = (ev)=> addMeasurementRow(ev.measurement || ev);
 ["measurementCreated","newMeasurement","measurementAdded"].forEach(evt=>{
   distancePlugin.on?.(evt, addRowFromEvent);
 });
+distancePlugin.on?.("measurementDestroyed", (ev)=>{
+  const m = ev.measurement || ev;
+  const id = getMeasId(m);
+  const row = measureListEl.querySelector(`[data-mid="${id}"]`);
+  if (row) row.remove();
+  measMap.delete(id);
+  seenMeas.delete(id);
+});
 
-/* Fallback infaillible : on monkey-patch createMeasurement */
-if (typeof distancePlugin.createMeasurement === "function") {
-  const _origCreate = distancePlugin.createMeasurement.bind(distancePlugin);
-  distancePlugin.createMeasurement = (...args)=>{
-    const m = _origCreate(...args);
-    try { addMeasurementRow(m); } catch {}
-    return m;
-  };
-}
-
-/* Toggle mesure (activate/deactivate — ne pas toucher .active) */
-function setMeasureActive(on){
-  if (on) {
-    distanceCtrl.activate();
-    btnMeasure?.classList.add("btn-primary");
-  } else {
-    distanceCtrl.deactivate();
-    btnMeasure?.classList.remove("btn-primary");
+/* Conversion robuste des labels “m” -> “mm” (fallback DOM) */
+function convertLabelsIn(node){
+  if (!node || node.nodeType !== 1) return;
+  const tw = document.createTreeWalker(node, NodeFilter.SHOW_TEXT, null);
+  const re = /(-?\d+(?:\.\d+)?)\s*m\b/;
+  const reGlobal = /(-?\d+(?:\.\d+)?)\s*m\b/g;
+  const toUpdate = [];
+  while (tw.nextNode()){
+    const t = tw.currentNode;
+    if (re.test(t.nodeValue)) toUpdate.push(t);
   }
+  for (const t of toUpdate){
+    t.nodeValue = t.nodeValue.replace(reGlobal, (_, num)=> `${(parseFloat(num)*1000).toFixed(2)} mm`);
+  }
+}
+const mo = new MutationObserver((mutations)=>{
+  for (const m of mutations){
+    m.addedNodes?.forEach(n=> convertLabelsIn(n));
+    if (m.type === "characterData") convertLabelsIn(m.target.parentNode);
+  }
+});
+mo.observe(overlayHost, { childList:true, subtree:true, characterData:true });
+convertLabelsIn(overlayHost); // premier passage
+
+/* Toggle mesure (activate/deactivate) */
+function setMeasureActive(on){
+  if (on) { distanceCtrl.activate();  btnMeasure?.classList.add("btn-primary"); }
+  else    { distanceCtrl.deactivate();btnMeasure?.classList.remove("btn-primary"); }
 }
 btnMeasure?.addEventListener("click", ()=> setMeasureActive(!distanceCtrl.active));
 window.addEventListener("keydown", (e)=>{ if (e.key==="Escape" && distanceCtrl.active) setMeasureActive(false); });
@@ -250,7 +274,6 @@ async function uploadAndShow(){
       await loadXKT(fileURL, f.name);
       return;
     }
-
     const fd=new FormData(); fd.append("file",f);
     const res=await fetch("/upload",{method:"POST",body:fd});
     const j=await res.json();
