@@ -73,7 +73,7 @@ const canvasEl = document.getElementById("xeokit-canvas");
 function resizeCanvasAndOverlay() {
   const w = Math.max(1, viewerContainer.clientWidth);
   const h = Math.max(1, viewerContainer.clientHeight);
-  const dpr = 1; // simple & infaillible pour l’alignement des overlays
+  const dpr = 1; // simple & infaillible
 
   canvasEl.style.width  = w + "px";
   canvasEl.style.height = h + "px";
@@ -122,15 +122,23 @@ const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
 });
 const distanceCtrl = new DistanceMeasurementsMouseControl(distancePlugin, { snapping: true });
 
-// Panneau "Mesures" (ajouté en bas de la colonne de gauche)
+/* Helpers robustes pour itérer les mesures (array | Map | objet) */
+function eachMeasurement(cb){
+  const src = distancePlugin.measurements ?? distancePlugin._measurements ?? [];
+  const arr = Array.isArray(src) ? src
+            : (src instanceof Map ? Array.from(src.values()) : Object.values(src));
+  arr.forEach(m => m && cb(m));
+}
+
+/* Panneau "Mesures" */
 const leftCard = document.querySelector(".grid > .card:first-child");
 const measPane = document.createElement("div");
 measPane.className = "pane";
 measPane.innerHTML = `
   <h4 style="margin:6px 0 10px">Mesures</h4>
   <div id="measureList" style="display:flex;flex-direction:column;gap:6px"></div>
-  <div class="row mini" style="margin-top:6px">
-    <button id="btnHideAll" class="btn mini">Tout cacher/montrer</button>
+  <div class="row mini" style="margin-top:6px; gap:8px">
+    <button id="btnHideAll" class="btn btn-outline mini">Tout cacher/montrer</button>
     <button id="btnClearMeas" class="btn btn-danger mini">Tout supprimer</button>
   </div>`;
 leftCard.appendChild(measPane);
@@ -142,16 +150,22 @@ const btnClearMeas  = measPane.querySelector("#btnClearMeas");
 let allHidden = false;
 btnHideAll.addEventListener("click", ()=>{
   allHidden = !allHidden;
-  distancePlugin.measurements?.forEach(m => m.visible = !allHidden);
+  eachMeasurement(m => m.visible = !allHidden);
 });
+
 btnClearMeas.addEventListener("click", ()=>{
-  // API varie selon versions; on couvre les deux noms usuels
-  if (distancePlugin.clear) distancePlugin.clear();
-  else if (distancePlugin.destroyAll) distancePlugin.destroyAll();
+  if (typeof distancePlugin.clear === "function") {
+    distancePlugin.clear();
+  } else if (typeof distancePlugin.destroyAll === "function") {
+    distancePlugin.destroyAll();
+  } else {
+    // fallback
+    eachMeasurement(m => m.destroy && m.destroy());
+  }
   measureListEl.innerHTML = "";
 });
 
-// Helpers UI mesures
+/* UI par mesure */
 function addMeasurementRow(m){
   const id = m.id || ("D"+Date.now());
   const row = document.createElement("div");
@@ -179,18 +193,23 @@ function addMeasurementRow(m){
   });
 }
 
-// Écoute la création / destruction (noms d’événements usuels du plugin)
-distancePlugin.on?.("measurementCreated", (ev)=>{
-  const m = ev.measurement || ev; // selon version
-  addMeasurementRow(m);
-});
-distancePlugin.on?.("measurementDestroyed", (ev)=>{
-  const m = ev.measurement || ev;
-  const row = measureListEl.querySelector(`[data-mid="${m.id}"]`);
-  if (row) row.remove();
+/* Branchements pour capter les nouvelles mesures (versions variées) */
+const addRowFromEvent = (ev)=> addMeasurementRow(ev.measurement || ev);
+["measurementCreated","newMeasurement","measurementAdded"].forEach(evt=>{
+  distancePlugin.on?.(evt, addRowFromEvent);
 });
 
-// Toggle mesure (activate/deactivate — ne pas toucher .active directement)
+/* Fallback infaillible : on monkey-patch createMeasurement */
+if (typeof distancePlugin.createMeasurement === "function") {
+  const _origCreate = distancePlugin.createMeasurement.bind(distancePlugin);
+  distancePlugin.createMeasurement = (...args)=>{
+    const m = _origCreate(...args);
+    try { addMeasurementRow(m); } catch {}
+    return m;
+  };
+}
+
+/* Toggle mesure (activate/deactivate — ne pas toucher .active) */
 function setMeasureActive(on){
   if (on) {
     distanceCtrl.activate();
@@ -355,7 +374,6 @@ function handleAnnotClick(worldPos){
   const input = overlayHost.querySelector(`[data-annotation_id="${id}"] .annot-input`);
   if (!input) return;
   input.focus();
-
   const commit=()=>{
     const val=(input.value||"Note");
     ann.setLabelHTML?.(`<div class="xk-badge">${val}</div>`) || (ann.labelHTML=`<div class="xk-badge">${val}</div>`);
