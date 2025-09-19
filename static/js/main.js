@@ -64,7 +64,7 @@ const xktLoader = new XKTLoaderPlugin(viewer, {
 });
 const sections = new SectionPlanesPlugin(viewer);
 
-// Overlays HTML (annotations perso)
+// Overlays HTML (annotations)
 const annotations = new AnnotationsPlugin(viewer, { container: overlayHost });
 
 /* ========= Canvas & overlay sizing — DPR sûr ========= */
@@ -72,7 +72,7 @@ const canvasEl = document.getElementById("xeokit-canvas");
 function resizeCanvasAndOverlay() {
   const w = Math.max(1, viewerContainer.clientWidth);
   const h = Math.max(1, viewerContainer.clientHeight);
-  const dpr = 1; // simple & infaillible
+  const dpr = 1;
 
   canvasEl.style.width  = w + "px";
   canvasEl.style.height = h + "px";
@@ -113,12 +113,11 @@ const setSome=(ids,prop,val)=> ids.forEach(id=>{const o=viewer.scene.objects[id]
 const setAll=(prop,val)=> allIds().forEach(id=>{const o=viewer.scene.objects[id]; if(o) o[prop]=val;});
 const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); if (propsPanel) propsPanel.innerHTML=""; };
 
-/* ---------- Mesures natives Xeokit (libellé "mm" sans conversion) ---------- */
+/* ---------- Mesures natives Xeokit (affiche “mm” sans conversion) ---------- */
 const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
   container: overlayHost,
   labelsShown: true,
-  // Tu as demandé : pas de conversion → on garde la valeur et on affiche "mm"
-  labelFormat: (meters) => `${meters.toFixed(2)} mm`
+  labelFormat: (meters) => `${meters.toFixed(2)} mm` // pas de conversion, on remplace juste l'unité
 });
 const distanceCtrl = new DistanceMeasurementsMouseControl(distancePlugin, { snapping: true });
 
@@ -175,6 +174,7 @@ distancePlugin.on?.("measurementDestroyed", (ev)=>{
   measureListEl.querySelector(`[data-mid="${id}"]`)?.remove();
   measMap.delete(id);
 });
+
 let allHidden = false;
 btnHideAll.addEventListener("click", ()=>{ allHidden = !allHidden; for (const {m} of measMap.values()) m.visible = !allHidden; });
 btnClearMeas.addEventListener("click", ()=>{
@@ -183,10 +183,40 @@ btnClearMeas.addEventListener("click", ()=>{
   measureListEl.innerHTML = ""; measMap.clear(); measCounter = 0; allHidden = false;
 });
 
-/* Toggle mesure */
-function setMeasureActive(on){ if (on){ distanceCtrl.activate(); btnMeasure?.classList.add("btn-primary"); } else { distanceCtrl.deactivate(); btnMeasure?.classList.remove("btn-primary"); } }
-btnMeasure?.addEventListener("click", ()=> setMeasureActive(!distanceCtrl.active));
-window.addEventListener("keydown", (e)=>{ if (e.key==="Escape" && distanceCtrl.active) setMeasureActive(false); });
+/* ============ Gestion MUTUELLEMENT EXCLUSIVE des modes ============ */
+function deactivateMeasure() {
+  if (distanceCtrl.active) distanceCtrl.deactivate();
+  btnMeasure?.classList.remove("btn-primary");
+}
+function deactivateAnnot() {
+  appMode = "select";
+  btnAnnot?.classList.remove("btn-primary");
+}
+function activateMeasure() {
+  deactivateAnnot();               // ← désactive ANNOTATION si active
+  distanceCtrl.activate();
+  btnMeasure?.classList.add("btn-primary");
+}
+function toggleMeasure() {
+  if (distanceCtrl.active) { deactivateMeasure(); }
+  else { activateMeasure(); }
+}
+function toggleAnnot() {
+  // activer/désactiver ANNOTATION et rendre exclusif avec MESURE
+  const turnOn = appMode !== "annotate";
+  deactivateMeasure();             // ← coupe MESURE si on bascule sur ANNOTATION
+  if (turnOn) {
+    appMode = "annotate";
+    btnAnnot?.classList.add("btn-primary");
+  } else {
+    deactivateAnnot();
+  }
+}
+btnMeasure?.addEventListener("click", toggleMeasure);
+btnAnnot  ?.addEventListener("click", toggleAnnot);
+
+// Echap quitte la mesure
+window.addEventListener("keydown", (e)=>{ if (e.key==="Escape" && distanceCtrl.active) deactivateMeasure(); });
 
 /* ---------- chargement XKT ---------- */
 async function loadXKT(url, nameHint){
@@ -245,38 +275,6 @@ chkGhost?.addEventListener("change",()=>{ setAll("ghosted",!!chkGhost.checked); 
 chkTheme?.addEventListener("change",()=> viewerShell?.classList.toggle("dark",!!chkTheme.checked));
 opacityRange?.addEventListener("input",()=> setAll("opacity", parseFloat(opacityRange.value)||1));
 
-/* ---------- recherche ---------- */
-btnSearch?.addEventListener("click",()=>{
-  const q=(searchInput?.value||"").toLowerCase().trim();
-  if (!resultsBox) return; resultsBox.innerHTML="";
-  if (!q) return;
-  const found=[];
-  allIds().forEach(id=>{
-    const o=viewer.scene.objects[id]; const m=o?.metaObject||{};
-    const hay=[id,m.type,m.name,m.ifcType,m.displayName].join(" ").toLowerCase();
-    if (hay.includes(q)) found.push({id,meta:m});
-  });
-  if (!found.length){ resultsBox.textContent="Aucun résultat"; return; }
-  found.slice(0,200).forEach(({id,meta})=>{
-    const div=document.createElement("div");
-    div.className="row mini"; div.style.justifyContent="space-between";
-    div.innerHTML=`<span style="font-size:12px">${meta?.name||meta?.displayName||meta?.type||id}</span>
-      <button class="btn btn-outline mini" data-id="${id}">Voir</button>`;
-    resultsBox.appendChild(div);
-  });
-  resultsBox.querySelectorAll("button").forEach(b=>{
-    b.addEventListener("click",()=>{ const id=b.dataset.id; const obj=viewer.scene.objects[id];
-      if (obj){ viewer.cameraFlight.flyTo(obj); setSome([id],"highlighted",true); }
-    });
-  });
-});
-
-/* ---------- iso/cacher/montrer ---------- */
-btnIsolate ?.addEventListener("click",()=>{ if (!selectedIds.size) return; setAll("visible",false); setSome([...selectedIds],"visible",true); });
-btnHide    ?.addEventListener("click",()=>{ if (!selectedIds.size) return; setSome([...selectedIds],"visible",false); });
-btnShowOnly?.addEventListener("click",()=>{ if (!selectedIds.size) return; setAll("visible",false); setSome([...selectedIds],"visible",true); });
-btnClearSel?.addEventListener("click",()=>{ setAll("visible",true); setSome(allIds(),"highlighted",false); clearSelection(); });
-
 /* ================= ANNOTATIONS (plugin xeokit) =================
    — panneau “Annotations” + synchro du texte avec la liste
 =================================================================*/
@@ -304,14 +302,12 @@ function setAnnotationLabel(ann, text){
   const html = `<div class="xk-badge">${safe || "Annotation"}</div>`;
   ann.setLabelHTML?.(html) || (ann.labelHTML = html);
 }
-
 function updateAnnotationListName(id, text){
   const row = annotListEl.querySelector(`[data-aid="${id}"]`);
   if (!row) return;
   const title = row.querySelector(".annot-name");
   title.textContent = text && text.trim() ? text.trim() : (annMap.get(id)?.name || "Annotation");
 }
-
 function addAnnotationRow(ann){
   const id = getAnnId(ann);
   if (!annMap.has(id)) { annCounter += 1; annMap.set(id, { ann, name: `Annotation ${annCounter}` }); }
@@ -357,27 +353,27 @@ btnClearAnn.addEventListener("click", ()=>{
 
 /* Création annotation au clic + saisie inline synchronisée */
 function handleAnnotClick(worldPos){
-  setMode("select");
-  const id="a"+Date.now();
+  // on reste exclusif : si mesure était active on l’a déjà coupée via toggleAnnot()
+  const tempId="a"+Date.now();
   const ann = annotations.createAnnotation({
-    id,
+    id: tempId,
     worldPos,
     markerHTML:`<div class="dot"></div>`,
     labelHTML:`<input class="annot-input" placeholder="Texte…" />`,
     labelShown:true
   });
-  addAnnotationRow(ann); // ajout dans la liste immédiatement
-  const listId = getAnnId(ann);     // id réel pour la liste
+  addAnnotationRow(ann);
+  const id = getAnnId(ann);
 
-  const input = overlayHost.querySelector(`[data-annotation_id="${id}"] .annot-input`);
+  const input = overlayHost.querySelector(`[data-annotation_id="${tempId}"] .annot-input`);
   if (!input) return;
   input.focus();
 
   const commit=()=>{
     const val=(input.value||"").trim();
     setAnnotationLabel(ann, val || "Annotation");
-    updateAnnotationListName(listId, val);
-    const entry = annMap.get(listId); if (entry && val) entry.name = val; // mémorise le titre
+    updateAnnotationListName(id, val);
+    const entry = annMap.get(id); if (entry && val) entry.name = val;
   };
   input.addEventListener("keydown",(e)=>{ if (e.key==="Enter"){ e.preventDefault(); input.blur(); } });
   input.addEventListener("blur", commit, {once:true});
