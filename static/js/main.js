@@ -76,20 +76,20 @@ const annotations = new AnnotationsPlugin(viewer, {
   labelHTML:  `<div class="bubble"></div>`
 });
 
-/* Canvas + overlay DPR-Ready */
+// --- Canvas & overlay : même taille CSS, pas de DPR manuel ---
 const canvasEl = document.getElementById("xeokit-canvas");
+
 function resizeCanvasAndOverlay() {
-  const w = Math.max(1, viewerContainer.clientWidth);
-  const h = Math.max(1, viewerContainer.clientHeight);
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  canvasEl.style.width = w + "px"; canvasEl.style.height = h + "px";
-  canvasEl.width  = Math.floor(w * dpr); canvasEl.height = Math.floor(h * dpr);
-  overlayHost.style.width = w + "px"; overlayHost.style.height = h + "px";
+  // On laisse le canvas à 100% en CSS, xeokit gère le DPR en interne.
+  // On ne touche NI width NI height "pixel" du canvas.
+  // L’overlay suit la taille via le CSS (100%).
   if (viewer.resize) viewer.resize();
   viewer.scene?.setDirty?.(true);
 }
-new ResizeObserver(resizeCanvasAndOverlay).observe(viewerContainer);
-addEventListener("resize", resizeCanvasAndOverlay);
+
+const ro = new ResizeObserver(resizeCanvasAndOverlay);
+ro.observe(viewerContainer);
+window.addEventListener("resize", resizeCanvasAndOverlay);
 resizeCanvasAndOverlay();
 
 /* Cube d’axes */
