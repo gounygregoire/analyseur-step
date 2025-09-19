@@ -250,53 +250,160 @@ function setMode(m){
 btnMeasure.addEventListener("click", ()=> setMode("measure"));
 btnAnnot  .addEventListener("click", ()=> setMode("annotate"));
 
-/* Mesures et annotations (via overlays HTML) */
-let measurePts = [];     // [[x,y,z], [x,y,z]]
-let measureAnnots = [];  // ids d'annotations créées pour la dernière mesure
-const fmt = (v)=> new Intl.NumberFormat("fr-FR",{maximumFractionDigits:2}).format(v);
+/* =========================================================
+ *  MESURE & ANNOTATION : version stable, plugins officiels
+ * =======================================================*/
 
-viewer.scene.input.on("mouseclicked", (coords)=>{
-  const hit = viewer.scene.pick({ canvasPos:[coords[0],coords[1]], pickSurface:true });
+import {
+  DistanceMeasurementsPlugin,
+  AnnotationsPlugin
+} from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
 
-  if (!hit || !hit.worldPos) { if (appMode==="select") clearSelection(); return; }
+/* Plugins */
+const measurements = new DistanceMeasurementsPlugin(viewer, {
+  // précision et unités du label (le plugin calcule en mètres -> on affiche en mm)
+  defaultDistancePrecision: 2
+});
 
-  if (appMode === "measure") {
-    // 2 points -> distance + pastilles + étiquette (au milieu)
-    measurePts.push(hit.worldPos);
-    const aId = "mpt"+Date.now()+Math.random();
-    annotations.createAnnotation({ id:aId, worldPos:hit.worldPos, markerShown:true, labelShown:false });
-    measureAnnots.push(aId);
-    if (measurePts.length===2){
-      const [a,b] = measurePts;
-      const d = Math.hypot(a[0]-b[0], a[1]-b[1], a[2]-b[2]);
-      const mid = [(a[0]+b[0])/2,(a[1]+b[1])/2,(a[2]+b[2])/2];
-      const lid = "mlbl"+Date.now();
-      annotations.createAnnotation({
-        id: lid, worldPos: mid, markerShown:false, labelShown:true, label: `${fmt(d)} mm`
-      });
-      measureAnnots.push(lid);
-      measurePts = [];
+const annotations = new AnnotationsPlugin(viewer, {
+  markerHTML:
+    "<div style='width:10px;height:10px;border-radius:999px;background:#2dd4bf;border:2px solid #fff;box-shadow:0 0 0 2px rgba(0,0,0,.15)'></div>"
+});
+
+/* Styles des labels (petites bulles jolies) */
+const overlayStyle = `
+.xk-badge{
+  font: 12px/1.3 Inter, system-ui, Segoe UI, Roboto, Arial, sans-serif;
+  color:#0f172a; background:#fff; padding:.35rem .5rem; border-radius:.5rem;
+  box-shadow:0 8px 24px rgba(2,6,23,.12); border:1px solid rgba(2,6,23,.06);
+}
+.xk-badge b{font-weight:600}
+`;
+if (!document.getElementById("xeokit-badges-css")) {
+  const s = document.createElement("style");
+  s.id = "xeokit-badges-css";
+  s.textContent = overlayStyle;
+  document.head.appendChild(s);
+}
+
+/* --------------------
+   Modes & petits helpers
+---------------------*/
+let toolMode = "select";     // "select" | "measure" | "annotate"
+let measureBuffer = [];      // stocke 0,1 points worldPos
+let lastMeasurement = null;  // dernier objet measurement
+const propsPanel = document.getElementById("propsPanel");
+
+function setToolMode(m) {
+  toolMode = (toolMode === m) ? "select" : m;
+
+  // UI (active / désactive visuellement les boutons si tu les as)
+  btnMeasure?.classList.toggle("btn-primary", toolMode === "measure");
+  btnAnnot?.classList.toggle("btn-primary",   toolMode === "annotate");
+
+  // reset mesure si on sort
+  if (toolMode !== "measure") {
+    measureBuffer.length = 0;
+  }
+}
+
+/* Convertit m -> mm avec 2 décimales */
+const mm = (meters) => (meters * 1000);
+
+/* --------------------
+   MESURE - 2 clics
+---------------------*/
+btnMeasure?.addEventListener("click", () => setToolMode("measure"));
+
+viewer.scene.input.on("mouseclicked", (coords) => {
+  const hit = viewer.scene.pick({ canvasPos: coords, pickSurface: true });
+  if (!hit || !hit.worldPos) {
+    if (toolMode === "measure") return; // on attend un point valide
+    return;
+  }
+
+  // ----- MESURE -----
+  if (toolMode === "measure") {
+    measureBuffer.push(hit.worldPos.slice());
+    if (measureBuffer.length === 2) {
+      const [A, B] = measureBuffer;
+      // supprime l’ancienne mesure si on en fait une nouvelle
+      if (lastMeasurement) { try { lastMeasurement.destroy(); } catch(_){} }
+
+      // crée la mesure officielle (ligne + pastilles + label)
+      lastMeasurement = measurements.createMeasurement({ positions: [A, B] });
+
+      // le plugin affiche la distance en m -> on remplace le label par nos mm
+      // on calcule nous-même la distance 3D
+      const dx = B[0]-A[0], dy = B[1]-A[1], dz = B[2]-A[2];
+      const distMM = mm(Math.hypot(dx, dy, dz)).toFixed(2);
+      // le label du plugin est accessible via lastMeasurement.label (HTMLElement)
+      // selon versions : label est dans lastMeasurement._label?.element – on couvre les deux
+      const labelEl =
+        lastMeasurement.label?.element ||
+        lastMeasurement._label?.element ||
+        lastMeasurement.label || null;
+
+      if (labelEl) {
+        labelEl.classList.add("xk-badge");
+        labelEl.innerHTML = `<b>${distMM}</b> mm`;
+      }
+
+      // on a fini la mesure -> on reste en mode nav
+      measureBuffer.length = 0;
+      setToolMode("select");
     }
     return;
   }
 
-  if (appMode === "annotate") {
-    const id = "note"+Date.now();
-    annotations.createAnnotation({
-      id, worldPos: hit.worldPos, markerShown:true, labelShown:true, label: "Annotation"
-    });
-    return;
-  }
+  // ----- ANNOTATION -----
+  if (toolMode === "annotate") {
+    const txt = prompt("Texte de l’annotation :", "");
+    if (txt == null) return; // annulé
 
-  // SELECT
-  const id = hit.entity?.id;
-  if (id){
-    setSome(allIds(), "highlighted", false);
-    selectedIds = new Set([id]);
-    setSome([id], "highlighted", true);
-    showProps(hit.entity.metaObject || hit.entity.meta || { id });
+    const id = "a" + Date.now();
+    const ann = annotations.createAnnotation({
+      id,
+      worldPos: hit.worldPos,
+      labelHTML: `<div class="xk-badge">${txt || "Note"}</div>`
+    });
+
+    // Ajoute contrôle simple dans "Propriétés"
+    if (propsPanel) {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.style.gap = "8px";
+      row.style.alignItems = "center";
+      row.innerHTML = `
+        <span style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${txt || "Note"}</span>
+        <button class="btn btn-outline mini" data-act="edit">Éditer</button>
+        <button class="btn btn-outline mini" data-act="hide">Cacher/Montrer</button>
+        <button class="btn btn-outline mini" data-act="del">Suppr.</button>
+      `;
+      propsPanel.appendChild(row);
+
+      row.querySelector('[data-act="edit"]')?.addEventListener("click", () => {
+        const nt = prompt("Nouveau texte :", txt || "Note");
+        if (nt != null) ann.setLabelHTML?.(`<div class="xk-badge">${nt}</div>`);
+        if (nt != null && row.firstElementChild) row.firstElementChild.textContent = nt;
+      });
+      row.querySelector('[data-act="hide"]')?.addEventListener("click", () => {
+        ann.visible = !ann.visible;
+      });
+      row.querySelector('[data-act="del"]')?.addEventListener("click", () => {
+        try { ann.destroy(); } catch(_) {}
+        row.remove();
+      });
+    }
+
+    // on sort du mode annotation pour te laisser naviguer
+    setToolMode("select");
   }
 });
+
+/* Bouton Annotation */
+btnAnnot?.addEventListener("click", () => setToolMode("annotate"));
+
 
 /* Iso / cacher / montrer */
 btnIsolate .addEventListener("click", ()=>{ if (!selectedIds.size) return; setAll("visible", false); setSome([...selectedIds],"visible",true); });
