@@ -5,7 +5,8 @@ import {
   FastNavPlugin,
   NavCubePlugin,
   SectionPlanesPlugin,
-  AnnotationsPlugin
+  AnnotationsPlugin,
+  DistanceMeasurementsPlugin
 } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
 
 /* ---------- utilitaires DOM ---------- */
@@ -19,9 +20,9 @@ const btnVisualiser = $("#btnVisualiser");
 const chkAdditive   = $("#chkAdditive");
 const fileNameLbl   = $("#fileName");
 
-const viewerShell   = $("#viewerShell");
+const viewerShell     = $("#viewerShell");
 const viewerContainer = $("#viewerContainer");
-const overlayHost   = $("#overlayHost");
+const overlayHost     = $("#overlayHost");
 
 const btnFit   = $("#btnFit");
 const btnProj  = $("#btnProj");
@@ -65,32 +66,25 @@ const viewer = new Viewer({
 const canvasEl = document.getElementById("xeokit-canvas");
 
 function resizeCanvasAndOverlay() {
-  // Taille CSS du container
   const w = Math.max(1, viewerContainer.clientWidth);
   const h = Math.max(1, viewerContainer.clientHeight);
+  const dpr = Math.min(window.devicePixelRatio || 1, 2); // cap à 2
 
-  // Taille "pixel" du canvas (DPR) pour un rendu net
-  const dpr = Math.min(window.devicePixelRatio || 1, 2); // cap à 2 pour éviter les canvases énormes
   canvasEl.style.width  = w + "px";
   canvasEl.style.height = h + "px";
   canvasEl.width  = Math.floor(w * dpr);
   canvasEl.height = Math.floor(h * dpr);
 
-  // L’overlay suit la même taille (utile si tu lis ses width/height)
   overlayHost.style.width  = w + "px";
   overlayHost.style.height = h + "px";
 
-  // Demande au viewer de repeindre si besoin (APIs selon versions)
   if (viewer.resize) viewer.resize();
   if (viewer.scene?.setDirty) viewer.scene.setDirty(true);
 }
-
-// Observe toute variation de taille du container
 const ro = new ResizeObserver(resizeCanvasAndOverlay);
 ro.observe(viewerContainer);
 window.addEventListener("resize", resizeCanvasAndOverlay);
 resizeCanvasAndOverlay();
-
 
 new FastNavPlugin(viewer, { flyToDuration: 0.9, hideEdges:false, autoHideEdges:false });
 
@@ -107,6 +101,37 @@ const annotations = new AnnotationsPlugin(viewer, {
   markerHTML: `<div class="dot"></div>`,
   labelHTML:  `<div class="bubble"></div>`
 });
+
+/* Mesures distances */
+const measurements = new DistanceMeasurementsPlugin(viewer, {
+  defaultDistancePrecision: 2 // le plugin calcule en mètres
+});
+
+/* CSS overlay (dot/bubble/badges + plaque de coupe) injectée une fois */
+(() => {
+  if (document.getElementById("xeokit-overlay-css")) return;
+  const css = document.createElement("style");
+  css.id = "xeokit-overlay-css";
+  css.textContent = `
+  .dot{
+    width:10px;height:10px;border-radius:999px;
+    background:#2dd4bf;border:2px solid #fff;box-shadow:0 0 0 2px rgba(0,0,0,.15)
+  }
+  .bubble{
+    min-width:10px;min-height:10px;border-radius:8px;background:rgba(0,0,0,.18);
+    backdrop-filter: blur(2px);
+  }
+  .xk-badge{
+    font: 12px/1.3 Inter, system-ui, Segoe UI, Roboto, Arial, sans-serif;
+    color:#0f172a; background:#fff; padding:.35rem .5rem; border-radius:.5rem;
+    box-shadow:0 8px 24px rgba(2,6,23,.12); border:1px solid rgba(2,6,23,.06);
+  }
+  .cutplate{
+    width:120px;height:120px;transform:translate(-50%,-50%);
+    background:rgba(59,130,246,.10); border:1px dashed rgba(59,130,246,.6);
+  }`;
+  document.head.appendChild(css);
+})();
 
 /* Cube d’axes dans le coin */
 (() => {
@@ -130,13 +155,14 @@ let clipAxis = null;      // 'x' | 'y' | 'z' | null
 let clipPlane = null;     // SectionPlane
 let clipPlateAnnot = null;// plaque visuelle (overlay)
 
-const setProgress = (p) => { if (progressBar) progressBar.style.inset = `0 ${100-Math.max(0,Math.min(100,p))}% 0 0`; };
-const allIds =       () => viewer.scene?.objectIds ?? [];
-const setSome = (ids, prop, val) => ids.forEach(id=>{ const o=viewer.scene.objects[id]; if(o) o[prop]=val; });
-const setAll  = (prop, val)     => allIds().forEach(id=>{ const o=viewer.scene.objects[id]; if(o) o[prop]=val; });
-const clearSelection = () => { setSome([...selectedIds], "highlighted", false); selectedIds.clear(); propsPanel.innerHTML=""; };
+const setProgress   = (p) => { if (progressBar) progressBar.style.inset = `0 ${100-Math.max(0,Math.min(100,p))}% 0 0`; };
+const allIds        = ()   => viewer.scene?.objectIds ?? [];
+const setSome       = (ids, prop, val) => ids.forEach(id=>{ const o=viewer.scene.objects[id]; if(o) o[prop]=val; });
+const setAll        = (prop, val)     => allIds().forEach(id=>{ const o=viewer.scene.objects[id]; if(o) o[prop]=val; });
+const clearSelection= () => { setSome([...selectedIds], "highlighted", false); selectedIds.clear(); if (propsPanel) propsPanel.innerHTML=""; };
 
 function showProps(meta) {
+  if (!propsPanel) return;
   propsPanel.innerHTML = "";
   if (!meta) return;
   const add = (k,v)=>{ const a=document.createElement("div"); a.textContent=k;
@@ -150,6 +176,7 @@ function showProps(meta) {
 }
 
 function refreshModelsList(){
+  if (!modelsList) return;
   modelsList.innerHTML="";
   for (const [id, info] of models) {
     const row = document.createElement("div");
@@ -171,13 +198,12 @@ function refreshModelsList(){
     });
   });
 }
-
 const flyAll = ()=> viewer.cameraFlight.flyTo(viewer.scene);
 
 /* ---------- chargement XKT ---------- */
 async function loadXKT(url, nameHint){
   const id = "m"+Date.now();
-  const model = xktLoader.load({ id, src:url, edges:!!chkEdges.checked });
+  const model = xktLoader.load({ id, src:url, edges:!!chkEdges?.checked });
   setProgress(6);
   model.on("progress", p=> setProgress(6 + Math.round(p*88)));
   model.on("loaded", ()=>{
@@ -185,7 +211,7 @@ async function loadXKT(url, nameHint){
     viewer.cameraFlight.flyTo(model);
     models.set(id, { model, name:nameHint||id, src:url });
     lastModelId=id; refreshModelsList();
-    if (chkEdges.checked) viewer.scene.edgeMaterial.edgesEnabled = true;
+    if (chkEdges?.checked) viewer.scene.edgeMaterial.edgesEnabled = true;
   });
   model.on("error", e=>{ console.error(e); setProgress(0); alert("Erreur chargement XKT."); });
   return id;
@@ -195,7 +221,7 @@ async function loadXKT(url, nameHint){
 async function uploadAndShow(){
   const f = fileInput?.files?.[0];
   if (!f) { alert("Choisis un fichier .step/.stp/.stl"); return; }
-  btnVisualiser.disabled = true; btnVisualiser.textContent = "Conversion…";
+  if (btnVisualiser) { btnVisualiser.disabled = true; btnVisualiser.textContent = "Conversion…"; }
   setProgress(10);
   try{
     const fd = new FormData(); fd.append("file", f);
@@ -204,141 +230,81 @@ async function uploadAndShow(){
     if (!res.ok || !j.xkt_url) throw new Error(JSON.stringify(j));
     const xktUrl = new URL(j.xkt_url, location.origin).toString();
 
-    if (!chkAdditive.checked) { for (const [,i] of models){ try{i.model.destroy();}catch{} } models.clear(); selectedIds.clear(); }
+    if (!chkAdditive?.checked) { for (const [,i] of models){ try{i.model.destroy();}catch{} } models.clear(); selectedIds.clear(); }
     await loadXKT(xktUrl, f.name);
   }catch(e){
     console.error(e); alert("Erreur conversion/chargement (voir Console).");
   }finally{
-    btnVisualiser.disabled = false; btnVisualiser.textContent = "VISUALISER";
+    if (btnVisualiser) { btnVisualiser.disabled = false; btnVisualiser.textContent = "VISUALISER"; }
   }
 }
 
 /* ---------- UI fichiers ---------- */
-btnChoose.addEventListener("click", (e)=>{ e.preventDefault(); fileInput.click(); });
-fileInput.addEventListener("change", ()=>{
-  const f=fileInput.files?.[0]; if (f) fileNameLbl.textContent = f.name;
+btnChoose?.addEventListener("click", (e)=>{ e.preventDefault(); fileInput?.click(); });
+fileInput?.addEventListener("change", ()=>{
+  const f=fileInput.files?.[0]; if (f && fileNameLbl) fileNameLbl.textContent = f.name;
   if (f) uploadAndShow(); // visualisation immédiate
 });
-btnVisualiser.addEventListener("click", (e)=>{ e.preventDefault(); uploadAndShow(); });
+btnVisualiser?.addEventListener("click", (e)=>{ e.preventDefault(); uploadAndShow(); });
 
 /* ---------- navigation & rendu ---------- */
-btnFit.addEventListener("click", flyAll);
+btnFit?.addEventListener("click", flyAll);
 let proj="perspective";
-btnProj.addEventListener("click", ()=>{
+btnProj?.addEventListener("click", ()=>{
   proj = proj==="perspective" ? "ortho" : "perspective";
   viewer.camera.projection = proj;
   btnProj.textContent = proj==="perspective" ? "PERSPECTIVE" : "ORTHOGRAPHIQUE";
 });
 const setNav = (m)=> viewer.cameraControl.navMode = (m==="pan" ? "planView" : m);
-navMode.addEventListener("change", ()=> setNav(navMode.value)); setNav(navMode.value);
+navMode?.addEventListener("change", ()=> setNav(navMode.value)); setNav(navMode?.value || "orbit");
 
-chkEdges.addEventListener("change", ()=> viewer.scene.edgeMaterial.edgesEnabled = !!chkEdges.checked);
-viewer.scene.on("tick", ()=>{ if (chkEdges.checked && !viewer.scene.edgeMaterial.edgesEnabled) viewer.scene.edgeMaterial.edgesEnabled = true; });
+chkEdges?.addEventListener("change", ()=> viewer.scene.edgeMaterial.edgesEnabled = !!chkEdges.checked);
+viewer.scene.on("tick", ()=>{ if (chkEdges?.checked && !viewer.scene.edgeMaterial.edgesEnabled) viewer.scene.edgeMaterial.edgesEnabled = true; });
 
-chkXray .addEventListener("change", ()=>{ setAll("xrayed",  !!chkXray.checked);  setSome([...selectedIds],"xrayed",false);  });
-chkGhost.addEventListener("change", ()=>{ setAll("ghosted", !!chkGhost.checked); setSome([...selectedIds],"ghosted",false); });
+chkXray ?.addEventListener("change", ()=>{ setAll("xrayed",  !!chkXray.checked);  setSome([...selectedIds],"xrayed",false);  });
+chkGhost?.addEventListener("change", ()=>{ setAll("ghosted", !!chkGhost.checked); setSome([...selectedIds],"ghosted",false); });
 
-chkTheme.addEventListener("change", ()=> viewerShell.classList.toggle("dark", !!chkTheme.checked));
-opacityRange.addEventListener("input", ()=> setAll("opacity", parseFloat(opacityRange.value)||1));
+chkTheme?.addEventListener("change", ()=> viewerShell?.classList.toggle("dark", !!chkTheme.checked));
+opacityRange?.addEventListener("input", ()=> setAll("opacity", parseFloat(opacityRange.value)||1));
 
 /* ---------- outils (modes) ---------- */
 function setMode(m){
   appMode = (appMode===m) ? "select" : m;
-  btnMeasure.classList.toggle("btn-primary", appMode==="measure");
-  btnAnnot.classList.toggle("btn-primary",   appMode==="annotate");
+  btnMeasure?.classList.toggle("btn-primary", appMode==="measure");
+  btnAnnot  ?.classList.toggle("btn-primary", appMode==="annotate");
 }
-btnMeasure.addEventListener("click", ()=> setMode("measure"));
-btnAnnot  .addEventListener("click", ()=> setMode("annotate"));
+btnMeasure?.addEventListener("click", ()=> setMode("measure"));
+btnAnnot  ?.addEventListener("click", ()=> setMode("annotate"));
 
 /* =========================================================
- *  MESURE & ANNOTATION : version stable, plugins officiels
+ *  MESURE & ANNOTATION : version stable
  * =======================================================*/
+let measureBuffer = [];      // 0..2 points worldPos
+let lastMeasurement = null;  // DistanceMeasurement
 
-import {
-  DistanceMeasurementsPlugin,
-  AnnotationsPlugin
-} from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
+const toMM = (m) => (m * 1000);
 
-/* Plugins */
-const measurements = new DistanceMeasurementsPlugin(viewer, {
-  // précision et unités du label (le plugin calcule en mètres -> on affiche en mm)
-  defaultDistancePrecision: 2
-});
-
-const annotations = new AnnotationsPlugin(viewer, {
-  markerHTML:
-    "<div style='width:10px;height:10px;border-radius:999px;background:#2dd4bf;border:2px solid #fff;box-shadow:0 0 0 2px rgba(0,0,0,.15)'></div>"
-});
-
-/* Styles des labels (petites bulles jolies) */
-const overlayStyle = `
-.xk-badge{
-  font: 12px/1.3 Inter, system-ui, Segoe UI, Roboto, Arial, sans-serif;
-  color:#0f172a; background:#fff; padding:.35rem .5rem; border-radius:.5rem;
-  box-shadow:0 8px 24px rgba(2,6,23,.12); border:1px solid rgba(2,6,23,.06);
-}
-.xk-badge b{font-weight:600}
-`;
-if (!document.getElementById("xeokit-badges-css")) {
-  const s = document.createElement("style");
-  s.id = "xeokit-badges-css";
-  s.textContent = overlayStyle;
-  document.head.appendChild(s);
-}
-
-/* --------------------
-   Modes & petits helpers
----------------------*/
-let toolMode = "select";     // "select" | "measure" | "annotate"
-let measureBuffer = [];      // stocke 0,1 points worldPos
-let lastMeasurement = null;  // dernier objet measurement
-const propsPanel = document.getElementById("propsPanel");
-
-function setToolMode(m) {
-  toolMode = (toolMode === m) ? "select" : m;
-
-  // UI (active / désactive visuellement les boutons si tu les as)
-  btnMeasure?.classList.toggle("btn-primary", toolMode === "measure");
-  btnAnnot?.classList.toggle("btn-primary",   toolMode === "annotate");
-
-  // reset mesure si on sort
-  if (toolMode !== "measure") {
-    measureBuffer.length = 0;
-  }
-}
-
-/* Convertit m -> mm avec 2 décimales */
-const mm = (meters) => (meters * 1000);
-
-/* --------------------
-   MESURE - 2 clics
----------------------*/
-btnMeasure?.addEventListener("click", () => setToolMode("measure"));
-
-viewer.scene.input.on("mouseclicked", (coords) => {
-  const hit = viewer.scene.pick({ canvasPos: coords, pickSurface: true });
+/* Clics scène : route par mode actif */
+viewer.scene.input.on("mouseclicked", (coords)=>{
+  const hit = viewer.scene.pick({ canvasPos: coords, pickSurface:true });
   if (!hit || !hit.worldPos) {
-    if (toolMode === "measure") return; // on attend un point valide
+    if (appMode === "measure") return;
     return;
   }
 
-  // ----- MESURE -----
-  if (toolMode === "measure") {
+  /* ----- MESURE (2 clics) ----- */
+  if (appMode === "measure") {
     measureBuffer.push(hit.worldPos.slice());
     if (measureBuffer.length === 2) {
-      const [A, B] = measureBuffer;
-      // supprime l’ancienne mesure si on en fait une nouvelle
-      if (lastMeasurement) { try { lastMeasurement.destroy(); } catch(_){} }
+      const [A,B] = measureBuffer;
+      if (lastMeasurement) { try{ lastMeasurement.destroy(); }catch{} }
 
-      // crée la mesure officielle (ligne + pastilles + label)
-      lastMeasurement = measurements.createMeasurement({ positions: [A, B] });
+      lastMeasurement = measurements.createMeasurement({ positions:[A,B] });
 
-      // le plugin affiche la distance en m -> on remplace le label par nos mm
-      // on calcule nous-même la distance 3D
-      const dx = B[0]-A[0], dy = B[1]-A[1], dz = B[2]-A[2];
-      const distMM = mm(Math.hypot(dx, dy, dz)).toFixed(2);
-      // le label du plugin est accessible via lastMeasurement.label (HTMLElement)
-      // selon versions : label est dans lastMeasurement._label?.element – on couvre les deux
+      // distance 3D en mm
+      const dx=B[0]-A[0], dy=B[1]-A[1], dz=B[2]-A[2];
+      const distMM = toMM(Math.hypot(dx,dy,dz)).toFixed(2);
+
       const labelEl =
         lastMeasurement.label?.element ||
         lastMeasurement._label?.element ||
@@ -349,17 +315,16 @@ viewer.scene.input.on("mouseclicked", (coords) => {
         labelEl.innerHTML = `<b>${distMM}</b> mm`;
       }
 
-      // on a fini la mesure -> on reste en mode nav
       measureBuffer.length = 0;
-      setToolMode("select");
+      setMode("select");
     }
     return;
   }
 
-  // ----- ANNOTATION -----
-  if (toolMode === "annotate") {
+  /* ----- ANNOTATION texte ----- */
+  if (appMode === "annotate") {
     const txt = prompt("Texte de l’annotation :", "");
-    if (txt == null) return; // annulé
+    if (txt == null) return;
 
     const id = "a" + Date.now();
     const ann = annotations.createAnnotation({
@@ -368,7 +333,6 @@ viewer.scene.input.on("mouseclicked", (coords) => {
       labelHTML: `<div class="xk-badge">${txt || "Note"}</div>`
     });
 
-    // Ajoute contrôle simple dans "Propriétés"
     if (propsPanel) {
       const row = document.createElement("div");
       row.className = "row";
@@ -378,42 +342,40 @@ viewer.scene.input.on("mouseclicked", (coords) => {
         <span style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${txt || "Note"}</span>
         <button class="btn btn-outline mini" data-act="edit">Éditer</button>
         <button class="btn btn-outline mini" data-act="hide">Cacher/Montrer</button>
-        <button class="btn btn-outline mini" data-act="del">Suppr.</button>
-      `;
+        <button class="btn btn-outline mini" data-act="del">Suppr.</button>`;
       propsPanel.appendChild(row);
 
-      row.querySelector('[data-act="edit"]')?.addEventListener("click", () => {
+      row.querySelector('[data-act="edit"]')?.addEventListener("click", ()=>{
         const nt = prompt("Nouveau texte :", txt || "Note");
-        if (nt != null) ann.setLabelHTML?.(`<div class="xk-badge">${nt}</div>`);
-        if (nt != null && row.firstElementChild) row.firstElementChild.textContent = nt;
+        if (nt != null) {
+          if (ann.setLabelHTML) ann.setLabelHTML(`<div class="xk-badge">${nt}</div>`);
+          else ann.labelHTML = `<div class="xk-badge">${nt}</div>`;
+          if (row.firstElementChild) row.firstElementChild.textContent = nt;
+        }
       });
-      row.querySelector('[data-act="hide"]')?.addEventListener("click", () => {
+      row.querySelector('[data-act="hide"]')?.addEventListener("click", ()=>{
         ann.visible = !ann.visible;
       });
-      row.querySelector('[data-act="del"]')?.addEventListener("click", () => {
-        try { ann.destroy(); } catch(_) {}
+      row.querySelector('[data-act="del"]')?.addEventListener("click", ()=>{
+        try{ ann.destroy(); }catch{}
         row.remove();
       });
     }
 
-    // on sort du mode annotation pour te laisser naviguer
-    setToolMode("select");
+    setMode("select");
   }
 });
 
-/* Bouton Annotation */
-btnAnnot?.addEventListener("click", () => setToolMode("annotate"));
-
-
 /* Iso / cacher / montrer */
-btnIsolate .addEventListener("click", ()=>{ if (!selectedIds.size) return; setAll("visible", false); setSome([...selectedIds],"visible",true); });
-btnHide    .addEventListener("click", ()=>{ if (!selectedIds.size) return; setSome([...selectedIds],"visible",false); });
-btnShowOnly.addEventListener("click", ()=>{ if (!selectedIds.size) return; setAll("visible", false); setSome([...selectedIds],"visible",true); });
-btnClearSel.addEventListener("click", ()=>{ setAll("visible", true); setSome(allIds(),"highlighted",false); clearSelection(); });
+btnIsolate ?.addEventListener("click", ()=>{ if (!selectedIds.size) return; setAll("visible", false); setSome([...selectedIds],"visible",true); });
+btnHide    ?.addEventListener("click", ()=>{ if (!selectedIds.size) return; setSome([...selectedIds],"visible",false); });
+btnShowOnly?.addEventListener("click", ()=>{ if (!selectedIds.size) return; setAll("visible", false); setSome([...selectedIds],"visible",true); });
+btnClearSel?.addEventListener("click", ()=>{ setAll("visible", true); setSome(allIds(),"highlighted",false); clearSelection(); });
 
 /* Recherche */
-btnSearch.addEventListener("click", ()=>{
-  const q=(searchInput.value||"").toLowerCase().trim();
+btnSearch?.addEventListener("click", ()=>{
+  const q=(searchInput?.value||"").toLowerCase().trim();
+  if (!resultsBox) return;
   resultsBox.innerHTML=""; if(!q) return;
   const found=[];
   allIds().forEach(id=>{
@@ -438,14 +400,14 @@ btnSearch.addEventListener("click", ()=>{
 });
 
 /* Reload / Unload */
-btnReload.addEventListener("click", ()=>{
+btnReload?.addEventListener("click", ()=>{
   if (!lastModelId) return;
   const info = models.get(lastModelId); if(!info) return;
   try{ info.model.destroy(); }catch{}
   models.delete(lastModelId);
   loadXKT(info.src, info.name);
 });
-btnUnload.addEventListener("click", ()=>{
+btnUnload?.addEventListener("click", ()=>{
   if (!lastModelId) return;
   const info=models.get(lastModelId); if(!info) return;
   try{ info.model.destroy(); }catch{}
@@ -454,8 +416,8 @@ btnUnload.addEventListener("click", ()=>{
   refreshModelsList();
 });
 
-/* Explode simple (offset radiale) */
-explodeRange.addEventListener("input", ()=>{
+/* Explode simple (offset radial) */
+explodeRange?.addEventListener("input", ()=>{
   const k = parseFloat(explodeRange.value)||0;
   const c = viewer.scene?.aabbCenter || [0,0,0];
   allIds().forEach(id=>{
@@ -469,17 +431,15 @@ explodeRange.addEventListener("input", ()=>{
 });
 
 /* Screenshot */
-btnShot.addEventListener("click", ()=>{
+btnShot?.addEventListener("click", ()=>{
   try{
-    const canvas = document.getElementById("xeokit-canvas");
-    const dataURL = canvas.toDataURL("image/png");
+    const dataURL = canvasEl.toDataURL("image/png");
     const a=document.createElement("a"); a.href=dataURL; a.download="cadlytics_view.png"; a.click();
   }catch(e){ console.error(e); alert("Capture impossible."); }
 });
 
 /* ---------- coupe : 1 axe à la fois, aucun par défaut ---------- */
 function setClipAxis(axis){
-  // toggle : si on reclique la même -> off
   const same = (clipAxis===axis);
   clipAxis = same ? null : axis;
 
@@ -487,53 +447,46 @@ function setClipAxis(axis){
     b.classList.toggle("btn-primary", !same && b.dataset.axis===clipAxis);
   });
 
-  // Plan plugin
   if (clipPlane) { try{ clipPlane.destroy(); }catch{} clipPlane=null; }
-  if (clipPlateAnnot) { annotations.destroyAnnotation(clipPlateAnnot.id); clipPlateAnnot=null; }
+  if (clipPlateAnnot) { try{ clipPlateAnnot.destroy?.(); }catch{} clipPlateAnnot=null; }
 
   if (!clipAxis) { viewer.scene.sectionPlanesEnabled = false; return; }
 
-  const aabb = viewer.scene?.aabb || [0,0,0, 0,0,0];
+  const aabb   = viewer.scene?.aabb || [0,0,0, 0,0,0];
   const center = [(aabb[0]+aabb[3])/2,(aabb[1]+aabb[4])/2,(aabb[2]+aabb[5])/2];
-  const dir = clipAxis==="x" ? [1,0,0] : clipAxis==="y" ? [0,1,0] : [0,0,1];
+  const dir    = clipAxis==="x" ? [1,0,0] : clipAxis==="y" ? [0,1,0] : [0,0,1];
 
   clipPlane = sections.createSectionPlane({ id:"cut", pos:center, dir });
   viewer.scene.sectionPlanesEnabled = true;
 
-  // Plaque visuelle (overlay) posée au centre
+  // Plaque visuelle ancrée au centre du plan
   clipPlateAnnot = annotations.createAnnotation({
     id: "cutplate",
     worldPos: center,
     markerShown:false,
-    labelShown:false
+    labelHTML: `<div class="cutplate" title="Plan ${clipAxis.toUpperCase()}"></div>`,
+    occludable:false
   });
-  // on remplace son container par une plaque custom
-  const el = overlayHost.querySelector('[data-annotation_id="cutplate"]');
-  if (el){
-    el.innerHTML = `<div class="cutplate" title="Plan ${clipAxis.toUpperCase()}"></div>`;
-  }
 
-  // reset slider
   clipRange.value = "0";
 }
 clipButtons.forEach(b=>{
   b.addEventListener("click", ()=> setClipAxis(b.dataset.axis));
 });
 
-clipRange.addEventListener("input", ()=>{
+clipRange?.addEventListener("input", ()=>{
   if (!clipPlane || !clipAxis) return;
-  // déplacement relatif +/-100 -> translation de +/- la demi-taille de la scène
   const k = parseFloat(clipRange.value)||0;
-  const aabb = viewer.scene?.aabb || [0,0,0, 0,0,0];
+  const aabb   = viewer.scene?.aabb || [0,0,0, 0,0,0];
   const center = [(aabb[0]+aabb[3])/2,(aabb[1]+aabb[4])/2,(aabb[2]+aabb[5])/2];
   const half   = [(aabb[3]-aabb[0])/2,(aabb[4]-aabb[1])/2,(aabb[5]-aabb[2])/2];
   const shift  = (clipAxis==="x"?half[0]:clipAxis==="y"?half[1]:half[2]) * (k/100);
-  const pos = [...center];
+  const pos    = [...center];
   if (clipAxis==="x") pos[0]+=shift; else if (clipAxis==="y") pos[1]+=shift; else pos[2]+=shift;
+
   clipPlane.pos = pos;
 
-  // déplacer la plaque indicative
-  if (clipPlateAnnot) {
-    annotations.setAnnotationWorldPos(clipPlateAnnot.id, pos);
-  }
+  // déplace la plaque indicative
+  if (clipPlateAnnot?.setWorldPos) clipPlateAnnot.setWorldPos(pos);
+  else clipPlateAnnot.worldPos = pos;
 });
