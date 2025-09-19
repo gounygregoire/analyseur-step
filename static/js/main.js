@@ -65,18 +65,15 @@ const xktLoader = new XKTLoaderPlugin(viewer, {
 });
 const sections = new SectionPlanesPlugin(viewer);
 
-// Overlays HTML (pour vos annotations custom)
+// Overlays HTML (annotations perso)
 const annotations = new AnnotationsPlugin(viewer, { container: overlayHost });
 
-/* ========= Canvas & overlay sizing — FIX DPR ========= */
+/* ========= Canvas & overlay sizing — DPR sûr ========= */
 const canvasEl = document.getElementById("xeokit-canvas");
-
 function resizeCanvasAndOverlay() {
   const w = Math.max(1, viewerContainer.clientWidth);
   const h = Math.max(1, viewerContainer.clientHeight);
-
-  // le plus sûr pour les pastilles : DPR=1
-  const dpr = 1;
+  const dpr = 1; // simple & infaillible pour l’alignement des overlays
 
   canvasEl.style.width  = w + "px";
   canvasEl.style.height = h + "px";
@@ -96,11 +93,8 @@ resizeCanvasAndOverlay();
 /* ---------- NavCube ---------- */
 (()=>{
   const cube=document.createElement("canvas"); cube.width=cube.height=96;
-  Object.assign(cube.style,{
-    position:"absolute",left:"12px",top:"12px",zIndex:"5",
-    borderRadius:"12px",boxShadow:"0 6px 18px rgba(0,0,0,.25)",
-    background:"rgba(255,255,255,.06)",backdropFilter:"blur(2px)"
-  });
+  Object.assign(cube.style,{position:"absolute",left:"12px",top:"12px",zIndex:"5",
+    borderRadius:"12px",boxShadow:"0 6px 18px rgba(0,0,0,.25)",background:"rgba(255,255,255,.06)",backdropFilter:"blur(2px)"});
   viewerContainer.appendChild(cube);
   new NavCubePlugin(viewer,{canvasElement:cube,cameraFlyToDuration:0.9});
 })();
@@ -109,7 +103,7 @@ resizeCanvasAndOverlay();
 const models = new Map();
 let lastModelId = null;
 let selectedIds = new Set();
-let appMode = "select";            // "select" | "measure" | "annotate"
+let appMode = "select";            // "select" | "annotate"
 let clipAxis = null;
 let clipPlane = null;
 let clipPlateAnn = null;
@@ -120,27 +114,94 @@ const setSome=(ids,prop,val)=> ids.forEach(id=>{const o=viewer.scene.objects[id]
 const setAll=(prop,val)=> allIds().forEach(id=>{const o=viewer.scene.objects[id]; if(o) o[prop]=val;});
 const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); if (propsPanel) propsPanel.innerHTML=""; };
 
-/* ---------- Distance measurements natifs Xeokit ---------- */
-const distancePlugin = new DistanceMeasurementsPlugin(viewer);
-const distanceCtrl   = new DistanceMeasurementsMouseControl(distancePlugin, { snapping: true });
+/* ---------- Mesures natives Xeokit (mm) + panneau de gestion ---------- */
+const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
+  container: overlayHost,
+  labelsShown: true,
+  labelFormat: (meters) => `${(meters * 1000).toFixed(2)} mm`  // ← mm
+});
+const distanceCtrl = new DistanceMeasurementsMouseControl(distancePlugin, { snapping: true });
 
+// Panneau "Mesures" (ajouté en bas de la colonne de gauche)
+const leftCard = document.querySelector(".grid > .card:first-child");
+const measPane = document.createElement("div");
+measPane.className = "pane";
+measPane.innerHTML = `
+  <h4 style="margin:6px 0 10px">Mesures</h4>
+  <div id="measureList" style="display:flex;flex-direction:column;gap:6px"></div>
+  <div class="row mini" style="margin-top:6px">
+    <button id="btnHideAll" class="btn mini">Tout cacher/montrer</button>
+    <button id="btnClearMeas" class="btn btn-danger mini">Tout supprimer</button>
+  </div>`;
+leftCard.appendChild(measPane);
+
+const measureListEl = measPane.querySelector("#measureList");
+const btnHideAll    = measPane.querySelector("#btnHideAll");
+const btnClearMeas  = measPane.querySelector("#btnClearMeas");
+
+let allHidden = false;
+btnHideAll.addEventListener("click", ()=>{
+  allHidden = !allHidden;
+  distancePlugin.measurements?.forEach(m => m.visible = !allHidden);
+});
+btnClearMeas.addEventListener("click", ()=>{
+  // API varie selon versions; on couvre les deux noms usuels
+  if (distancePlugin.clear) distancePlugin.clear();
+  else if (distancePlugin.destroyAll) distancePlugin.destroyAll();
+  measureListEl.innerHTML = "";
+});
+
+// Helpers UI mesures
+function addMeasurementRow(m){
+  const id = m.id || ("D"+Date.now());
+  const row = document.createElement("div");
+  row.className = "row mini";
+  row.dataset.mid = id;
+  row.style.justifyContent = "space-between";
+  row.innerHTML = `
+    <span style="font-size:12px">Mesure ${id}</span>
+    <span>
+      <button class="btn btn-outline mini" data-act="toggle">Cacher</button>
+      <button class="btn btn-outline mini btn-danger" data-act="del">Suppr.</button>
+    </span>`;
+  measureListEl.appendChild(row);
+
+  const btnT = row.querySelector('[data-act="toggle"]');
+  const btnD = row.querySelector('[data-act="del"]');
+
+  btnT.addEventListener("click", ()=>{
+    m.visible = !m.visible;
+    btnT.textContent = m.visible ? "Cacher" : "Montrer";
+  });
+  btnD.addEventListener("click", ()=>{
+    try { m.destroy ? m.destroy() : distancePlugin.destroyMeasurement?.(m.id); } catch {}
+    row.remove();
+  });
+}
+
+// Écoute la création / destruction (noms d’événements usuels du plugin)
+distancePlugin.on?.("measurementCreated", (ev)=>{
+  const m = ev.measurement || ev; // selon version
+  addMeasurementRow(m);
+});
+distancePlugin.on?.("measurementDestroyed", (ev)=>{
+  const m = ev.measurement || ev;
+  const row = measureListEl.querySelector(`[data-mid="${m.id}"]`);
+  if (row) row.remove();
+});
+
+// Toggle mesure (activate/deactivate — ne pas toucher .active directement)
 function setMeasureActive(on){
   if (on) {
-    distanceCtrl.activate();   // <-- API correcte (active est un getter uniquement)
-    appMode = "measure";
+    distanceCtrl.activate();
     btnMeasure?.classList.add("btn-primary");
   } else {
     distanceCtrl.deactivate();
-    appMode = "select";
     btnMeasure?.classList.remove("btn-primary");
   }
 }
-btnMeasure?.addEventListener("click", () => setMeasureActive(!distanceCtrl.active));
-
-// petite sécurité : Echap pour quitter la mesure
-window.addEventListener("keydown", (e)=>{
-  if (e.key === "Escape" && distanceCtrl.active) setMeasureActive(false);
-});
+btnMeasure?.addEventListener("click", ()=> setMeasureActive(!distanceCtrl.active));
+window.addEventListener("keydown", (e)=>{ if (e.key==="Escape" && distanceCtrl.active) setMeasureActive(false); });
 
 /* ---------- chargement XKT ---------- */
 async function loadXKT(url, nameHint){
@@ -240,17 +301,15 @@ btnHide    ?.addEventListener("click",()=>{ if (!selectedIds.size) return; setSo
 btnShowOnly?.addEventListener("click",()=>{ if (!selectedIds.size) return; setAll("visible",false); setSome([...selectedIds],"visible",true); });
 btnClearSel?.addEventListener("click",()=>{ setAll("visible",true); setSome(allIds(),"highlighted",false); clearSelection(); });
 
-/* ---------- sélection au clic (modes) ---------- */
+/* ---------- modes / clic scène ---------- */
 function setMode(m){
   appMode = (appMode===m) ? "select" : m;
-  btnAnnot  ?.classList.toggle("btn-primary", appMode==="annotate");
+  btnAnnot?.classList.toggle("btn-primary", appMode==="annotate");
 }
-// note: on n'utilise plus l’ancien handleMeasureClick — c’est le contrôle Xeokit qui gère tout
 btnAnnot?.addEventListener("click",()=> setMode("annotate"));
 
 viewer.scene.input.on("mouseclicked", (coords)=>{
-  // si l’outil de mesure natif est actif, on laisse faire
-  if (distanceCtrl.active) return;
+  if (distanceCtrl.active) return; // la mesure consomme le clic
 
   const hit = viewer.scene.pick({ canvasPos: coords, pickSurface: true });
   if (!hit || !hit.entity) {
@@ -258,9 +317,8 @@ viewer.scene.input.on("mouseclicked", (coords)=>{
     return;
   }
 
-  if (appMode==="annotate"){ handleAnnotClick(hit.worldPos);  return; }
+  if (appMode==="annotate"){ handleAnnotClick(hit.worldPos); return; }
 
-  // mode select
   const id = hit.entity.id;
   setSome(allIds(),"highlighted",false);
   selectedIds = new Set([id]);
@@ -283,9 +341,7 @@ function showProps(meta){
     Object.entries(p).forEach(([k,v])=> add(k, typeof v==="object"? JSON.stringify(v): v));
 }
 
-/* =========================================================
- *  ANNOTATION : saisie inline (vous gardez vos pastilles)
- * =======================================================*/
+/* ---------- ANNOTATION : saisie inline ---------- */
 function handleAnnotClick(worldPos){
   setMode("select");
   const id="a"+Date.now();
@@ -303,32 +359,14 @@ function handleAnnotClick(worldPos){
   const commit=()=>{
     const val=(input.value||"Note");
     ann.setLabelHTML?.(`<div class="xk-badge">${val}</div>`) || (ann.labelHTML=`<div class="xk-badge">${val}</div>`);
-    if (propsPanel){
-      const row=document.createElement("div");
-      row.className="row mini"; row.style.gap="8px"; row.innerHTML=`
-        <span style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${val}</span>
-        <button class="btn btn-outline mini" data-act="edit">Éditer</button>
-        <button class="btn btn-outline mini" data-act="hide">Cacher/Montrer</button>
-        <button class="btn btn-outline mini" data-act="del">Suppr.</button>`;
-      propsPanel.appendChild(row);
-      row.querySelector('[data-act="edit"]').addEventListener("click",()=>{
-        const nv = prompt("Nouveau texte :", val);
-        if (nv!=null){ ann.setLabelHTML?.(`<div class="xk-badge">${nv}</div>`) || (ann.labelHTML=`<div class="xk-badge">${nv}</div>`); row.firstElementChild.textContent=nv; }
-      });
-      row.querySelector('[data-act="hide"]').addEventListener("click",()=>{ ann.visible=!ann.visible; });
-      row.querySelector('[data-act="del"]').addEventListener("click",()=>{ try{ ann.destroy(); }catch{} row.remove(); });
-    }
   };
   input.addEventListener("keydown",(e)=>{ if (e.key==="Enter"){ e.preventDefault(); input.blur(); } });
   input.addEventListener("blur", commit, {once:true});
 }
 
-/* =========================================================
- *  COUPE : un axe à la fois + plaque translucide
- * =======================================================*/
+/* ---------- COUPE ---------- */
 function setClipAxis(axis){
   const same=(clipAxis===axis); clipAxis = same ? null : axis;
-
   clipButtons.forEach(b=> b.classList.toggle("btn-primary", !same && b.dataset.axis===clipAxis));
 
   if (clipPlane){ try{ clipPlane.destroy(); }catch{} clipPlane=null; }
@@ -351,7 +389,6 @@ function setClipAxis(axis){
   clipRange.value="0";
 }
 clipButtons.forEach(b=> b.addEventListener("click",()=> setClipAxis(b.dataset.axis)));
-
 clipRange?.addEventListener("input",()=>{
   if (!clipPlane || !clipAxis) return;
   const k=parseFloat(clipRange.value)||0;
