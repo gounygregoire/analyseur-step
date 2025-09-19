@@ -270,16 +270,18 @@ let proj="perspective";
 btnProj?.addEventListener("click",()=>{ proj = proj==="perspective" ? "ortho" : "perspective"; viewer.camera.projection=proj; btnProj.textContent = proj==="perspective" ? "PERSPECTIVE" : "ORTHOGRAPHIQUE"; });
 
 chkEdges?.addEventListener("change",()=> viewer.scene.edgeMaterial.edgesEnabled=!!chkEdges.checked);
-viewer.scene.on("tick",()=>{ if (chkEdges?.checked && !viewer.scene.edgeMaterial.edgesEnabled) viewer.scene.edgeMaterial.edgesEnabled=true; });
+viewer.scene.on("tick",()=>{ 
+  if (chkEdges?.checked && !viewer.scene.edgeMaterial.edgesEnabled) viewer.scene.edgeMaterial.edgesEnabled=true;
+  // force le recalcul des positions d'annotations si nécessaire selon la version
+  annotations.update?.(); 
+});
 
 chkXray ?.addEventListener("change",()=>{ setAll("xrayed", !!chkXray.checked);  setSome([...selectedIds],"xrayed",false); });
 chkGhost?.addEventListener("change",()=>{ setAll("ghosted",!!chkGhost.checked); setSome([...selectedIds],"ghosted",false); });
 chkTheme?.addEventListener("change",()=> viewerShell?.classList.toggle("dark",!!chkTheme.checked));
 opacityRange?.addEventListener("input",()=> setAll("opacity", parseFloat(opacityRange.value)||1));
 
-/* ================= ANNOTATIONS (plugin xeokit) =================
-   — panneau “Annotations” + synchro du texte avec la liste
-=================================================================*/
+/* ================= ANNOTATIONS ================= */
 const annotPane = document.createElement("div");
 annotPane.className = "pane";
 annotPane.innerHTML = `
@@ -356,14 +358,13 @@ btnClearAnn.addEventListener("click", ()=>{
   annMap.clear(); annCounter = 0; allAnnHidden = false; annotListEl.innerHTML = "";
 });
 
-/* Création annotation au clic + saisie inline synchronisée
-   -> on passe le pickResult COMPLET + worldPos + entity pour ancrer sur la pièce */
+/* Création annotation : on passe le pickResult COMPLET + worldPos + entity */
 function handleAnnotClick(pickResult){
   const tempId="a"+Date.now();
   const ann = annotations.createAnnotation({
     id: tempId,
-    pickResult,                         // (si supporté par la version)
-    entity: pickResult.entity,          // ceinture+bretelles
+    pickResult,                         // si ta version le supporte, c’est suffisant
+    entity: pickResult.entity,          // sinon on lui donne la cible explicitement
     worldPos: pickResult.worldPos.slice(),
     occludable: false,
     markerHTML:`<div class="dot"></div>`,
@@ -371,7 +372,7 @@ function handleAnnotClick(pickResult){
     markerShown:true,
     labelShown:true
   });
-  // sécurité si l'API ne prend pas pickResult
+  // fallback “ceinture & bretelles”
   ann.setWorldPos?.(pickResult.worldPos);
   if (!ann.entity && pickResult.entity) ann.entity = pickResult.entity;
 
