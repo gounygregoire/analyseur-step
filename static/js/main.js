@@ -69,9 +69,9 @@ const xktLoader = new XKTLoaderPlugin(viewer, {
 });
 const sections = new SectionPlanesPlugin(viewer);
 
-/* Overlays (pastilles / bulles / plaques) */
+/* Overlays (pastilles / bulles / plaques) — ⚠️ containerElement */
 const annotations = new AnnotationsPlugin(viewer, {
-  container: overlayHost,
+  containerElement: overlayHost,
   markerHTML: `<div class="dot"></div>`,
   labelHTML:  `<div class="bubble"></div>`
 });
@@ -249,24 +249,19 @@ viewer.scene.input.on("mouseclicked",(coords)=>{
     if (measureBuffer.length===2){
       const [A,B]=measureBuffer; measureBuffer.length=0; setMode("select");
 
-      // pastilles A/B
       const annA = annotations.createAnnotation({ id:"ma"+Date.now(), worldPos:A, markerHTML:`<div class="dot"></div>`, labelShown:false });
       const annB = annotations.createAnnotation({ id:"mb"+Date.now(), worldPos:B, markerHTML:`<div class="dot"></div>`, labelShown:false });
 
-      // label au milieu
       const M=[ (A[0]+B[0])/2,(A[1]+B[1])/2,(A[2]+B[2])/2 ];
       const d = Math.hypot(B[0]-A[0], B[1]-A[1], B[2]-A[2]);
       const labelAnn = annotations.createAnnotation({
         id:"ml"+Date.now(), worldPos:M, labelHTML:`<div class="xk-badge"><b>${mm(d)}</b> mm</div>`, markerShown:false, labelShown:true
       });
 
-      // ligne 2D qui suit les pastilles
       const line=document.createElement("div"); line.className="measure-line"; overlayHost.appendChild(line);
-
       const mId="M"+Date.now();
       measures.push({id:mId, annA, annB, labelAnn, lineEl:line});
 
-      // entrée “Propriétés”
       if (propsPanel){
         const row=document.createElement("div");
         row.className="row"; row.style.gap="8px"; row.innerHTML=`
@@ -415,7 +410,7 @@ function setClipAxis(axis){
   clipPlane = sections.createSectionPlane({ id:"cut", pos:center, dir });
   viewer.scene.sectionPlanesEnabled=true;
 
-  // plaque visuelle
+  // plaque visuelle (annotation label)
   clipPlateAnnot = annotations.createAnnotation({
     id:"cutplate", worldPos:center, markerShown:false, labelShown:true,
     labelHTML:`<div class="cutplate" title="Plan ${clipAxis.toUpperCase()}"></div>`, occludable:false
@@ -433,5 +428,12 @@ clipRange?.addEventListener("input",()=>{
   const shift=(clipAxis==="x"?half[0]:clipAxis==="y"?half[1]:half[2])*(k/100);
   const pos=[...center]; if (clipAxis==="x") pos[0]+=shift; else if (clipAxis==="y") pos[1]+=shift; else pos[2]+=shift;
   clipPlane.pos=pos;
-  if (clipPlateAnnot?.setWorldPos) clipPlateAnnot.setWorldPos(pos); else clipPlateAnnot.worldPos=pos;
+  // déplace la plaque de coupe
+  if (annotations.setAnnotationWorldPos) {
+    annotations.setAnnotationWorldPos("cutplate", pos);
+  } else if (clipPlateAnnot?.setWorldPos) {
+    clipPlateAnnot.setWorldPos(pos);
+  } else if (clipPlateAnnot) {
+    clipPlateAnnot.worldPos = pos;
+  }
 });
