@@ -68,31 +68,36 @@ const annotations = new AnnotationsPlugin(viewer, {
   container: overlayHost
 });
 
-// main.js — fonction de resize (syncCanvasAndOverlaySize / resizeCanvasAndOverlay)
-- const dpr = Math.min(window.devicePixelRatio || 1, 2);
-+ // Ne jamais descendre sous 1, sinon décalage des annotations (DPR < 1 => bitmap plus petit que la taille CSS)
-+ const dprRaw = window.devicePixelRatio || 1;
-+ const dpr = Math.max(1, Math.min(dprRaw, 2));
+/* ========= Canvas & overlay sizing — FIX DPR ========= */
+const canvasEl = document.getElementById("xeokit-canvas");
 
-  // Taille CSS (en px) identique pour canvas et overlay
+function resizeCanvasAndOverlay() {
+  const w = Math.max(1, viewerContainer.clientWidth);
+  const h = Math.max(1, viewerContainer.clientHeight);
+
+  // Option la plus fiable : verrouiller à DPR=1 (évite tout décalage de pastilles)
+  const dpr = 1;
+  // Variante haute densité possible : const dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+
+  // Taille CSS identique pour canvas & overlay
   canvasEl.style.width  = w + "px";
   canvasEl.style.height = h + "px";
   overlayHost.style.width  = w + "px";
   overlayHost.style.height = h + "px";
 
-  // Taille "bitmap" du canvas pour éviter le flou et le décalage
+  // Taille bitmap du canvas
   canvasEl.width  = Math.floor(w * dpr);
   canvasEl.height = Math.floor(h * dpr);
 
-  // Notifie le viewer
-  viewer.resize?.();
-  viewer.scene?.setDirty?.(true);
+  // Notifier le viewer
+  if (viewer.resize) viewer.resize();
+  if (viewer.scene?.setDirty) viewer.scene.setDirty(true);
 }
-new ResizeObserver(syncCanvasAndOverlaySize).observe(viewerContainer);
-addEventListener("resize", syncCanvasAndOverlaySize, { passive: true });
-syncCanvasAndOverlaySize();
+new ResizeObserver(resizeCanvasAndOverlay).observe(viewerContainer);
+addEventListener("resize", resizeCanvasAndOverlay, { passive: true });
+resizeCanvasAndOverlay();
 
-/* Cube d’axes */
+/* ---------- NavCube ---------- */
 (()=>{
   const cube=document.createElement("canvas"); cube.width=cube.height=96;
   Object.assign(cube.style,{position:"absolute",left:"12px",top:"12px",zIndex:"5",
@@ -114,7 +119,7 @@ const setProgress=(p)=>{ if (progressBar) progressBar.style.width = `${Math.max(
 const allIds=()=> viewer.scene?.objectIds ?? [];
 const setSome=(ids,prop,val)=> ids.forEach(id=>{const o=viewer.scene.objects[id]; if(o) o[prop]=val;});
 const setAll=(prop,val)=> allIds().forEach(id=>{const o=viewer.scene.objects[id]; if(o) o[prop]=val;});
-const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); propsPanel && (propsPanel.innerHTML=""); };
+const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); if (propsPanel) propsPanel.innerHTML=""; };
 
 /* ---------- chargement XKT ---------- */
 async function loadXKT(url, nameHint){
