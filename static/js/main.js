@@ -68,24 +68,30 @@ const annotations = new AnnotationsPlugin(viewer, {
   container: overlayHost
 });
 
-/* DPR & resizing */
+/* ========= DPR & resizing — CRITIQUE pour que les pastilles collent ========= */
 const canvasEl = document.getElementById("xeokit-canvas");
-function resizeCanvasAndOverlay() {
+function syncCanvasAndOverlaySize() {
   const w = Math.max(1, viewerContainer.clientWidth);
   const h = Math.max(1, viewerContainer.clientHeight);
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  canvasEl.style.width = w + "px";
+
+  // Taille CSS (en px) identique pour canvas et overlay
+  canvasEl.style.width  = w + "px";
   canvasEl.style.height = h + "px";
+  overlayHost.style.width  = w + "px";
+  overlayHost.style.height = h + "px";
+
+  // Taille "bitmap" du canvas pour éviter le flou et le décalage
   canvasEl.width  = Math.floor(w * dpr);
   canvasEl.height = Math.floor(h * dpr);
-  overlayHost.style.width = w + "px";
-  overlayHost.style.height = h + "px";
+
+  // Notifie le viewer
   viewer.resize?.();
   viewer.scene?.setDirty?.(true);
 }
-new ResizeObserver(resizeCanvasAndOverlay).observe(viewerContainer);
-addEventListener("resize", resizeCanvasAndOverlay);
-resizeCanvasAndOverlay();
+new ResizeObserver(syncCanvasAndOverlaySize).observe(viewerContainer);
+addEventListener("resize", syncCanvasAndOverlaySize, { passive: true });
+syncCanvasAndOverlaySize();
 
 /* Cube d’axes */
 (()=>{
@@ -111,7 +117,7 @@ const setSome=(ids,prop,val)=> ids.forEach(id=>{const o=viewer.scene.objects[id]
 const setAll=(prop,val)=> allIds().forEach(id=>{const o=viewer.scene.objects[id]; if(o) o[prop]=val;});
 const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); propsPanel && (propsPanel.innerHTML=""); };
 
-/* ---------- chargement XKT via /upload ---------- */
+/* ---------- chargement XKT ---------- */
 async function loadXKT(url, nameHint){
   const id="m"+Date.now();
   const model=xktLoader.load({id, src:url, edges:!!chkEdges?.checked});
@@ -133,7 +139,6 @@ async function uploadAndShow(){
   if (btnVisualiser){ btnVisualiser.disabled=true; btnVisualiser.textContent="Conversion…"; }
   setProgress(12);
   try{
-    // Si déjà .xkt, on charge directement :
     if (/\.(xkt)$/i.test(f.name)) {
       const fileURL = URL.createObjectURL(f);
       if (!chkAdditive?.checked){ for (const [,i] of models){ try{i.model.destroy();}catch{} } models.clear(); selectedIds.clear(); }
@@ -210,7 +215,7 @@ btnHide    ?.addEventListener("click",()=>{ if (!selectedIds.size) return; setSo
 btnShowOnly?.addEventListener("click",()=>{ if (!selectedIds.size) return; setAll("visible",false); setSome([...selectedIds],"visible",true); });
 btnClearSel?.addEventListener("click",()=>{ setAll("visible",true); setSome(allIds(),"highlighted",false); clearSelection(); });
 
-/* ---------- sélection au clic (mode "select") + route modes ---------- */
+/* ---------- sélection au clic (modes) ---------- */
 function setMode(m){
   appMode = (appMode===m) ? "select" : m;
   btnMeasure?.classList.toggle("btn-primary", appMode==="measure");
@@ -253,7 +258,7 @@ function showProps(meta){
 }
 
 /* =========================================================
- *  MESURE custom (pastilles + segment 2D + label mm)
+ *  MESURE (pastilles + segment 2D + label mm)
  * =======================================================*/
 const measures = []; // {id, annA, annB, labelAnn, lineEl}
 let measureBuffer = []; // 0..2 worldPos
@@ -278,6 +283,7 @@ function handleMeasureClick(worldPos){
   const [A,B] = measureBuffer.splice(0,2);
   setMode("select");
 
+  // Pastilles ancrées scène (AnnotationsPlugin)
   const annA = annotations.createAnnotation({ id:"ma"+Date.now(), worldPos:A, markerHTML:`<div class="dot"></div>`, labelShown:false });
   const annB = annotations.createAnnotation({ id:"mb"+Date.now(), worldPos:B, markerHTML:`<div class="dot"></div>`, labelShown:false });
 
@@ -287,11 +293,11 @@ function handleMeasureClick(worldPos){
     id:"ml"+Date.now(), worldPos:M, labelHTML:`<div class="xk-badge"><b>${mm(d)}</b> mm</div>`, markerShown:false, labelShown:true
   });
 
+  // Ligne 2D (overlay)
   const line=document.createElement("div"); line.className="measure-line"; overlayHost.appendChild(line);
   const mId="M"+Date.now();
   measures.push({id:mId, annA, annB, labelAnn, lineEl:line});
 
-  // entrée Propriétés simple
   if (propsPanel){
     const row=document.createElement("div");
     row.className="row mini"; row.style.gap="8px"; row.innerHTML=`
@@ -309,7 +315,7 @@ function handleMeasureClick(worldPos){
   }
 }
 
-/* Mise à jour des lignes de mesure à chaque frame */
+/* Mise à jour (tick) — recalcule la ligne en partant de la position DOM des pastilles */
 viewer.scene.on("tick",()=>{
   for (const m of measures){
     const elA = overlayHost.querySelector(`[data-annotation_id="${m.annA.id}"]`);
@@ -380,7 +386,6 @@ function setClipAxis(axis){
   clipPlane = sections.createSectionPlane({ id:"cut", pos:center, dir });
   viewer.scene.sectionPlanesEnabled=true;
 
-  // plaque indicative
   clipPlateAnn = annotations.createAnnotation({
     id:"cutplate", worldPos:center, markerShown:false, labelShown:true,
     labelHTML:`<div class="cutplate" title="Plan ${clipAxis.toUpperCase()}"></div>`, occludable:false
@@ -399,7 +404,6 @@ clipRange?.addEventListener("input",()=>{
   const shift=(clipAxis==="x"?half[0]:clipAxis==="y"?half[1]:half[2])*(k/100);
   const pos=[...center]; if (clipAxis==="x") pos[0]+=shift; else if (clipAxis==="y") pos[1]+=shift; else pos[2]+=shift;
   clipPlane.pos=pos;
-  // déplace la plaque
   if (clipPlateAnn?.setWorldPos) clipPlateAnn.setWorldPos(pos); else clipPlateAnn.worldPos=pos;
 });
 
