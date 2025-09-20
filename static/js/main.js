@@ -284,48 +284,66 @@ chkGhost?.addEventListener("change",()=>{ setAll("ghosted",!!chkGhost.checked); 
 chkTheme?.addEventListener("change",()=> viewerShell?.classList.toggle("dark",!!chkTheme.checked));
 opacityRange?.addEventListener("input",()=> setAll("opacity", parseFloat(opacityRange.value)||1));
 
-/* ===================== ANNOTATIONS MANUELLES (fiables) ===================== */
+/* ===================== ANNOTATIONS MANUELLES (lock + occlusion) ===================== */
 
-const annotPane = document.createElement("div");
-annotPane.className = "pane";
-annotPane.innerHTML = `
-  <h4 style="margin:12px 0 10px">Annotations</h4>
-  <div id="annotList" style="display:flex;flex-direction:column;gap:6px"></div>
-  <div class="row mini" style="margin-top:6px; gap:8px">
-    <button id="btnHideAllAnn" class="btn btn-outline mini">Tout cacher/montrer</button>
-    <button id="btnClearAnn"   class="btn btn-danger mini">Tout supprimer</button>
-  </div>`;
-leftCard.appendChild(annotPane);
+/* --- petits helpers 4x4 --- */
+function invertMat4(m) {
+  const a = m, out = new Float32Array(16);
+  const b00 = a[0]*a[5]-a[1]*a[4],  b01 = a[0]*a[6]-a[2]*a[4],  b02 = a[0]*a[7]-a[3]*a[4];
+  const b03 = a[1]*a[6]-a[2]*a[5],  b04 = a[1]*a[7]-a[3]*a[5],  b05 = a[2]*a[7]-a[3]*a[6];
+  const b06 = a[8]*a[13]-a[9]*a[12], b07 = a[8]*a[14]-a[10]*a[12], b08 = a[8]*a[15]-a[11]*a[12];
+  const b09 = a[9]*a[14]-a[10]*a[13], b10 = a[9]*a[15]-a[11]*a[13], b11 = a[10]*a[15]-a[11]*a[14];
+  let det = b00*b11 - b01*b10 + b02*b09 + b03*b08 - b04*b07 + b05*b06;
+  if (!det) return null;
+  det = 1.0 / det;
+  out[0]  = ( a[5]*b11 - a[6]*b10 + a[7]*b09) * det;
+  out[1]  = (-a[1]*b11 + a[2]*b10 - a[3]*b09) * det;
+  out[2]  = ( a[13]*b05 - a[14]*b04 + a[15]*b03) * det;
+  out[3]  = (-a[9]*b05 + a[10]*b04 - a[11]*b03) * det;
+  out[4]  = (-a[4]*b11 + a[6]*b08 - a[7]*b07) * det;
+  out[5]  = ( a[0]*b11 - a[2]*b08 + a[3]*b07) * det;
+  out[6]  = (-a[12]*b05 + a[14]*b02 - a[15]*b01) * det;
+  out[7]  = ( a[8]*b05 - a[10]*b02 + a[11]*b01) * det;
+  out[8]  = ( a[4]*b10 - a[5]*b08 + a[7]*b06) * det;
+  out[9]  = (-a[0]*b10 + a[1]*b08 - a[3]*b06) * det;
+  out[10] = ( a[12]*b04 - a[13]*b02 + a[15]*b00) * det;
+  out[11] = (-a[8]*b04 + a[9]*b02 - a[11]*b00) * det;
+  out[12] = (-a[4]*b09 + a[5]*b07 - a[6]*b06) * det;
+  out[13] = ( a[0]*b09 - a[1]*b07 + a[2]*b06) * det;
+  out[14] = (-a[12]*b03 + a[13]*b01 - a[14]*b00) * det;
+  out[15] = ( a[8]*b03 - a[9]*b01 + a[10]*b00) * det;
+  return out;
+}
+function transformPoint(m, v) {
+  const x=v[0], y=v[1], z=v[2];
+  const w = m[3]*x + m[7]*y + m[11]*z + m[15];
+  return [
+    (m[0]*x + m[4]*y + m[8]*z  + m[12]) / w,
+    (m[1]*x + m[5]*y + m[9]*z  + m[13]) / w,
+    (m[2]*x + m[6]*y + m[10]*z + m[14]) / w
+  ];
+}
+const dist3 = (a,b)=> Math.hypot(a[0]-b[0], a[1]-b[1], a[2]-b[2]);
 
-const annotListEl  = annotPane.querySelector("#annotList");
-const btnHideAllAnn= annotPane.querySelector("#btnHideAllAnn");
-const btnClearAnn  = annotPane.querySelector("#btnClearAnn");
-
-let annCounter = 0;
-const manualAnns = []; // {id, world:[x,y,z], el, visible, name}
-
+/* — projection 3D -> 2D — */
 function worldToCanvas(world){
-  // 1) chemin le plus fiable : project() si dispo
   if (typeof viewer.camera.project === "function") {
-    const out = viewer.camera.project(world, new Float32Array(4)); // clip coords
+    const out = viewer.camera.project(world, new Float32Array(4));
     const w = out[3] || 1;
-    const nx = out[0] / w;     // NDC -1..+1
-    const ny = out[1] / w;
-    const x = (nx * 0.5 + 0.5) * overlayHost.clientWidth;
-    const y = (1 - (ny * 0.5 + 0.5)) * overlayHost.clientHeight;
-    return { x, y };
+    const nx = out[0] / w, ny = out[1] / w;         // NDC [-1,+1]
+    return {
+      x: (nx * 0.5 + 0.5) * overlayHost.clientWidth,
+      y: (1 - (ny * 0.5 + 0.5)) * overlayHost.clientHeight
+    };
   }
-  // 2) fallback: projection 4x4 (si la méthode n'existe pas)
   const mV = viewer.camera.viewMatrix;
   const mP = viewer.camera.projMatrix || viewer.camera.projectionMatrix;
   if (!mV || !mP) return null;
   const x = world[0], y = world[1], z = world[2];
-  // v = V * [x,y,z,1]
   const vx = mV[0]*x + mV[4]*y + mV[8]*z  + mV[12];
   const vy = mV[1]*x + mV[5]*y + mV[9]*z  + mV[13];
   const vz = mV[2]*x + mV[6]*y + mV[10]*z + mV[14];
   const vw = mV[3]*x + mV[7]*y + mV[11]*z + mV[15];
-  // c = P * v
   const cx = mP[0]*vx + mP[4]*vy + mP[8]*vz + mP[12]*vw;
   const cy = mP[1]*vx + mP[5]*vy + mP[9]*vz + mP[13]*vw;
   const cw = mP[3]*vx + mP[7]*vy + mP[11]*vz + mP[15]*vw;
@@ -336,27 +354,76 @@ function worldToCanvas(world){
   };
 }
 
-function place(el, p){
+/* — util placement centré pixel-perfect (évite “flottement”) — */
+function place(el, p, half=6){
   if (!p) { el.style.display = "none"; return; }
   el.style.display = "block";
-  // centrer le marqueur
-  el.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px) translate(-50%, -50%)`;
+  el.style.transform = `translate(${Math.round(p.x - half)}px, ${Math.round(p.y - half)}px)`;
 }
 
-function setAnnotationLabelEl(el, text){
-  const badge = document.createElement("div");
-  badge.className = "xk-badge";
-  badge.textContent = (text && text.trim()) || "Annotation";
-  const label = el.querySelector(".ann-label");
-  label.innerHTML = "";
-  label.appendChild(badge);
+/* — UI liste + gestion — */
+const annotPane = document.querySelector(".pane:last-child") || (()=>{
+  const p = document.createElement("div");
+  p.className="pane";
+  p.innerHTML = `
+    <h4 style="margin:12px 0 10px">Annotations</h4>
+    <div id="annotList" style="display:flex;flex-direction:column;gap:6px"></div>
+    <div class="row mini" style="margin-top:6px; gap:8px">
+      <button id="btnHideAllAnn" class="btn btn-outline mini">Tout cacher/montrer</button>
+      <button id="btnClearAnn"   class="btn btn-danger mini">Tout supprimer</button>
+    </div>`;
+  document.querySelector(".grid > .card:first-child").appendChild(p);
+  return p;
+})();
+const annotListEl  = annotPane.querySelector("#annotList");
+const btnHideAllAnn= annotPane.querySelector("#btnHideAllAnn");
+const btnClearAnn  = annotPane.querySelector("#btnClearAnn");
+
+let annCounter = 0;
+const manualAnns = []; // {id, entity, local:[x,y,z], world:[x,y,z], el, visible, name, half}
+
+/* Création d’une annotation **verrouillée** à l’entité */
+function createManualAnnotation(hit){
+  const ent = hit.entity;
+  const wm  = ent.worldMatrix || ent.matrix;
+  const inv = invertMat4(wm);
+  const local = inv ? transformPoint(inv, hit.worldPos) : hit.worldPos.slice(); // fallback si inversible
+  const id = "ann" + (++annCounter);
+
+  const el = document.createElement("div");
+  Object.assign(el.style, { position:"absolute", zIndex:"5", pointerEvents:"auto" });
+  // dot 12x12 (half=6) → centre pile sur le point
+  const dot = document.createElement("div");
+  dot.className = "dot"; // assure-toi que .dot fait ~12x12px
+  el.appendChild(dot);
+  // label (input d’abord)
+  const lab = document.createElement("div");
+  lab.className = "ann-label";
+  const input = document.createElement("input");
+  input.className = "annot-input"; input.placeholder = "Texte…";
+  lab.appendChild(input); el.appendChild(lab);
+  overlayHost.appendChild(el);
+  input.focus();
+
+  const entry = { id, entity: ent, local, world: hit.worldPos.slice(), el, visible:true, name:`Annotation ${annCounter}`, half:6 };
+  manualAnns.push(entry);
+  addAnnotationRow(entry);
+
+  const commit = ()=>{
+    const t = (input.value||"").trim() || entry.name;
+    lab.innerHTML = `<div class="xk-badge">${t}</div>`;
+    const r = annotListEl.querySelector(`[data-aid="${id}"] .annot-name`);
+    if (r) r.textContent = t;
+  };
+  input.addEventListener("keydown", e=>{ if (e.key==="Enter"){ e.preventDefault(); input.blur(); } });
+  input.addEventListener("blur", commit, {once:true});
 }
 
+/* UI annexe */
 function addAnnotationRow(entry){
   const row = document.createElement("div");
-  row.className = "row mini";
-  row.style.justifyContent = "space-between";
-  row.dataset.aid = entry.id;
+  row.className="row mini"; row.dataset.aid = entry.id;
+  row.style.justifyContent="space-between";
   row.innerHTML = `
     <span class="annot-name" style="font-size:12px">${entry.name}</span>
     <span>
@@ -367,12 +434,11 @@ function addAnnotationRow(entry){
   annotListEl.appendChild(row);
 
   row.querySelector('[data-act="edit"]').addEventListener("click", ()=>{
-    const current = row.querySelector(".annot-name").textContent.trim();
-    const nv = prompt("Texte de l’annotation :", current);
-    if (nv != null){
-      setAnnotationLabelEl(entry.el, nv);
-      row.querySelector(".annot-name").textContent = nv.trim() || entry.name;
-      entry.name = nv.trim() || entry.name;
+    const cur = row.querySelector(".annot-name").textContent.trim();
+    const nv  = prompt("Texte de l’annotation :", cur);
+    if (nv!=null){
+      entry.el.querySelector(".ann-label").innerHTML = `<div class="xk-badge">${nv.trim()||entry.name}</div>`;
+      row.querySelector(".annot-name").textContent = nv.trim()||entry.name;
     }
   });
   row.querySelector('[data-act="toggle"]').addEventListener("click", ()=>{
@@ -387,75 +453,45 @@ function addAnnotationRow(entry){
     row.remove();
   });
 }
-
-let allAnnHidden = false;
 btnHideAllAnn.addEventListener("click", ()=>{
-  allAnnHidden = !allAnnHidden;
-  manualAnns.forEach(a=>{
-    a.visible = !allAnnHidden;
-    a.el.style.display = a.visible ? "block" : "none";
-  });
+  const hide = manualAnns.some(a=>a.visible);
+  manualAnns.forEach(a=>{ a.visible=!hide; a.el.style.display = a.visible ? "block" : "none"; });
 });
 btnClearAnn.addEventListener("click", ()=>{
   manualAnns.splice(0).forEach(a=> a.el.remove());
-  annotListEl.innerHTML = "";
-  allAnnHidden = false;
-  annCounter = 0;
+  annotListEl.innerHTML="";
+  annCounter=0;
 });
 
-function createManualAnnotation(world){
-  const id = "ann" + (++annCounter);
-  const wrapper = document.createElement("div");
-  wrapper.className = "ann";
-  Object.assign(wrapper.style, {
-    position:"absolute",
-    transform:"translate(-9999px, -9999px)",
-    willChange:"transform",
-    pointerEvents:"auto",
-    zIndex: "5"
-  });
-
-  // dot
-  const dot = document.createElement("div");
-  dot.className = "dot";
-  wrapper.appendChild(dot);
-
-  // label (input d'abord)
-  const label = document.createElement("div");
-  label.className = "ann-label";
-  const input = document.createElement("input");
-  input.className = "annot-input";
-  input.placeholder = "Texte…";
-  label.appendChild(input);
-  wrapper.appendChild(label);
-
-  overlayHost.appendChild(wrapper);
-  input.focus();
-
-  const entry = { id, world: world.slice(), el: wrapper, visible: true, name: `Annotation ${annCounter}` };
-  manualAnns.push(entry);
-  addAnnotationRow(entry);
-
-  const commit = ()=>{
-    const val = (input.value||"").trim();
-    setAnnotationLabelEl(wrapper, val);
-    const row = annotListEl.querySelector(`[data-aid="${id}"] .annot-name`);
-    if (row) row.textContent = val || entry.name;
-  };
-  input.addEventListener("keydown",(e)=>{ if (e.key==="Enter"){ e.preventDefault(); input.blur(); } });
-  input.addEventListener("blur", commit, {once:true});
-
-  // placer tout de suite
-  place(wrapper, worldToCanvas(entry.world));
-}
-
-/* — mise à jour des annotations à chaque frame — */
+/* — mise à jour : recalcule worldPos **depuis la position locale** + occlusion réelle — */
 viewer.scene.on("tick", ()=>{
   for (const a of manualAnns){
     if (!a.visible) continue;
-    place(a.el, worldToCanvas(a.world));
+
+    const wm = a.entity.worldMatrix || a.entity.matrix;
+    if (!wm) { a.el.style.display="none"; continue; }
+
+    a.world = transformPoint(wm, a.local);                 // **relock** sur le mesh
+    const p2 = worldToCanvas(a.world);                     // reprojeter
+    if (!p2) { a.el.style.display="none"; continue; }
+
+    // test d’occlusion: on repick au pixel reprojeté
+    const pick = viewer.scene.pick({ canvasPos:[p2.x, p2.y], pickSurface:true });
+    const visible = pick && pick.entity && pick.entity.id===a.entity.id && dist3(pick.worldPos, a.world) < 1e-3;
+
+    a.el.style.opacity = visible ? "1" : "0";              // hide si derrière
+    place(a.el, p2, a.half);
   }
 });
+
+/* ---------- clic scène : crée l’annotation verrouillée ---------- */
+viewer.scene.input.on("mouseclicked", (coords)=>{
+  if (distanceCtrl.active) return; // la mesure consomme le clic
+  const hit = viewer.scene.pick({ canvasPos: coords, pickSurface: true });
+  if (!hit || !hit.entity) return;
+  if (appMode==="annotate"){ createManualAnnotation(hit); return; }
+});
+
 
 /* ---------- clic scène ---------- */
 viewer.scene.input.on("mouseclicked", (coords)=>{
