@@ -164,11 +164,9 @@ label{ font-size:12px; color: var(--muted); display:inline-flex; align-items:cen
 #viewerShell.dark label{ color:#b9bdc3 }
 
 /* ---------- Badges / pastilles / mesures / annotations ---------- */
-.dot{
-  width: 11px; height: 11px; border-radius: 999px;
-  background: var(--ok); border: 2px solid #fff;
-  box-shadow: 0 0 0 2px rgba(0,0,0,.15), 0 10px 22px rgba(16,185,129,.25);
-}
+.dot { width:12px; height:12px; border-radius:50%; background:#1abc9c; box-shadow:0 0 0 2px #fff; }
+.ann-label { margin-top:4px; }
+
 .xk-badge{
   font: 12px/1.35 Inter, system-ui, Segoe UI, Roboto, Arial, sans-serif;
   color: #0f172a;
