@@ -285,6 +285,10 @@ chkTheme?.addEventListener("change",()=> viewerShell?.classList.toggle("dark",!!
 opacityRange?.addEventListener("input",()=> setAll("opacity", parseFloat(opacityRange.value)||1));
 
 /* ===================== ANNOTATIONS MANUELLES (lock + occlusion, UI robuste) ===================== */
+// Occlusion des annotations derrière la géométrie.
+// false = toujours visible (recommandé si tu veux du robuste)
+// true  = masque quand c'est derrière (plus strict, mais peut cacher trop souvent)
+const ANN_OCCLUSION = false;
 
 /* Helpers 4x4 */
 function invertMat4(m) {
@@ -422,9 +426,13 @@ function createManualAnnotation(hit){
   overlayHost.appendChild(el);
   input.focus();
 
-  const entry = { id, entity: ent, local, world: hit.worldPos.slice(), el, visible:true, name:`Annotation ${annCounter}`, half:6 };
-  manualAnns.push(entry);
-  if (annotListEl) addAnnotationRow(entry);
+
+const entry = { id, entity: ent, local, world: hit.worldPos.slice(), el, visible:true, name:`Annotation ${annCounter}`, half:6 };
+manualAnns.push(entry);
+if (annotListEl) addAnnotationRow(entry);
+
+const p0 = worldToCanvas(entry.world);
+if (p0) { el.style.display="block"; el.style.opacity="1"; place(el, p0, entry.half); }
 
   const commit = ()=>{
     const t = (input.value||"").trim() || entry.name;
@@ -487,23 +495,34 @@ if (btnClearAnn) {
 /* Mise à jour : recalcule worldPos depuis la coordonnée locale + occlusion */
 viewer.scene.on("tick", ()=>{
   for (const a of manualAnns){
-    if (!a.visible) continue;
+    if (!a.visible) { a.el.style.display="none"; continue; }
 
     const wm = a.entity.worldMatrix || a.entity.matrix;
     if (!wm) { a.el.style.display="none"; continue; }
 
+    // verrouillage sur l'entité : world = Mworld * local
     a.world = transformPoint(wm, a.local);
+
     const p2 = worldToCanvas(a.world);
     if (!p2) { a.el.style.display="none"; continue; }
 
-    // Occlusion: repick au pixel
-    const pick = viewer.scene.pick({ canvasPos:[p2.x, p2.y], pickSurface:true });
-    const visible = pick && pick.entity && pick.entity.id===a.entity.id && dist3(pick.worldPos, a.world) < 1e-3;
+    if (!ANN_OCCLUSION) {
+      a.el.style.display = "block";
+      a.el.style.opacity = "1";
+      place(a.el, p2, a.half);
+      continue;
+    }
 
-    a.el.style.opacity = visible ? "1" : "0";
+    // --- Occlusion optionnelle (tolérante) ---
+    const pick = viewer.scene.pick({ canvasPos:[Math.round(p2.x), Math.round(p2.y)], pickSurface:true });
+    const sameEntity = !!(pick && pick.entity && pick.entity.id === a.entity.id);
+
+    a.el.style.display = "block";
+    a.el.style.opacity = sameEntity ? "1" : "0.35"; // on atténue plutôt que cacher complètement
     place(a.el, p2, a.half);
   }
 });
+
 
 /* Clic scène : création annotation verrouillée */
 viewer.scene.input.on("mouseclicked", (coords)=>{
