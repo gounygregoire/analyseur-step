@@ -5,7 +5,7 @@ import {
   FastNavPlugin,
   NavCubePlugin,
   SectionPlanesPlugin,
-  AnnotationsPlugin,               // gardé si tu veux encore t'en servir ailleurs
+  AnnotationsPlugin,
   DistanceMeasurementsPlugin,
   DistanceMeasurementsMouseControl
 } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
@@ -64,7 +64,7 @@ const xktLoader = new XKTLoaderPlugin(viewer, {
 });
 const sections = new SectionPlanesPlugin(viewer);
 
-// (on garde une instance, mais on ne s'appuie plus dessus pour placer les annotations)
+// Overlays HTML (utilisé par mesures + annotations)
 const annotations = new AnnotationsPlugin(viewer, { container: overlayHost });
 
 /* ========= Canvas & overlay sizing — DPR sûr ========= */
@@ -74,7 +74,6 @@ function resizeCanvasAndOverlay() {
   const h = Math.max(1, viewerContainer.clientHeight);
   const dpr = 1;
 
-  // Calque HTML bien superposé au canvas
   viewerContainer.style.position = "relative";
   overlayHost.style.position = "absolute";
   overlayHost.style.left = "0";
@@ -111,7 +110,6 @@ let selectedIds = new Set();
 let appMode = "select";            // "select" | "annotate"
 let clipAxis = null;
 let clipPlane = null;
-let clipPlateAnn = null;
 
 const setProgress=(p)=>{ if (progressBar) progressBar.style.width = `${Math.max(0,Math.min(100,p))}%`; };
 const allIds=()=> viewer.scene?.objectIds ?? [];
@@ -119,7 +117,7 @@ const setSome=(ids,prop,val)=> ids.forEach(id=>{const o=viewer.scene.objects[id]
 const setAll=(prop,val)=> allIds().forEach(id=>{const o=viewer.scene.objects[id]; if(o) o[prop]=val;});
 const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); if (propsPanel) propsPanel.innerHTML=""; };
 
-/* ---------- Mesures xeokit (affiche “mm” sans conversion) ---------- */
+/* ---------- Mesures xeokit (affiche “mm” sans conversion, comme demandé) ---------- */
 const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
   container: overlayHost,
   labelsShown: true,
@@ -128,7 +126,7 @@ const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
 const distanceCtrl = new DistanceMeasurementsMouseControl(distancePlugin, { snapping: true });
 
 /* ====== Panneau "Mesures" ====== */
-const leftCard = document.querySelector(".grid > .card:first-child");
+const leftCard = document.querySelector(".grid > .card:first-child") || document.querySelector(".sidebar") || document.querySelector("#leftPane") || document.body;
 const measPane = document.createElement("div");
 measPane.className = "pane";
 measPane.innerHTML = `
@@ -239,7 +237,6 @@ async function loadXKT(url, nameHint){
   model.on("error", e=>{ console.error(e); setProgress(0); alert("Erreur chargement XKT."); });
   return id;
 }
-
 async function uploadAndShow(){
   const f=fileInput?.files?.[0];
   if (!f){ alert("Choisis un fichier .step/.stp/.stl (ou .xkt)"); return; }
@@ -274,23 +271,15 @@ let proj="perspective";
 btnProj?.addEventListener("click",()=>{ proj = proj==="perspective" ? "ortho" : "perspective"; viewer.camera.projection=proj; btnProj.textContent = proj==="perspective" ? "PERSPECTIVE" : "ORTHOGRAPHIQUE"; });
 
 chkEdges?.addEventListener("change",()=> viewer.scene.edgeMaterial.edgesEnabled=!!chkEdges.checked);
-viewer.scene.on("tick",()=>{ 
-  if (chkEdges?.checked && !viewer.scene.edgeMaterial.edgesEnabled) viewer.scene.edgeMaterial.edgesEnabled=true;
-  // (les annotations manuelles seront mises à jour plus bas)
-});
+viewer.scene.on("tick",()=>{ if (chkEdges?.checked && !viewer.scene.edgeMaterial.edgesEnabled) viewer.scene.edgeMaterial.edgesEnabled=true; });
 
 chkXray ?.addEventListener("change",()=>{ setAll("xrayed", !!chkXray.checked);  setSome([...selectedIds],"xrayed",false); });
 chkGhost?.addEventListener("change",()=>{ setAll("ghosted",!!chkGhost.checked); setSome([...selectedIds],"ghosted",false); });
 chkTheme?.addEventListener("change",()=> viewerShell?.classList.toggle("dark",!!chkTheme.checked));
 opacityRange?.addEventListener("input",()=> setAll("opacity", parseFloat(opacityRange.value)||1));
 
-/* ===================== ANNOTATIONS MANUELLES (lock + occlusion, UI robuste) ===================== */
-// Occlusion des annotations derrière la géométrie.
-// false = toujours visible (recommandé si tu veux du robuste)
-// true  = masque quand c'est derrière (plus strict, mais peut cacher trop souvent)
-const ANN_OCCLUSION = false;
-
-/* Helpers 4x4 */
+/* ===================== ANNOTATIONS (plugin xeokit, verrouillées au mesh) ===================== */
+/* Helpers 4x4 pour stocker/convertir local<->world */
 function invertMat4(m) {
   const a = m, out = new Float32Array(16);
   const b00 = a[0]*a[5]-a[1]*a[4],  b01 = a[0]*a[6]-a[2]*a[4],  b02 = a[0]*a[7]-a[3]*a[4];
@@ -327,49 +316,13 @@ function transformPoint(m, v) {
     (m[2]*x + m[6]*y + m[10]*z + m[14]) / w
   ];
 }
-const dist3 = (a,b)=> Math.hypot(a[0]-b[0], a[1]-b[1], a[2]-b[2]);
 
-/* Projection 3D -> 2D */
-function worldToCanvas(world){
-  if (!overlayHost) return null;
-  if (typeof viewer.camera.project === "function") {
-    const out = viewer.camera.project(world, new Float32Array(4));
-    const w = out[3] || 1, nx = out[0]/w, ny = out[1]/w;
-    return {
-      x: (nx*0.5+0.5)*overlayHost.clientWidth,
-      y: (1-(ny*0.5+0.5))*overlayHost.clientHeight
-    };
-  }
-  const mV = viewer.camera.viewMatrix;
-  const mP = viewer.camera.projMatrix || viewer.camera.projectionMatrix;
-  if (!mV || !mP) return null;
-  const x=world[0], y=world[1], z=world[2];
-  const vx=mV[0]*x+mV[4]*y+mV[8]*z +mV[12];
-  const vy=mV[1]*x+mV[5]*y+mV[9]*z +mV[13];
-  const vz=mV[2]*x+mV[6]*y+mV[10]*z+mV[14];
-  const vw=mV[3]*x+mV[7]*y+mV[11]*z+mV[15];
-  const cx=mP[0]*vx+mP[4]*vy+mP[8]*vz+mP[12]*vw;
-  const cy=mP[1]*vx+mP[5]*vy+mP[9]*vz+mP[13]*vw;
-  const cw=mP[3]*vx+mP[7]*vy+mP[11]*vz+mP[15]*vw;
-  const nx=cx/cw, ny=cy/cw;
-  return {
-    x: (nx*0.5+0.5)*overlayHost.clientWidth,
-    y: (1-(ny*0.5+0.5))*overlayHost.clientHeight
-  };
-}
-function place(el, p, half=6){
-  if (!p) { el.style.display="none"; return; }
-  el.style.display="block";
-  el.style.transform = `translate(${Math.round(p.x-half)}px, ${Math.round(p.y-half)}px)`;
-}
-
-/* UI : création sûre du panneau */
+/* UI annotations (optionnelle – sûre, pas de crash si conteneur absent) */
 function ensureAnnotPane(){
   const left = document.querySelector(".grid > .card:first-child")
-            || document.querySelector("#leftPane")
             || document.querySelector(".sidebar")
-            || document.querySelector(".left-panel");
-  if (!left) return null;
+            || document.querySelector("#leftPane")
+            || document.body;
   let pane = left.querySelector('[data-pane="annotations"]');
   if (!pane){
     pane = document.createElement("div");
@@ -391,16 +344,16 @@ function ensureAnnotPane(){
     clearBtn: pane.querySelector("#btnClearAnn"),
   };
 }
-const annotUI = ensureAnnotPane(); // peut être null si aucun conteneur latéral
+const annotUI = ensureAnnotPane();
 const annotListEl   = annotUI?.list;
 const btnHideAllAnn = annotUI?.hideAllBtn;
 const btnClearAnn   = annotUI?.clearBtn;
 
-/* Modèle de données */
 let annCounter = 0;
-const manualAnns = []; // {id, entity, local:[x,y,z], world:[x,y,z], el, visible, name, half}
+/** { id, entity, local:[x,y,z], ann: Annotation } */
+const manualAnns = [];
 
-/* Création d’une annotation verrouillée à l’entité */
+/* Création avec le plugin (projection fiable) + verrouillage local */
 function createManualAnnotation(hit){
   const ent = hit.entity;
   const wm  = ent.worldMatrix || ent.matrix;
@@ -408,47 +361,39 @@ function createManualAnnotation(hit){
   const local = inv ? transformPoint(inv, hit.worldPos) : hit.worldPos.slice(); // fallback
 
   const id = "ann" + (++annCounter);
-  const el = document.createElement("div");
-  Object.assign(el.style, { position:"absolute", zIndex:"5", pointerEvents:"auto" });
+  const ann = annotations.createAnnotation({
+    id,
+    worldPos: hit.worldPos,
+    markerHTML:`<div class="dot"></div>`,
+    markerShown: true,
+    labelHTML:`<input class="annot-input" placeholder="Texte…" />`,
+    labelShown:true,
+    occludable:false  // toujours visible
+  });
 
-  const dot = document.createElement("div");
-  dot.className = "dot";           // doit faire ~12x12px
-  el.appendChild(dot);
+  const entry = { id, entity: ent, local, ann };
+  manualAnns.push(entry);
+  if (annotListEl) addAnnotationRow(entry);
 
-  const lab = document.createElement("div");
-  lab.className = "ann-label";
-  const input = document.createElement("input");
-  input.className = "annot-input";
-  input.placeholder = "Texte…";
-  lab.appendChild(input);
-  el.appendChild(lab);
-
-  overlayHost.appendChild(el);
-  input.focus();
-
-
-const entry = { id, entity: ent, local, world: hit.worldPos.slice(), el, visible:true, name:`Annotation ${annCounter}`, half:6 };
-manualAnns.push(entry);
-if (annotListEl) addAnnotationRow(entry);
-
-const p0 = worldToCanvas(entry.world);
-if (p0) { el.style.display="block"; el.style.opacity="1"; place(el, p0, entry.half); }
-
-  const commit = ()=>{
-    const t = (input.value||"").trim() || entry.name;
-    lab.innerHTML = `<div class="xk-badge">${t}</div>`;
-    const r = annotListEl?.querySelector(`[data-aid="${id}"] .annot-name`);
-    if (r) r.textContent = t;
-  };
-  input.addEventListener("keydown", e=>{ if (e.key==="Enter"){ e.preventDefault(); input.blur(); } });
-  input.addEventListener("blur", commit, {once:true});
+  // Saisie inline -> badge
+  const input = overlayHost.querySelector(`[data-annotation_id="${id}"] .annot-input`);
+  if (input){
+    input.focus();
+    const commit=()=>{
+      const t = (input.value||"").trim() || `Annotation ${annCounter}`;
+      ann.setLabelHTML?.(`<div class="xk-badge">${t}</div>`) || (ann.labelHTML=`<div class="xk-badge">${t}</div>`);
+      const row = annotListEl?.querySelector(`[data-aid="${id}"] .annot-name`); if (row) row.textContent = t;
+    };
+    input.addEventListener("keydown",(e)=>{ if (e.key==="Enter"){ e.preventDefault(); input.blur(); } });
+    input.addEventListener("blur", commit, {once:true});
+  }
 }
 function addAnnotationRow(entry){
   const row = document.createElement("div");
   row.className="row mini"; row.dataset.aid = entry.id;
   row.style.justifyContent="space-between";
   row.innerHTML = `
-    <span class="annot-name" style="font-size:12px">${entry.name}</span>
+    <span class="annot-name" style="font-size:12px">Annotation ${annCounter}</span>
     <span>
       <button class="btn btn-outline mini" data-act="edit">Éditer</button>
       <button class="btn btn-outline mini" data-act="toggle">Cacher</button>
@@ -456,83 +401,63 @@ function addAnnotationRow(entry){
     </span>`;
   annotListEl.appendChild(row);
 
-  row.querySelector('[data-act="edit"]').addEventListener("click", ()=>{
+  const btnE = row.querySelector('[data-act="edit"]');
+  const btnT = row.querySelector('[data-act="toggle"]');
+  const btnD = row.querySelector('[data-act="del"]');
+
+  btnE.addEventListener("click", ()=>{
     const cur = row.querySelector(".annot-name").textContent.trim();
     const nv  = prompt("Texte de l’annotation :", cur);
     if (nv!=null){
-      entry.el.querySelector(".ann-label").innerHTML = `<div class="xk-badge">${nv.trim()||entry.name}</div>`;
-      row.querySelector(".annot-name").textContent = nv.trim()||entry.name;
+      entry.ann.setLabelHTML?.(`<div class="xk-badge">${nv.trim()||cur}</div>`) || (entry.ann.labelHTML=`<div class="xk-badge">${nv.trim()||cur}</div>`);
+      row.querySelector(".annot-name").textContent = nv.trim()||cur;
     }
   });
-  row.querySelector('[data-act="toggle"]').addEventListener("click", ()=>{
-    entry.visible = !entry.visible;
-    entry.el.style.display = entry.visible ? "block" : "none";
-    row.querySelector('[data-act="toggle"]').textContent = entry.visible ? "Cacher" : "Montrer";
+  btnT.addEventListener("click", ()=>{
+    entry.ann.visible = !entry.ann.visible;
+    btnT.textContent = entry.ann.visible ? "Cacher" : "Montrer";
   });
-  row.querySelector('[data-act="del"]').addEventListener("click", ()=>{
-    entry.el.remove();
+  btnD.addEventListener("click", ()=>{
+    try { entry.ann.destroy?.(); } catch {}
     const i = manualAnns.findIndex(a=>a.id===entry.id);
     if (i>=0) manualAnns.splice(i,1);
     row.remove();
   });
 }
 
-/* Boutons du panneau (protégés si absents) */
 if (btnHideAllAnn) {
   btnHideAllAnn.addEventListener("click", ()=>{
-    const hide = manualAnns.some(a=>a.visible);
-    manualAnns.forEach(a=>{ a.visible=!hide; a.el.style.display = a.visible ? "block" : "none"; });
+    const hide = manualAnns.some(a=>a.ann.visible);
+    manualAnns.forEach(a=> a.ann.visible = !hide);
   });
 }
 if (btnClearAnn) {
   btnClearAnn.addEventListener("click", ()=>{
-    manualAnns.splice(0).forEach(a=> a.el.remove());
+    manualAnns.splice(0).forEach(a=>{ try{ a.ann.destroy?.(); }catch{} });
     if (annotListEl) annotListEl.innerHTML="";
     annCounter=0;
   });
 }
 
-/* Mise à jour : recalcule worldPos depuis la coordonnée locale + occlusion */
+/* Mise à jour : recalcule worldPos depuis la coordonnée locale (=> collée au mesh) */
 viewer.scene.on("tick", ()=>{
   for (const a of manualAnns){
-    if (!a.visible) { a.el.style.display="none"; continue; }
-
     const wm = a.entity.worldMatrix || a.entity.matrix;
-    if (!wm) { a.el.style.display="none"; continue; }
-
-    // verrouillage sur l'entité : world = Mworld * local
-    a.world = transformPoint(wm, a.local);
-
-    const p2 = worldToCanvas(a.world);
-    if (!p2) { a.el.style.display="none"; continue; }
-
-    if (!ANN_OCCLUSION) {
-      a.el.style.display = "block";
-      a.el.style.opacity = "1";
-      place(a.el, p2, a.half);
-      continue;
-    }
-
-    // --- Occlusion optionnelle (tolérante) ---
-    const pick = viewer.scene.pick({ canvasPos:[Math.round(p2.x), Math.round(p2.y)], pickSurface:true });
-    const sameEntity = !!(pick && pick.entity && pick.entity.id === a.entity.id);
-
-    a.el.style.display = "block";
-    a.el.style.opacity = sameEntity ? "1" : "0.35"; // on atténue plutôt que cacher complètement
-    place(a.el, p2, a.half);
+    if (!wm) continue;
+    const world = transformPoint(wm, a.local);
+    if (a.ann.setWorldPos) a.ann.setWorldPos(world);
+    else a.ann.worldPos = world;
   }
 });
 
-
-/* Clic scène : création annotation verrouillée */
+/* Clic scène : création annotation (mode ANNOTATE) */
 viewer.scene.input.on("mouseclicked", (coords)=>{
-  if (distanceCtrl.active) return; // la mesure consomme le clic
+  if (distanceCtrl.active) return;           // la mesure consomme le clic
   if (appMode!=="annotate") return;
   const hit = viewer.scene.pick({ canvasPos: coords, pickSurface: true });
   if (!hit || !hit.entity) return;
   createManualAnnotation(hit);
 });
-
 
 /* ---------- propriétés ---------- */
 function showProps(meta){
@@ -555,7 +480,6 @@ function setClipAxis(axis){
   clipButtons.forEach(b=> b.classList.toggle("btn-primary", !same && b.dataset.axis===clipAxis));
 
   if (clipPlane){ try{ clipPlane.destroy(); }catch{} clipPlane=null; }
-  if (clipPlateAnn){ try{ clipPlateAnn.destroy?.(); }catch{} clipPlateAnn=null; }
 
   if (!clipAxis){ viewer.scene.sectionPlanesEnabled=false; return; }
 
@@ -566,7 +490,7 @@ function setClipAxis(axis){
   clipPlane = sections.createSectionPlane({ id:"cut", pos:center, dir });
   viewer.scene.sectionPlanesEnabled=true;
 
-  // petite plaque visuelle (on peut garder l'annotation plugin ici, ce n'est qu'un label flottant)
+  // petite étiquette indicative (plugin annotations)
   annotations.createAnnotation({
     id:"cutplate", worldPos:center, markerShown:false, labelShown:true,
     labelHTML:`<div class="cutplate" title="Plan ${clipAxis.toUpperCase()}"></div>`, occludable:false
