@@ -93,14 +93,35 @@ new ResizeObserver(resizeCanvasAndOverlay).observe(viewerContainer);
 addEventListener("resize", resizeCanvasAndOverlay, { passive: true });
 resizeCanvasAndOverlay();
 
-/* ---------- projeter world -> pixels overlay ---------- */
+// Remplace TOUTE ta fonction worldToOverlayXY par celle-ci
 function worldToOverlayXY(world){
-  const out = viewer.camera.project?.(world, new Float32Array(4));
-  if (!out) return null;
-  const w = out[3] || 1, nx = out[0]/w, ny = out[1]/w;
+  // Matrices caméra (compat : projMatrix | projectionMatrix)
+  const cam = viewer.camera;
+  const mV  = cam.viewMatrix;
+  const mP  = cam.projMatrix || cam.projectionMatrix;
+  if (!mV || !mP || !overlayHost) return null;
+
+  // world (x,y,z,1) -> view
+  const x=world[0], y=world[1], z=world[2];
+  const vx = mV[0]*x + mV[4]*y + mV[8]*z  + mV[12];
+  const vy = mV[1]*x + mV[5]*y + mV[9]*z  + mV[13];
+  const vz = mV[2]*x + mV[6]*y + mV[10]*z + mV[14];
+  const vw = mV[3]*x + mV[7]*y + mV[11]*z + mV[15];
+
+  // view -> clip
+  const cx = mP[0]*vx + mP[4]*vy + mP[8]*vz  + mP[12]*vw;
+  const cy = mP[1]*vx + mP[5]*vy + mP[9]*vz  + mP[13]*vw;
+  const cw = mP[3]*vx + mP[7]*vy + mP[11]*vz + mP[15]*vw;
+  if (!cw) return null;
+
+  // clip -> NDC [-1,1] -> pixels overlay
+  const nx = cx / cw;
+  const ny = cy / cw;
+  const w = overlayHost.clientWidth;
+  const h = overlayHost.clientHeight;
   return {
-    x: (nx*0.5 + 0.5) * overlayHost.clientWidth,
-    y: (1 - (ny*0.5 + 0.5)) * overlayHost.clientHeight
+    x: (nx * 0.5 + 0.5) * w,
+    y: (1 - (ny * 0.5 + 0.5)) * h
   };
 }
 
