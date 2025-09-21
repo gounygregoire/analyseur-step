@@ -5,7 +5,7 @@ import {
   FastNavPlugin,
   NavCubePlugin,
   SectionPlanesPlugin,
-  AnnotationsPlugin, // gardé uniquement pour la plaque de coupe
+  AnnotationsPlugin, // gardé pour compat (pas utilisé pour la plaque)
   DistanceMeasurementsPlugin,
   DistanceMeasurementsMouseControl
 } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
@@ -45,7 +45,7 @@ const propsPanel   = $("#propsPanel");
 
 const progressBar  = $("#progressBar");
 const btnMeasure   = $("#btnMeasure");
-const btnAnnot     = $("#btnAnnot"); // sera désactivé/caché
+const btnAnnot     = $("#btnAnnot"); // masqué
 const clipButtons  = $$(".clipAxis");
 const clipRange    = $("#clipRange");
 const btnShot      = $("#btnShot");
@@ -63,16 +63,15 @@ const xktLoader = new XKTLoaderPlugin(viewer, {
     "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/resources/draco/"
 });
 const sections = new SectionPlanesPlugin(viewer);
+// gardé uniquement si besoin ailleurs (pas utilisé pour la plaque)
+new AnnotationsPlugin(viewer, { container: overlayHost });
 
-// Plugin d’annotations conservé UNIQUEMENT pour la “plaque” de coupe
-const annotations = new AnnotationsPlugin(viewer, { container: overlayHost });
-
-/* ========= Canvas & overlay sizing (DPR sûr) ========= */
+/* ========= Canvas & overlay sizing ========= */
 const canvasEl = document.getElementById("xeokit-canvas");
 function resizeCanvasAndOverlay() {
   const w = Math.max(1, viewerContainer.clientWidth);
   const h = Math.max(1, viewerContainer.clientHeight);
-  const dpr = 1; // évite tout décalage entre canvas et overlay
+  const dpr = 1;
 
   viewerContainer.style.position = "relative";
   overlayHost.style.position = "absolute";
@@ -94,16 +93,15 @@ new ResizeObserver(resizeCanvasAndOverlay).observe(viewerContainer);
 addEventListener("resize", resizeCanvasAndOverlay, { passive: true });
 resizeCanvasAndOverlay();
 
+/* ---------- projeter world -> pixels overlay ---------- */
 function worldToOverlayXY(world){
   const out = viewer.camera.project?.(world, new Float32Array(4));
-  if (out) {
-    const w = out[3] || 1, nx = out[0]/w, ny = out[1]/w;
-    return {
-      x: (nx*0.5 + 0.5) * overlayHost.clientWidth,
-      y: (1 - (ny*0.5 + 0.5)) * overlayHost.clientHeight
-    };
-  }
-  return null;
+  if (!out) return null;
+  const w = out[3] || 1, nx = out[0]/w, ny = out[1]/w;
+  return {
+    x: (nx*0.5 + 0.5) * overlayHost.clientWidth,
+    y: (1 - (ny*0.5 + 0.5)) * overlayHost.clientHeight
+  };
 }
 
 /* ---------- NavCube ---------- */
@@ -119,13 +117,12 @@ function worldToOverlayXY(world){
 const models = new Map();
 let lastModelId = null;
 let selectedIds = new Set();
-let appMode = "select"; // plus d’annotation
 let clipAxis = null;
 let clipPlane = null;
-let clipPlateAnn = null;   // ← référence à la plaque (annotation plugin)
-let clipPlateDom = null;   // ← fallback DOM si jamais le plugin ne rend rien
-let clipPlateWorld = null; // ← position 3D courante de la plaque
 
+// Plaque DOM (toujours DOM, plus d’annotation plugin)
+let clipPlateEl = null;        // <div class="cutplate">
+let clipPlateWorld = null;     // position 3D actuelle
 
 const setProgress=(p)=>{ if (progressBar) progressBar.style.width = `${Math.max(0,Math.min(100,p))}%`; };
 const allIds=()=> viewer.scene?.objectIds ?? [];
@@ -133,11 +130,11 @@ const setSome=(ids,prop,val)=> ids.forEach(id=>{const o=viewer.scene.objects[id]
 const setAll=(prop,val)=> allIds().forEach(id=>{const o=viewer.scene.objects[id]; if(o) o[prop]=val;});
 const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); if (propsPanel) propsPanel.innerHTML=""; };
 
-/* ---------- Mesures Xeokit (libellé “mm”) ---------- */
+/* ---------- Mesures (libellé “mm”) ---------- */
 const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
   container: overlayHost,
   labelsShown: true,
-  labelFormat: (meters) => `${meters.toFixed(2)} mm` // tu voulais uniquement “mm” dans le label
+  labelFormat: (meters) => `${meters.toFixed(2)} mm`
 });
 const distanceCtrl = new DistanceMeasurementsMouseControl(distancePlugin, { snapping: true });
 
@@ -158,7 +155,7 @@ const measureListEl = measPane.querySelector("#measureList");
 const btnHideAll    = measPane.querySelector("#btnHideAll");
 const btnClearMeas  = measPane.querySelector("#btnClearMeas");
 
-const measMap  = new Map();  // id -> { m, name }
+const measMap  = new Map();
 let measCounter = 0;
 const getMeasId = (m)=> m.id || m._id || (m.__uiId ?? (m.__uiId = "m"+Date.now().toString(36)+Math.random().toString(36).slice(2,6)));
 
@@ -223,11 +220,8 @@ function toggleMeasure() {
 btnMeasure?.addEventListener("click", toggleMeasure);
 window.addEventListener("keydown", (e)=>{ if (e.key==="Escape" && distanceCtrl.active) deactivateMeasure(); });
 
-// Annotation : désactivée proprement
-if (btnAnnot) {
-  btnAnnot.style.display = "none";         // on cache le bouton
-  btnAnnot.disabled = true;
-}
+// Annotation : masquée
+if (btnAnnot) { btnAnnot.style.display = "none"; btnAnnot.disabled = true; }
 
 /* ---------- chargement XKT ---------- */
 async function loadXKT(url, nameHint){
@@ -282,9 +276,9 @@ viewer.scene.on("tick",()=>{
   if (chkEdges?.checked && !viewer.scene.edgeMaterial.edgesEnabled) viewer.scene.edgeMaterial.edgesEnabled=true;
 });
 
-/* ---------- Sélection simple au clic (utile pour props & ISO) ---------- */
+/* ---------- Sélection simple au clic ---------- */
 viewer.scene.input.on("mouseclicked", (coords)=>{
-  if (distanceCtrl.active) return; // la mesure consomme le clic
+  if (distanceCtrl.active) return;
   const hit = viewer.scene.pick({ canvasPos: coords, pickSurface: true });
   if (!hit || !hit.entity) { clearSelection(); return; }
   const id = hit.entity.id;
@@ -341,18 +335,26 @@ function showProps(meta){
     Object.entries(p).forEach(([k,v])=> add(k, typeof v==="object"? JSON.stringify(v): v));
 }
 
-/* ---------- COUPE (plan + plaque bleutée) ---------- */
+/* ---------- COUPE (plan + plaque DOM bleutée) ---------- */
+function ensureCutPlate(){
+  if (clipPlane && !clipPlateEl){
+    clipPlateEl = document.createElement("div");
+    clipPlateEl.className = "cutplate";
+    clipPlateEl.style.position = "absolute";
+    clipPlateEl.style.display  = "none";
+    clipPlateEl.style.pointerEvents = "none";
+    overlayHost.appendChild(clipPlateEl);
+  }
+}
+
 function setClipAxis(axis){
   const same = (clipAxis === axis);
   clipAxis = same ? null : axis;
 
-  // UI
   clipButtons.forEach(b => b.classList.toggle("btn-primary", !same && b.dataset.axis === clipAxis));
 
-  // Nettoyage ancien plan / ancienne plaque
-  if (clipPlane)    { try{ clipPlane.destroy(); }catch{} clipPlane = null; }
-  if (clipPlateAnn) { try{ clipPlateAnn.destroy?.(); }catch{} clipPlateAnn = null; }
-  if (clipPlateDom) { try{ clipPlateDom.remove(); }catch{} clipPlateDom = null; }
+  if (clipPlane){ try{ clipPlane.destroy(); }catch{} clipPlane = null; }
+  if (clipPlateEl){ clipPlateEl.style.display = "none"; }
   clipPlateWorld = null;
 
   if (!clipAxis){
@@ -360,42 +362,17 @@ function setClipAxis(axis){
     return;
   }
 
-  // Centre du modèle + direction d’axe
   const aabb   = viewer.scene?.aabb || [0,0,0, 0,0,0];
   const center = [(aabb[0]+aabb[3])/2,(aabb[1]+aabb[4])/2,(aabb[2]+aabb[5])/2];
   const dir    = clipAxis === "x" ? [1,0,0] : clipAxis === "y" ? [0,1,0] : [0,0,1];
 
-  // Plan de coupe
   clipPlane = sections.createSectionPlane({ id:"cut", pos:center, dir });
   viewer.scene.sectionPlanesEnabled = true;
 
-  // Plaque via le plugin d’annotations (2D overlay qui suit la position du plan)
-  try {
-    clipPlateAnn = annotations.createAnnotation({
-      id: "cutplate",
-      worldPos: center,
-      markerShown: false,
-      labelShown:  true,
-      labelHTML: `<div class="cutplate" style="pointer-events:none" title="Plan ${clipAxis.toUpperCase()}"></div>`,
-      occludable: false
-    });
-  } catch(e) {
-    clipPlateAnn = null;
-  }
-
-  // Fallback DOM si jamais le plugin n’affiche rien
-  if (!clipPlateAnn) {
-    clipPlateDom = document.createElement("div");
-    clipPlateDom.className = "cutplate";
-    clipPlateDom.style.position = "absolute";
-    clipPlateDom.style.pointerEvents = "none";
-    overlayHost.appendChild(clipPlateDom);
-  }
-
+  ensureCutPlate();
   clipPlateWorld = center.slice();
   clipRange.value = "0";
 }
-
 clipButtons.forEach(b => b.addEventListener("click", () => setClipAxis(b.dataset.axis)));
 
 clipRange?.addEventListener("input", () => {
@@ -414,29 +391,16 @@ clipRange?.addEventListener("input", () => {
 
   clipPlane.pos = pos;
   clipPlateWorld = pos;
-
-  // Déplacement plaque (plugin ou fallback DOM)
-  if (clipPlateAnn?.setWorldPos) {
-    clipPlateAnn.setWorldPos(pos);
-  } else if (clipPlateDom) {
-    const p = worldToOverlayXY(pos);
-    if (p) {
-      clipPlateDom.style.transform = `translate(${Math.round(p.x-110)}px, ${Math.round(p.y-9)}px)`; // centre la plaque 220x18
-      clipPlateDom.style.display = "block";
-    }
-  }
 });
 
-// Si fallback DOM: suivre la caméra (reprojection à chaque tick)
+// Reprojection de la plaque à chaque frame
 viewer.scene.on("tick", () => {
-  if (!clipPlateDom || !clipPlateWorld) return;
+  if (!clipPlateEl || !clipPlateWorld) return;
   const p = worldToOverlayXY(clipPlateWorld);
-  if (!p) { clipPlateDom.style.display = "none"; return; }
-  clipPlateDom.style.transform = `translate(${Math.round(p.x-110)}px, ${Math.round(p.y-9)}px)`;
-  clipPlateDom.style.display = "block";
+  if (!p) { clipPlateEl.style.display = "none"; return; }
+  clipPlateEl.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px) translate(-50%,-50%)`;
+  clipPlateEl.style.display = "block";
 });
-
-
 
 /* ---------- Screenshot ---------- */
 btnShot?.addEventListener("click",()=>{
