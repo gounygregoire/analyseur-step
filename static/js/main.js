@@ -94,6 +94,18 @@ new ResizeObserver(resizeCanvasAndOverlay).observe(viewerContainer);
 addEventListener("resize", resizeCanvasAndOverlay, { passive: true });
 resizeCanvasAndOverlay();
 
+function worldToOverlayXY(world){
+  const out = viewer.camera.project?.(world, new Float32Array(4));
+  if (out) {
+    const w = out[3] || 1, nx = out[0]/w, ny = out[1]/w;
+    return {
+      x: (nx*0.5 + 0.5) * overlayHost.clientWidth,
+      y: (1 - (ny*0.5 + 0.5)) * overlayHost.clientHeight
+    };
+  }
+  return null;
+}
+
 /* ---------- NavCube ---------- */
 (()=>{
   const cube=document.createElement("canvas"); cube.width=cube.height=96;
@@ -110,7 +122,9 @@ let selectedIds = new Set();
 let appMode = "select"; // plus d’annotation
 let clipAxis = null;
 let clipPlane = null;
-let clipPlateAnn = null; // ← NEW: garde la plaque de coupe
+let clipPlateAnn = null;   // ← référence à la plaque (annotation plugin)
+let clipPlateDom = null;   // ← fallback DOM si jamais le plugin ne rend rien
+let clipPlateWorld = null; // ← position 3D courante de la plaque
 
 
 const setProgress=(p)=>{ if (progressBar) progressBar.style.width = `${Math.max(0,Math.min(100,p))}%`; };
@@ -327,41 +341,58 @@ function showProps(meta){
     Object.entries(p).forEach(([k,v])=> add(k, typeof v==="object"? JSON.stringify(v): v));
 }
 
-/* ---------- COUPE (plaque HTML via plugin) ---------- */
+/* ---------- COUPE (plan + plaque bleutée) ---------- */
 function setClipAxis(axis){
   const same = (clipAxis === axis);
   clipAxis = same ? null : axis;
 
+  // UI
   clipButtons.forEach(b => b.classList.toggle("btn-primary", !same && b.dataset.axis === clipAxis));
 
-  // Nettoyage
+  // Nettoyage ancien plan / ancienne plaque
   if (clipPlane)    { try{ clipPlane.destroy(); }catch{} clipPlane = null; }
   if (clipPlateAnn) { try{ clipPlateAnn.destroy?.(); }catch{} clipPlateAnn = null; }
+  if (clipPlateDom) { try{ clipPlateDom.remove(); }catch{} clipPlateDom = null; }
+  clipPlateWorld = null;
 
   if (!clipAxis){
     viewer.scene.sectionPlanesEnabled = false;
     return;
   }
 
+  // Centre du modèle + direction d’axe
   const aabb   = viewer.scene?.aabb || [0,0,0, 0,0,0];
   const center = [(aabb[0]+aabb[3])/2,(aabb[1]+aabb[4])/2,(aabb[2]+aabb[5])/2];
   const dir    = clipAxis === "x" ? [1,0,0] : clipAxis === "y" ? [0,1,0] : [0,0,1];
 
-  // Plan de coupe + activation
+  // Plan de coupe
   clipPlane = sections.createSectionPlane({ id:"cut", pos:center, dir });
   viewer.scene.sectionPlanesEnabled = true;
 
-  // Plaque HTML — on garde une référence et on la déplacera avec le slider
-  clipPlateAnn = annotations.createAnnotation({
-    id: "cutplate",
-    worldPos: center,
-    markerShown: false,
-    labelShown:  true,
-    // pointer-events:none pour ne jamais bloquer les clics
-    labelHTML: `<div class="cutplate" style="pointer-events:none" title="Plan ${clipAxis.toUpperCase()}"></div>`,
-    occludable: false
-  });
+  // Plaque via le plugin d’annotations (2D overlay qui suit la position du plan)
+  try {
+    clipPlateAnn = annotations.createAnnotation({
+      id: "cutplate",
+      worldPos: center,
+      markerShown: false,
+      labelShown:  true,
+      labelHTML: `<div class="cutplate" style="pointer-events:none" title="Plan ${clipAxis.toUpperCase()}"></div>`,
+      occludable: false
+    });
+  } catch(e) {
+    clipPlateAnn = null;
+  }
 
+  // Fallback DOM si jamais le plugin n’affiche rien
+  if (!clipPlateAnn) {
+    clipPlateDom = document.createElement("div");
+    clipPlateDom.className = "cutplate";
+    clipPlateDom.style.position = "absolute";
+    clipPlateDom.style.pointerEvents = "none";
+    overlayHost.appendChild(clipPlateDom);
+  }
+
+  clipPlateWorld = center.slice();
   clipRange.value = "0";
 }
 
@@ -376,17 +407,35 @@ clipRange?.addEventListener("input", () => {
   const half   = [(aabb[3]-aabb[0])/2,(aabb[4]-aabb[1])/2,(aabb[5]-aabb[2])/2];
 
   const shift = (clipAxis === "x" ? half[0] : clipAxis === "y" ? half[1] : half[2]) * (k/100);
-  const pos   = [...center];
+  const pos   = center.slice();
   if (clipAxis === "x") pos[0] += shift;
   else if (clipAxis === "y") pos[1] += shift;
   else pos[2] += shift;
 
   clipPlane.pos = pos;
+  clipPlateWorld = pos;
 
-  // Déplace la plaque avec le plan
-  if (clipPlateAnn?.setWorldPos) clipPlateAnn.setWorldPos(pos);
-  else if (clipPlateAnn)         clipPlateAnn.worldPos = pos;
+  // Déplacement plaque (plugin ou fallback DOM)
+  if (clipPlateAnn?.setWorldPos) {
+    clipPlateAnn.setWorldPos(pos);
+  } else if (clipPlateDom) {
+    const p = worldToOverlayXY(pos);
+    if (p) {
+      clipPlateDom.style.transform = `translate(${Math.round(p.x-110)}px, ${Math.round(p.y-9)}px)`; // centre la plaque 220x18
+      clipPlateDom.style.display = "block";
+    }
+  }
 });
+
+// Si fallback DOM: suivre la caméra (reprojection à chaque tick)
+viewer.scene.on("tick", () => {
+  if (!clipPlateDom || !clipPlateWorld) return;
+  const p = worldToOverlayXY(clipPlateWorld);
+  if (!p) { clipPlateDom.style.display = "none"; return; }
+  clipPlateDom.style.transform = `translate(${Math.round(p.x-110)}px, ${Math.round(p.y-9)}px)`;
+  clipPlateDom.style.display = "block";
+});
+
 
 
 /* ---------- Screenshot ---------- */
