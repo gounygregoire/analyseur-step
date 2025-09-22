@@ -121,35 +121,77 @@ const setSome=(ids,prop,val)=> ids.forEach(id=>{const o=viewer.scene.objects[id]
 const setAll=(prop,val)=> allIds().forEach(id=>{const o=viewer.scene.objects[id]; if(o) o[prop]=val;});
 const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); if (propsPanel) propsPanel.innerHTML=""; };
 
-/* ---------- Mesures (mm + snap adouci) ---------- */
+/* ---------- Mesures (mm + snap très adouci + fix labels) ---------- */
 const MM_PER_M = 1000;
 
-const formatMM = (meters) => {
-  const mm = meters * MM_PER_M;
+// format mm pour une lecture propre
+const mmNumber = (mm) => {
   const abs = Math.abs(mm);
-  return abs < 10 ? `${mm.toFixed(3)} mm`
-       : abs < 100 ? `${mm.toFixed(1)} mm`
-       : `${Math.round(mm)} mm`;
+  if (abs < 10)   return mm.toFixed(2);
+  if (abs < 100)  return mm.toFixed(1);
+  return Math.round(mm).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 };
+const formatMM = (meters) => `${mmNumber(meters * MM_PER_M)} mm`;
 
 const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
   container: overlayHost,
   labelsShown: true,
-  labelFormat: formatMM
+  labelFormat: formatMM   // total en mm
 });
-const distanceCtrl = new DistanceMeasurementsMouseControl(distancePlugin, { snapping: true });
 
-// aimantation plus douce
-if ("snapDistance" in distanceCtrl) distanceCtrl.snapDistance = 0.01; // 1 cm
-if ("snapRadius"   in distanceCtrl) distanceCtrl.snapRadius   = 6;    // en px
-if ("snapToEdges"  in distanceCtrl) distanceCtrl.snapToEdges  = false;
+// contrôle + snap très léger
+const distanceCtrl = new DistanceMeasurementsMouseControl(distancePlugin, { snapping: true });
+if ("snapDistance" in distanceCtrl) distanceCtrl.snapDistance = 0.001; // 1 mm monde
+if ("snapRadius"   in distanceCtrl) distanceCtrl.snapRadius   = 3;     // 3px écran
+if ("snapToEdges"  in distanceCtrl) distanceCtrl.snapToEdges  = false; // pas d’arêtes
 if ("snapToVertices" in distanceCtrl) distanceCtrl.snapToVertices = true;
+
+// Raccourci : maintenir ALT pour désactiver temporairement le snap
+if ("snapping" in distanceCtrl) {
+  window.addEventListener("keydown", (e)=>{ if (e.altKey) distanceCtrl.snapping = false; }, {passive:true});
+  window.addEventListener("keyup",   (e)=>{ if (!e.altKey) distanceCtrl.snapping = true;  }, {passive:true});
+}
+
+/* ---- Forçage des labels en mm (y compris X/Y/Z) ----
+   Certains builds du plugin réécrivent les libellés en mètres.
+   On observe l’overlay et on convertit toute occurrence `… 3.02m`
+   vers `… 3 020 mm`, sans double conversion. */
+const metersToMMInText = (txt) =>
+  txt.replace(/(~?\s*)(-?\d+(?:\.\d+)?)\s*m\b/g, (all, pre, num) =>
+    `${pre}${mmNumber(parseFloat(num) * MM_PER_M)} mm`
+  );
+
+function convertNodeTextToMM(root) {
+  if (!root || root.nodeType !== 1 || root.dataset.mmConverted === "1") return;
+  let changed = false;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  for (const t of nodes) {
+    const newText = metersToMMInText(t.nodeValue);
+    if (newText !== t.nodeValue) { t.nodeValue = newText; changed = true; }
+  }
+  if (changed) root.dataset.mmConverted = "1";
+}
+
+// Observe l’overlay pour convertir tous les labels dynamiques
+const mmObserver = new MutationObserver((mutations) => {
+  for (const m of mutations) {
+    m.addedNodes?.forEach((n) => { if (n.nodeType === 1) convertNodeTextToMM(n); });
+    if (m.type === "characterData") convertNodeTextToMM(m.target.parentElement);
+  }
+});
+mmObserver.observe(overlayHost, { childList: true, subtree: true, characterData: true });
+
+// Conversion initiale (au cas où des labels existent déjà)
+convertNodeTextToMM(overlayHost);
 
 /* ====== Panneau "Mesures" ====== */
 const leftCard = document.querySelector(".grid > .card:first-child")
                || document.querySelector(".sidebar")
                || document.querySelector("#leftPane")
                || document.body;
+
 const measPane = document.createElement("div");
 measPane.className = "pane";
 measPane.innerHTML = `
@@ -192,8 +234,15 @@ function addMeasurementRow(m){
   btnT.addEventListener("click", ()=>{ m.visible = !m.visible; btnT.textContent = m.visible ? "Cacher" : "Montrer"; });
   btnD.addEventListener("click", ()=>{ try { m.destroy ? m.destroy() : distancePlugin.destroyMeasurement?.(m.id); } catch {} measMap.delete(id); row.remove(); });
 }
+
+// brancher les événements du plugin
 ["measurementCreated","newMeasurement","measurementAdded"].forEach(evt=>{
-  distancePlugin.on?.(evt, (ev)=> addMeasurementRow(ev.measurement || ev));
+  distancePlugin.on?.(evt, (ev)=>{
+    const meas = ev.measurement || ev;
+    addMeasurementRow(meas);
+    // conversion immédiate des labels créés
+    setTimeout(()=> convertNodeTextToMM(overlayHost), 0);
+  });
 });
 distancePlugin.on?.("measurementDestroyed", (ev)=>{
   const m = ev.measurement || ev;
@@ -212,6 +261,13 @@ btnClearMeas.addEventListener("click", ()=>{
   else if (typeof distancePlugin.destroyAll === "function") distancePlugin.destroyAll();
   measureListEl.innerHTML = ""; measMap.clear(); measCounter = 0; allHidden = false;
 });
+
+// Toggle mesure on/off (si tu l’as dans ta toolbar)
+function deactivateMeasure() { if (distanceCtrl.active) distanceCtrl.deactivate(); btnMeasure?.classList.remove("btn-primary"); }
+function activateMeasure()   { distanceCtrl.activate(); btnMeasure?.classList.add("btn-primary"); }
+function toggleMeasure()     { if (distanceCtrl.active) deactivateMeasure(); else activateMeasure(); }
+btnMeasure?.addEventListener("click", toggleMeasure);
+window.addEventListener("keydown", (e)=>{ if (e.key==="Escape" && distanceCtrl.active) deactivateMeasure(); }, {passive:true});
 
 /* ============ Modes ============ */
 function deactivateMeasure() {
