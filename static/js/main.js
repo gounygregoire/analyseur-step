@@ -126,7 +126,7 @@ const mmNumber = (mm) => {
 const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
   container: overlayHost,
   labelsShown: true,
-  axisLabelsShown: true, // selon la version; ignoré si non supporté
+  axisLabelsShown: true, // ignoré si non supporté par la version
   labelFormat: (meters) => `${mmNumber(meters * MM_PER_M)} mm`
 });
 
@@ -143,8 +143,8 @@ if ("snapping" in distanceCtrl) {
 
 // 3) Observer DOM pour convertir toute étiquette “m” → “mm” (X/Y/Z inclus)
 const metersToMMInText = (txt) =>
-  txt.replace(/(~?\s*[XYZ]?\s*~?\s*)(-?\d+(?:\.\d+)?)\s*m\b/g, (all, pre, num) =>
-    `${pre}${mmNumber(parseFloat(num) * MM_PER_M)} mm`
+  txt.replace(/(-?\d+(?:\.\d+)?)\s*m\b/g, (_, num) =>
+    `${mmNumber(parseFloat(num) * MM_PER_M)} mm`
   );
 
 function convertNodeTextToMM(root) {
@@ -218,7 +218,6 @@ function addMeasurementRow(m){
   const btnT=row.querySelector('[data-act="toggle"]');
   const btnD=row.querySelector('[data-act="del"]');
   btnT.addEventListener("click",()=>{
-    // on exploite la propriété visible du measurement (si dispo), sinon fallback CSS
     if ("visible" in m) { m.visible = !m.visible; }
     btnT.textContent = ("visible" in m) ? (m.visible ? "Cacher" : "Montrer") : (btnT.textContent==="Cacher"?"Montrer":"Cacher");
   });
@@ -248,112 +247,29 @@ btnClearMeas.addEventListener("click",()=>{
   measureListEl.innerHTML=""; measMap.clear(); measCounter=0; allHidden=false;
 });
 
-/* ====================== CHARGEMENT XKT ====================== */
-async function loadXKT(url, nameHint){
-  const id="m"+Date.now();
-  const model=xktLoader.load({id, src:url, edges:!!chkEdges?.checked});
-  setProgress(8);
-  model.on("progress", p=> setProgress(8+Math.round(p*84)));
-  model.on("loaded", ()=>{
-    setProgress(100); setTimeout(()=>setProgress(0), 350);
-    viewer.cameraFlight.flyTo(model);
-    models.set(id,{model,name:nameHint||id,src:url}); lastModelId=id;
-    if (chkEdges?.checked) viewer.scene.edgeMaterial.edgesEnabled=true;
-  });
-  model.on("error", e=>{ console.error(e); setProgress(0); alert("Erreur chargement XKT."); });
-  return id;
-}
-async function uploadAndShow(){
-  const f=fileInput?.files?.[0];
-  if (!f){ alert("Choisis un fichier .step/.stp/.stl (ou .xkt)"); return; }
-  if (btnVisualiser){ btnVisualiser.disabled=true; btnVisualiser.textContent="Conversion…"; }
-  setProgress(12);
-  try{
-    if (/\.(xkt)$/i.test(f.name)) {
-      const fileURL = URL.createObjectURL(f);
-      if (!chkAdditive?.checked){ for (const [,i] of models){ try{i.model.destroy();}catch{} } models.clear(); selectedIds.clear(); }
-      await loadXKT(fileURL, f.name);
-      return;
-    }
-    const fd=new FormData(); fd.append("file",f);
-    const res=await fetch("/upload",{method:"POST",body:fd});
-    const j=await res.json();
-    if (!res.ok || !j.xkt_url) throw new Error(JSON.stringify(j));
-    const xktUrl=new URL(j.xkt_url, location.origin).toString();
-    if (!chkAdditive?.checked){ for (const [,i] of models){ try{i.model.destroy();}catch{} } models.clear(); selectedIds.clear(); }
-    await loadXKT(xktUrl, f.name);
-  }catch(e){ console.error(e); alert("Erreur conversion/chargement (voir Console)."); }
-  finally{ if (btnVisualiser){ btnVisualiser.disabled=false; btnVisualiser.textContent="VISUALISER"; } }
-}
+/* ====================== Projection world -> overlay (utilisée par la coupe) ====================== */
+function worldToOverlayXY(world){
+  const cam = viewer.camera;
+  const mV  = cam.viewMatrix;
+  const mP  = cam.projMatrix || cam.projectionMatrix;
+  if (!mV || !mP || !overlayHost) return null;
 
-/* ---------- fichiers UI ---------- */
-btnChoose?.addEventListener("click",(e)=>{ e.preventDefault(); fileInput?.click(); });
-fileInput?.addEventListener("change",()=>{ const f=fileInput.files?.[0]; if (f && fileNameLbl) fileNameLbl.textContent=f.name; if (f) uploadAndShow(); });
-btnVisualiser?.addEventListener("click",(e)=>{ e.preventDefault(); uploadAndShow(); });
+  const x=world[0], y=world[1], z=world[2];
+  const vx = mV[0]*x + mV[4]*y + mV[8]*z  + mV[12];
+  const vy = mV[1]*x + mV[5]*y + mV[9]*z  + mV[13];
+  const vz = mV[2]*x + mV[6]*y + mV[10]*z + mV[14];
+  const vw = mV[3]*x + mV[7]*y + mV[11]*z + mV[15];
 
-/* ---------- nav & rendu ---------- */
-btnFit?.addEventListener("click", ()=> viewer.cameraFlight.flyTo(viewer.scene));
-let proj="perspective";
-btnProj?.addEventListener("click",()=>{ proj = proj==="perspective" ? "ortho" : "perspective"; viewer.camera.projection=proj; btnProj.textContent = proj==="perspective" ? "PERSPECTIVE" : "ORTHOGRAPHIQUE"; });
-chkEdges?.addEventListener("change",()=> viewer.scene.edgeMaterial.edgesEnabled=!!chkEdges.checked);
+  const cx = mP[0]*vx + mP[4]*vy + mP[8]*vz  + mP[12]*vw;
+  const cy = mP[1]*vx + mP[5]*vy + mP[9]*vz  + mP[13]*vw;
+  const cw = mP[3]*vx + mP[7]*vy + mP[11]*vz + mP[15]*vw;
+  if (!cw) return null;
 
-/* ---------- Sélection simple ---------- */
-viewer.scene.input.on("mouseclicked", (coords)=>{
-  if (distanceCtrl.active) return;
-  const hit = viewer.scene.pick({ canvasPos: coords, pickSurface: true });
-  if (!hit || !hit.entity) { clearSelection(); return; }
-  const id = hit.entity.id;
-  setSome(allIds(),"highlighted",false);
-  selectedIds = new Set([id]);
-  setSome([id],"highlighted",true);
-  showProps(hit.entity.metaObject || { id });
-});
-
-/* ---------- Recherche ---------- */
-btnSearch?.addEventListener("click",()=>{
-  const q=(searchInput?.value||"").toLowerCase().trim();
-  if (!resultsBox) return; resultsBox.innerHTML="";
-  if (!q) return;
-  const found=[];
-  allIds().forEach(id=>{
-    const o=viewer.scene.objects[id]; const m=o?.metaObject||{};
-    const hay=[id,m.type,m.name,m.ifcType,m.displayName].join(" ").toLowerCase();
-    if (hay.includes(q)) found.push({id,meta:m});
-  });
-  if (!found.length){ resultsBox.textContent="Aucun résultat"; return; }
-  found.slice(0,200).forEach(({id,meta})=>{
-    const div=document.createElement("div");
-    div.className="row mini"; div.style.justifyContent="space-between";
-    div.innerHTML=`<span style="font-size:12px">${meta?.name||meta?.displayName||meta?.type||id}</span>
-      <button class="btn btn-outline mini" data-id="${id}">Voir</button>`;
-    resultsBox.appendChild(div);
-  });
-  resultsBox.querySelectorAll("button").forEach(b=>{
-    b.addEventListener("click",()=>{ const id=b.dataset.id; const obj=viewer.scene.objects[id];
-      if (obj){ viewer.cameraFlight.flyTo(obj); setSome([id],"highlighted",true); }
-    });
-  });
-});
-
-/* ---------- Iso/cacher/montrer ---------- */
-btnIsolate ?.addEventListener("click",()=>{ if (!selectedIds.size) return; setAll("visible",false); setSome([...selectedIds],"visible",true); });
-btnHide    ?.addEventListener("click",()=>{ if (!selectedIds.size) return; setSome([...selectedIds],"visible",false); });
-btnShowOnly?.addEventListener("click",()=>{ if (!selectedIds.size) return; setAll("visible",false); setSome([...selectedIds],"visible",true); });
-btnClearSel?.addEventListener("click",()=>{ setAll("visible",true); setSome(allIds(),"highlighted",false); clearSelection(); });
-
-/* ---------- Propriétés ---------- */
-function showProps(meta){
-  if (!propsPanel) return;
-  propsPanel.innerHTML = "";
-  if (!meta) return;
-  const add=(k,v)=>{ const a=document.createElement("div"); a.textContent=k;
-                     const b=document.createElement("div"); b.textContent=String(v);
-                     propsPanel.append(a,b); };
-  const base={ id:meta.id, type:meta.type||meta.ifcType||"", name:meta.name||meta.displayName||"" };
-  Object.entries(base).forEach(([k,v])=> (v!==undefined && v!=="") && add(k,v));
-  const p=meta.properties||meta.props;
-  if (p && typeof p==="object")
-    Object.entries(p).forEach(([k,v])=> add(k, typeof v==="object"? JSON.stringify(v): v));
+  const nx = cx / cw, ny = cy / cw;
+  return {
+    x: (nx * 0.5 + 0.5) * overlayHost.clientWidth,
+    y: (1 - (ny * 0.5 + 0.5)) * overlayHost.clientHeight
+  };
 }
 
 /* ====================== PLAQUE DE COUPE : quad SVG en perspective ====================== */
