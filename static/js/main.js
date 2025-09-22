@@ -63,7 +63,7 @@ const xktLoader = new XKTLoaderPlugin(viewer, {
     "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/resources/draco/"
 });
 const sections = new SectionPlanesPlugin(viewer);
-new AnnotationsPlugin(viewer, { container: overlayHost }); // pas utilisé, mais conservé
+new AnnotationsPlugin(viewer, { container: overlayHost }); // intact
 
 /* ========= Canvas & overlay sizing ========= */
 const canvasEl = document.getElementById("xeokit-canvas");
@@ -109,9 +109,9 @@ let appMode = "select";
 let clipAxis = null;
 let clipPlane = null;
 
-// partagées avec la plaque (SVG)
-let clipPlateWorld = null;            // centre 3D du plan
-let clipPlaneDir   = [1,0,0];         // normale du plan
+// coupe (SVG)
+let clipPlateWorld = null;
+let clipPlaneDir   = [1,0,0];
 
 const setProgress=(p)=>{ if (progressBar) progressBar.style.width = `${Math.max(0,Math.min(100,p))}%`; };
 const allIds=()=> viewer.scene?.objectIds ?? [];
@@ -119,7 +119,7 @@ const setSome=(ids,prop,val)=> ids.forEach(id=>{const o=viewer.scene.objects[id]
 const setAll=(prop,val)=> allIds().forEach(id=>{const o=viewer.scene.objects[id]; if(o) o[prop]=val;});
 const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); if (propsPanel) propsPanel.innerHTML=""; };
 
-/* ===================== MESURES — cotes en mm + snap “opt-in” ===================== */
+/* ===================== MESURES — mm + anti-aimantation par défaut ===================== */
 const MM_PER_M = 1000;
 const mmNumber = (mm) => {
   const abs = Math.abs(mm);
@@ -128,30 +128,56 @@ const mmNumber = (mm) => {
   return Math.round(mm).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 };
 
-// 1) on coupe les labels natifs -> on dessinera les nôtres
+// (A) on coupe les labels natifs du plugin
 const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
   container: overlayHost,
-  labelsShown: false   // <— important
+  labelsShown: false
 });
 
-// 2) contrôle “Mesure” avec aimantation très douce, uniquement quand ALT est maintenu
-const distanceCtrl = new DistanceMeasurementsMouseControl(distancePlugin, {
-  snapping: false  // off par défaut
+// (B) contrôle de mesure : SNAP OFF, opt-in avec ALT
+const distanceCtrl = new DistanceMeasurementsMouseControl(distancePlugin, { snapping: false });
+
+// désactive *vraiment* le snap (toutes variantes connues)
+try {
+  distanceCtrl.snapping = false;
+  if ("snapRadius" in distanceCtrl)   distanceCtrl.snapRadius   = 0;
+  if ("snapDistance" in distanceCtrl) distanceCtrl.snapDistance = 0;
+  if ("snapToEdges" in distanceCtrl)  distanceCtrl.snapToEdges  = false;
+  if ("snapToVertices" in distanceCtrl) distanceCtrl.snapToVertices = false;
+  // fallback pour builds différentes
+  distanceCtrl._snapRadius   = 0;
+  distanceCtrl._snapDistance = 0;
+} catch {}
+
+let ALT_HELD = false;
+window.addEventListener("keydown", e => { if (e.altKey) { ALT_HELD = true;  distanceCtrl.snapping = true; }},  {passive:true});
+window.addEventListener("keyup",   e => { if (!e.altKey){ ALT_HELD = false; distanceCtrl.snapping = false;}}, {passive:true});
+
+// (C) masquage CSS de secours des bulles bleues en mètres si une build ignore labelsShown:false
+const styleKillMeters = document.createElement("style");
+styleKillMeters.textContent = `
+  /* masquer toute bulle du plugin, on ne garde que nos étiquettes .xk-badge et le SVG */
+  #overlayHost > :not(.xk-badge):not(svg) .xeokit-distance-label,
+  #overlayHost .xeokit-distance-label,
+  #overlayHost .xeokit-measurement-label,
+  #overlayHost .distanceMeasurements-label,
+  #overlayHost > .xeokit-distance-label,
+  #overlayHost > .xeokit-measurement-label {
+    display: none !important;
+  }
+`;
+document.head.appendChild(styleKillMeters);
+
+// (D) pour toute nouvelle mesure : si la build expose des flags, on coupe encore les labels
+["measurementCreated","newMeasurement","measurementAdded"].forEach(evt=>{
+  distancePlugin.on?.(evt, (ev)=>{
+    const m = ev.measurement || ev;
+    if ("labelShown"  in m) m.labelShown  = false;
+    if ("labelsShown" in m) m.labelsShown = false;
+  });
 });
-// paramètres au cas où la lib les expose
-if ("snapRadius"   in distanceCtrl) distanceCtrl.snapRadius   = 3;      // 3 px écran
-if ("snapDistance" in distanceCtrl) distanceCtrl.snapDistance = 0.0005; // 0.5 mm monde
-if ("snapToEdges"  in distanceCtrl) distanceCtrl.snapToEdges  = false;
-if ("snapToVertices" in distanceCtrl) distanceCtrl.snapToVertices = true;
 
-// ALT active le snap temporairement (opt-in)
-if ("snapping" in distanceCtrl) {
-  window.addEventListener("keydown", (e)=>{ if (e.altKey) distanceCtrl.snapping = true;  }, {passive:true});
-  window.addEventListener("keyup",   (e)=>{ if (!e.altKey) distanceCtrl.snapping = false; }, {passive:true});
-}
-
-/* ---------- Nos étiquettes “mm” ---------- */
-// projection monde -> overlay px
+/* ---------- Nos étiquettes mm (overlay) ---------- */
 function worldToOverlayXY(world){
   const cam = viewer.camera;
   const mV  = cam.viewMatrix;
@@ -176,35 +202,27 @@ function worldToOverlayXY(world){
   };
 }
 
-// util maths
 const len3 = (a,b)=> Math.hypot(a[0]-b[0], a[1]-b[1], a[2]-b[2]);
 const mid3 = (a,b)=> [(a[0]+b[0])/2,(a[1]+b[1])/2,(a[2]+b[2])/2];
 
 const measUI = new Map(); // measurement -> {el, getEnds}
 
-/* essaie d’extraire les 2 extrémités 3D sur différentes versions du plugin */
 function makeEndsGetter(m){
-  // 1) tableau positions [x1,y1,z1,x2,y2,z2]
   const fromPositions = (src) => () => {
     const p = (src && Array.isArray(src) && src.length >= 6) ? src : null;
     if (!p) return null;
     return [[p[0],p[1],p[2]],[p[3],p[4],p[5]]];
   };
-
-  if (Array.isArray(m.positions))        return fromPositions(m.positions);
+  if (Array.isArray(m.positions))                return fromPositions(m.positions);
   if (m._state && Array.isArray(m._state.positions)) return fromPositions(m._state.positions);
-  if (Array.isArray(m._positions))       return fromPositions(m._positions);
-  if (Array.isArray(m.coords))           return fromPositions(m.coords);
-  if (Array.isArray(m._coords))          return fromPositions(m._coords);
+  if (Array.isArray(m._positions))               return fromPositions(m._positions);
+  if (Array.isArray(m.coords))                   return fromPositions(m.coords);
+  if (Array.isArray(m._coords))                  return fromPositions(m._coords);
 
-  // 2) propriétés p1/p2, point1/point2, origin/target…
   const p1 = m.pos1||m.point1||m.p1||m.origin||m.start||m.a;
   const p2 = m.pos2||m.point2||m.p2||m.target||m.end||m.b;
-  if (Array.isArray(p1) && Array.isArray(p2)) {
-    return ()=> [p1.slice(0,3), p2.slice(0,3)];
-  }
+  if (Array.isArray(p1) && Array.isArray(p2)) return ()=> [p1.slice(0,3), p2.slice(0,3)];
 
-  // 3) laisse une dernière chance via fonction dédiée (certaines builds)
   if (typeof m.getPositions === "function") {
     return ()=> {
       const p = m.getPositions();
@@ -215,42 +233,32 @@ function makeEndsGetter(m){
 }
 
 function addMMLabelFor(meas){
-  const wrap = document.createElement("div");
-  wrap.className = "xk-badge";
-  wrap.style.position = "absolute";
-  wrap.style.pointerEvents = "none";
-  wrap.style.transform = "translate(-50%,-50%)";
-  wrap.style.zIndex = "12";
-  wrap.textContent = ""; // rempli à l’update
-  overlayHost.appendChild(wrap);
-
-  measUI.set(meas, { el: wrap, getEnds: makeEndsGetter(meas) });
+  const el = document.createElement("div");
+  el.className = "xk-badge";
+  el.style.cssText = "position:absolute;pointer-events:none;transform:translate(-50%,-50%);z-index:12;"+
+                     "background:#2563eb; color:#fff; border-radius:8px; padding:3px 6px; font:600 11px/1.2 system-ui,Segoe UI,Roboto,sans-serif; box-shadow:0 4px 12px rgba(0,0,0,.15)";
+  overlayHost.appendChild(el);
+  measUI.set(meas, { el, getEnds: makeEndsGetter(meas) });
 }
-
 function removeMMLabelFor(meas){
-  const ui = measUI.get(meas);
-  if (ui){ ui.el.remove(); measUI.delete(meas); }
+  const ui = measUI.get(meas); if (ui){ ui.el.remove(); measUI.delete(meas); }
 }
-
 function updateAllMMLabels(){
   for (const [meas, ui] of measUI.entries()){
     const ends = ui.getEnds?.();
     if (!ends) { ui.el.style.display="none"; continue; }
     const [a,b] = ends;
-    const center = mid3(a,b);
-    const pt = worldToOverlayXY(center);
+    const c = mid3(a,b);
+    const pt = worldToOverlayXY(c);
     if (!pt){ ui.el.style.display="none"; continue; }
-
-    const m = len3(a,b);                       // mètres
-    const mm = m * MM_PER_M;                   // millimètres
-    ui.el.textContent = `${mmNumber(mm)} mm`;  // ex: 1 820 mm
+    const mm = len3(a,b) * MM_PER_M;
+    ui.el.textContent = `${mmNumber(mm)} mm`;
     ui.el.style.left = `${pt.x}px`;
     ui.el.style.top  = `${pt.y}px`;
     ui.el.style.display = "block";
   }
 }
 
-// brancher les événements du plugin
 ["measurementCreated","newMeasurement","measurementAdded"].forEach(evt=>{
   distancePlugin.on?.(evt, (ev)=> addMMLabelFor(ev.measurement || ev));
 });
@@ -259,14 +267,14 @@ distancePlugin.on?.("measurementDestroyed", (ev)=>{
   removeMMLabelFor(m);
 });
 
-// toggle mesure on/off
-function deactivateMeasure() { if (distanceCtrl.active) distanceCtrl.deactivate(); btnMeasure?.classList.remove("btn-primary"); }
-function activateMeasure()   { distanceCtrl.activate();  btnMeasure?.classList.add("btn-primary"); }
-function toggleMeasure()     { if (distanceCtrl.active) deactivateMeasure(); else activateMeasure(); }
+// toggle mesure
+function deactivateMeasure(){ if (distanceCtrl.active) distanceCtrl.deactivate(); btnMeasure?.classList.remove("btn-primary"); }
+function activateMeasure(){   distanceCtrl.activate();  btnMeasure?.classList.add("btn-primary"); }
+function toggleMeasure(){     if (distanceCtrl.active) deactivateMeasure(); else activateMeasure(); }
 btnMeasure?.addEventListener("click", toggleMeasure);
 window.addEventListener("keydown", (e)=>{ if (e.key==="Escape" && distanceCtrl.active) deactivateMeasure(); }, {passive:true});
 
-/* ====================== RECHERCHE / UI Mesures ====================== */
+/* ====================== Panneau Mesures ====================== */
 const leftCard = document.querySelector(".grid > .card:first-child")
                || document.querySelector(".sidebar")
                || document.querySelector("#leftPane")
@@ -586,7 +594,7 @@ clipRange?.addEventListener("input", ()=>{
   updateCutPlaneVisual();
 });
 
-/* ---------- TICK : maintient arêtes + met à jour plaque & labels mm ---------- */
+/* ---------- TICK ---------- */
 viewer.scene.on("tick", ()=>{
   if (chkEdges?.checked && !viewer.scene.edgeMaterial.edgesEnabled) {
     viewer.scene.edgeMaterial.edgesEnabled = true;
