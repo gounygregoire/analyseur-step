@@ -337,8 +337,8 @@ function showProps(meta){
     Object.entries(p).forEach(([k,v])=> add(k, typeof v==="object"? JSON.stringify(v): v));
 }
 
-/* ====================== PLAQUE DE COUPE ====================== */
-/* --- maths util --- */
+/* ====================== PLAQUE DE COUPE : version "quad en perspective" ====================== */
+/* utilitaires maths */
 const cross = (a,b)=> [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
 const dot   = (a,b)=> a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
 const len   = (v)=> Math.hypot(v[0],v[1],v[2]) || 1;
@@ -346,7 +346,7 @@ const norm  = (v)=>{ const L=len(v); return [v[0]/L,v[1]/L,v[2]/L]; };
 const add3  = (a,b)=> [a[0]+b[0],a[1]+b[1],a[2]+b[2]];
 const mul3  = (v,s)=> [v[0]*s, v[1]*s, v[2]*s];
 
-/* Projection world -> pixels (fallback robuste sans camera.project) */
+/* Projection world -> pixels (compatible même sans camera.project) */
 function worldToOverlayXY(world){
   const cam = viewer.camera;
   const mV  = cam.viewMatrix;
@@ -371,51 +371,141 @@ function worldToOverlayXY(world){
   };
 }
 
-/* crée la plaque si absente */
-function ensureCutPlate(){
-  if (clipPlateDom) return;
-  clipPlateDom = document.createElement("div");
-  clipPlateDom.className = "cutplate";
-  Object.assign(clipPlateDom.style, {
-    position: "absolute",
-    width: CLIP_PLATE_W + "px",
-    height: CLIP_PLATE_H + "px",
-    transformOrigin: "50% 50%",
-    pointerEvents: "none",
-    display: "none",
-    zIndex: "10"
-  });
-  overlayHost.appendChild(clipPlateDom);
+/* --- overlay SVG (quad + axe) --- */
+let cutSvg = null, cutPoly = null, cutAxis = null;
+let clipPlaneDir = [1,0,0];   // normale du plan courant
+let clipPlateWorld = null;    // centre du plan
+function ensureCutSvg(){
+  if (cutSvg) return;
+  cutSvg = document.createElementNS("http://www.w3.org/2000/svg","svg");
+  cutSvg.setAttribute("id","cutSvg");
+  cutSvg.setAttribute("width","100%");
+  cutSvg.setAttribute("height","100%");
+  cutSvg.style.position = "absolute";
+  cutSvg.style.inset = "0";
+  cutSvg.style.pointerEvents = "none";
+  overlayHost.appendChild(cutSvg);
+
+  // Polygone de la plaque
+  cutPoly = document.createElementNS("http://www.w3.org/2000/svg","polygon");
+  cutPoly.setAttribute("class","cut-plane");
+  cutSvg.appendChild(cutPoly);
+
+  // Petite ligne centrale pour l’axe U (optionnel, sympa visuellement)
+  cutAxis = document.createElementNS("http://www.w3.org/2000/svg","line");
+  cutAxis.setAttribute("class","cut-axis");
+  cutSvg.appendChild(cutAxis);
 }
 
-/* calcule position + orientation écran de la plaque */
-function updateCutPlateVisual(){
-  if (!clipPlateDom || !clipPlateWorld) return;
+/* calcule un rectangle 3D dans le plan qui couvre la bbox du modèle,
+   projette ses 4 coins -> quad en perspective dans l’overlay */
+function updateCutPlaneVisual(){
+  if (!clipPlateWorld) { if (cutPoly) cutPoly.setAttribute("points",""); return; }
 
-  const p0 = worldToOverlayXY(clipPlateWorld);
-  if (!p0){ clipPlateDom.style.display="none"; return; }
+  ensureCutSvg();
 
-  // Base dans le plan : u = up × n (un vecteur horizontal sur la plaque)
+  // base du plan (u,v,n)
   const n = norm(clipPlaneDir);
   let up = [0,1,0];
   if (Math.abs(dot(up,n)) > 0.95) up = [1,0,0]; // évite colinéarité
   const u = norm(cross(up, n));
+  const v = norm(cross(n, u));
 
-  // taille scène pour un petit offset de référence
+  // dimensions du plan : on prend la bbox scène, on projette ses 8 coins sur (u,v)
   const aabb = viewer.scene?.aabb || [0,0,0,0,0,0];
-  const sceneSize = Math.max(aabb[3]-aabb[0], aabb[4]-aabb[1], aabb[5]-aabb[2]) || 1;
-  const L = sceneSize * 0.08;
+  const corners = [
+    [aabb[0],aabb[1],aabb[2]],[aabb[3],aabb[1],aabb[2]],[aabb[0],aabb[4],aabb[2]],[aabb[3],aabb[4],aabb[2]],
+    [aabb[0],aabb[1],aabb[5]],[aabb[3],aabb[1],aabb[5]],[aabb[0],aabb[4],aabb[5]],[aabb[3],aabb[4],aabb[5]]
+  ];
+  let minU=+Infinity,maxU=-Infinity,minV=+Infinity,maxV=-Infinity;
+  for (const p of corners){
+    const r = [p[0]-clipPlateWorld[0], p[1]-clipPlateWorld[1], p[2]-clipPlateWorld[2]];
+    const su = dot(r,u), sv = dot(r,v);
+    if (su<minU) minU=su; if (su>maxU) maxU=su;
+    if (sv<minV) minV=sv; if (sv>maxV) maxV=sv;
+  }
+  // on réduit un peu pour un rendu propre
+  const SCALE = 0.92;
+  const halfU = (maxU-minU)*0.5*SCALE || 1;
+  const halfV = (maxV-minV)*0.5*SCALE || 1;
 
-  const p1 = worldToOverlayXY(add3(clipPlateWorld, mul3(u, L)));
-  if (!p1){ clipPlateDom.style.display="none"; return; }
+  // 4 coins 3D du rectangle dans le plan
+  const P0 = add3( add3(clipPlateWorld, mul3(u,-halfU)), mul3(v,-halfV) );
+  const P1 = add3( add3(clipPlateWorld, mul3(u, halfU)), mul3(v,-halfV) );
+  const P2 = add3( add3(clipPlateWorld, mul3(u, halfU)), mul3(v, halfV) );
+  const P3 = add3( add3(clipPlateWorld, mul3(u,-halfU)), mul3(v, halfV) );
 
-  const angle = Math.atan2(p1.y - p0.y, p1.x - p0.x);
-  const tx = Math.round(p0.x - CLIP_PLATE_W/2);
-  const ty = Math.round(p0.y - CLIP_PLATE_H/2);
+  // projection écran
+  const q0 = worldToOverlayXY(P0),
+        q1 = worldToOverlayXY(P1),
+        q2 = worldToOverlayXY(P2),
+        q3 = worldToOverlayXY(P3);
+  if (!q0 || !q1 || !q2 || !q3){ cutPoly.setAttribute("points",""); return; }
 
-  clipPlateDom.style.transform = `translate(${tx}px, ${ty}px) rotate(${angle}rad)`;
-  clipPlateDom.style.display = "block";
+  cutPoly.setAttribute("points", `${q0.x},${q0.y} ${q1.x},${q1.y} ${q2.x},${q2.y} ${q3.x},${q3.y}`);
+
+  // petit trait central le long de u (pour “lire” la direction)
+  const C  = worldToOverlayXY(clipPlateWorld);
+  const Au = worldToOverlayXY(add3(clipPlateWorld, mul3(u, halfU*0.55)));
+  const Bu = worldToOverlayXY(add3(clipPlateWorld, mul3(u,-halfU*0.55)));
+  if (C && Au && Bu){
+    cutAxis.setAttribute("x1", Au.x); cutAxis.setAttribute("y1", Au.y);
+    cutAxis.setAttribute("x2", Bu.x); cutAxis.setAttribute("y2", Bu.y);
+    cutAxis.style.display = "block";
+  } else {
+    cutAxis.style.display = "none";
+  }
 }
+
+/* ---------- COUPE ---------- */
+function setClipAxis(axis){
+  const same = (clipAxis === axis);
+  clipAxis = same ? null : axis;
+
+  clipButtons.forEach(b => b.classList.toggle("btn-primary", !same && b.dataset.axis === clipAxis));
+
+  if (clipPlane){ try{ clipPlane.destroy(); }catch{} clipPlane=null; }
+  clipPlateWorld = null;
+
+  if (!clipAxis){
+    viewer.scene.sectionPlanesEnabled=false;
+    if (cutPoly) cutPoly.setAttribute("points","");
+    return;
+  }
+
+  const aabb   = viewer.scene?.aabb || [0,0,0, 0,0,0];
+  const center = [(aabb[0]+aabb[3])/2,(aabb[1]+aabb[4])/2,(aabb[2]+aabb[5])/2];
+  clipPlaneDir  = (clipAxis==="x") ? [1,0,0] : (clipAxis==="y") ? [0,1,0] : [0,0,1];
+
+  clipPlane = sections.createSectionPlane({ id:"cut", pos:center, dir: clipPlaneDir });
+  viewer.scene.sectionPlanesEnabled = true;
+
+  ensureCutSvg();
+  clipPlateWorld = center.slice();
+  clipRange.value = "0";
+  updateCutPlaneVisual();
+}
+clipButtons.forEach(b => b.addEventListener("click", () => setClipAxis(b.dataset.axis)));
+
+clipRange?.addEventListener("input", ()=>{
+  if (!clipPlane || !clipAxis) return;
+  const k=parseFloat(clipRange.value)||0;
+
+  const aabb=viewer.scene?.aabb || [0,0,0, 0,0,0];
+  const center=[(aabb[0]+aabb[3])/2,(aabb[1]+aabb[4])/2,(aabb[2]+aabb[5])/2];
+  const half=[(aabb[3]-aabb[0])/2,(aabb[4]-aabb[1])/2,(aabb[5]-aabb[2])/2];
+  const shift=(clipAxis==="x"?half[0]:clipAxis==="y"?half[1]:half[2])*(k/100);
+  const pos=center.slice();
+  if (clipAxis==="x") pos[0]+=shift; else if (clipAxis==="y") pos[1]+=shift; else pos[2]+=shift;
+
+  clipPlane.pos = pos;
+  clipPlateWorld = pos;
+  updateCutPlaneVisual();
+});
+
+/* suivre la caméra : on reprojette le quad à chaque frame */
+viewer.scene.on("tick", updateCutPlaneVisual);
+
 
 /* ---------- COUPE ---------- */
 function setClipAxis(axis){
