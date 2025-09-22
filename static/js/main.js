@@ -111,7 +111,7 @@ let appMode = "select"; // plus d’annotation
 let clipAxis = null;
 let clipPlane = null;
 
-// Variables partagées avec la section "PLAQUE DE COUPE (SVG)"
+// partagées avec la plaque (SVG)
 let clipPlateWorld = null;            // centre 3D du plan
 let clipPlaneDir   = [1,0,0];         // normale du plan
 
@@ -122,7 +122,7 @@ const setAll=(prop,val)=> allIds().forEach(id=>{const o=viewer.scene.objects[id]
 const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); if (propsPanel) propsPanel.innerHTML=""; };
 
 /* ---------- Mesures (mm + snap adouci) ---------- */
-const MM_PER_M = 1000; // xeokit → mètres, on veut afficher en millimètres
+const MM_PER_M = 1000;
 
 const formatMM = (meters) => {
   const mm = meters * MM_PER_M;
@@ -137,84 +137,19 @@ const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
   labelsShown: true,
   labelFormat: formatMM
 });
-
 const distanceCtrl = new DistanceMeasurementsMouseControl(distancePlugin, { snapping: true });
 
-// Aimantation plus douce (les champs peuvent ne pas exister selon la version du SDK)
-if ("snapDistance" in distanceCtrl) distanceCtrl.snapDistance = 0.01; // 1 cm en mètres-monde
-if ("snapRadius"   in distanceCtrl) distanceCtrl.snapRadius   = 6;    // rayon écran en px (plus petit = moins collant)
+// aimantation plus douce
+if ("snapDistance" in distanceCtrl) distanceCtrl.snapDistance = 0.01; // 1 cm
+if ("snapRadius"   in distanceCtrl) distanceCtrl.snapRadius   = 6;    // en px
 if ("snapToEdges"  in distanceCtrl) distanceCtrl.snapToEdges  = false;
 if ("snapToVertices" in distanceCtrl) distanceCtrl.snapToVertices = true;
 
 /* ====== Panneau "Mesures" ====== */
-const leftCard = document.querySelector(".grid > .card:first-child") || document.querySelector(".sidebar") || document.querySelector("#leftPane") || document.body;
-const measPane = document.createElement("div");
-measPane.className = "pane";
-measPane.innerHTML = `
-  <h4 style="margin:6px 0 10px">Mesures</h4>
-  <div id="measureList" style="display:flex;flex-direction:column;gap:6px"></div>
-  <div class="row mini" style="margin-top:6px; gap:8px">
-    <button id="btnHideAll" class="btn btn-outline mini">Tout cacher/montrer</button>
-    <button id="btnClearMeas" class="btn btn-danger mini">Tout supprimer</button>
-  </div>`;
-leftCard.appendChild(measPane);
-
-const measureListEl = measPane.querySelector("#measureList");
-const btnHideAll    = measPane.querySelector("#btnHideAll");
-const btnClearMeas  = measPane.querySelector("#btnClearMeas");
-
-const measMap  = new Map();
-let measCounter = 0;
-const getMeasId = (m)=> m.id || m._id || (m.__uiId ?? (m.__uiId = "m"+Date.now().toString(36)+Math.random().toString(36).slice(2,6)));
-
-function addMeasurementRow(m){
-  const id = getMeasId(m);
-  if (!measMap.has(id)) { measCounter += 1; measMap.set(id, { m, name: `Mesure ${measCounter}` }); }
-  const { name } = measMap.get(id);
-  if (measureListEl.querySelector(`[data-mid="${id}"]`)) return;
-
-  const row = document.createElement("div");
-  row.className = "row mini";
-  row.dataset.mid = id;
-  row.style.justifyContent = "space-between";
-  row.innerHTML = `
-    <span class="measure-name" style="font-size:12px">${name}</span>
-    <span>
-      <button class="btn btn-outline mini" data-act="toggle">Cacher</button>
-      <button class="btn btn-outline mini btn-danger" data-act="del">Suppr.</button>
-    </span>`;
-  measureListEl.appendChild(row);
-
-  const btnT = row.querySelector('[data-act="toggle"]');
-  const btnD = row.querySelector('[data-act="del"]');
-  btnT.addEventListener("click", ()=>{ m.visible = !m.visible; btnT.textContent = m.visible ? "Cacher" : "Montrer"; });
-  btnD.addEventListener("click", ()=>{ try { m.destroy ? m.destroy() : distancePlugin.destroyMeasurement?.(m.id); } catch {} measMap.delete(id); row.remove(); });
-}
-
-["measurementCreated","newMeasurement","measurementAdded"].forEach(evt=>{
-  distancePlugin.on?.(evt, (ev)=> addMeasurementRow(ev.measurement || ev));
-});
-distancePlugin.on?.("measurementDestroyed", (ev)=>{
-  const m = ev.measurement || ev;
-  const id = getMeasId(m);
-  measureListEl.querySelector(`[data-mid="${id}"]`)?.remove();
-  measMap.delete(id);
-});
-
-let allHidden = false;
-btnHideAll.addEventListener("click", ()=>{
-  allHidden = !allHidden;
-  for (const {m} of measMap.values()) m.visible = !allHidden;
-});
-btnClearMeas.addEventListener("click", ()=>{
-  if (typeof distancePlugin.clear === "function") distancePlugin.clear();
-  else if (typeof distancePlugin.destroyAll === "function") distancePlugin.destroyAll();
-  measureListEl.innerHTML = ""; measMap.clear(); measCounter = 0; allHidden = false;
-});
-
-
-/* ====== Panneau "Mesures" ====== */
-const leftCard = document.querySelector(".grid > .card:first-child") || document.querySelector(".sidebar") || document.querySelector("#leftPane") || document.body;
+const leftCard = document.querySelector(".grid > .card:first-child")
+               || document.querySelector(".sidebar")
+               || document.querySelector("#leftPane")
+               || document.body;
 const measPane = document.createElement("div");
 measPane.className = "pane";
 measPane.innerHTML = `
@@ -294,11 +229,8 @@ function toggleMeasure() {
 btnMeasure?.addEventListener("click", toggleMeasure);
 window.addEventListener("keydown", (e)=>{ if (e.key==="Escape" && distanceCtrl.active) deactivateMeasure(); });
 
-// Annotation : on masque le bouton (fonction retirée)
-if (btnAnnot) {
-  btnAnnot.style.display = "none";
-  btnAnnot.disabled = true;
-}
+// Annotation : on masque le bouton
+if (btnAnnot) { btnAnnot.style.display = "none"; btnAnnot.disabled = true; }
 
 /* ---------- chargement XKT ---------- */
 async function loadXKT(url, nameHint){
@@ -456,7 +388,7 @@ function ensureCutSvg(){
   cutSvg.style.zIndex = "10";
   overlayHost.appendChild(cutSvg);
 
-  // Polygone de la plaque (style proche de ta .cutplate)
+  // Polygone de la plaque
   cutPoly = document.createElementNS("http://www.w3.org/2000/svg","polygon");
   cutPoly.setAttribute("fill","rgba(80,140,255,.20)");
   cutPoly.setAttribute("stroke","rgba(80,140,255,.45)");
@@ -464,7 +396,7 @@ function ensureCutSvg(){
   cutPoly.style.filter = "drop-shadow(0 6px 14px rgba(20,60,140,.18))";
   cutSvg.appendChild(cutPoly);
 
-  // Trait central pour l’axe U (lecture de l’orientation)
+  // Trait central (axe U)
   cutAxis = document.createElementNS("http://www.w3.org/2000/svg","line");
   cutAxis.setAttribute("stroke","rgba(80,140,255,.65)");
   cutAxis.setAttribute("stroke-width","2");
@@ -472,8 +404,7 @@ function ensureCutSvg(){
   cutSvg.appendChild(cutAxis);
 }
 
-// Calcule un rectangle 3D dans le plan qui couvre la bbox du modèle,
-// puis projette ses 4 coins -> quad en perspective dans l’overlay
+// Quad projeté qui couvre la bbox du modèle
 function updateCutPlaneVisual(){
   if (!clipPlateWorld) { if (cutPoly) cutPoly.setAttribute("points",""); return; }
   ensureCutSvg();
@@ -481,11 +412,11 @@ function updateCutPlaneVisual(){
   // base du plan (u,v,n)
   const n = norm(clipPlaneDir);
   let up = [0,1,0];
-  if (Math.abs(dot(up,n)) > 0.95) up = [1,0,0]; // évite colinéarité
+  if (Math.abs(dot(up,n)) > 0.95) up = [1,0,0];
   const u = norm(cross(up, n));
   const v = norm(cross(n, u));
 
-  // dimensions à partir de la bbox
+  // dimensions via la bbox
   const aabb = viewer.scene?.aabb || [0,0,0,0,0,0];
   const corners = [
     [aabb[0],aabb[1],aabb[2]],[aabb[3],aabb[1],aabb[2]],[aabb[0],aabb[4],aabb[2]],[aabb[3],aabb[4],aabb[2]],
@@ -498,17 +429,17 @@ function updateCutPlaneVisual(){
     if (su<minU) minU=su; if (su>maxU) maxU=su;
     if (sv<minV) minV=sv; if (sv>maxV) maxV=sv;
   }
-  const SCALE = 0.92; // marge douce
-  const halfU = Math.max( (maxU-minU)*0.5*SCALE, 1e-3 );
-  const halfV = Math.max( (maxV-minV)*0.5*SCALE, 1e-3 );
+  const SCALE = 0.92;
+  const halfU = Math.max((maxU-minU)*0.5*SCALE, 1e-3);
+  const halfV = Math.max((maxV-minV)*0.5*SCALE, 1e-3);
 
-  // 4 coins 3D du rectangle dans le plan
+  // 4 coins 3D
   const P0 = add3( add3(clipPlateWorld, mul3(u,-halfU)), mul3(v,-halfV) );
   const P1 = add3( add3(clipPlateWorld, mul3(u, halfU)), mul3(v,-halfV) );
   const P2 = add3( add3(clipPlateWorld, mul3(u, halfU)), mul3(v, halfV) );
   const P3 = add3( add3(clipPlateWorld, mul3(u,-halfU)), mul3(v, halfV) );
 
-  // projection -> pixels
+  // projection → pixels
   const q0 = worldToOverlayXY(P0),
         q1 = worldToOverlayXY(P1),
         q2 = worldToOverlayXY(P2),
@@ -517,7 +448,7 @@ function updateCutPlaneVisual(){
 
   cutPoly.setAttribute("points", `${q0.x},${q0.y} ${q1.x},${q1.y} ${q2.x},${q2.y} ${q3.x},${q3.y}`);
 
-  // petit trait central le long de u (esthétique)
+  // petit trait central
   const Au = worldToOverlayXY(add3(clipPlateWorld, mul3(u, halfU*0.55)));
   const Bu = worldToOverlayXY(add3(clipPlateWorld, mul3(u,-halfU*0.55)));
   if (Au && Bu){
@@ -541,7 +472,7 @@ function setClipAxis(axis){
 
   if (!clipAxis){
     viewer.scene.sectionPlanesEnabled=false;
-    if (cutPoly) cutPoly.setAttribute("points",""); // masque le quad
+    if (cutPoly) cutPoly.setAttribute("points","");
     return;
   }
 
