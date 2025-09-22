@@ -63,9 +63,7 @@ const xktLoader = new XKTLoaderPlugin(viewer, {
     "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/resources/draco/"
 });
 const sections = new SectionPlanesPlugin(viewer);
-
-// On garde l’instance, mais on n’utilise plus le plugin pour la plaque
-new AnnotationsPlugin(viewer, { container: overlayHost });
+new AnnotationsPlugin(viewer, { container: overlayHost }); // pas utilisé, mais conservé
 
 /* ========= Canvas & overlay sizing ========= */
 const canvasEl = document.getElementById("xeokit-canvas");
@@ -107,7 +105,7 @@ resizeCanvasAndOverlay();
 const models = new Map();
 let lastModelId = null;
 let selectedIds = new Set();
-let appMode = "select"; // plus d’annotation
+let appMode = "select";
 let clipAxis = null;
 let clipPlane = null;
 
@@ -121,69 +119,154 @@ const setSome=(ids,prop,val)=> ids.forEach(id=>{const o=viewer.scene.objects[id]
 const setAll=(prop,val)=> allIds().forEach(id=>{const o=viewer.scene.objects[id]; if(o) o[prop]=val;});
 const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); if (propsPanel) propsPanel.innerHTML=""; };
 
-/* ---------- Mesures (mm + snap très adouci + fix labels) ---------- */
+/* ===================== MESURES — cotes en mm + snap “opt-in” ===================== */
 const MM_PER_M = 1000;
-
-// format mm pour une lecture propre
 const mmNumber = (mm) => {
   const abs = Math.abs(mm);
   if (abs < 10)   return mm.toFixed(2);
   if (abs < 100)  return mm.toFixed(1);
   return Math.round(mm).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 };
-const formatMM = (meters) => `${mmNumber(meters * MM_PER_M)} mm`;
 
+// 1) on coupe les labels natifs -> on dessinera les nôtres
 const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
   container: overlayHost,
-  labelsShown: true,
-  labelFormat: formatMM   // total en mm
+  labelsShown: false   // <— important
 });
 
-// contrôle + snap très léger
-const distanceCtrl = new DistanceMeasurementsMouseControl(distancePlugin, { snapping: true });
-if ("snapDistance" in distanceCtrl) distanceCtrl.snapDistance = 0.001; // 1 mm monde
-if ("snapRadius"   in distanceCtrl) distanceCtrl.snapRadius   = 3;     // 3px écran
-if ("snapToEdges"  in distanceCtrl) distanceCtrl.snapToEdges  = false; // pas d’arêtes
+// 2) contrôle “Mesure” avec aimantation très douce, uniquement quand ALT est maintenu
+const distanceCtrl = new DistanceMeasurementsMouseControl(distancePlugin, {
+  snapping: false  // off par défaut
+});
+// paramètres au cas où la lib les expose
+if ("snapRadius"   in distanceCtrl) distanceCtrl.snapRadius   = 3;      // 3 px écran
+if ("snapDistance" in distanceCtrl) distanceCtrl.snapDistance = 0.0005; // 0.5 mm monde
+if ("snapToEdges"  in distanceCtrl) distanceCtrl.snapToEdges  = false;
 if ("snapToVertices" in distanceCtrl) distanceCtrl.snapToVertices = true;
 
-// Raccourci : maintenir ALT pour désactiver temporairement le snap
+// ALT active le snap temporairement (opt-in)
 if ("snapping" in distanceCtrl) {
-  window.addEventListener("keydown", (e)=>{ if (e.altKey) distanceCtrl.snapping = false; }, {passive:true});
-  window.addEventListener("keyup",   (e)=>{ if (!e.altKey) distanceCtrl.snapping = true;  }, {passive:true});
+  window.addEventListener("keydown", (e)=>{ if (e.altKey) distanceCtrl.snapping = true;  }, {passive:true});
+  window.addEventListener("keyup",   (e)=>{ if (!e.altKey) distanceCtrl.snapping = false; }, {passive:true});
 }
 
-/* ---- Forçage des labels en mm (y compris X/Y/Z) ---- */
-const metersToMMInText = (txt) =>
-  txt.replace(/(~?\s*)(-?\d+(?:\.\d+)?)\s*m\b/g, (all, pre, num) =>
-    `${pre}${mmNumber(parseFloat(num) * MM_PER_M)} mm`
-  );
+/* ---------- Nos étiquettes “mm” ---------- */
+// projection monde -> overlay px
+function worldToOverlayXY(world){
+  const cam = viewer.camera;
+  const mV  = cam.viewMatrix;
+  const mP  = cam.projMatrix || cam.projectionMatrix;
+  if (!mV || !mP || !overlayHost) return null;
 
-function convertNodeTextToMM(root) {
-  if (!root || root.nodeType !== 1 || root.dataset.mmConverted === "1") return;
-  let changed = false;
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
-  const nodes = [];
-  while (walker.nextNode()) nodes.push(walker.currentNode);
-  for (const t of nodes) {
-    const newText = metersToMMInText(t.nodeValue);
-    if (newText !== t.nodeValue) { t.nodeValue = newText; changed = true; }
-  }
-  if (changed) root.dataset.mmConverted = "1";
+  const x=world[0], y=world[1], z=world[2];
+  const vx = mV[0]*x + mV[4]*y + mV[8]*z  + mV[12];
+  const vy = mV[1]*x + mV[5]*y + mV[9]*z  + mV[13];
+  const vz = mV[2]*x + mV[6]*y + mV[10]*z + mV[14];
+  const vw = mV[3]*x + mV[7]*y + mV[11]*z + mV[15];
+
+  const cx = mP[0]*vx + mP[4]*vy + mP[8]*vz  + mP[12]*vw;
+  const cy = mP[1]*vx + mP[5]*vy + mP[9]*vz  + mP[13]*vw;
+  const cw = mP[3]*vx + mP[7]*vy + mP[11]*vz + mP[15]*vw;
+  if (!cw) return null;
+
+  const nx = cx / cw, ny = cy / cw;
+  return {
+    x: (nx * 0.5 + 0.5) * overlayHost.clientWidth,
+    y: (1 - (ny * 0.5 + 0.5)) * overlayHost.clientHeight
+  };
 }
 
-// Observe l’overlay pour convertir tous les labels dynamiques
-const mmObserver = new MutationObserver((mutations) => {
-  for (const m of mutations) {
-    m.addedNodes?.forEach((n) => { if (n.nodeType === 1) convertNodeTextToMM(n); });
-    if (m.type === "characterData") convertNodeTextToMM(m.target.parentElement);
+// util maths
+const len3 = (a,b)=> Math.hypot(a[0]-b[0], a[1]-b[1], a[2]-b[2]);
+const mid3 = (a,b)=> [(a[0]+b[0])/2,(a[1]+b[1])/2,(a[2]+b[2])/2];
+
+const measUI = new Map(); // measurement -> {el, getEnds}
+
+/* essaie d’extraire les 2 extrémités 3D sur différentes versions du plugin */
+function makeEndsGetter(m){
+  // 1) tableau positions [x1,y1,z1,x2,y2,z2]
+  const fromPositions = (src) => () => {
+    const p = (src && Array.isArray(src) && src.length >= 6) ? src : null;
+    if (!p) return null;
+    return [[p[0],p[1],p[2]],[p[3],p[4],p[5]]];
+  };
+
+  if (Array.isArray(m.positions))        return fromPositions(m.positions);
+  if (m._state && Array.isArray(m._state.positions)) return fromPositions(m._state.positions);
+  if (Array.isArray(m._positions))       return fromPositions(m._positions);
+  if (Array.isArray(m.coords))           return fromPositions(m.coords);
+  if (Array.isArray(m._coords))          return fromPositions(m._coords);
+
+  // 2) propriétés p1/p2, point1/point2, origin/target…
+  const p1 = m.pos1||m.point1||m.p1||m.origin||m.start||m.a;
+  const p2 = m.pos2||m.point2||m.p2||m.target||m.end||m.b;
+  if (Array.isArray(p1) && Array.isArray(p2)) {
+    return ()=> [p1.slice(0,3), p2.slice(0,3)];
   }
+
+  // 3) laisse une dernière chance via fonction dédiée (certaines builds)
+  if (typeof m.getPositions === "function") {
+    return ()=> {
+      const p = m.getPositions();
+      return (Array.isArray(p) && p.length>=6) ? [[p[0],p[1],p[2]],[p[3],p[4],p[5]]] : null;
+    };
+  }
+  return ()=> null;
+}
+
+function addMMLabelFor(meas){
+  const wrap = document.createElement("div");
+  wrap.className = "xk-badge";
+  wrap.style.position = "absolute";
+  wrap.style.pointerEvents = "none";
+  wrap.style.transform = "translate(-50%,-50%)";
+  wrap.style.zIndex = "12";
+  wrap.textContent = ""; // rempli à l’update
+  overlayHost.appendChild(wrap);
+
+  measUI.set(meas, { el: wrap, getEnds: makeEndsGetter(meas) });
+}
+
+function removeMMLabelFor(meas){
+  const ui = measUI.get(meas);
+  if (ui){ ui.el.remove(); measUI.delete(meas); }
+}
+
+function updateAllMMLabels(){
+  for (const [meas, ui] of measUI.entries()){
+    const ends = ui.getEnds?.();
+    if (!ends) { ui.el.style.display="none"; continue; }
+    const [a,b] = ends;
+    const center = mid3(a,b);
+    const pt = worldToOverlayXY(center);
+    if (!pt){ ui.el.style.display="none"; continue; }
+
+    const m = len3(a,b);                       // mètres
+    const mm = m * MM_PER_M;                   // millimètres
+    ui.el.textContent = `${mmNumber(mm)} mm`;  // ex: 1 820 mm
+    ui.el.style.left = `${pt.x}px`;
+    ui.el.style.top  = `${pt.y}px`;
+    ui.el.style.display = "block";
+  }
+}
+
+// brancher les événements du plugin
+["measurementCreated","newMeasurement","measurementAdded"].forEach(evt=>{
+  distancePlugin.on?.(evt, (ev)=> addMMLabelFor(ev.measurement || ev));
 });
-mmObserver.observe(overlayHost, { childList: true, subtree: true, characterData: true });
+distancePlugin.on?.("measurementDestroyed", (ev)=>{
+  const m = ev.measurement || ev;
+  removeMMLabelFor(m);
+});
 
-// Conversion initiale
-convertNodeTextToMM(overlayHost);
+// toggle mesure on/off
+function deactivateMeasure() { if (distanceCtrl.active) distanceCtrl.deactivate(); btnMeasure?.classList.remove("btn-primary"); }
+function activateMeasure()   { distanceCtrl.activate();  btnMeasure?.classList.add("btn-primary"); }
+function toggleMeasure()     { if (distanceCtrl.active) deactivateMeasure(); else activateMeasure(); }
+btnMeasure?.addEventListener("click", toggleMeasure);
+window.addEventListener("keydown", (e)=>{ if (e.key==="Escape" && distanceCtrl.active) deactivateMeasure(); }, {passive:true});
 
-/* ====== Panneau "Mesures" ====== */
+/* ====================== RECHERCHE / UI Mesures ====================== */
 const leftCard = document.querySelector(".grid > .card:first-child")
                || document.querySelector(".sidebar")
                || document.querySelector("#leftPane")
@@ -228,18 +311,19 @@ function addMeasurementRow(m){
 
   const btnT = row.querySelector('[data-act="toggle"]');
   const btnD = row.querySelector('[data-act="del"]');
-  btnT.addEventListener("click", ()=>{ m.visible = !m.visible; btnT.textContent = m.visible ? "Cacher" : "Montrer"; });
-  btnD.addEventListener("click", ()=>{ try { m.destroy ? m.destroy() : distancePlugin.destroyMeasurement?.(m.id); } catch {} measMap.delete(id); row.remove(); });
+  btnT.addEventListener("click", ()=>{
+    const ui = measUI.get(m);
+    if (ui){ const vis = ui.el.style.display !== "none"; ui.el.style.display = vis ? "none" : "block"; }
+    btnT.textContent = (ui && ui.el.style.display !== "none") ? "Cacher" : "Montrer";
+  });
+  btnD.addEventListener("click", ()=>{
+    try { m.destroy ? m.destroy() : distancePlugin.destroyMeasurement?.(m.id); } catch {}
+    measMap.delete(id); row.remove(); removeMMLabelFor(m);
+  });
 }
 
-// brancher les événements du plugin
 ["measurementCreated","newMeasurement","measurementAdded"].forEach(evt=>{
-  distancePlugin.on?.(evt, (ev)=>{
-    const meas = ev.measurement || ev;
-    addMeasurementRow(meas);
-    // conversion immédiate des labels créés
-    setTimeout(()=> convertNodeTextToMM(overlayHost), 0);
-  });
+  distancePlugin.on?.(evt, (ev)=> addMeasurementRow(ev.measurement || ev));
 });
 distancePlugin.on?.("measurementDestroyed", (ev)=>{
   const m = ev.measurement || ev;
@@ -251,25 +335,19 @@ distancePlugin.on?.("measurementDestroyed", (ev)=>{
 let allHidden = false;
 btnHideAll.addEventListener("click", ()=>{
   allHidden = !allHidden;
-  for (const {m} of measMap.values()) m.visible = !allHidden;
+  for (const {m} of measMap.values()) {
+    const ui = measUI.get(m);
+    if (ui) ui.el.style.display = allHidden ? "none" : "block";
+  }
 });
 btnClearMeas.addEventListener("click", ()=>{
   if (typeof distancePlugin.clear === "function") distancePlugin.clear();
   else if (typeof distancePlugin.destroyAll === "function") distancePlugin.destroyAll();
+  for (const {m} of measMap.values()) removeMMLabelFor(m);
   measureListEl.innerHTML = ""; measMap.clear(); measCounter = 0; allHidden = false;
 });
 
-// Toggle mesure on/off (UNE SEULE DÉFINITION)
-function deactivateMeasure() { if (distanceCtrl.active) distanceCtrl.deactivate(); btnMeasure?.classList.remove("btn-primary"); }
-function activateMeasure()   { distanceCtrl.activate();  btnMeasure?.classList.add("btn-primary"); }
-function toggleMeasure()     { if (distanceCtrl.active) deactivateMeasure(); else activateMeasure(); }
-btnMeasure?.addEventListener("click", toggleMeasure);
-window.addEventListener("keydown", (e)=>{ if (e.key==="Escape" && distanceCtrl.active) deactivateMeasure(); }, {passive:true});
-
-// Annotation : on masque le bouton
-if (btnAnnot) { btnAnnot.style.display = "none"; btnAnnot.disabled = true; }
-
-/* ---------- chargement XKT ---------- */
+/* ====================== CHARGEMENT XKT ====================== */
 async function loadXKT(url, nameHint){
   const id="m"+Date.now();
   const model=xktLoader.load({id, src:url, edges:!!chkEdges?.checked});
@@ -379,38 +457,11 @@ function showProps(meta){
 }
 
 /* ====================== PLAQUE DE COUPE : quad SVG en perspective ====================== */
-/* utilitaires maths */
 const cross = (a,b)=> [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
 const dot   = (a,b)=> a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
-const len   = (v)=> Math.hypot(v[0],v[1],v[2]) || 1;
-const norm  = (v)=>{ const L=len(v); return [v[0]/L,v[1]/L,v[2]/L]; };
+const norm  = (v)=>{ const L=Math.hypot(v[0],v[1],v[2])||1; return [v[0]/L,v[1]/L,v[2]/L]; };
 const add3  = (a,b)=> [a[0]+b[0],a[1]+b[1],a[2]+b[2]];
 const mul3  = (v,s)=> [v[0]*s, v[1]*s, v[2]*s];
-
-/* Projection world -> pixels (compatible même sans camera.project) */
-function worldToOverlayXY(world){
-  const cam = viewer.camera;
-  const mV  = cam.viewMatrix;
-  const mP  = cam.projMatrix || cam.projectionMatrix;
-  if (!mV || !mP || !overlayHost) return null;
-
-  const x=world[0], y=world[1], z=world[2];
-  const vx = mV[0]*x + mV[4]*y + mV[8]*z  + mV[12];
-  const vy = mV[1]*x + mV[5]*y + mV[9]*z  + mV[13];
-  const vz = mV[2]*x + mV[6]*y + mV[10]*z + mV[14];
-  const vw = mV[3]*x + mV[7]*y + mV[11]*z + mV[15];
-
-  const cx = mP[0]*vx + mP[4]*vy + mP[8]*vz  + mP[12]*vw;
-  const cy = mP[1]*vx + mP[5]*vy + mP[9]*vz  + mP[13]*vw;
-  const cw = mP[3]*vx + mP[7]*vy + mP[11]*vz + mP[15]*vw;
-  if (!cw) return null;
-
-  const nx = cx / cw, ny = cy / cw;
-  return {
-    x: (nx * 0.5 + 0.5) * overlayHost.clientWidth,
-    y: (1 - (ny * 0.5 + 0.5)) * overlayHost.clientHeight
-  };
-}
 
 /* --- overlay SVG (quad + axe) --- */
 let cutSvg = null, cutPoly = null, cutAxis = null;
@@ -425,7 +476,6 @@ function ensureCutSvg(){
   cutSvg.style.zIndex = "10";
   overlayHost.appendChild(cutSvg);
 
-  // Polygone de la plaque
   cutPoly = document.createElementNS("http://www.w3.org/2000/svg","polygon");
   cutPoly.setAttribute("fill","rgba(80,140,255,.20)");
   cutPoly.setAttribute("stroke","rgba(80,140,255,.45)");
@@ -433,7 +483,6 @@ function ensureCutSvg(){
   cutPoly.style.filter = "drop-shadow(0 6px 14px rgba(20,60,140,.18))";
   cutSvg.appendChild(cutPoly);
 
-  // Trait central (axe U)
   cutAxis = document.createElementNS("http://www.w3.org/2000/svg","line");
   cutAxis.setAttribute("stroke","rgba(80,140,255,.65)");
   cutAxis.setAttribute("stroke-width","2");
@@ -444,16 +493,13 @@ function ensureCutSvg(){
 // Quad projeté qui couvre la bbox du modèle
 function updateCutPlaneVisual(){
   if (!clipPlateWorld) { if (cutPoly) cutPoly.setAttribute("points",""); return; }
-  ensureCutSvg();
 
-  // base du plan (u,v,n)
   const n = norm(clipPlaneDir);
   let up = [0,1,0];
   if (Math.abs(dot(up,n)) > 0.95) up = [1,0,0];
   const u = norm(cross(up, n));
   const v = norm(cross(n, u));
 
-  // dimensions via la bbox
   const aabb = viewer.scene?.aabb || [0,0,0,0,0,0];
   const corners = [
     [aabb[0],aabb[1],aabb[2]],[aabb[3],aabb[1],aabb[2]],[aabb[0],aabb[4],aabb[2]],[aabb[3],aabb[4],aabb[2]],
@@ -462,7 +508,7 @@ function updateCutPlaneVisual(){
   let minU=+Infinity,maxU=-Infinity,minV=+Infinity,maxV=-Infinity;
   for (const p of corners){
     const r = [p[0]-clipPlateWorld[0], p[1]-clipPlateWorld[1], p[2]-clipPlateWorld[2]];
-    const su = dot(r,u), sv = dot(r,v);
+    const su = r[0]*u[0]+r[1]*u[1]+r[2]*u[2], sv = r[0]*v[0]+r[1]*v[1]+r[2]*v[2];
     if (su<minU) minU=su; if (su>maxU) maxU=su;
     if (sv<minV) minV=sv; if (sv>maxV) maxV=sv;
   }
@@ -470,13 +516,11 @@ function updateCutPlaneVisual(){
   const halfU = Math.max((maxU-minU)*0.5*SCALE, 1e-3);
   const halfV = Math.max((maxV-minV)*0.5*SCALE, 1e-3);
 
-  // 4 coins 3D
   const P0 = add3( add3(clipPlateWorld, mul3(u,-halfU)), mul3(v,-halfV) );
   const P1 = add3( add3(clipPlateWorld, mul3(u, halfU)), mul3(v,-halfV) );
   const P2 = add3( add3(clipPlateWorld, mul3(u, halfU)), mul3(v, halfV) );
   const P3 = add3( add3(clipPlateWorld, mul3(u,-halfU)), mul3(v, halfV) );
 
-  // projection → pixels
   const q0 = worldToOverlayXY(P0),
         q1 = worldToOverlayXY(P1),
         q2 = worldToOverlayXY(P2),
@@ -485,7 +529,6 @@ function updateCutPlaneVisual(){
 
   cutPoly.setAttribute("points", `${q0.x},${q0.y} ${q1.x},${q1.y} ${q2.x},${q2.y} ${q3.x},${q3.y}`);
 
-  // petit trait central
   const Au = worldToOverlayXY(add3(clipPlateWorld, mul3(u, halfU*0.55)));
   const Bu = worldToOverlayXY(add3(clipPlateWorld, mul3(u,-halfU*0.55)));
   if (Au && Bu){
@@ -543,12 +586,13 @@ clipRange?.addEventListener("input", ()=>{
   updateCutPlaneVisual();
 });
 
-// suit la caméra et maintient "arêtes" actif si coché
+/* ---------- TICK : maintient arêtes + met à jour plaque & labels mm ---------- */
 viewer.scene.on("tick", ()=>{
   if (chkEdges?.checked && !viewer.scene.edgeMaterial.edgesEnabled) {
     viewer.scene.edgeMaterial.edgesEnabled = true;
   }
   updateCutPlaneVisual();
+  updateAllMMLabels();
 });
 
 /* ---------- Switchs d’affichage ---------- */
