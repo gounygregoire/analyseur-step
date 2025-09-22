@@ -113,7 +113,7 @@ let clipPlane = null;
 
 // Plaque DOM (toujours en overlay) + infos
 let clipPlateDom = null;
-let clipPlaneDir = [1,0,0];           // direction du plan courant
+let clipPlaneDir = [1,0,0];           // direction du plan courant (normal)
 let clipPlateWorld = null;            // centre monde où placer la plaque
 const CLIP_PLATE_W = 220;             // largeur px de la plaque
 const CLIP_PLATE_H = 18;              // hauteur px de la plaque
@@ -270,7 +270,7 @@ btnProj?.addEventListener("click",()=>{ proj = proj==="perspective" ? "ortho" : 
 chkEdges?.addEventListener("change",()=> viewer.scene.edgeMaterial.edgesEnabled=!!chkEdges.checked);
 viewer.scene.on("tick",()=>{ 
   if (chkEdges?.checked && !viewer.scene.edgeMaterial.edgesEnabled) viewer.scene.edgeMaterial.edgesEnabled=true;
-  updateCutPlateVisual(); // suit caméra
+  updateCutPlateVisual(); // suit position & orientation à chaque frame
 });
 
 chkXray ?.addEventListener("change",()=>{ setAll("xrayed", !!chkXray.checked);  setSome([...selectedIds],"xrayed",false); });
@@ -346,7 +346,7 @@ const norm  = (v)=>{ const L=len(v); return [v[0]/L,v[1]/L,v[2]/L]; };
 const add3  = (a,b)=> [a[0]+b[0],a[1]+b[1],a[2]+b[2]];
 const mul3  = (v,s)=> [v[0]*s, v[1]*s, v[2]*s];
 
-/* Projection world -> pixels (compat sans camera.project) */
+/* Projection world -> pixels (fallback robuste sans camera.project) */
 function worldToOverlayXY(world){
   const cam = viewer.camera;
   const mV  = cam.viewMatrix;
@@ -388,27 +388,28 @@ function ensureCutPlate(){
   overlayHost.appendChild(clipPlateDom);
 }
 
-/* calcul angle d’orientation écran de la plaque + position */
+/* calcule position + orientation écran de la plaque */
 function updateCutPlateVisual(){
   if (!clipPlateDom || !clipPlateWorld) return;
 
   const p0 = worldToOverlayXY(clipPlateWorld);
   if (!p0){ clipPlateDom.style.display="none"; return; }
 
-  // Base dans le plan : u = up × n, v = n × u
+  // Base dans le plan : u = up × n (un vecteur horizontal sur la plaque)
   const n = norm(clipPlaneDir);
   let up = [0,1,0];
-  if (Math.abs(dot(up,n)) > 0.95) up = [1,0,0]; // évite la colinéarité
-  let u = norm(cross(up, n));
-  // on prend une petite longueur monde pour projeter (proportionnelle à la bbox)
+  if (Math.abs(dot(up,n)) > 0.95) up = [1,0,0]; // évite colinéarité
+  const u = norm(cross(up, n));
+
+  // taille scène pour un petit offset de référence
   const aabb = viewer.scene?.aabb || [0,0,0,0,0,0];
   const sceneSize = Math.max(aabb[3]-aabb[0], aabb[4]-aabb[1], aabb[5]-aabb[2]) || 1;
-  const L = sceneSize * 0.08; // vecteur de référence dans le plan
+  const L = sceneSize * 0.08;
 
   const p1 = worldToOverlayXY(add3(clipPlateWorld, mul3(u, L)));
   if (!p1){ clipPlateDom.style.display="none"; return; }
 
-  const angle = Math.atan2(p1.y - p0.y, p1.x - p0.x); // orientation écran du plan
+  const angle = Math.atan2(p1.y - p0.y, p1.x - p0.x);
   const tx = Math.round(p0.x - CLIP_PLATE_W/2);
   const ty = Math.round(p0.y - CLIP_PLATE_H/2);
 
