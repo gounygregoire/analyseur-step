@@ -1,6 +1,9 @@
 /* ==========================================================================
-   CADlytics — UI kit
-   (nettoyé : suppression de JS dans ce fichier et styles doublons)
+   CADlytics — UI kit (thème kaki/chocolat, glassmorphism, micro-animations)
+   --------------------------------------------------------------------------
+   - Compatible avec app.html & main.js fournis
+   - Overlay superposé au canvas (#overlayHost) pour badges/plaques
+   - Variante sombre via .dark sur #viewerShell
    ========================================================================== */
 
 /* ---------- Palette & bases ---------- */
@@ -10,14 +13,21 @@
   --panel-2: #fbfaf7;
   --text: #2b2b2b;
   --muted: #6c6a63;
+
   --kaki-900:#3f3f29; --kaki-700:#5d5d3c; --kaki-500:#7e7d5b; --kaki-300:#a6a487; --kaki-200:#bdbb9e;
   --choco-900:#3c2e22; --choco-700:#5a4030; --choco-500:#7a5a47; --choco-300:#b0917e; --choco-200:#d7c3b6;
-  --brand:#82b38a; --brand-2:#6da07a;
-  --accent:#3b82f6; --danger:#e11d48; --ok:#10b981;
+
+  --brand:#82b38a;
+  --brand-2:#6da07a;
+  --accent:#3b82f6;     /* éléments techniques (plaques, lignes) */
+  --danger:#e11d48;
+
   --ring: 0 0 0 6px rgba(130,179,138,.12);
   --shadow-1: 0 8px 24px rgba(31,41,55,.08);
   --shadow-2: 0 16px 40px rgba(31,41,55,.12);
-  --radius: 14px; --radius-sm: 10px;
+
+  --radius: 14px;
+  --radius-sm: 10px;
 }
 
 *{box-sizing:border-box}
@@ -32,13 +42,16 @@ body{
     linear-gradient(135deg, var(--bg), #ece9e2);
 }
 
-/* ---------- Layout ---------- */
+/* ---------- Layout global ---------- */
 .wrap{max-width:1400px;margin:0 auto;padding:22px}
 h2{margin:0 0 12px;font-size:22px;letter-spacing:.2px;color:var(--kaki-900)}
-.grid{ display:grid;gap:16px; grid-template-columns: 340px 1fr; }
+.grid{
+  display:grid;gap:16px;
+  grid-template-columns: 340px 1fr;
+}
 @media (max-width: 1024px){ .grid{ grid-template-columns: 1fr; } }
 
-/* ---------- Cartes ---------- */
+/* ---------- Cartes / panneaux ---------- */
 .card{
   background: var(--panel);
   border: 1px solid rgba(0,0,0,.06);
@@ -49,12 +62,18 @@ h2{margin:0 0 12px;font-size:22px;letter-spacing:.2px;color:var(--kaki-900)}
 }
 .pane{ padding: 14px 14px; }
 .card + .card .pane:first-child{ padding-top: 12px; }
-.pane h4{ margin:4px 0 10px; font-size: 13px; font-weight: 700; color: var(--kaki-700); letter-spacing:.3px; }
+.pane h4{
+  margin:4px 0 10px;
+  font-size: 13px; font-weight: 700;
+  color: var(--kaki-700);
+  letter-spacing:.3px;
+}
 
-/* ---------- Rows / Inputs / Btns ---------- */
+/* ---------- Rows ---------- */
 .row{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .row.mini{ gap:8px; }
 
+/* ---------- Inputs & boutons ---------- */
 input[type="text"], input[type="search"]{
   height:32px; padding:0 10px; width: 220px;
   border:1px solid rgba(0,0,0,.12);
@@ -65,6 +84,7 @@ input[type="text"], input[type="search"]{
 input[type="text"]:focus, input[type="search"]:focus{
   outline: none; border-color: var(--brand-2); box-shadow: var(--ring);
 }
+
 input[type="range"]{
   appearance: none; width: 180px; height: 6px; border-radius:999px;
   background: linear-gradient(90deg, var(--kaki-300), var(--choco-300));
@@ -95,6 +115,10 @@ label{ font-size:12px; color: var(--muted); display:inline-flex; align-items:cen
   background: linear-gradient(180deg, #fb7185, #e11d48);
   color:#fff; border-color: transparent;
 }
+.toolbar .btn.btn-primary{ box-shadow: 0 0 0 4px rgba(109,160,122,.18); }
+
+/* ---------- Sidebar (panneau gauche) ---------- */
+.card .pane + .pane{ border-top: 1px dashed rgba(0,0,0,.06); }
 
 /* ---------- Viewer ---------- */
 #viewerShell{ min-height: 640px; }
@@ -108,11 +132,11 @@ label{ font-size:12px; color: var(--muted); display:inline-flex; align-items:cen
 }
 #xeokit-canvas{ display:block; width:100%; height:100%; }
 
-/* Overlay strictement superposé au canvas */
+/* Overlay superposé au canvas (NE PAS ENLEVER) */
 #overlayHost{
   position:absolute; inset:0; z-index:10;
-  pointer-events:none;
-  contain: layout paint;
+  pointer-events:none; /* les clics vont au canvas */
+  contain: layout paint;  /* optimisation & positions stables */
 }
 
 /* Progress bar */
@@ -123,7 +147,7 @@ label{ font-size:12px; color: var(--muted); display:inline-flex; align-items:cen
   transition: width .25s ease;
 }
 
-/* ---------- Sombre ---------- */
+/* Variante sombre pilotée par le checkbox "Thème sombre" (main.js applique .dark) */
 #viewerShell.dark #viewerContainer{
   background: radial-gradient(140% 140% at 0% 0%, #0f1113, #13171a);
   outline-color: rgba(255,255,255,.05);
@@ -138,9 +162,10 @@ label{ font-size:12px; color: var(--muted); display:inline-flex; align-items:cen
 }
 #viewerShell.dark label{ color:#b9bdc3 }
 
-/* ---------- Pastilles / badges ---------- */
+/* ---------- Badges / pastilles / mesures / annotations ---------- */
 .dot { width:12px; height:12px; border-radius:50%; background:#1abc9c; box-shadow:0 0 0 2px #fff; }
 .ann-label { margin-top:4px; }
+
 .xk-badge{
   font: 12px/1.35 Inter, system-ui, Segoe UI, Roboto, Arial, sans-serif;
   color: #0f172a;
@@ -178,16 +203,17 @@ label{ font-size:12px; color: var(--muted); display:inline-flex; align-items:cen
   background:#0f1216; color:#eaeaea; border-color: rgba(255,255,255,.16);
 }
 
-/* ---------- Plaque de coupe (DOM) ---------- */
+/* ---------- Plaque translucide de coupe (UNE seule définition) ---------- */
 .cutplate{
-  width: 160px;
-  height: 160px;
+  width: 220px;
+  height: 18px;
   border-radius: 10px;
-  background: rgba(80,140,255,.18);
-  border: 1px dashed rgba(80,140,255,.55);
-  box-shadow: inset 0 0 40px rgba(80,140,255,.18);
-  transform: translate(-50%,-50%); /* centrée sur la position projetée */
+  background: rgba(80,140,255,.20);
+  border: 1px solid rgba(80,140,255,.45);
+  box-shadow: 0 6px 14px rgba(20,60,140,.18), inset 0 0 0 1px rgba(255,255,255,.35);
   pointer-events: none;
+  transform-origin: 50% 50%;       /* important pour la rotation en main.js */
+  will-change: transform, opacity; /* perf lors des rotations/mouvements */
 }
 
 /* ---------- Résultats / propriétés ---------- */
@@ -203,12 +229,12 @@ label{ font-size:12px; color: var(--muted); display:inline-flex; align-items:cen
 #propsPanel > div:nth-child(odd){ color:var(--muted) }
 #propsPanel .row.mini{ gap:8px }
 
-/* ---------- Tablettes ---------- */
+/* ---------- Tablettes & petits écrans ---------- */
 @media (max-width: 920px){
   #propsPanel{ grid-template-columns: 1fr; }
 }
 
-/* ---------- Scrollbar ---------- */
+/* ---------- Scrollbar subtil (Chrome/Edge) ---------- */
 *::-webkit-scrollbar{ width:10px; height:10px }
 *::-webkit-scrollbar-thumb{
   background: linear-gradient(180deg, var(--kaki-300), var(--choco-300));
@@ -217,8 +243,10 @@ label{ font-size:12px; color: var(--muted); display:inline-flex; align-items:cen
 }
 *::-webkit-scrollbar-track{ background: transparent }
 
-/* ---------- Divers ---------- */
+/* ---------- Petites aides visuelles ---------- */
 .btn[data-active="true"]{ outline: 0; box-shadow: var(--ring); }
 input[type="checkbox"]{ width:14px; height:14px }
+
+/* ---------- Liens utilitaires ---------- */
 a{ color: var(--brand-2); text-decoration: none; }
 a:hover{ text-decoration: underline; }
