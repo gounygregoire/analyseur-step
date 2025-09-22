@@ -111,12 +111,9 @@ let appMode = "select"; // plus d’annotation
 let clipAxis = null;
 let clipPlane = null;
 
-// Plaque DOM (toujours en overlay) + infos
-let clipPlateDom = null;
-let clipPlaneDir = [1,0,0];           // direction du plan courant (normal)
-let clipPlateWorld = null;            // centre monde où placer la plaque
-const CLIP_PLATE_W = 220;             // largeur px de la plaque
-const CLIP_PLATE_H = 18;              // hauteur px de la plaque
+// Variables partagées avec la section "PLAQUE DE COUPE (SVG)"
+let clipPlateWorld = null;            // centre 3D du plan
+let clipPlaneDir   = [1,0,0];         // normale du plan
 
 const setProgress=(p)=>{ if (progressBar) progressBar.style.width = `${Math.max(0,Math.min(100,p))}%`; };
 const allIds=()=> viewer.scene?.objectIds ?? [];
@@ -269,10 +266,6 @@ btnProj?.addEventListener("click",()=>{ proj = proj==="perspective" ? "ortho" : 
 
 chkEdges?.addEventListener("change",()=> viewer.scene.edgeMaterial.edgesEnabled=!!chkEdges.checked);
 viewer.scene.on("tick",()=>{ 
-  if (chkEdges?.checked && !viewer.scene.edgeMaterial.edgesEnabled) viewer.scene.edgeMaterial.edgesEnabled=true;
-  updateCutPlateVisual(); // suit position & orientation à chaque frame
-});
-
 chkXray ?.addEventListener("change",()=>{ setAll("xrayed", !!chkXray.checked);  setSome([...selectedIds],"xrayed",false); });
 chkGhost?.addEventListener("change",()=>{ setAll("ghosted",!!chkGhost.checked); setSome([...selectedIds],"ghosted",false); });
 chkTheme?.addEventListener("change",()=> viewerShell?.classList.toggle("dark",!!chkTheme.checked));
