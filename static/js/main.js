@@ -121,13 +121,97 @@ const setSome=(ids,prop,val)=> ids.forEach(id=>{const o=viewer.scene.objects[id]
 const setAll=(prop,val)=> allIds().forEach(id=>{const o=viewer.scene.objects[id]; if(o) o[prop]=val;});
 const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); if (propsPanel) propsPanel.innerHTML=""; };
 
-/* ---------- Mesures (libellé “mm”) ---------- */
+/* ---------- Mesures (mm + snap adouci) ---------- */
+const MM_PER_M = 1000; // xeokit → mètres, on veut afficher en millimètres
+
+const formatMM = (meters) => {
+  const mm = meters * MM_PER_M;
+  const abs = Math.abs(mm);
+  return abs < 10 ? `${mm.toFixed(3)} mm`
+       : abs < 100 ? `${mm.toFixed(1)} mm`
+       : `${Math.round(mm)} mm`;
+};
+
 const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
   container: overlayHost,
   labelsShown: true,
-  labelFormat: (meters) => `${meters.toFixed(2)} mm`
+  labelFormat: formatMM
 });
+
 const distanceCtrl = new DistanceMeasurementsMouseControl(distancePlugin, { snapping: true });
+
+// Aimantation plus douce (les champs peuvent ne pas exister selon la version du SDK)
+if ("snapDistance" in distanceCtrl) distanceCtrl.snapDistance = 0.01; // 1 cm en mètres-monde
+if ("snapRadius"   in distanceCtrl) distanceCtrl.snapRadius   = 6;    // rayon écran en px (plus petit = moins collant)
+if ("snapToEdges"  in distanceCtrl) distanceCtrl.snapToEdges  = false;
+if ("snapToVertices" in distanceCtrl) distanceCtrl.snapToVertices = true;
+
+/* ====== Panneau "Mesures" ====== */
+const leftCard = document.querySelector(".grid > .card:first-child") || document.querySelector(".sidebar") || document.querySelector("#leftPane") || document.body;
+const measPane = document.createElement("div");
+measPane.className = "pane";
+measPane.innerHTML = `
+  <h4 style="margin:6px 0 10px">Mesures</h4>
+  <div id="measureList" style="display:flex;flex-direction:column;gap:6px"></div>
+  <div class="row mini" style="margin-top:6px; gap:8px">
+    <button id="btnHideAll" class="btn btn-outline mini">Tout cacher/montrer</button>
+    <button id="btnClearMeas" class="btn btn-danger mini">Tout supprimer</button>
+  </div>`;
+leftCard.appendChild(measPane);
+
+const measureListEl = measPane.querySelector("#measureList");
+const btnHideAll    = measPane.querySelector("#btnHideAll");
+const btnClearMeas  = measPane.querySelector("#btnClearMeas");
+
+const measMap  = new Map();
+let measCounter = 0;
+const getMeasId = (m)=> m.id || m._id || (m.__uiId ?? (m.__uiId = "m"+Date.now().toString(36)+Math.random().toString(36).slice(2,6)));
+
+function addMeasurementRow(m){
+  const id = getMeasId(m);
+  if (!measMap.has(id)) { measCounter += 1; measMap.set(id, { m, name: `Mesure ${measCounter}` }); }
+  const { name } = measMap.get(id);
+  if (measureListEl.querySelector(`[data-mid="${id}"]`)) return;
+
+  const row = document.createElement("div");
+  row.className = "row mini";
+  row.dataset.mid = id;
+  row.style.justifyContent = "space-between";
+  row.innerHTML = `
+    <span class="measure-name" style="font-size:12px">${name}</span>
+    <span>
+      <button class="btn btn-outline mini" data-act="toggle">Cacher</button>
+      <button class="btn btn-outline mini btn-danger" data-act="del">Suppr.</button>
+    </span>`;
+  measureListEl.appendChild(row);
+
+  const btnT = row.querySelector('[data-act="toggle"]');
+  const btnD = row.querySelector('[data-act="del"]');
+  btnT.addEventListener("click", ()=>{ m.visible = !m.visible; btnT.textContent = m.visible ? "Cacher" : "Montrer"; });
+  btnD.addEventListener("click", ()=>{ try { m.destroy ? m.destroy() : distancePlugin.destroyMeasurement?.(m.id); } catch {} measMap.delete(id); row.remove(); });
+}
+
+["measurementCreated","newMeasurement","measurementAdded"].forEach(evt=>{
+  distancePlugin.on?.(evt, (ev)=> addMeasurementRow(ev.measurement || ev));
+});
+distancePlugin.on?.("measurementDestroyed", (ev)=>{
+  const m = ev.measurement || ev;
+  const id = getMeasId(m);
+  measureListEl.querySelector(`[data-mid="${id}"]`)?.remove();
+  measMap.delete(id);
+});
+
+let allHidden = false;
+btnHideAll.addEventListener("click", ()=>{
+  allHidden = !allHidden;
+  for (const {m} of measMap.values()) m.visible = !allHidden;
+});
+btnClearMeas.addEventListener("click", ()=>{
+  if (typeof distancePlugin.clear === "function") distancePlugin.clear();
+  else if (typeof distancePlugin.destroyAll === "function") distancePlugin.destroyAll();
+  measureListEl.innerHTML = ""; measMap.clear(); measCounter = 0; allHidden = false;
+});
+
 
 /* ====== Panneau "Mesures" ====== */
 const leftCard = document.querySelector(".grid > .card:first-child") || document.querySelector(".sidebar") || document.querySelector("#leftPane") || document.body;
