@@ -122,23 +122,15 @@ const mmNumber = (mm) => {
   return Math.round(mm).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 };
 
-// 1) On coupe les libellés natifs du plugin ⇒ on dessinera les nôtres (mm)
+// 1) Labels du plugin visibles (TOTAL), formatés en mm
 const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
   container: overlayHost,
-  labelsShown: false,            // total off
-  axisLabelsShown: false         // X/Y/Z off (si la propriété existe)
+  labelsShown: true,
+  axisLabelsShown: true, // selon la version; ignoré si non supporté
+  labelFormat: (meters) => `${mmNumber(meters * MM_PER_M)} mm`
 });
-// fallback brutal au cas où : on cache tout ce qui ressemble à un label du plugin
-const style = document.createElement("style");
-style.textContent = `
-  #overlayHost .xeokit-distance-label,
-  #overlayHost .xeokit-distanceMeasurement-label,
-  #overlayHost .distanceMeasurement-label,
-  #overlayHost .xeokit-measurement-label { display:none !important; }
-`;
-document.head.appendChild(style);
 
-// 2) contrôle avec aimantation douce et **opt-in** (ALT pour snap)
+// 2) Contrôle : aimantation douce et *opt-in* (ALT)
 const distanceCtrl = new DistanceMeasurementsMouseControl(distancePlugin, { snapping: false });
 if ("snapRadius"   in distanceCtrl) distanceCtrl.snapRadius   = 2;        // 2 px
 if ("snapDistance" in distanceCtrl) distanceCtrl.snapDistance = 0.001;    // 1 mm (monde)
@@ -149,60 +141,31 @@ if ("snapping" in distanceCtrl) {
   addEventListener("keyup",   (e)=>{ if (!e.altKey) distanceCtrl.snapping = false; }, {passive:true});
 }
 
-// projection monde -> overlay px
-function worldToOverlayXY(world){
-  const cam = viewer.camera, mV = cam.viewMatrix, mP = cam.projMatrix || cam.projectionMatrix;
-  if (!mV || !mP || !overlayHost) return null;
-  const x=world[0], y=world[1], z=world[2];
-  const vx = mV[0]*x + mV[4]*y + mV[8]*z  + mV[12];
-  const vy = mV[1]*x + mV[5]*y + mV[9]*z  + mV[13];
-  const vz = mV[2]*x + mV[6]*y + mV[10]*z + mV[14];
-  const vw = mV[3]*x + mV[7]*y + mV[11]*z + mV[15];
-  const cx = mP[0]*vx + mP[4]*vy + mP[8]*vz  + mP[12]*vw;
-  const cy = mP[1]*vx + mP[5]*vy + mP[9]*vz  + mP[13]*vw;
-  const cw = mP[3]*vx + mP[7]*vy + mP[11]*vz + mP[15]*vw;
-  if (!cw) return null;
-  const nx = cx / cw, ny = cy / cw;
-  return { x:(nx*0.5+0.5)*overlayHost.clientWidth, y:(1-(ny*0.5+0.5))*overlayHost.clientHeight };
-}
-const len3=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1],a[2]-b[2]);
-const mid3=(a,b)=>[(a[0]+b[0])/2,(a[1]+b[1])/2,(a[2]+b[2])/2];
+// 3) Observer DOM pour convertir toute étiquette “m” → “mm” (X/Y/Z inclus)
+const metersToMMInText = (txt) =>
+  txt.replace(/(~?\s*[XYZ]?\s*~?\s*)(-?\d+(?:\.\d+)?)\s*m\b/g, (all, pre, num) =>
+    `${pre}${mmNumber(parseFloat(num) * MM_PER_M)} mm`
+  );
 
-const measUI = new Map(); // measurement -> {el, getEnds}
-
-function endsGetter(m){
-  const fromPos = (src)=>()=> Array.isArray(src)&&src.length>=6 ? [[src[0],src[1],src[2]],[src[3],src[4],src[5]]] : null;
-  if (Array.isArray(m.positions)) return fromPos(m.positions);
-  if (m._state && Array.isArray(m._state.positions)) return fromPos(m._state.positions);
-  if (Array.isArray(m._positions)) return fromPos(m._positions);
-  if (Array.isArray(m.coords)) return fromPos(m.coords);
-  if (Array.isArray(m._coords)) return fromPos(m._coords);
-  const p1=m.pos1||m.point1||m.p1||m.origin||m.start||m.a, p2=m.pos2||m.point2||m.p2||m.target||m.end||m.b;
-  if (Array.isArray(p1)&&Array.isArray(p2)) return ()=>[p1.slice(0,3),p2.slice(0,3)];
-  if (typeof m.getPositions==="function") return ()=>{ const p=m.getPositions(); return Array.isArray(p)&&p.length>=6?[[p[0],p[1],p[2]],[p[3],p[4],p[5]]]:null; };
-  return ()=>null;
-}
-function addMMLabel(meas){
-  const el=document.createElement("div");
-  el.className="xk-badge";
-  Object.assign(el.style,{position:"absolute",pointerEvents:"none",transform:"translate(-50%,-50%)",zIndex:"12"});
-  overlayHost.appendChild(el);
-  measUI.set(meas,{el,getEnds:endsGetter(meas)});
-}
-function removeMMLabel(meas){ const ui=measUI.get(meas); if(ui){ ui.el.remove(); measUI.delete(meas);} }
-function updateMMLabels(){
-  for (const [m,ui] of measUI){
-    const ends=ui.getEnds?.(); if(!ends){ ui.el.style.display="none"; continue; }
-    const [a,b]=ends, c=mid3(a,b), pt=worldToOverlayXY(c); if(!pt){ ui.el.style.display="none"; continue; }
-    const mm=len3(a,b)*MM_PER_M; ui.el.textContent=`${mmNumber(mm)} mm`;
-    ui.el.style.left=`${pt.x}px`; ui.el.style.top=`${pt.y}px`; ui.el.style.display="block";
+function convertNodeTextToMM(root) {
+  if (!root || root.nodeType !== 1) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  for (const t of nodes) {
+    const newText = metersToMMInText(t.nodeValue);
+    if (newText !== t.nodeValue) t.nodeValue = newText;
   }
 }
-// brancher événements plugin
-["measurementCreated","newMeasurement","measurementAdded"].forEach(evt=>{
-  distancePlugin.on?.(evt, (ev)=> addMMLabel(ev.measurement||ev));
+
+const mmObserver = new MutationObserver((mutations) => {
+  for (const m of mutations) {
+    m.addedNodes?.forEach((n) => { if (n.nodeType === 1) convertNodeTextToMM(n); });
+    if (m.type === "characterData" && m.target?.parentElement) convertNodeTextToMM(m.target.parentElement);
+  }
 });
-distancePlugin.on?.("measurementDestroyed", (ev)=> removeMMLabel(ev.measurement||ev));
+mmObserver.observe(overlayHost, { childList: true, subtree: true, characterData: true });
+convertNodeTextToMM(overlayHost);
 
 // Toggle mesure
 function deactivateMeasure(){ if(distanceCtrl.active) distanceCtrl.deactivate(); btnMeasure?.classList.remove("btn-primary"); }
@@ -214,7 +177,7 @@ addEventListener("keydown",(e)=>{ if(e.key==="Escape" && distanceCtrl.active) de
 // Masquer le bouton Annotation (définitivement)
 if (btnAnnot) { btnAnnot.style.display = "none"; btnAnnot.disabled = true; }
 
-/* ====================== Panneau “Mesures” (liste) ====================== */
+/* ====================== Panneau “Mesures” (liste simple) ====================== */
 const leftCard = document.querySelector(".grid > .card:first-child")
                || document.querySelector(".sidebar")
                || document.querySelector("#leftPane")
@@ -255,13 +218,13 @@ function addMeasurementRow(m){
   const btnT=row.querySelector('[data-act="toggle"]');
   const btnD=row.querySelector('[data-act="del"]');
   btnT.addEventListener("click",()=>{
-    const ui=measUI.get(m);
-    if(ui){ const vis=ui.el.style.display!=="none"; ui.el.style.display=vis?"none":"block"; }
-    btnT.textContent=(ui && ui.el.style.display!=="none")?"Cacher":"Montrer";
+    // on exploite la propriété visible du measurement (si dispo), sinon fallback CSS
+    if ("visible" in m) { m.visible = !m.visible; }
+    btnT.textContent = ("visible" in m) ? (m.visible ? "Cacher" : "Montrer") : (btnT.textContent==="Cacher"?"Montrer":"Cacher");
   });
   btnD.addEventListener("click",()=>{
     try{ m.destroy?m.destroy():distancePlugin.destroyMeasurement?.(m.id);}catch{}
-    measMap.delete(id); row.remove(); removeMMLabel(m);
+    measMap.delete(id); row.remove();
   });
 }
 ["measurementCreated","newMeasurement","measurementAdded"].forEach(evt=>{
@@ -276,13 +239,12 @@ let allHidden=false;
 btnHideAll.addEventListener("click",()=>{
   allHidden=!allHidden;
   for (const {m} of measMap.values()){
-    const ui=measUI.get(m); if(ui) ui.el.style.display=allHidden?"none":"block";
+    if ("visible" in m) m.visible = !allHidden;
   }
 });
 btnClearMeas.addEventListener("click",()=>{
   if (typeof distancePlugin.clear==="function") distancePlugin.clear();
   else if (typeof distancePlugin.destroyAll==="function") distancePlugin.destroyAll();
-  for (const {m} of measMap.values()) removeMMLabel(m);
   measureListEl.innerHTML=""; measMap.clear(); measCounter=0; allHidden=false;
 });
 
@@ -485,13 +447,12 @@ clipRange?.addEventListener("input",()=>{
   clipPlane.pos=pos; clipPlateWorld=pos; updateCutPlaneVisual();
 });
 
-/* ---------- TICK : plaque + labels mm + arêtes ---------- */
+/* ---------- TICK : plaque + arêtes (labels mm gérés par l'observer) ---------- */
 viewer.scene.on("tick", ()=>{
   if (chkEdges?.checked && !viewer.scene.edgeMaterial.edgesEnabled) {
     viewer.scene.edgeMaterial.edgesEnabled = true;
   }
   updateCutPlaneVisual();
-  updateMMLabels();
 });
 
 /* ---------- Switchs d’affichage ---------- */
