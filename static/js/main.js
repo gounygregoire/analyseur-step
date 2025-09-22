@@ -65,7 +65,7 @@ const xktLoader = new XKTLoaderPlugin(viewer, {
 const sections = new SectionPlanesPlugin(viewer);
 
 // On garde l’instance, mais on n’utilise plus le plugin pour la plaque
-const annotations = new AnnotationsPlugin(viewer, { container: overlayHost });
+new AnnotationsPlugin(viewer, { container: overlayHost });
 
 /* ========= Canvas & overlay sizing ========= */
 const canvasEl = document.getElementById("xeokit-canvas");
@@ -152,10 +152,7 @@ if ("snapping" in distanceCtrl) {
   window.addEventListener("keyup",   (e)=>{ if (!e.altKey) distanceCtrl.snapping = true;  }, {passive:true});
 }
 
-/* ---- Forçage des labels en mm (y compris X/Y/Z) ----
-   Certains builds du plugin réécrivent les libellés en mètres.
-   On observe l’overlay et on convertit toute occurrence `… 3.02m`
-   vers `… 3 020 mm`, sans double conversion. */
+/* ---- Forçage des labels en mm (y compris X/Y/Z) ---- */
 const metersToMMInText = (txt) =>
   txt.replace(/(~?\s*)(-?\d+(?:\.\d+)?)\s*m\b/g, (all, pre, num) =>
     `${pre}${mmNumber(parseFloat(num) * MM_PER_M)} mm`
@@ -183,7 +180,7 @@ const mmObserver = new MutationObserver((mutations) => {
 });
 mmObserver.observe(overlayHost, { childList: true, subtree: true, characterData: true });
 
-// Conversion initiale (au cas où des labels existent déjà)
+// Conversion initiale
 convertNodeTextToMM(overlayHost);
 
 /* ====== Panneau "Mesures" ====== */
@@ -262,28 +259,12 @@ btnClearMeas.addEventListener("click", ()=>{
   measureListEl.innerHTML = ""; measMap.clear(); measCounter = 0; allHidden = false;
 });
 
-// Toggle mesure on/off (si tu l’as dans ta toolbar)
+// Toggle mesure on/off (UNE SEULE DÉFINITION)
 function deactivateMeasure() { if (distanceCtrl.active) distanceCtrl.deactivate(); btnMeasure?.classList.remove("btn-primary"); }
-function activateMeasure()   { distanceCtrl.activate(); btnMeasure?.classList.add("btn-primary"); }
+function activateMeasure()   { distanceCtrl.activate();  btnMeasure?.classList.add("btn-primary"); }
 function toggleMeasure()     { if (distanceCtrl.active) deactivateMeasure(); else activateMeasure(); }
 btnMeasure?.addEventListener("click", toggleMeasure);
 window.addEventListener("keydown", (e)=>{ if (e.key==="Escape" && distanceCtrl.active) deactivateMeasure(); }, {passive:true});
-
-/* ============ Modes ============ */
-function deactivateMeasure() {
-  if (distanceCtrl.active) distanceCtrl.deactivate();
-  btnMeasure?.classList.remove("btn-primary");
-}
-function activateMeasure() {
-  distanceCtrl.activate();
-  btnMeasure?.classList.add("btn-primary");
-}
-function toggleMeasure() {
-  if (distanceCtrl.active) { deactivateMeasure(); }
-  else { activateMeasure(); }
-}
-btnMeasure?.addEventListener("click", toggleMeasure);
-window.addEventListener("keydown", (e)=>{ if (e.key==="Escape" && distanceCtrl.active) deactivateMeasure(); });
 
 // Annotation : on masque le bouton
 if (btnAnnot) { btnAnnot.style.display = "none"; btnAnnot.disabled = true; }
