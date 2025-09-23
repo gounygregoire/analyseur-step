@@ -5,16 +5,15 @@ import pathlib
 import time
 import json
 import requests
-# RQ / Redis (Option B : analyse déléguée au worker)
+
+# RQ / Redis (analyse déléguée au worker)
 import redis
+from rq import Queue
+
 from flask import Flask, request, jsonify, send_from_directory, abort, render_template
 from flask_cors import CORS
 from dotenv import load_dotenv
 load_dotenv()  # charge .env si présent
-
-
-
-from rq import Queue
 
 # ---------- App & CORS ----------
 app = Flask(__name__, static_folder="static", template_folder="templates")
@@ -55,21 +54,31 @@ def _first_existing(paths):
             return p
     return None
 
-# ---------- Redis / RQ (Option B) ----------
-# Essaie d'abord REDIS_URL, puis REDIS_TLS_URL (certains providers),
-# sinon fallback sur TON URL gérée (au lieu de localhost).
+# ---------- Redis / RQ ----------
+# Utilise REDIS_URL (ou REDIS_TLS_URL). Laisse un fallback explicite (ton URL).
 REDIS_URL = (
     os.environ.get("REDIS_URL")
     or os.environ.get("REDIS_TLS_URL")
     or "redis://default:gISbsmwsGo5RgJtTA9xX9TQknzx0cvD6@redis-12922.c327.europe-west1-2.gce.redns.redis-cloud.com:12922/0"
 )
-RQ_QUEUE_NAME = os.environ.get("RQ_QUEUE_NAME", "analysis")  # "default" si ton worker écoute la default
+RQ_QUEUE_NAME = os.environ.get("RQ_QUEUE_NAME", "default").strip() or "default"
 
 try:
-    _redis = redis.from_url(REDIS_URL)
-    q = Queue(RQ_QUEUE_NAME, connection=_redis)
+    _redis = redis.from_url(
+        REDIS_URL,
+        socket_timeout=5,
+        socket_connect_timeout=5,
+        retry_on_timeout=True,
+        health_check_interval=30,
+        ssl=REDIS_URL.startswith("rediss://"),
+    )
+    _redis.ping()
+    q = Queue(RQ_QUEUE_NAME, connection=_redis, default_timeout=600)
+    app.logger.info(f"[RQ] Connected. queue='{RQ_QUEUE_NAME}' url='{REDIS_URL}'")
 except Exception:
+    app.logger.exception("[RQ] init failed")
     q = None
+
 # ---------- Pages ----------
 @app.get("/")
 def landing():
@@ -171,20 +180,16 @@ def serve_xkt(fname):
         abort(404)
     return send_from_directory(OUTPUT_FOLDER, fname, as_attachment=False)
 
-# ---------- Helpers analyse / caches (Option B) ----------
+# ---------- Helpers analyse / caches ----------
 def _step_path_for(file_id: str) -> str | None:
-    # L'upload a sauvé le fichier sous file_id + extension d'origine ; on cible ici uniquement STEP/STP.
+    # L'upload a sauvé le fichier sous file_id + extension d'origine ; on vise ici STEP/STP.
     candidates = [
         os.path.join(UPLOAD_FOLDER, f"{file_id}.step"),
         os.path.join(UPLOAD_FOLDER, f"{file_id}.stp"),
-        # (on pourrait ajouter un fallback .stl si on autorise l'analyse depuis STL)
     ]
     return _first_existing(candidates)
 
 def _cache_paths(file_id: str, axis: str) -> tuple[str, str]:
-    # shape_metrics écrit :
-    # - {file_id}.stats.json  (volume_mm3, bbox_mm, thickness_min/max_mm)
-    # - {file_id}.proj.{axis}.json (projected_area_cm2)
     base = os.path.join(OUTPUT_FOLDER, f"{file_id}.stats.json")
     proj = os.path.join(OUTPUT_FOLDER, f"{file_id}.proj.{axis}.json")
     return base, proj
@@ -207,13 +212,17 @@ def _response_from_caches(base_path: str, proj_path: str) -> dict:
         "bbox_mm": [round(float(x), 4) for x in bbox_mm],
     }
 
-# ---------- API : analyse shape (Option A : synchrone) ----------
-from shape_metrics import stats_json as compute_stats_json  # AJOUT d'import (en haut du fichier si tu préfères)
+# ---------- API : analyse shape via worker RQ (worker-only) ----------
+from importlib import import_module
 
 @app.get("/api/shape/stats")
 def api_shape_stats():
     """
-    Renvoie les métriques géométriques du STEP en synchrone (pas de RQ/Redis).
+    Enqueue le calcul dans le worker via Redis/RQ :
+    - lit le STEP sauvegardé lors de /upload
+    - envoie les BYTES au worker (stats_json_from_bytes)
+    - attend au plus 90s, sinon renvoie {"status":"processing"}
+    Toujours du JSON (jamais de page HTML), donc plus d'erreur "Unexpected token <".
     """
     file_id = request.args.get("file_id")
     axis = (request.args.get("axis") or "Z").upper()
@@ -222,36 +231,84 @@ def api_shape_stats():
     if axis not in ("X", "Y", "Z"):
         axis = "Z"
 
-    # Cherche le STEP d'origine
-    def _step_path_for(file_id: str) -> str | None:
-        cands = [
-            os.path.join(UPLOAD_FOLDER, f"{file_id}.step"),
-            os.path.join(UPLOAD_FOLDER, f"{file_id}.stp"),
-        ]
-        for p in cands:
-            if os.path.isfile(p):
-                return p
-        return None
-
     step_path = _step_path_for(file_id)
     if not step_path:
-        return jsonify(error="not_step_found",
-                       detail="Analyse disponible uniquement pour un import STEP/STP.",
-                       file_id=file_id), 400
+        return jsonify(
+            error="not_step_found",
+            detail="Analyse disponible uniquement pour un import STEP/STP.",
+            file_id=file_id,
+        ), 400
 
+    if not q:
+        return jsonify(
+            error="rq_unavailable",
+            detail="REDIS_URL/RQ_QUEUE_NAME non configurés côté web ou connexion échouée.",
+        ), 503
+
+    # Import léger de la fonction util du module de calcul (pas de CadQuery dans le web)
     try:
-        # On peut passer OUTPUT_FOLDER comme cache_dir pour bénéficier du cache disque
-        data = compute_stats_json(step_path, axis=axis, cache_dir=OUTPUT_FOLDER, file_id=file_id)
-        return jsonify(data)
+        sm = import_module("shape_metrics")
+        stats_from_bytes = getattr(sm, "stats_json_from_bytes")
     except Exception as e:
-        # Log côté serveur et message propre côté client
-        return jsonify(error="compute_fail", detail=str(e)), 500
+        return jsonify(error="import_fail", detail=f"shape_metrics import: {e}"), 500
+
+    # Enqueue + attente raisonnable
+    try:
+        with open(step_path, "rb") as fh:
+            blob = fh.read()
+
+        job = q.enqueue(
+            stats_from_bytes,
+            kwargs={
+                "step_bytes": blob,
+                "axis": axis,
+                "cache_dir": OUTPUT_FOLDER,
+                "file_id": file_id,
+            },
+            job_timeout=600,
+            result_ttl=3600,
+            failure_ttl=7200,
+        )
+
+        deadline = time.time() + 90.0
+        while time.time() < deadline:
+            job.refresh()
+            st = job.get_status()
+            if st == "finished" and job.result:
+                return jsonify(job.result)
+            if st == "failed":
+                return jsonify(error="compute_fail", detail=str(job.exc_info)), 500
+            time.sleep(0.5)
+
+        return jsonify(status="processing", job_id=job.get_id())
+
+    except Exception as e:
+        return jsonify(error="enqueue_fail", detail=str(e)), 500
 
 # ---------- Diag ----------
 @app.get("/__routes")
 def __routes():
     lines = [f"{sorted(r.methods)}  {r.rule}" for r in app.url_map.iter_rules()]
     return "<pre>" + "\n".join(sorted(lines)) + "</pre>"
+
+@app.get("/__rq")
+def __rq():
+    info = {
+        "queue": RQ_QUEUE_NAME,
+        "has_q": bool(q),
+        "redis_url_set": bool(REDIS_URL),
+    }
+    try:
+        if q:
+            info["queued"] = q.count
+            info["is_connected"] = True
+            _ = _redis.ping()
+        else:
+            info["is_connected"] = False
+    except Exception as e:
+        info["is_connected"] = False
+        info["error"] = str(e)
+    return jsonify(info)
 
 @app.get("/__diag")
 def __diag():

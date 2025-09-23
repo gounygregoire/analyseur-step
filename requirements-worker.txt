@@ -19,3 +19,4 @@ casadi==3.7.0
 # requirements-worker.txt
 Rtree==1.2.0
 # (optionnel) pyembree==0.1.12  # si tu descends trimesh < 4, sinon évite
+Pillow==11.2.1
