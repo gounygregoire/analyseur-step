@@ -121,7 +121,7 @@ const setSome=(ids,prop,val)=> ids.forEach(id=>{const o=viewer.scene.objects[id]
 const setAll=(prop,val)=> allIds().forEach(id=>{const o=viewer.scene.objects[id]; if(o) o[prop]=val;});
 const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); if (propsPanel) propsPanel.innerHTML=""; };
 
-/* ---------- Mesures (mm + snap adouci + labels forcés mm) ---------- */
+/* ---------- Mesures (mm + snap adouci) ---------- */
 const MM_PER_M = 1000;
 const mmNumber = (mm) => {
   const abs = Math.abs(mm);
@@ -142,37 +142,46 @@ if ("snapDistance" in distanceCtrl) distanceCtrl.snapDistance = 0.001;
 if ("snapRadius"   in distanceCtrl) distanceCtrl.snapRadius   = 3;
 if ("snapToEdges"  in distanceCtrl) distanceCtrl.snapToEdges  = false;
 if ("snapToVertices" in distanceCtrl) distanceCtrl.snapToVertices = true;
-
 if ("snapping" in distanceCtrl) {
   window.addEventListener("keydown", (e)=>{ if (e.altKey) distanceCtrl.snapping = false; }, {passive:true});
   window.addEventListener("keyup",   (e)=>{ if (!e.altKey) distanceCtrl.snapping = true;  }, {passive:true});
 }
 
-/* ---- Forçage des labels en mm ---- */
-const metersToMMInText = (txt) =>
-  txt.replace(/(~?\s*)(-?\d+(?:\.\d+)?)\s*m\b/g, (all, pre, num) =>
-    `${pre}${mmNumber(parseFloat(num) * MM_PER_M)} mm`
-  );
-function convertNodeTextToMM(root) {
-  if (!root || root.nodeType !== 1 || root.dataset.mmConverted === "1") return;
-  let changed = false;
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
-  const nodes = [];
-  while (walker.nextNode()) nodes.push(walker.currentNode);
-  for (const t of nodes) {
-    const newText = metersToMMInText(t.nodeValue);
-    if (newText !== t.nodeValue) { t.nodeValue = newText; changed = true; }
-  }
-  if (changed) root.dataset.mmConverted = "1";
+/* ---- Forçage des labels en mm (corrigé & idempotent) ---- */
+// Convertit toute occurrence de mètres en millimètres, y compris ~, virgules, espaces.
+function textMetersToMM(txt) {
+  return txt.replace(/(~?\s*)(-?\d+(?:[.,]\d+)?)\s*m(?!m)/gi, (_all, pre, num) => {
+    const val = parseFloat(String(num).replace(',', '.'));
+    if (isNaN(val)) return _all;
+    const mm = val * 1000;
+    const abs = Math.abs(mm);
+    const pretty = abs < 10 ? mm.toFixed(2) : abs < 100 ? mm.toFixed(1)
+                    : Math.round(mm).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+    return `${pre}${pretty} mm`;
+  });
 }
+// Sans flag de mémorisation : on peut reconvertir à chaque mutation
+function convertNodeTextToMM(root) {
+  if (!root || root.nodeType !== 1) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+  const toEdit = [];
+  while (walker.nextNode()) toEdit.push(walker.currentNode);
+  for (const t of toEdit) {
+    const newText = textMetersToMM(t.nodeValue);
+    if (newText !== t.nodeValue) t.nodeValue = newText;
+  }
+}
+// Observe l’overlay et reconvertit en continu
 const mmObserver = new MutationObserver((mutations) => {
   for (const m of mutations) {
     m.addedNodes?.forEach((n) => { if (n.nodeType === 1) convertNodeTextToMM(n); });
-    if (m.type === "characterData") convertNodeTextToMM(m.target.parentElement);
+    if (m.type === "characterData" && m.target?.parentElement) convertNodeTextToMM(m.target.parentElement);
   }
 });
 mmObserver.observe(overlayHost, { childList: true, subtree: true, characterData: true });
+// Conversion initiale + filet de sécurité sur le tick
 convertNodeTextToMM(overlayHost);
+viewer.scene.on("tick", ()=> convertNodeTextToMM(overlayHost));
 
 /* ====== Panneau "Mesures" ====== */
 const leftCard = document.querySelector(".grid > .card:first-child")
@@ -296,19 +305,14 @@ async function uploadAndShow(file){
 /* ---------- FICHIERS UI (fiabilisé) ---------- */
 function openFileChooser(){
   try{
-    // 1) input natif si présent
     if (fileInput && !fileInput.disabled){
-      // Chrome/Edge modernes
       if (typeof fileInput.showPicker === "function") {
         fileInput.showPicker();
       } else {
-        // Fallback universel
         fileInput.click();
       }
       return;
     }
-
-    // 2) fallback : input éphémère si l’original manque
     const tmp = document.createElement("input");
     tmp.type = "file";
     tmp.accept = ".step,.stp,.stl,.xkt,model/step,model/stl,application/octet-stream";
@@ -322,9 +326,8 @@ function openFileChooser(){
     alert("Impossible d’ouvrir le sélecteur de fichiers (popup bloquée ?).");
   }
 }
-
-btnChoose?.setAttribute("type","button");           // évite submit si dans un <form>
-btnChoose?.setAttribute("tabindex","0");            // accessibilité
+btnChoose?.setAttribute("type","button");
+btnChoose?.setAttribute("tabindex","0");
 btnChoose?.addEventListener("click",  (e)=>{ e.preventDefault(); openFileChooser(); });
 btnChoose?.addEventListener("keydown",(e)=>{ if (e.key==="Enter"||e.key===" ") { e.preventDefault(); openFileChooser(); } });
 
@@ -333,10 +336,8 @@ fileInput?.addEventListener("change",()=>{
   if (f && fileNameLbl) fileNameLbl.textContent=f.name;
   if (f) uploadAndShow(f);
 });
-
 btnVisualiser?.addEventListener("click",(e)=>{ e.preventDefault(); uploadAndShow(); });
 
-/* --- Drag & Drop sur la zone viewer --- */
 ["dragenter","dragover"].forEach(ev=>{
   viewerContainer?.addEventListener(ev,(e)=>{ e.preventDefault(); e.dataTransfer.dropEffect="copy"; }, false);
 });
@@ -443,16 +444,14 @@ function worldToOverlayXY(world){
   };
 }
 
+/* --- overlay SVG (quad + axe) --- */
 let cutSvg = null, cutPoly = null, cutAxisLine = null;
 function ensureCutSvg(){
   if (cutSvg) return;
   cutSvg = document.createElementNS("http://www.w3.org/2000/svg","svg");
   cutSvg.setAttribute("width","100%");
   cutSvg.setAttribute("height","100%");
-  cutSvg.style.position = "absolute";
-  cutSvg.style.inset = "0";
-  cutSvg.style.pointerEvents = "none";
-  cutSvg.style.zIndex = "10";
+  Object.assign(cutSvg.style, { position:"absolute", inset:"0", pointerEvents:"none", zIndex:"10" });
   overlayHost.appendChild(cutSvg);
 
   cutPoly = document.createElementNS("http://www.w3.org/2000/svg","polygon");
@@ -468,6 +467,12 @@ function ensureCutSvg(){
   cutAxisLine.setAttribute("stroke-linecap","round");
   cutSvg.appendChild(cutAxisLine);
 }
+// supprime totalement l’overlay pour éviter tout “trait” résiduel
+function clearCutSvg(){
+  try { cutSvg?.remove(); } catch {}
+  cutSvg = null; cutPoly = null; cutAxisLine = null;
+}
+
 function updateCutPlaneVisual(){
   if (!clipPlateWorld) { if (cutPoly) cutPoly.setAttribute("points",""); return; }
   ensureCutSvg();
@@ -525,11 +530,13 @@ function setClipAxis(axis){
   clipButtons.forEach(b => b.classList.toggle("btn-primary", !same && b.dataset.axis === clipAxis));
 
   if (clipPlane){ try{ clipPlane.destroy(); }catch{} clipPlane=null; }
+  try { sections.clear?.(); } catch {}
+
   clipPlateWorld = null;
 
   if (!clipAxis){
     viewer.scene.sectionPlanesEnabled=false;
-    if (cutPoly) cutPoly.setAttribute("points","");
+    clearCutSvg(); // <— supprime complètement l'overlay (finit le trait bleu)
     return;
   }
 
