@@ -5,11 +5,15 @@ import pathlib
 import time
 import json
 import requests
-from flask import Flask, request, jsonify, send_from_directory, abort, render_template
-from flask_cors import CORS
-
 # RQ / Redis (Option B : analyse déléguée au worker)
 import redis
+from flask import Flask, request, jsonify, send_from_directory, abort, render_template
+from flask_cors import CORS
+from dotenv import load_dotenv
+load_dotenv()  # charge .env si présent
+
+
+
 from rq import Queue
 
 # ---------- App & CORS ----------
@@ -52,16 +56,20 @@ def _first_existing(paths):
     return None
 
 # ---------- Redis / RQ (Option B) ----------
-REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-RQ_QUEUE_NAME = os.environ.get("RQ_QUEUE_NAME", "analysis")  # mets "default" si ton worker écoute la queue par défaut
+# Essaie d'abord REDIS_URL, puis REDIS_TLS_URL (certains providers),
+# sinon fallback sur TON URL gérée (au lieu de localhost).
+REDIS_URL = (
+    os.environ.get("REDIS_URL")
+    or os.environ.get("REDIS_TLS_URL")
+    or "redis://default:gISbsmwsGo5RgJtTA9xX9TQknzx0cvD6@redis-12922.c327.europe-west1-2.gce.redns.redis-cloud.com:12922/0"
+)
+RQ_QUEUE_NAME = os.environ.get("RQ_QUEUE_NAME", "analysis")  # "default" si ton worker écoute la default
 
 try:
     _redis = redis.from_url(REDIS_URL)
     q = Queue(RQ_QUEUE_NAME, connection=_redis)
 except Exception:
-    # L'appli web reste fonctionnelle même si Redis n'est pas dispo ; l'endpoint renverra une 503 appropriée.
     q = None
-
 # ---------- Pages ----------
 @app.get("/")
 def landing():
