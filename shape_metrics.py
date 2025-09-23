@@ -1,6 +1,6 @@
-# shape_metrics.py — version maillage (pas d'import OCP direct)
+# shape_metrics.py — STEP→STL en sous-processus, métriques via trimesh
 from __future__ import annotations
-import os, io, json, math, tempfile, hashlib, random
+import os, io, json, math, tempfile, hashlib, random, subprocess, textwrap, sys, shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Tuple, Optional, Dict
@@ -8,16 +8,7 @@ from typing import Literal, Tuple, Optional, Dict
 import numpy as np
 import trimesh
 
-# CadQuery uniquement pour convertir STEP -> STL (aucun import OCP direct ici)
-import importlib
-_CQ = None
-def _cadquery():
-    global _CQ
-    if _CQ is None:
-        _CQ = importlib.import_module("cadquery")
-    return _CQ
-
-# (Optionnel) Pillow pour une surface projetée précise par rasterisation
+# Pillow est optionnelle (raster plus précis pour la surface projetée)
 try:
     from PIL import Image, ImageDraw
     _HAS_PIL = True
@@ -76,6 +67,7 @@ def _raster_union_area_mm2(pts2d: np.ndarray, faces: np.ndarray, max_px: int = 2
         y = (p[:, 1] - miny) * scale
         return np.c_[x, (H - 1) - y]
 
+    from PIL import Image, ImageDraw  # si dispo
     img = Image.new("1", (W, H), 0)
     draw = ImageDraw.Draw(img)
     for f in faces:
@@ -86,20 +78,47 @@ def _raster_union_area_mm2(pts2d: np.ndarray, faces: np.ndarray, max_px: int = 2
     mm_per_px = 1.0 / scale
     return float(on * (mm_per_px ** 2))
 
-# --------------------- Mesh (depuis STEP via CadQuery) -------------------
+# --------------------- STEP→STL en sous-processus -----------------------
+def _step_to_stl_subprocess(step_path: str, stl_path: str, tolerance: float = 0.6, timeout: int = 180) -> None:
+    """
+    Lance un petit script CadQuery dans un sous-processus pour exporter du STL.
+    Si CadQuery/OCC segfault => seul l'enfant meurt, le web reste vivant.
+    """
+    code = textwrap.dedent(
+        """
+        import sys
+        import cadquery as cq
+        from cadquery import importers, exporters
+
+        step, stl, tol = sys.argv[1], sys.argv[2], float(sys.argv[3])
+        shape = importers.importStep(step)
+        exporters.export(shape, stl, 'STL', tolerance=tol)
+        print("OK", file=sys.stderr)
+        """
+    )
+    env = os.environ.copy()
+    # Limite le nombre de threads OCC/BLAS si nécessaire
+    env.setdefault("OMP_NUM_THREADS", "1")
+    env.setdefault("OPENBLAS_NUM_THREADS", "1")
+    env.setdefault("MKL_NUM_THREADS", "1")
+
+    proc = subprocess.run(
+        [sys.executable, "-c", code, step_path, stl_path, str(tolerance)],
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        timeout=timeout, check=False
+    )
+    if proc.returncode != 0 or (not os.path.isfile(stl_path) or os.path.getsize(stl_path) == 0):
+        err = proc.stderr.decode("utf-8", "ignore")
+        out = proc.stdout.decode("utf-8", "ignore")
+        raise RuntimeError(f"STEP→STL failed (rc={proc.returncode})\nSTDERR:\n{err}\nSTDOUT:\n{out}")
+
 def _ensure_mesh_from_step(step_path: str) -> trimesh.Trimesh:
-    """Exporte un STL via CadQuery puis charge en Trimesh. Unités : mm."""
-    cq = _cadquery()
+    """Exporte un STL via un sous-processus CadQuery puis charge en Trimesh. Unités : mm."""
     tmp_dir = Path(tempfile.mkdtemp(prefix="shape_metrics_"))
     stl_path = tmp_dir / (Path(step_path).stem + ".stl")
     try:
-        shape = cq.importers.importStep(str(step_path))
-        # maillage raisonnable en perf/qualité
-        cq.exporters.export(shape, str(stl_path), "STL", tolerance=0.6)
-        if not stl_path.exists() or stl_path.stat().st_size == 0:
-            raise RuntimeError("STL non généré")
+        _step_to_stl_subprocess(step_path, str(stl_path), tolerance=0.6)
         mesh = trimesh.load_mesh(str(stl_path), file_type="stl", process=True)
-        # nettoyer un peu si nécessaire
         if mesh.is_empty:
             raise RuntimeError("Maillage vide")
         mesh.remove_degenerate_faces()
@@ -107,16 +126,10 @@ def _ensure_mesh_from_step(step_path: str) -> trimesh.Trimesh:
         mesh.rezero()
         return mesh
     finally:
-        try:
-            for p in tmp_dir.glob("*"):
-                p.unlink(missing_ok=True)
-            tmp_dir.rmdir()
-        except Exception:
-            pass
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 # --------------------- Métriques à partir du mesh -----------------------
 def compute_volume_mm3(mesh: trimesh.Trimesh) -> float:
-    """Volume signé -> on prend la valeur absolue. (mm³)"""
     try:
         vol = float(abs(mesh.volume))
         if not np.isfinite(vol): vol = 0.0
@@ -125,7 +138,7 @@ def compute_volume_mm3(mesh: trimesh.Trimesh) -> float:
         return 0.0
 
 def compute_bbox_mm(mesh: trimesh.Trimesh) -> Tuple[float, float, float]:
-    bounds = mesh.bounds  # (min, max)
+    bounds = mesh.bounds
     if bounds is None or len(bounds) != 2:
         return (0.0, 0.0, 0.0)
     mins, maxs = bounds
@@ -142,7 +155,7 @@ def compute_projected_area_cm2(mesh: trimesh.Trimesh, axis: Axis, *, max_px: int
     return float(area_mm2 / 100.0)  # -> cm²
 
 def compute_thickness_minmax_mm(mesh: trimesh.Trimesh, *, samples: int = 2000, seed: int = 42) -> Tuple[float, float]:
-    """Estimation : raycasts à partir de sommets vers l'intérieur (normales)."""
+    """Estimation via raycasts (Rtree requis ; fallback numpy si absent)."""
     rng = random.Random(seed)
     n = len(mesh.vertices)
     if n == 0:
@@ -165,6 +178,9 @@ def compute_thickness_minmax_mm(mesh: trimesh.Trimesh, *, samples: int = 2000, s
         dirv= dirs_in[i:i+BATCH]
         try:
             hits = intersector.intersects_first(ray_origins=ori, ray_directions=dirv)
+            for h in hits:
+                if h is not None and h > eps * 0.5:
+                    dists.append(float(h))
         except Exception:
             loc = intersector.intersects_location(ray_origins=ori, ray_directions=dirv)
             points, index_ray, _ = loc
@@ -174,10 +190,9 @@ def compute_thickness_minmax_mm(mesh: trimesh.Trimesh, *, samples: int = 2000, s
                 dist = float(np.linalg.norm(v))
                 if _d[j] < 0 or dist < _d[j]:
                     _d[j] = dist
-            hits = _d
-        for h in hits:
-            if h is not None and h > eps * 0.5:
-                dists.append(float(h))
+            for h in _d:
+                if h > 0:
+                    dists.append(float(h))
     if not dists:
         return (0.0, 0.0)
     return float(max(0.0, min(dists))), float(max(dists))
@@ -224,10 +239,9 @@ def compute_stats(step_path: str, axis: Axis = "Z",
             except Exception:
                 pass
 
-    # On travaille depuis le maillage (généré depuis le STEP)
+    # Mesh depuis le STEP (sous-processus pour STL)
     mesh = _ensure_mesh_from_step(step_path)
 
-    # volume / bbox / thickness (indépendants de l’axe)
     if vol_mm3 is None or bbox_mm is None or tmin is None or tmax is None:
         vol_mm3 = compute_volume_mm3(mesh)
         bbox_mm = compute_bbox_mm(mesh)
@@ -243,7 +257,6 @@ def compute_stats(step_path: str, axis: Axis = "Z",
             except Exception:
                 pass
 
-    # surface projetée (dépend de l’axe)
     if proj_cm2 is None:
         proj_cm2 = compute_projected_area_cm2(mesh, axis)
         if cache_dir:
@@ -257,7 +270,7 @@ def compute_stats(step_path: str, axis: Axis = "Z",
 
     return ShapeStats(
         units="mm_internal",
-        volume_cm3=float((vol_mm3 or 0.0) / 1000.0),   # mm3 -> cm3
+        volume_cm3=float((vol_mm3 or 0.0) / 1000.0),
         projected_area_cm2=float(proj_cm2 or 0.0),
         thickness_min_mm=float(tmin or 0.0),
         thickness_max_mm=float(tmax or 0.0),
