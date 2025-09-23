@@ -46,5 +46,5 @@ networkx==3.4.2
 cadquery==2.4.0
 cadquery-ocp==7.7.2.2b2
 # optionnels :
-# Pillow==11.2.1      # (tu l’as déjà côté web)
-# pyembree==0.1.12    # si wheel dispo, accélère les raycasts
+Pillow==11.2.1      # (tu l’as déjà côté web)
+pyembree==0.1.12    # si wheel dispo, accélère les raycasts
