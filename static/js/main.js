@@ -121,15 +121,15 @@ const setSome=(ids,prop,val)=> ids.forEach(id=>{const o=viewer.scene.objects[id]
 const setAll=(prop,val)=> allIds().forEach(id=>{const o=viewer.scene.objects[id]; if(o) o[prop]=val;});
 const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); if (propsPanel) propsPanel.innerHTML=""; };
 
-/* ---------- Mesures (mm + snap adouci) ---------- */
-const MM_PER_M = 1000;
-const mmNumber = (mm) => {
-  const abs = Math.abs(mm);
-  if (abs < 10)   return mm.toFixed(2);
-  if (abs < 100)  return mm.toFixed(1);
-  return Math.round(mm).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+/* ---------- Mesures (affichage "mm" SANS conversion) ---------- */
+const prettyNumber = (v) => {
+  const abs = Math.abs(v);
+  if (abs < 10)   return v.toFixed(2);
+  if (abs < 100)  return v.toFixed(1);
+  return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 };
-const formatMM = (meters) => `${mmNumber(meters * MM_PER_M)} mm`;
+// Xeokit fournit des mètres. On garde la valeur et on affiche "mm".
+const formatMM = (meters) => `${prettyNumber(meters)} mm`;
 
 const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
   container: overlayHost,
@@ -147,20 +147,15 @@ if ("snapping" in distanceCtrl) {
   window.addEventListener("keyup",   (e)=>{ if (!e.altKey) distanceCtrl.snapping = true;  }, {passive:true});
 }
 
-/* ---- Forçage des labels en mm (corrigé & idempotent) ---- */
-// Convertit toute occurrence de mètres en millimètres, y compris ~, virgules, espaces.
+/* ---- Forçage des labels : remplacer "m" par "mm" (sans *1000) ---- */
 function textMetersToMM(txt) {
   return txt.replace(/(~?\s*)(-?\d+(?:[.,]\d+)?)\s*m(?!m)/gi, (_all, pre, num) => {
     const val = parseFloat(String(num).replace(',', '.'));
     if (isNaN(val)) return _all;
-    const mm = val * 1000;
-    const abs = Math.abs(mm);
-    const pretty = abs < 10 ? mm.toFixed(2) : abs < 100 ? mm.toFixed(1)
-                    : Math.round(mm).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+    const pretty = prettyNumber(val); // même valeur, juste formatée
     return `${pre}${pretty} mm`;
   });
 }
-// Sans flag de mémorisation : on peut reconvertir à chaque mutation
 function convertNodeTextToMM(root) {
   if (!root || root.nodeType !== 1) return;
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
@@ -171,7 +166,6 @@ function convertNodeTextToMM(root) {
     if (newText !== t.nodeValue) t.nodeValue = newText;
   }
 }
-// Observe l’overlay et reconvertit en continu
 const mmObserver = new MutationObserver((mutations) => {
   for (const m of mutations) {
     m.addedNodes?.forEach((n) => { if (n.nodeType === 1) convertNodeTextToMM(n); });
@@ -179,7 +173,6 @@ const mmObserver = new MutationObserver((mutations) => {
   }
 });
 mmObserver.observe(overlayHost, { childList: true, subtree: true, characterData: true });
-// Conversion initiale + filet de sécurité sur le tick
 convertNodeTextToMM(overlayHost);
 viewer.scene.on("tick", ()=> convertNodeTextToMM(overlayHost));
 
@@ -536,7 +529,7 @@ function setClipAxis(axis){
 
   if (!clipAxis){
     viewer.scene.sectionPlanesEnabled=false;
-    clearCutSvg(); // <— supprime complètement l'overlay (finit le trait bleu)
+    clearCutSvg(); // <— plus de trait bleu
     return;
   }
 
