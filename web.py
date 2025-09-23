@@ -2,9 +2,15 @@
 import os
 import uuid
 import pathlib
+import time
+import json
 import requests
 from flask import Flask, request, jsonify, send_from_directory, abort, render_template
 from flask_cors import CORS
+
+# RQ / Redis (Option B : analyse déléguée au worker)
+import redis
+from rq import Queue
 
 # ---------- App & CORS ----------
 app = Flask(__name__, static_folder="static", template_folder="templates")
@@ -44,6 +50,17 @@ def _first_existing(paths):
         if os.path.exists(p):
             return p
     return None
+
+# ---------- Redis / RQ (Option B) ----------
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+RQ_QUEUE_NAME = os.environ.get("RQ_QUEUE_NAME", "analysis")  # mets "default" si ton worker écoute la queue par défaut
+
+try:
+    _redis = redis.from_url(REDIS_URL)
+    q = Queue(RQ_QUEUE_NAME, connection=_redis)
+except Exception:
+    # L'appli web reste fonctionnelle même si Redis n'est pas dispo ; l'endpoint renverra une 503 appropriée.
+    q = None
 
 # ---------- Pages ----------
 @app.get("/")
@@ -100,9 +117,8 @@ def upload():
     except Exception as e:
         return jsonify(error="save_fail", detail=str(e)), 500
 
-    # Envoi au converter privé (ou public si tu préfères) et récupération du XKT
+    # Envoi au converter et récupération du XKT
     try:
-        # On renvoie le nom d'origine au converter (ça ne change rien, mais c’est propre)
         with open(in_path, "rb") as fh:
             resp = requests.post(
                 f"{CONVERTER_URL}/convert",
@@ -110,7 +126,6 @@ def upload():
                 timeout=600,  # la conversion peut être longue
             )
         if resp.status_code != 200:
-            # Essaye d’extraire un message utile si JSON
             detail = resp.text
             try:
                 detail = resp.json()
@@ -148,6 +163,109 @@ def serve_xkt(fname):
         abort(404)
     return send_from_directory(OUTPUT_FOLDER, fname, as_attachment=False)
 
+# ---------- Helpers analyse / caches (Option B) ----------
+def _step_path_for(file_id: str) -> str | None:
+    # L'upload a sauvé le fichier sous file_id + extension d'origine ; on cible ici uniquement STEP/STP.
+    candidates = [
+        os.path.join(UPLOAD_FOLDER, f"{file_id}.step"),
+        os.path.join(UPLOAD_FOLDER, f"{file_id}.stp"),
+        # (on pourrait ajouter un fallback .stl si on autorise l'analyse depuis STL)
+    ]
+    return _first_existing(candidates)
+
+def _cache_paths(file_id: str, axis: str) -> tuple[str, str]:
+    # shape_metrics écrit :
+    # - {file_id}.stats.json  (volume_mm3, bbox_mm, thickness_min/max_mm)
+    # - {file_id}.proj.{axis}.json (projected_area_cm2)
+    base = os.path.join(OUTPUT_FOLDER, f"{file_id}.stats.json")
+    proj = os.path.join(OUTPUT_FOLDER, f"{file_id}.proj.{axis}.json")
+    return base, proj
+
+def _read_json(p: str) -> dict:
+    with open(p, "r", encoding="utf-8") as fh:
+        return json.load(fh)
+
+def _response_from_caches(base_path: str, proj_path: str) -> dict:
+    j1 = _read_json(base_path)
+    j2 = _read_json(proj_path)
+    vol_mm3 = float(j1.get("volume_mm3") or 0.0)
+    bbox_mm = j1.get("bbox_mm") or [0.0, 0.0, 0.0]
+    return {
+        "units": "mm_internal",
+        "volume_cm3": round(vol_mm3 / 1000.0, 4),  # 1 cm³ = 1000 mm³
+        "projected_area_cm2": round(float(j2.get("projected_area_cm2") or 0.0), 4),
+        "thickness_min_mm": round(float(j1.get("thickness_min_mm") or 0.0), 4),
+        "thickness_max_mm": round(float(j1.get("thickness_max_mm") or 0.0), 4),
+        "bbox_mm": [round(float(x), 4) for x in bbox_mm],
+    }
+
+# ---------- API : analyse shape (Option B via worker) ----------
+@app.get("/api/shape/stats")
+def api_shape_stats():
+    """
+    Renvoie les métriques géométriques du STEP via un job RQ (worker).
+    - Si cache présent : renvoie immédiatement.
+    - Sinon : enqueue un job shape_metrics.stats_json(...) et attend quelques secondes
+      que le worker écrive le cache, puis renvoie.
+    """
+    file_id = request.args.get("file_id")
+    axis = (request.args.get("axis") or "Z").upper()
+    if not file_id:
+        return jsonify(error="no_file_id"), 400
+    if axis not in ("X", "Y", "Z"):
+        axis = "Z"
+
+    step_path = _step_path_for(file_id)
+    if not step_path:
+        return jsonify(
+            error="not_step_found",
+            detail="Analyse disponible uniquement pour un import STEP/STP.",
+            file_id=file_id
+        ), 400
+
+    base_path, proj_path = _cache_paths(file_id, axis)
+
+    # 1) Cache déjà prêt ?
+    if os.path.isfile(base_path) and os.path.isfile(proj_path):
+        return jsonify(_response_from_caches(base_path, proj_path))
+
+    # 2) Pas de cache -> envoi au worker
+    if q is None:
+        return jsonify(error="rq_unavailable",
+                       detail="Connexion Redis/RQ non dispo côté web."), 503
+    try:
+        # IMPORTANT : on référence la fonction par chemin importable (string),
+        # pour que le worker l'importe et exécute (le web n'importe pas shape_metrics).
+        job = q.enqueue(
+            "shape_metrics.stats_json",
+            step_path,          # arg 1
+            axis,               # arg 2
+            OUTPUT_FOLDER,      # kw cache_dir
+            file_id,            # kw file_id
+            job_timeout=1800,   # gros STEP
+            result_ttl=600
+        )
+    except Exception as e:
+        return jsonify(error="enqueue_fail", detail=str(e)), 500
+
+    # 3) Attente raisonnable du cache (poll disque)
+    wait_s = env_int("STATS_WAIT_S", 20)  # configurable ; défaut 20s
+    deadline = time.time() + wait_s
+    while time.time() < deadline:
+        if os.path.isfile(base_path) and os.path.isfile(proj_path):
+            return jsonify(_response_from_caches(base_path, proj_path))
+        time.sleep(0.4)
+
+    # 4) Bonus : si le job a déjà un résultat dict, on le renvoie
+    try:
+        if job.is_finished and isinstance(job.result, dict):
+            return jsonify(job.result)
+    except Exception:
+        pass
+
+    # 5) Sinon : encore en traitement
+    return jsonify(status="processing", file_id=file_id, axis=axis, retryAfterMs=1500)
+
 # ---------- Diag ----------
 @app.get("/__routes")
 def __routes():
@@ -162,6 +280,9 @@ def __diag():
         "OUTPUT_FOLDER": OUTPUT_FOLDER,
         "MAX_UPLOAD_MB": MAX_UPLOAD_MB,
         "converter_url": CONVERTER_URL,
+        "redis_url": REDIS_URL,
+        "rq_queue": RQ_QUEUE_NAME,
+        "rq_connected": bool(q is not None),
     }
     # ping rapide du converter (optionnel)
     try:
@@ -170,4 +291,5 @@ def __diag():
     except Exception as e:
         info["converter_health"] = {"ok": False, "error": str(e)}
     return jsonify(info)
+
 # --- fin web.py ---

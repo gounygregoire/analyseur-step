@@ -20,7 +20,10 @@
           <div class="row mini">
             <button id="btnChoose" class="btn mini">CHOISIR</button>
             <button id="btnVisualiser" class="btn mini">VISUALISER</button>
-            <label class="row mini" style="margin-left:auto"><input id="chkAdditive" type="checkbox" /> <span>Ajouter (multi-modèles)</span></label>
+            <label class="row mini" style="margin-left:auto">
+              <input id="chkAdditive" type="checkbox" />
+              <span>Ajouter (multi-modèles)</span>
+            </label>
           </div>
           <input id="fileInput" type="file" style="display:none" accept=".stp,.step,.stl,.xkt" />
           <div id="fileName" style="font-size:12px;color:#777;margin-top:6px"></div>
@@ -73,8 +76,9 @@
         </div>
       </div>
 
-      <!-- Viewer -->
+      <!-- Viewer + Analyse -->
       <div class="card">
+        <!-- Barre d’outils viewer -->
         <div class="pane row mini" style="margin-bottom:0">
           <button id="btnMeasure" class="btn btn-outline mini">MESURE</button>
           <button id="btnAnnot" class="btn btn-outline mini">ANNOTATION</button>
@@ -87,6 +91,7 @@
           <button id="btnShot" class="btn btn-outline mini">SCREENSHOT</button>
         </div>
 
+        <!-- Zone viewer -->
         <div id="viewerShell" class="pane" style="padding-top:8px">
           <div id="viewerContainer">
             <canvas id="xeokit-canvas"></canvas>
@@ -94,6 +99,52 @@
             <div id="overlayHost"></div>
           </div>
 
+          <!-- === NOUVEAU : Panneau Analyse === -->
+          <div id="analysisPanel" class="pane" style="margin-top:12px;padding:10px;border-radius:10px;background:#fafafa;border:1px solid #eee">
+            <div class="row mini" style="gap:16px;align-items:center;flex-wrap:wrap">
+              <div style="display:flex;align-items:baseline;gap:6px">
+                <div style="font-size:12px;color:#666">Volume</div>
+                <div id="volVal" style="font-weight:600">—</div>
+                <div style="font-size:12px;color:#666">cm³</div>
+              </div>
+
+              <div style="display:flex;align-items:baseline;gap:6px">
+                <div style="font-size:12px;color:#666">Épaisseur min</div>
+                <div id="tminVal" style="font-weight:600">—</div>
+                <div style="font-size:12px;color:#666">mm</div>
+              </div>
+
+              <div style="display:flex;align-items:baseline;gap:6px">
+                <div style="font-size:12px;color:#666">Épaisseur max</div>
+                <div id="tmaxVal" style="font-weight:600">—</div>
+                <div style="font-size:12px;color:#666">mm</div>
+              </div>
+            </div>
+
+            <div class="row mini" style="gap:16px;align-items:center;flex-wrap:wrap;margin-top:8px">
+              <div style="display:flex;align-items:baseline;gap:6px">
+                <div style="font-size:12px;color:#666">Surface projetée</div>
+                <div id="projVal" style="font-weight:600">—</div>
+                <div style="font-size:12px;color:#666">cm²</div>
+              </div>
+
+              <div class="row mini" style="gap:10px;align-items:center">
+                <span style="font-size:12px;color:#666">Axe :</span>
+                <label style="display:flex;align-items:center;gap:6px">
+                  <input type="radio" name="projAxis" id="axisX" value="X" /> <span>X</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:6px">
+                  <input type="radio" name="projAxis" id="axisY" value="Y" /> <span>Y</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:6px">
+                  <input type="radio" name="projAxis" id="axisZ" value="Z" checked /> <span>Z</span>
+                </label>
+              </div>
+            </div>
+          </div>
+          <!-- === /Panneau Analyse === -->
+
+          <!-- Progression -->
           <div class="row mini" style="margin-top:10px;opacity:.8">
             <div style="font-size:12px">Progression</div>
             <div style="flex:1;background:#eef0f3;height:6px;border-radius:4px;overflow:hidden">
@@ -102,6 +153,7 @@
           </div>
         </div>
       </div>
+      <!-- /Viewer + Analyse -->
     </div> <!-- /grid -->
   </div> <!-- /wrap -->
 

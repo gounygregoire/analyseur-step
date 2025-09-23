@@ -50,6 +50,16 @@ const clipButtons  = $$(".clipAxis");
 const clipRange    = $("#clipRange");
 const btnShot      = $("#btnShot");
 
+/* ====== Analyse: sélecteurs panneau (app.html Étape A) ====== */
+const volVal  = $("#volVal");
+const projVal = $("#projVal");
+const tminVal = $("#tminVal");
+const tmaxVal = $("#tmaxVal");
+const axisX   = $("#axisX");
+const axisY   = $("#axisY");
+const axisZ   = $("#axisZ");
+const projAxisRadios = $$('input[name="projAxis"]');  // X / Y / Z  :contentReference[oaicite:3]{index=3}
+
 /* ---------- viewer + plugins ---------- */
 const viewer = new Viewer({
   canvasId: "xeokit-canvas",
@@ -114,6 +124,11 @@ let clipPlane = null;
 // partagées avec la plaque (SVG)
 let clipPlateWorld = null;
 let clipPlaneDir   = [1,0,0];
+
+/* ====== Analyse: état courant ====== */
+let currentFileId = null;         // défini par /upload  :contentReference[oaicite:4]{index=4}
+let currentAxis   = "Z";          // défaut Z (orthographe majuscules pour l’API)
+const getSelectedAxis = () => (axisX?.checked && "X") || (axisY?.checked && "Y") || "Z";
 
 const setProgress=(p)=>{ if (progressBar) progressBar.style.width = `${Math.max(0,Math.min(100,p))}%`; };
 const allIds=()=> viewer.scene?.objectIds ?? [];
@@ -265,6 +280,12 @@ async function loadXKT(url, nameHint){
     viewer.cameraFlight.flyTo(model);
     models.set(id,{model,name:nameHint||id,src:url}); lastModelId=id;
     if (chkEdges?.checked) viewer.scene.edgeMaterial.edgesEnabled=true;
+
+    // === Analyse: déclencher le fetch de stats à Z si on a un file_id ===
+    try {
+      currentAxis = getSelectedAxis(); // prend l'état des radios (Z par défaut)  :contentReference[oaicite:5]{index=5}
+      if (currentFileId) { fetchStats(currentAxis, /*soft=*/false); }
+    } catch (e) { console.warn("[analyse] fetch initial ignoré:", e); }
   });
   model.on("error", e=>{ console.error(e); setProgress(0); alert("Erreur chargement XKT."); });
   return id;
@@ -279,15 +300,18 @@ async function uploadAndShow(file){
   setProgress(12);
   try{
     if (/\.(xkt)$/i.test(f.name)) {
+      // Chargement direct d'un XKT local : pas d'API d'analyse (pas de file_id)
+      currentFileId = null;
       const fileURL = URL.createObjectURL(f);
       if (!chkAdditive?.checked){ for (const [,i] of models){ try{i.model.destroy();}catch{} } models.clear(); selectedIds.clear(); }
       await loadXKT(fileURL, f.name);
       return;
     }
     const fd=new FormData(); fd.append("file",f);
-    const res=await fetch("/upload",{method:"POST",body:fd});
+    const res=await fetch("/upload",{method:"POST",body:fd}); // renvoie {file_id, xkt_url}  :contentReference[oaicite:6]{index=6}
     const j=await res.json();
     if (!res.ok || !j.xkt_url) throw new Error(JSON.stringify(j));
+    currentFileId = j.file_id || null; // <— on garde le file_id pour /api/shape/stats
     const xktUrl=new URL(j.xkt_url, location.origin).toString();
     if (!chkAdditive?.checked){ for (const [,i] of models){ try{i.model.destroy();}catch{} } models.clear(); selectedIds.clear(); }
     await loadXKT(xktUrl, f.name);
@@ -583,3 +607,44 @@ btnShot?.addEventListener("click",()=>{
     const a=document.createElement("a"); a.href=dataURL; a.download="cadlytics_view.png"; a.click();
   }catch(e){ console.error(e); alert("Capture impossible."); }
 });
+
+/* ==================== ANALYSE : fetch & rendu ==================== */
+/** Met à jour le panneau Analyse avec les valeurs JSON reçues (aucune conversion côté front). */
+function renderStats(json){
+  if (!json || typeof json !== "object") return;
+  if (volVal)  volVal.textContent  = (json.volume_cm3 ?? "—");
+  if (projVal) projVal.textContent = (json.projected_area_cm2 ?? "—");
+  if (tminVal) tminVal.textContent = (json.thickness_min_mm ?? "—");
+  if (tmaxVal) tmaxVal.textContent = (json.thickness_max_mm ?? "—");
+}
+
+/**
+ * Récupère les stats serveur pour un file_id donné.
+ * @param {('X'|'Y'|'Z')} axis
+ * @param {boolean} soft - si true, on n'alerte pas en cas d'absence de file_id (ex: XKT local)
+ */
+async function fetchStats(axis="Z", soft=true){
+  try{
+    if (!currentFileId){
+      if (!soft) console.info("[analyse] aucun file_id (XKT local) → pas d'analyse.");
+      return;
+    }
+    const url = `/api/shape/stats?file_id=${encodeURIComponent(currentFileId)}&axis=${encodeURIComponent(axis)}`;
+    const res = await fetch(url, { method:"GET" });
+    const j   = await res.json();
+    if (!res.ok){
+      console.warn("[analyse] erreur API", j);
+      return;
+    }
+    renderStats(j);
+  }catch(err){
+    console.error("[analyse] fetchStats failed", err);
+  }
+}
+
+/* Radios X/Y/Z → met à jour uniquement la Surface projetée (les autres valeurs sont indépendantes de l’axe) */
+projAxisRadios.forEach(r => r?.addEventListener("change", ()=>{
+  const ax = getSelectedAxis();
+  currentAxis = ax;
+  fetchStats(ax);
+}));
