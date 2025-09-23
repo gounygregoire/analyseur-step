@@ -207,14 +207,13 @@ def _response_from_caches(base_path: str, proj_path: str) -> dict:
         "bbox_mm": [round(float(x), 4) for x in bbox_mm],
     }
 
-# ---------- API : analyse shape (Option B via worker) ----------
+# ---------- API : analyse shape (Option A : synchrone) ----------
+from shape_metrics import stats_json as compute_stats_json  # AJOUT d'import (en haut du fichier si tu préfères)
+
 @app.get("/api/shape/stats")
 def api_shape_stats():
     """
-    Renvoie les métriques géométriques du STEP via un job RQ (worker).
-    - Si cache présent : renvoie immédiatement.
-    - Sinon : enqueue un job shape_metrics.stats_json(...) et attend quelques secondes
-      que le worker écrive le cache, puis renvoie.
+    Renvoie les métriques géométriques du STEP en synchrone (pas de RQ/Redis).
     """
     file_id = request.args.get("file_id")
     axis = (request.args.get("axis") or "Z").upper()
@@ -223,56 +222,30 @@ def api_shape_stats():
     if axis not in ("X", "Y", "Z"):
         axis = "Z"
 
+    # Cherche le STEP d'origine
+    def _step_path_for(file_id: str) -> str | None:
+        cands = [
+            os.path.join(UPLOAD_FOLDER, f"{file_id}.step"),
+            os.path.join(UPLOAD_FOLDER, f"{file_id}.stp"),
+        ]
+        for p in cands:
+            if os.path.isfile(p):
+                return p
+        return None
+
     step_path = _step_path_for(file_id)
     if not step_path:
-        return jsonify(
-            error="not_step_found",
-            detail="Analyse disponible uniquement pour un import STEP/STP.",
-            file_id=file_id
-        ), 400
+        return jsonify(error="not_step_found",
+                       detail="Analyse disponible uniquement pour un import STEP/STP.",
+                       file_id=file_id), 400
 
-    base_path, proj_path = _cache_paths(file_id, axis)
-
-    # 1) Cache déjà prêt ?
-    if os.path.isfile(base_path) and os.path.isfile(proj_path):
-        return jsonify(_response_from_caches(base_path, proj_path))
-
-    # 2) Pas de cache -> envoi au worker
-    if q is None:
-        return jsonify(error="rq_unavailable",
-                       detail="Connexion Redis/RQ non dispo côté web."), 503
     try:
-        # IMPORTANT : on référence la fonction par chemin importable (string),
-        # pour que le worker l'importe et exécute (le web n'importe pas shape_metrics).
-        job = q.enqueue(
-            "shape_metrics.stats_json",
-            step_path,          # arg 1
-            axis,               # arg 2
-            OUTPUT_FOLDER,      # kw cache_dir
-            file_id,            # kw file_id
-            job_timeout=1800,   # gros STEP
-            result_ttl=600
-        )
+        # On peut passer OUTPUT_FOLDER comme cache_dir pour bénéficier du cache disque
+        data = compute_stats_json(step_path, axis=axis, cache_dir=OUTPUT_FOLDER, file_id=file_id)
+        return jsonify(data)
     except Exception as e:
-        return jsonify(error="enqueue_fail", detail=str(e)), 500
-
-    # 3) Attente raisonnable du cache (poll disque)
-    wait_s = env_int("STATS_WAIT_S", 20)  # configurable ; défaut 20s
-    deadline = time.time() + wait_s
-    while time.time() < deadline:
-        if os.path.isfile(base_path) and os.path.isfile(proj_path):
-            return jsonify(_response_from_caches(base_path, proj_path))
-        time.sleep(0.4)
-
-    # 4) Bonus : si le job a déjà un résultat dict, on le renvoie
-    try:
-        if job.is_finished and isinstance(job.result, dict):
-            return jsonify(job.result)
-    except Exception:
-        pass
-
-    # 5) Sinon : encore en traitement
-    return jsonify(status="processing", file_id=file_id, axis=axis, retryAfterMs=1500)
+        # Log côté serveur et message propre côté client
+        return jsonify(error="compute_fail", detail=str(e)), 500
 
 # ---------- Diag ----------
 @app.get("/__routes")

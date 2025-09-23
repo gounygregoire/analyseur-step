@@ -28,14 +28,14 @@ from typing import Literal, Tuple, Optional, Dict
 
 import numpy as np
 
-# --- OCC / OCP imports (via pythonocc-core / OCP) ---
-from OCC.Core.STEPControl import STEPControl_Reader
-from OCC.Core.IFSelect import IFSelect_RetDone
-from OCC.Core.BRepGProp import brepgprop_VolumeProperties, brepgprop_SurfaceProperties
-from OCC.Core.GProp import GProp_GProps
-from OCC.Core.Bnd import Bnd_Box
-from OCC.Core.BRepBndLib import brepbndlib_Add
-from OCC.Core.TopoDS import TopoDS_Shape
+# --- OCP imports (CadQuery-OCP) ---
+from OCP.STEPControl import STEPControl_Reader
+from OCP.IFSelect import IFSelect_RetDone
+from OCP.BRepGProp import brepgprop_VolumeProperties
+from OCP.GProp import GProp_GProps
+from OCP.Bnd import Bnd_Box
+from OCP.BRepBndLib import brepbndlib_Add
+from OCP.TopoDS import TopoDS_Shape
 
 # CadQuery pour export STL (utile pour Trimesh si on n'a pas un STL déjà)
 import importlib
