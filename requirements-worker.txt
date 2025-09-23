@@ -16,3 +16,6 @@ ezdxf==1.4.2
 nptyping==2.0.1
 nlopt==2.7.1
 casadi==3.7.0
+# requirements-worker.txt
+Rtree==1.2.0
+# (optionnel) pyembree==0.1.12  # si tu descends trimesh < 4, sinon évite

@@ -82,7 +82,7 @@ def _raster_union_area_mm2(pts2d: np.ndarray, faces: np.ndarray, max_px: int = 2
 def _step_to_stl_subprocess(step_path: str, stl_path: str, tolerance: float = 0.6, timeout: int = 180) -> None:
     """
     Lance un petit script CadQuery dans un sous-processus pour exporter du STL.
-    Si CadQuery/OCC segfault => seul l'enfant meurt, le web reste vivant.
+    Si CadQuery/OCC segfault => seul l'enfant meurt, le web/worker reste vivant.
     """
     code = textwrap.dedent(
         """
@@ -97,7 +97,7 @@ def _step_to_stl_subprocess(step_path: str, stl_path: str, tolerance: float = 0.
         """
     )
     env = os.environ.copy()
-    # Limite le nombre de threads OCC/BLAS si nécessaire
+    # Limiter le nombre de threads si nécessaire
     env.setdefault("OMP_NUM_THREADS", "1")
     env.setdefault("OPENBLAS_NUM_THREADS", "1")
     env.setdefault("MKL_NUM_THREADS", "1")
@@ -155,7 +155,10 @@ def compute_projected_area_cm2(mesh: trimesh.Trimesh, axis: Axis, *, max_px: int
     return float(area_mm2 / 100.0)  # -> cm²
 
 def compute_thickness_minmax_mm(mesh: trimesh.Trimesh, *, samples: int = 2000, seed: int = 42) -> Tuple[float, float]:
-    """Estimation via raycasts (Rtree requis ; fallback numpy si absent)."""
+    """
+    Estimation via raycasts.
+    Essaie d'abord Embree, sinon le backend triangle (nécessite Rtree).
+    """
     rng = random.Random(seed)
     n = len(mesh.vertices)
     if n == 0:
@@ -166,9 +169,12 @@ def compute_thickness_minmax_mm(mesh: trimesh.Trimesh, *, samples: int = 2000, s
     eps = 0.01
     dirs_in = -norms
     origins_in = origins + norms * eps
+
+    # Sélection du moteur de raycast
     try:
         intersector = trimesh.ray.ray_pyembree.RayMeshIntersector(mesh)
     except Exception:
+        # RayTriangle a besoin de Rtree pour des perfs correctes.
         intersector = trimesh.ray.ray_triangle.RayMeshIntersector(mesh)
 
     dists = []
@@ -289,3 +295,20 @@ def stats_json(step_path: str, axis: Axis = "Z",
         "thickness_max_mm": round(s.thickness_max_mm, 4),
         "bbox_mm": [round(x, 4) for x in s.bbox_mm],
     }
+
+# --- util: calcul depuis des BYTES (pour RQ sans FS partagé) -------------
+def stats_json_from_bytes(step_bytes: bytes, axis: Axis = "Z",
+                          cache_dir: Optional[str] = None,
+                          file_id: Optional[str] = None) -> Dict:
+    """
+    Écrit le STEP dans un répertoire temporaire puis appelle stats_json(path).
+    Utile pour envoyer le STEP via Redis/RQ (pas besoin de partager le disque).
+    """
+    tmpdir = tempfile.mkdtemp(prefix="shape_bytes_")
+    try:
+        tmp_step = os.path.join(tmpdir, "part.step")
+        with open(tmp_step, "wb") as f:
+            f.write(step_bytes)
+        return stats_json(tmp_step, axis=axis, cache_dir=cache_dir, file_id=file_id)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
