@@ -55,29 +55,42 @@ def _first_existing(paths):
     return None
 
 # ---------- Redis / RQ ----------
-# Utilise REDIS_URL (ou REDIS_TLS_URL). Laisse un fallback explicite (ton URL).
-REDIS_URL = (
-    os.environ.get("REDIS_URL")
-    or os.environ.get("REDIS_TLS_URL")
-    or "redis://default:gISbsmwsGo5RgJtTA9xX9TQknzx0cvD6@redis-12922.c327.europe-west1-2.gce.redns.redis-cloud.com:12922/0"
-)
-RQ_QUEUE_NAME = os.environ.get("RQ_QUEUE_NAME", "default").strip() or "default"
+import redis
+from rq import Queue
 
-try:
-    _redis = redis.from_url(
-        REDIS_URL,
+def _redis_kwargs_from_url(url: str) -> dict:
+    # Réglages robustes + TLS sans vérification de certificat (Redis Cloud)
+    kw = dict(
         socket_timeout=5,
         socket_connect_timeout=5,
         retry_on_timeout=True,
         health_check_interval=30,
-        ssl=REDIS_URL.startswith("rediss://"),
     )
+    if url.startswith("rediss://"):
+        kw.update(
+            ssl=True,
+            ssl_cert_reqs=None,  # <= désactive la vérif du certificat
+        )
+    return kw
+
+REDIS_URL = (
+    os.environ.get("REDIS_URL")
+    or os.environ.get("REDIS_TLS_URL")
+    or "rediss://default:gISbsmwsGo5RgJtTA9xX9TQknzx0cvD6@redis-12922.c327.europe-west1-2.gce.redns.redis-cloud.com:12922/0"
+)
+RQ_QUEUE_NAME = os.environ.get("RQ_QUEUE_NAME", "default").strip() or "default"
+
+q = None
+_redis = None
+try:
+    _redis = redis.from_url(REDIS_URL, **_redis_kwargs_from_url(REDIS_URL))
     _redis.ping()
     q = Queue(RQ_QUEUE_NAME, connection=_redis, default_timeout=600)
     app.logger.info(f"[RQ] Connected. queue='{RQ_QUEUE_NAME}' url='{REDIS_URL}'")
-except Exception:
+except Exception as e:
     app.logger.exception("[RQ] init failed")
     q = None
+
 
 # ---------- Pages ----------
 @app.get("/")
@@ -295,19 +308,19 @@ def __routes():
 def __rq():
     info = {
         "queue": RQ_QUEUE_NAME,
-        "has_q": bool(q),
         "redis_url_set": bool(REDIS_URL),
+        "has_q": bool(q),
     }
+    # On tente une connexion de sonde même si l'init a échoué
     try:
-        if q:
-            info["queued"] = q.count
-            info["is_connected"] = True
-            _ = _redis.ping()
-        else:
-            info["is_connected"] = False
+        test = redis.from_url(REDIS_URL, **_redis_kwargs_from_url(REDIS_URL))
+        test.ping()
+        info["is_connected"] = True
+        info["probe_ok"] = True
     except Exception as e:
         info["is_connected"] = False
-        info["error"] = str(e)
+        info["probe_ok"] = False
+        info["error"] = repr(e)  # message d'erreur utile
     return jsonify(info)
 
 @app.get("/__diag")
