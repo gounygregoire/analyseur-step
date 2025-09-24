@@ -45,7 +45,9 @@ def _first_existing(paths):
             return p
     return None
 
-# ---------- Redis / RQ : normalisation + connexion (support rediss://) ----------
+# ---------- Redis / RQ : normalisation + connexion (support rediss:// + diag) ----------
+from urllib.parse import urlparse, urlunparse, unquote
+
 def _normalize_redis_url(url: str) -> str:
     """Nettoie l'URL et force TLS (rediss://) pour Redis Cloud si besoin."""
     if not url:
@@ -53,7 +55,7 @@ def _normalize_redis_url(url: str) -> str:
     url = str(url).strip().strip('"').strip("'")
     parsed = urlparse(url)
 
-    # Redis Cloud exige TLS sur le endpoint public → on force rediss://
+    # Redis Cloud exige TLS sur l'endpoint public -> force rediss://
     host = (parsed.hostname or "")
     needs_tls = (
         host.endswith("redis-cloud.com")
@@ -61,9 +63,7 @@ def _normalize_redis_url(url: str) -> str:
         or host.endswith("redns.redis-cloud.com.")
         or (parsed.port == 12922)
     )
-    scheme = parsed.scheme.lower()
-
-    if needs_tls and scheme == "redis":
+    if needs_tls and parsed.scheme.lower() == "redis":
         parsed = parsed._replace(scheme="rediss")
 
     return urlunparse(parsed)
@@ -75,16 +75,43 @@ REDIS_URL = _normalize_redis_url(
 )
 RQ_QUEUE_NAME = os.environ.get("RQ_QUEUE_NAME", "default")
 
-q = None
-_redis = None
+# objets globaux + messages d'erreur visibles dans /__rq
+_redis: redis.Redis | None = None
+q: Queue | None = None
+_redis_err: str | None = None
+_rq_err: str | None = None
+
+# 1) Connexion Redis (TLS si rediss://)
 try:
-    # from_url gère rediss:// tout seul (SSL). Ne PAS passer de param ssl= ici.
-    _redis = redis.from_url(REDIS_URL)
-    # petit ping pour valider la connexion (si ça échoue, on catch et on garde q=None)
-    _redis.ping()
-    q = Queue(RQ_QUEUE_NAME, connection=_redis)
-except Exception:
-    q = None
+    parsed = urlparse(REDIS_URL.strip().strip('"').strip("'"))
+    use_ssl = (parsed.scheme or "").lower().startswith("rediss")
+
+    _redis = redis.Redis(
+        host=parsed.hostname,
+        port=parsed.port or 6379,
+        username=(parsed.username or "default"),
+        password=unquote(parsed.password or ""),
+        db=int((parsed.path or "/0").lstrip("/")),
+        ssl=use_ssl,
+        # on désactive la vérif du certificat pour éviter CERTIFICATE_VERIFY_FAILED
+        # si le CA n'est pas installé côté plateforme
+        ssl_cert_reqs=None,
+        socket_timeout=5,
+    )
+    _redis.ping()  # test immédiat
+except Exception as e:
+    _redis = None
+    _redis_err = repr(e)
+
+# 2) Création de la Queue RQ (séparée pour diagnostiquer finement)
+if _redis is not None:
+    try:
+        q = Queue(RQ_QUEUE_NAME, connection=_redis)
+        _ = q.count  # forcer une commande côté RQ
+    except Exception as e:
+        q = None
+        _rq_err = repr(e)
+
 
 # ---------- Pages ----------
 @app.get("/")
@@ -293,18 +320,19 @@ def __rq():
         "redis_url_set": bool(REDIS_URL),
         "queue": RQ_QUEUE_NAME,
         "has_q": bool(q is not None),
-        "is_connected": False,
+        "is_connected": bool(_redis is not None),
         "probe_ok": False,
+        "redis_error": _redis_err,
+        "rq_error": _rq_err,
     }
     try:
         if _redis is not None:
-            _redis.ping()
-            info["is_connected"] = True
             _redis.setex("rq_probe", 5, "ok")
             info["probe_ok"] = (_redis.get("rq_probe") == b"ok")
     except Exception as e:
-        info["error"] = repr(e)
+        info["rq_probe_error"] = repr(e)
     return jsonify(info)
+
 
 @app.get("/__diag")
 def __diag():
