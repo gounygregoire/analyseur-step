@@ -623,38 +623,35 @@ function renderStats(json){
  * @param {('X'|'Y'|'Z')} axis
  * @param {boolean} soft - si true, on n'alerte pas en cas d'absence de file_id (ex: XKT local)
  */
-async function fetchStats(axis="Z", soft=true){
-  try{
-    if (!currentFileId){
-      if (!soft) console.info("[analyse] aucun file_id (XKT local) → pas d'analyse.");
-      return;
-    }
-    const url = `/api/shape/stats?file_id=${encodeURIComponent(currentFileId)}&axis=${encodeURIComponent(axis)}`;
-    const res = await fetch(url, { method:"GET" });
+async function fetchStats(fileId, axis = 'Z') {
+  try {
+    const res = await fetch(`/api/shape/stats?file_id=${encodeURIComponent(fileId)}&axis=${axis}`, { cache: 'no-store' });
+    const data = await res.json();
 
-    // 202 => job en cours : on repoll automatiquement
-    if (res.status === 202) {
-      const j = await res.json().catch(()=> ({}));
-      const delay = (j && j.retry_in_sec ? j.retry_in_sec : 2) * 1000;
-      setTimeout(()=> fetchStats(axis, true), delay);
+    if (res.status === 200 && data && typeof data.volume_cm3 !== 'undefined') {
+      // ✅ mettre à jour l’UI
+      document.querySelector('[data-metric="volume"]').textContent         = Number(data.volume_cm3).toFixed(3);
+      document.querySelector('[data-metric="tmin"]').textContent           = Number(data.thickness_min_mm).toFixed(3);
+      document.querySelector('[data-metric="tmax"]').textContent           = Number(data.thickness_max_mm).toFixed(3);
+      document.querySelector('[data-metric="projected_area"]').textContent = Number(data.projected_area_cm2).toFixed(3);
       return;
     }
 
-    // Autre erreur => log et stop
-    if (!res.ok){
-      const j = await res.json().catch(()=> ({}));
-      console.warn("[analyse] erreur API", j);
+    // Tant que le job n'est pas fini on repoll
+    if (res.status === 202 && data && (data.status === 'queued' || data.status === 'processing')) {
+      const delayMs = ((data.retry_in_sec ?? 2) * 1000);
+      setTimeout(() => fetchStats(fileId, axis), delayMs);
       return;
     }
 
-    // 200 => on affiche
-    const j = await res.json();
-    renderStats(j);
+    // Cas d'erreur : log utile pour diag
+    console.warn('[analyse] erreur API', res.status, data);
 
-  }catch(err){
-    console.error("[analyse] fetchStats failed", err);
+  } catch (err) {
+    console.error('[analyse] fetchStats failed', err);
   }
 }
+
 
 
 /* Radios X/Y/Z → met à jour uniquement la Surface projetée (les autres valeurs sont indépendantes de l’axe) */
