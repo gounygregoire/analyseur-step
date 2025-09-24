@@ -50,7 +50,7 @@ const clipButtons  = $$(".clipAxis");
 const clipRange    = $("#clipRange");
 const btnShot      = $("#btnShot");
 
-/* ====== Analyse: sélecteurs panneau (app.html Étape A) ====== */
+/* ====== Analyse: sélecteurs panneau ====== */
 const volVal  = $("#volVal");
 const projVal = $("#projVal");
 const tminVal = $("#tminVal");
@@ -58,7 +58,7 @@ const tmaxVal = $("#tmaxVal");
 const axisX   = $("#axisX");
 const axisY   = $("#axisY");
 const axisZ   = $("#axisZ");
-const projAxisRadios = $$('input[name="projAxis"]');  // X / Y / Z  :contentReference[oaicite:3]{index=3}
+const projAxisRadios = $$('input[name="projAxis"]');
 
 /* ---------- viewer + plugins ---------- */
 const viewer = new Viewer({
@@ -126,8 +126,8 @@ let clipPlateWorld = null;
 let clipPlaneDir   = [1,0,0];
 
 /* ====== Analyse: état courant ====== */
-let currentFileId = null;         // défini par /upload  :contentReference[oaicite:4]{index=4}
-let currentAxis   = "Z";          // défaut Z (orthographe majuscules pour l’API)
+let currentFileId = null;         // défini par /upload
+let currentAxis   = "Z";          // défaut Z
 const getSelectedAxis = () => (axisX?.checked && "X") || (axisY?.checked && "Y") || "Z";
 
 const setProgress=(p)=>{ if (progressBar) progressBar.style.width = `${Math.max(0,Math.min(100,p))}%`; };
@@ -281,10 +281,12 @@ async function loadXKT(url, nameHint){
     models.set(id,{model,name:nameHint||id,src:url}); lastModelId=id;
     if (chkEdges?.checked) viewer.scene.edgeMaterial.edgesEnabled=true;
 
-    // === Analyse: déclencher le fetch de stats à Z si on a un file_id ===
+    // === Analyse: déclenche le fetch avec le VRAI file_id et l’axe courant
     try {
-      currentAxis = getSelectedAxis(); // prend l'état des radios (Z par défaut)  :contentReference[oaicite:5]{index=5}
-      if (currentFileId) { fetchStats(currentAxis, /*soft=*/false); }
+      currentAxis = getSelectedAxis(); // Z par défaut si rien de coché
+      if (currentFileId) {
+        fetchStats(currentFileId, currentAxis);
+      }
     } catch (e) { console.warn("[analyse] fetch initial ignoré:", e); }
   });
   model.on("error", e=>{ console.error(e); setProgress(0); alert("Erreur chargement XKT."); });
@@ -308,7 +310,7 @@ async function uploadAndShow(file){
       return;
     }
     const fd=new FormData(); fd.append("file",f);
-    const res=await fetch("/upload",{method:"POST",body:fd}); // renvoie {file_id, xkt_url}  :contentReference[oaicite:6]{index=6}
+    const res=await fetch("/upload",{method:"POST",body:fd}); // renvoie {file_id, xkt_url}
     const j=await res.json();
     if (!res.ok || !j.xkt_url) throw new Error(JSON.stringify(j));
     currentFileId = j.file_id || null; // <— on garde le file_id pour /api/shape/stats
@@ -553,7 +555,7 @@ function setClipAxis(axis){
 
   if (!clipAxis){
     viewer.scene.sectionPlanesEnabled=false;
-    clearCutSvg(); // <— plus de trait bleu
+    clearCutSvg();
     return;
   }
 
@@ -609,54 +611,53 @@ btnShot?.addEventListener("click",()=>{
 });
 
 /* ==================== ANALYSE : fetch & rendu ==================== */
-/** Met à jour le panneau Analyse avec les valeurs JSON reçues (aucune conversion côté front). */
 function renderStats(json){
   if (!json || typeof json !== "object") return;
   if (volVal)  volVal.textContent  = (json.volume_cm3 ?? "—");
   if (projVal) projVal.textContent = (json.projected_area_cm2 ?? "—");
   if (tminVal) tminVal.textContent = (json.thickness_min_mm ?? "—");
   if (tmaxVal) tmaxVal.textContent = (json.thickness_max_mm ?? "—");
+
+  // fallback éventuel si tu utilises des spans data-metric=...
+  const d = (sel, v) => { const el = document.querySelector(sel); if (el) el.textContent = v; };
+  if (typeof json.volume_cm3 !== "undefined")        d('[data-metric="volume"]',         Number(json.volume_cm3).toFixed(3));
+  if (typeof json.thickness_min_mm !== "undefined")  d('[data-metric="tmin"]',           Number(json.thickness_min_mm).toFixed(3));
+  if (typeof json.thickness_max_mm !== "undefined")  d('[data-metric="tmax"]',           Number(json.thickness_max_mm).toFixed(3));
+  if (typeof json.projected_area_cm2 !== "undefined")d('[data-metric="projected_area"]', Number(json.projected_area_cm2).toFixed(3));
+}
+function clearStatsUI(){
+  renderStats({ volume_cm3:"—", projected_area_cm2:"—", thickness_min_mm:"—", thickness_max_mm:"—" });
 }
 
-/**
- * Récupère les stats serveur pour un file_id donné.
- * @param {('X'|'Y'|'Z')} axis
- * @param {boolean} soft - si true, on n'alerte pas en cas d'absence de file_id (ex: XKT local)
- */
+/** Récupère les stats serveur pour un file_id donné + axe. */
 async function fetchStats(fileId, axis = 'Z') {
+  if (!fileId) { clearStatsUI(); return; }
   try {
-    const res = await fetch(`/api/shape/stats?file_id=${encodeURIComponent(fileId)}&axis=${axis}`, { cache: 'no-store' });
+    const res  = await fetch(`/api/shape/stats?file_id=${encodeURIComponent(fileId)}&axis=${axis}`, { cache: 'no-store' });
     const data = await res.json();
 
     if (res.status === 200 && data && typeof data.volume_cm3 !== 'undefined') {
-      // ✅ mettre à jour l’UI
-      document.querySelector('[data-metric="volume"]').textContent         = Number(data.volume_cm3).toFixed(3);
-      document.querySelector('[data-metric="tmin"]').textContent           = Number(data.thickness_min_mm).toFixed(3);
-      document.querySelector('[data-metric="tmax"]').textContent           = Number(data.thickness_max_mm).toFixed(3);
-      document.querySelector('[data-metric="projected_area"]').textContent = Number(data.projected_area_cm2).toFixed(3);
+      renderStats(data);
       return;
     }
 
-    // Tant que le job n'est pas fini on repoll
     if (res.status === 202 && data && (data.status === 'queued' || data.status === 'processing')) {
-      const delayMs = ((data.retry_in_sec ?? 2) * 1000);
-      setTimeout(() => fetchStats(fileId, axis), delayMs);
+      setTimeout(() => fetchStats(fileId, axis), ((data.retry_in_sec ?? 2) * 1000));
       return;
     }
 
-    // Cas d'erreur : log utile pour diag
+    // cas d'erreur : mettre des tirets et log
+    clearStatsUI();
     console.warn('[analyse] erreur API', res.status, data);
 
   } catch (err) {
+    clearStatsUI();
     console.error('[analyse] fetchStats failed', err);
   }
 }
 
-
-
-/* Radios X/Y/Z → met à jour uniquement la Surface projetée (les autres valeurs sont indépendantes de l’axe) */
+/* Radios X/Y/Z → recalcul de la surface projetée (et renvoie file_id + axe corrects) */
 projAxisRadios.forEach(r => r?.addEventListener("change", ()=>{
-  const ax = getSelectedAxis();
-  currentAxis = ax;
-  fetchStats(ax);
+  currentAxis = getSelectedAxis();
+  if (currentFileId) fetchStats(currentFileId, currentAxis);
 }));
