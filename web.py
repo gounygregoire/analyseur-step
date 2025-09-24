@@ -234,18 +234,21 @@ def _response_from_caches(base_path: str, proj_path: str) -> dict:
         "thickness_max_mm": round(float(j1.get("thickness_max_mm") or 0.0), 4),
         "bbox_mm": [round(float(x), 4) for x in bbox_mm],
     }
+def _redis_key(file_id: str, axis: str) -> str:
+    return f"shape_stats:{file_id}:{axis}"
+
 
 # ---------- API analyse : lecture cache / enqueue worker ----------
 @app.get("/api/shape/stats")
 def api_shape_stats():
     """
     1) Si caches présents -> 200 JSON
-    2) Sinon si RQ dispo :
-         - vérifie si job existe
-         - sinon enqueue une job
-         - renvoie 202 JSON (le front repoll)
-    3) Sinon -> 503 (pas de RQ)
+    2) Sinon si SYNC_METRICS=1 -> calcule en synchrone (dépannage)
+    3) Sinon RQ :
+       - si job en cours -> 202
+       - si job fini -> lit caches, sinon Redis -> sinon job.result -> 202
     """
+    import json as _json
     file_id = request.args.get("file_id")
     axis = (request.args.get("axis") or "Z").upper()
     if not file_id:
@@ -261,20 +264,30 @@ def api_shape_stats():
 
     base_cache, proj_cache = _cache_paths(file_id, axis)
 
-    # 1) Caches disponibles => 200
+    # 1) Caches locaux (si jamais présents)
     if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
         try:
             return jsonify(_response_from_caches(base_cache, proj_cache))
         except Exception as e:
             return jsonify(error="cache_read_fail", detail=str(e)), 500
 
-    # 3) Pas de RQ dispo => 503 (évite 502 HTML)
+    # 2) Fallback synchrone (optionnel) si tu veux tester sans le worker
+    if os.environ.get("SYNC_METRICS") == "1":
+        from shape_metrics import stats_json as compute_stats_json
+        try:
+            data = compute_stats_json(step_path, axis=axis, cache_dir=OUTPUT_FOLDER, file_id=file_id)
+            return jsonify(data)
+        except Exception as e:
+            return jsonify(error="compute_fail", detail=str(e)), 500
+
+    # 3) RQ requis à partir d'ici
     if q is None or _redis is None:
         return jsonify(error="rq_unavailable",
                        detail="REDIS_URL/RQ_QUEUE_NAME non configurés côté web ou connexion échouée."), 503
 
-    # 2) Enqueue / status
     job_id = f"shape_stats:{file_id}:{axis}"
+
+    # Tente de récupérer un job existant
     try:
         job = Job.fetch(job_id, connection=_redis)
     except Exception:
@@ -284,23 +297,39 @@ def api_shape_stats():
         st = (job.get_status() or "").lower()
         if st in ("queued", "started", "deferred"):
             return jsonify(status="processing", job_id=job_id, retry_in_sec=2), 202
+
         if st == "finished":
+            # a) si des caches sont finalement apparus côté web (rare)
             if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
                 return jsonify(_response_from_caches(base_cache, proj_cache))
-            return jsonify(status="processing", job_id=job_id, retry_in_sec=2), 202
+
+            # b) sinon, lit le blob JSON écrit par le worker dans Redis
+            try:
+                raw = _redis.get(_redis_key(file_id, axis))
+                if raw:
+                    return jsonify(_json.loads(raw))
+            except Exception:
+                pass
+
+            # c) sinon, tente job.result (RQ stocke le retour de la fonction)
+            try:
+                res = job.result
+                if isinstance(res, dict) and "volume_cm3" in res:
+                    return jsonify(res)
+            except Exception:
+                pass
+
+            # Si rien encore accessible, redemander
+            return jsonify(status="processing", job_id=job_id, retry_in_sec=1), 202
+
         if st == "failed":
             return jsonify(error="compute_fail", detail="job failed", job_id=job_id), 500
 
-    # pas de job => on en crée une
+    # Pas de job -> on en crée une
     try:
         q.enqueue(
             "tasks.compute_and_cache_stats",
-            kwargs={
-                "file_id": file_id,
-                "axis": axis,
-                "step_path": step_path,
-                "cache_dir": OUTPUT_FOLDER
-            },
+            kwargs={"file_id": file_id, "axis": axis, "step_path": step_path, "cache_dir": OUTPUT_FOLDER},
             job_id=job_id,
             result_ttl=3600, ttl=3600, failure_ttl=3600
         )
