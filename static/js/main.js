@@ -631,16 +631,31 @@ async function fetchStats(axis="Z", soft=true){
     }
     const url = `/api/shape/stats?file_id=${encodeURIComponent(currentFileId)}&axis=${encodeURIComponent(axis)}`;
     const res = await fetch(url, { method:"GET" });
-    const j   = await res.json();
+
+    // 202 => job en cours : on repoll automatiquement
+    if (res.status === 202) {
+      const j = await res.json().catch(()=> ({}));
+      const delay = (j && j.retry_in_sec ? j.retry_in_sec : 2) * 1000;
+      setTimeout(()=> fetchStats(axis, true), delay);
+      return;
+    }
+
+    // Autre erreur => log et stop
     if (!res.ok){
+      const j = await res.json().catch(()=> ({}));
       console.warn("[analyse] erreur API", j);
       return;
     }
+
+    // 200 => on affiche
+    const j = await res.json();
     renderStats(j);
+
   }catch(err){
     console.error("[analyse] fetchStats failed", err);
   }
 }
+
 
 /* Radios X/Y/Z → met à jour uniquement la Surface projetée (les autres valeurs sont indépendantes de l’axe) */
 projAxisRadios.forEach(r => r?.addEventListener("change", ()=>{

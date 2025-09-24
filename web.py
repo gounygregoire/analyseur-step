@@ -1,35 +1,28 @@
 # web.py
-import os
-import uuid
-import pathlib
-import time
-import json
-import requests
-
-# RQ / Redis (analyse déléguée au worker)
-import redis
-from rq import Queue
-
+import os, uuid, pathlib, json, time, requests
 from flask import Flask, request, jsonify, send_from_directory, abort, render_template
 from flask_cors import CORS
 from dotenv import load_dotenv
-load_dotenv()  # charge .env si présent
+load_dotenv()
 
-# ---------- App & CORS ----------
+# ==== RQ / Redis (connexion légère, SANS calcul local) ====
+import redis
+from rq import Queue
+from rq.job import Job
+
 app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
 
 # ---------- Config ----------
 def env_int(name: str, default: int) -> int:
     v = os.environ.get(name)
-    if v is None or v == "":
-        return default
+    if not v: return default
     try:
         return int(float(str(v).strip().strip('"').strip("'")))
     except Exception:
         return default
 
-MAX_UPLOAD_MB = env_int("MAX_UPLOAD_MB", 50)  # 50 Mo par défaut
+MAX_UPLOAD_MB = env_int("MAX_UPLOAD_MB", 50)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
 
 UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
@@ -37,67 +30,38 @@ OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-# URL du converter (env > fallback hardcodé demandé)
 CONVERTER_URL = os.environ.get("CONVERTER_URL", "https://cadlytics-converter.onrender.com").rstrip("/")
 
-# Extensions acceptées (le converter gère .stl et .step/.stp)
 ALLOWED_EXTS = {".stl", ".step", ".stp"}
-def _ext(name: str) -> str:
-    return pathlib.Path(name.lower()).suffix
-def _allowed(name: str) -> bool:
-    return _ext(name) in ALLOWED_EXTS
+def _ext(name: str) -> str: return pathlib.Path(name.lower()).suffix
+def _allowed(name: str) -> bool: return _ext(name) in ALLOWED_EXTS
 
-# ---------- Helpers ----------
 def _first_existing(paths):
     for p in paths:
         if os.path.exists(p):
             return p
     return None
 
-# ---------- Redis / RQ ----------
-import redis
-from rq import Queue
-
-def _redis_kwargs_from_url(url: str) -> dict:
-    # Réglages robustes + TLS sans vérification de certificat (Redis Cloud)
-    kw = dict(
-        socket_timeout=5,
-        socket_connect_timeout=5,
-        retry_on_timeout=True,
-        health_check_interval=30,
-    )
-    if url.startswith("rediss://"):
-        kw.update(
-            ssl=True,
-            ssl_cert_reqs=None,  # <= désactive la vérif du certificat
-        )
-    return kw
-
+# ---------- Redis / RQ : connexion (support rediss://) ----------
 REDIS_URL = (
     os.environ.get("REDIS_URL")
     or os.environ.get("REDIS_TLS_URL")
-    or "rediss://default:gISbsmwsGo5RgJtTA9xX9TQknzx0cvD6@redis-12922.c327.europe-west1-2.gce.redns.redis-cloud.com:12922/0"
+    or "redis://localhost:6379/0"
 )
-RQ_QUEUE_NAME = os.environ.get("RQ_QUEUE_NAME", "default").strip() or "default"
+RQ_QUEUE_NAME = os.environ.get("RQ_QUEUE_NAME", "default")
 
 q = None
 _redis = None
 try:
-    _redis = redis.from_url(REDIS_URL, **_redis_kwargs_from_url(REDIS_URL))
-    _redis.ping()
-    q = Queue(RQ_QUEUE_NAME, connection=_redis, default_timeout=600)
-    app.logger.info(f"[RQ] Connected. queue='{RQ_QUEUE_NAME}' url='{REDIS_URL}'")
-except Exception as e:
-    app.logger.exception("[RQ] init failed")
+    # from_url gère rediss:// tout seul (SSL)
+    _redis = redis.from_url(REDIS_URL)
+    q = Queue(RQ_QUEUE_NAME, connection=_redis)
+except Exception:
     q = None
-
 
 # ---------- Pages ----------
 @app.get("/")
 def landing():
-    """
-    Cherche un index dans templates/ puis dans static/
-    """
     candidates = [
         os.path.join(app.root_path, "templates", "index.html"),
         os.path.join(app.root_path, "templates", "home.html"),
@@ -117,7 +81,6 @@ def landing():
 
 @app.get("/app")
 def app_view():
-    # Ta page viewer (templates/app.html)
     return render_template("app.html", max_upload_mb=MAX_UPLOAD_MB)
 
 @app.get("/favicon.ico")
@@ -128,7 +91,7 @@ def favicon():
 def healthz():
     return "ok"
 
-# ---------- API : upload -> forward au converter ----------
+# ---------- API : upload -> converter XKT ----------
 @app.post("/upload")
 def upload():
     f = request.files.get("file")
@@ -141,34 +104,29 @@ def upload():
     in_path  = os.path.join(UPLOAD_FOLDER, f"{file_id}{_ext(f.filename) or '.step'}")
     out_xkt  = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
 
-    # On sauvegarde localement (utile pour debug et pour rejouer si besoin)
     try:
         f.save(in_path)
     except Exception as e:
         return jsonify(error="save_fail", detail=str(e)), 500
 
-    # Envoi au converter et récupération du XKT
     try:
         with open(in_path, "rb") as fh:
             resp = requests.post(
                 f"{CONVERTER_URL}/convert",
                 files={"file": (f.filename, fh, f.mimetype or "application/octet-stream")},
-                timeout=600,  # la conversion peut être longue
+                timeout=600,
             )
         if resp.status_code != 200:
             detail = resp.text
-            try:
-                detail = resp.json()
-            except Exception:
-                pass
+            try: detail = resp.json()
+            except Exception: pass
             return jsonify(error="convert_fail", detail=detail, status_code=resp.status_code), 500
 
-        # Sauvegarde le XKT renvoyé
         with open(out_xkt, "wb") as out:
             out.write(resp.content)
 
         if not os.path.isfile(out_xkt):
-            return jsonify(error="no_xkt", detail=f".xkt introuvable après conversion: {out_xkt}"), 500
+            return jsonify(error="no_xkt", detail=f".xkt introuvable: {out_xkt}"), 500
 
         return jsonify(file_id=file_id, status="ready", xkt_url=f"/xkt/{file_id}.xkt")
 
@@ -195,14 +153,12 @@ def serve_xkt(fname):
 
 # ---------- Helpers analyse / caches ----------
 def _step_path_for(file_id: str) -> str | None:
-    # L'upload a sauvé le fichier sous file_id + extension d'origine ; on vise ici STEP/STP.
-    candidates = [
+    return _first_existing([
         os.path.join(UPLOAD_FOLDER, f"{file_id}.step"),
         os.path.join(UPLOAD_FOLDER, f"{file_id}.stp"),
-    ]
-    return _first_existing(candidates)
+    ])
 
-def _cache_paths(file_id: str, axis: str) -> tuple[str, str]:
+def _cache_paths(file_id: str, axis: str):
     base = os.path.join(OUTPUT_FOLDER, f"{file_id}.stats.json")
     proj = os.path.join(OUTPUT_FOLDER, f"{file_id}.proj.{axis}.json")
     return base, proj
@@ -218,20 +174,24 @@ def _response_from_caches(base_path: str, proj_path: str) -> dict:
     bbox_mm = j1.get("bbox_mm") or [0.0, 0.0, 0.0]
     return {
         "units": "mm_internal",
-        "volume_cm3": round(vol_mm3 / 1000.0, 4),  # 1 cm³ = 1000 mm³
+        "volume_cm3": round(vol_mm3 / 1000.0, 4),
         "projected_area_cm2": round(float(j2.get("projected_area_cm2") or 0.0), 4),
         "thickness_min_mm": round(float(j1.get("thickness_min_mm") or 0.0), 4),
         "thickness_max_mm": round(float(j1.get("thickness_max_mm") or 0.0), 4),
         "bbox_mm": [round(float(x), 4) for x in bbox_mm],
     }
 
-# ---------- API : analyse shape via worker RQ (worker-only) ----------
-from importlib import import_module
-
-from shape_metrics import stats_json as compute_stats_json
-
+# ---------- API analyse : lecture cache / enqueue worker ----------
 @app.get("/api/shape/stats")
 def api_shape_stats():
+    """
+    1) Si caches présents -> 200 JSON
+    2) Sinon si RQ dispo :
+         - vérifie si job existe
+         - sinon enqueue une job
+         - renvoie 202 JSON (le front repoll)
+    3) Sinon -> 503 (pas de RQ)
+    """
     file_id = request.args.get("file_id")
     axis = (request.args.get("axis") or "Z").upper()
     if not file_id:
@@ -239,25 +199,61 @@ def api_shape_stats():
     if axis not in ("X", "Y", "Z"):
         axis = "Z"
 
-    # Localise le STEP d'origine
-    candidates = [
-        os.path.join(UPLOAD_FOLDER, f"{file_id}.step"),
-        os.path.join(UPLOAD_FOLDER, f"{file_id}.stp"),
-    ]
-    step_path = next((p for p in candidates if os.path.isfile(p)), None)
+    step_path = _step_path_for(file_id)
     if not step_path:
         return jsonify(error="not_step_found",
                        detail="Analyse disponible uniquement pour un import STEP/STP.",
                        file_id=file_id), 400
 
-    # 1) Si RQ est dispo et connecté, tu peux (optionnel) l'utiliser.
-    # 2) SINON -> fallback synchrone immédiat (plus jamais de 503 côté front).
-    try:
-        data = compute_stats_json(step_path, axis=axis, cache_dir=OUTPUT_FOLDER, file_id=file_id)
-        return jsonify(data)
-    except Exception as e:
-        return jsonify(error="compute_fail", detail=str(e)), 500
+    base_cache, proj_cache = _cache_paths(file_id, axis)
 
+    # 1) Caches disponibles => 200
+    if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
+        try:
+            return jsonify(_response_from_caches(base_cache, proj_cache))
+        except Exception as e:
+            return jsonify(error="cache_read_fail", detail=str(e)), 500
+
+    # 3) Pas de RQ dispo => 503 (évite 502)
+    if q is None or _redis is None:
+        return jsonify(error="rq_unavailable",
+                       detail="REDIS_URL/RQ_QUEUE_NAME non configurés côté web ou connexion échouée."), 503
+
+    # 2) Enqueue / status
+    job_id = f"shape_stats:{file_id}:{axis}"
+    try:
+        job = Job.fetch(job_id, connection=_redis)
+    except Exception:
+        job = None
+
+    if job:
+        st = (job.get_status() or "").lower()
+        if st in ("queued", "started", "deferred"):
+            return jsonify(status="processing", job_id=job_id, retry_in_sec=2), 202
+        if st == "finished":
+            # le worker a dû écrire les caches -> on relit
+            if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
+                return jsonify(_response_from_caches(base_cache, proj_cache))
+            return jsonify(status="processing", job_id=job_id, retry_in_sec=2), 202
+        if st == "failed":
+            return jsonify(error="compute_fail", detail="job failed", job_id=job_id), 500
+
+    # pas de job => on en crée une
+    try:
+        q.enqueue(
+            "tasks.compute_and_cache_stats",
+            kwargs={
+                "file_id": file_id,
+                "axis": axis,
+                "step_path": step_path,
+                "cache_dir": OUTPUT_FOLDER
+            },
+            job_id=job_id,
+            result_ttl=3600, ttl=3600, failure_ttl=3600
+        )
+        return jsonify(status="queued", job_id=job_id, retry_in_sec=2), 202
+    except Exception as e:
+        return jsonify(error="enqueue_fail", detail=str(e)), 500
 
 # ---------- Diag ----------
 @app.get("/__routes")
@@ -268,20 +264,21 @@ def __routes():
 @app.get("/__rq")
 def __rq():
     info = {
-        "queue": RQ_QUEUE_NAME,
         "redis_url_set": bool(REDIS_URL),
-        "has_q": bool(q),
+        "queue": RQ_QUEUE_NAME,
+        "has_q": bool(q is not None),
+        "is_connected": False,
+        "probe_ok": False,
     }
-    # On tente une connexion de sonde même si l'init a échoué
     try:
-        test = redis.from_url(REDIS_URL, **_redis_kwargs_from_url(REDIS_URL))
-        test.ping()
-        info["is_connected"] = True
-        info["probe_ok"] = True
+        if _redis is not None:
+            _redis.ping()
+            info["is_connected"] = True
+            # petite sonde : set/get
+            _redis.setex("rq_probe", 5, "ok")
+            info["probe_ok"] = (_redis.get("rq_probe") == b"ok")
     except Exception as e:
-        info["is_connected"] = False
-        info["probe_ok"] = False
-        info["error"] = repr(e)  # message d'erreur utile
+        info["error"] = repr(e)
     return jsonify(info)
 
 @app.get("/__diag")
@@ -296,28 +293,9 @@ def __diag():
         "rq_queue": RQ_QUEUE_NAME,
         "rq_connected": bool(q is not None),
     }
-    # ping rapide du converter (optionnel)
     try:
         r = requests.get(f"{CONVERTER_URL}/healthz", timeout=2)
         info["converter_health"] = {"ok": (r.status_code == 200), "code": r.status_code}
     except Exception as e:
         info["converter_health"] = {"ok": False, "error": str(e)}
     return jsonify(info)
-
-@app.get("/__versions")
-def __versions():
-    vers = {}
-    try:
-        import redis
-        vers["redis"] = getattr(redis, "__version__", "unknown")
-    except Exception as e:
-        vers["redis"] = f"error:{e}"
-    try:
-        import rq
-        vers["rq"] = getattr(rq, "__version__", "unknown")
-    except Exception as e:
-        vers["rq"] = f"error:{e}"
-    return jsonify(vers)
-
-
-# --- fin web.py ---
