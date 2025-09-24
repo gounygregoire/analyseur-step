@@ -1,8 +1,10 @@
 # web.py
-import os, uuid, pathlib, json, time, requests
+import os, uuid, pathlib, json, requests
 from flask import Flask, request, jsonify, send_from_directory, abort, render_template
 from flask_cors import CORS
 from dotenv import load_dotenv
+from urllib.parse import urlparse, urlunparse
+
 load_dotenv()
 
 # ==== RQ / Redis (connexion légère, SANS calcul local) ====
@@ -16,7 +18,8 @@ CORS(app)
 # ---------- Config ----------
 def env_int(name: str, default: int) -> int:
     v = os.environ.get(name)
-    if not v: return default
+    if not v:
+        return default
     try:
         return int(float(str(v).strip().strip('"').strip("'")))
     except Exception:
@@ -42,8 +45,30 @@ def _first_existing(paths):
             return p
     return None
 
-# ---------- Redis / RQ : connexion (support rediss://) ----------
-REDIS_URL = (
+# ---------- Redis / RQ : normalisation + connexion (support rediss://) ----------
+def _normalize_redis_url(url: str) -> str:
+    """Nettoie l'URL et force TLS (rediss://) pour Redis Cloud si besoin."""
+    if not url:
+        return url
+    url = str(url).strip().strip('"').strip("'")
+    parsed = urlparse(url)
+
+    # Redis Cloud exige TLS sur le endpoint public → on force rediss://
+    host = (parsed.hostname or "")
+    needs_tls = (
+        host.endswith("redis-cloud.com")
+        or host.endswith("redns.redis-cloud.com")
+        or host.endswith("redns.redis-cloud.com.")
+        or (parsed.port == 12922)
+    )
+    scheme = parsed.scheme.lower()
+
+    if needs_tls and scheme == "redis":
+        parsed = parsed._replace(scheme="rediss")
+
+    return urlunparse(parsed)
+
+REDIS_URL = _normalize_redis_url(
     os.environ.get("REDIS_URL")
     or os.environ.get("REDIS_TLS_URL")
     or "redis://localhost:6379/0"
@@ -53,8 +78,10 @@ RQ_QUEUE_NAME = os.environ.get("RQ_QUEUE_NAME", "default")
 q = None
 _redis = None
 try:
-    # from_url gère rediss:// tout seul (SSL)
+    # from_url gère rediss:// tout seul (SSL). Ne PAS passer de param ssl= ici.
     _redis = redis.from_url(REDIS_URL)
+    # petit ping pour valider la connexion (si ça échoue, on catch et on garde q=None)
+    _redis.ping()
     q = Queue(RQ_QUEUE_NAME, connection=_redis)
 except Exception:
     q = None
@@ -214,7 +241,7 @@ def api_shape_stats():
         except Exception as e:
             return jsonify(error="cache_read_fail", detail=str(e)), 500
 
-    # 3) Pas de RQ dispo => 503 (évite 502)
+    # 3) Pas de RQ dispo => 503 (évite 502 HTML)
     if q is None or _redis is None:
         return jsonify(error="rq_unavailable",
                        detail="REDIS_URL/RQ_QUEUE_NAME non configurés côté web ou connexion échouée."), 503
@@ -231,7 +258,6 @@ def api_shape_stats():
         if st in ("queued", "started", "deferred"):
             return jsonify(status="processing", job_id=job_id, retry_in_sec=2), 202
         if st == "finished":
-            # le worker a dû écrire les caches -> on relit
             if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
                 return jsonify(_response_from_caches(base_cache, proj_cache))
             return jsonify(status="processing", job_id=job_id, retry_in_sec=2), 202
@@ -274,7 +300,6 @@ def __rq():
         if _redis is not None:
             _redis.ping()
             info["is_connected"] = True
-            # petite sonde : set/get
             _redis.setex("rq_probe", 5, "ok")
             info["probe_ok"] = (_redis.get("rq_probe") == b"ok")
     except Exception as e:
