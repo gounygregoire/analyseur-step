@@ -228,15 +228,10 @@ def _response_from_caches(base_path: str, proj_path: str) -> dict:
 # ---------- API : analyse shape via worker RQ (worker-only) ----------
 from importlib import import_module
 
+from shape_metrics import stats_json as compute_stats_json
+
 @app.get("/api/shape/stats")
 def api_shape_stats():
-    """
-    Enqueue le calcul dans le worker via Redis/RQ :
-    - lit le STEP sauvegardé lors de /upload
-    - envoie les BYTES au worker (stats_json_from_bytes)
-    - attend au plus 90s, sinon renvoie {"status":"processing"}
-    Toujours du JSON (jamais de page HTML), donc plus d'erreur "Unexpected token <".
-    """
     file_id = request.args.get("file_id")
     axis = (request.args.get("axis") or "Z").upper()
     if not file_id:
@@ -244,59 +239,25 @@ def api_shape_stats():
     if axis not in ("X", "Y", "Z"):
         axis = "Z"
 
-    step_path = _step_path_for(file_id)
+    # Localise le STEP d'origine
+    candidates = [
+        os.path.join(UPLOAD_FOLDER, f"{file_id}.step"),
+        os.path.join(UPLOAD_FOLDER, f"{file_id}.stp"),
+    ]
+    step_path = next((p for p in candidates if os.path.isfile(p)), None)
     if not step_path:
-        return jsonify(
-            error="not_step_found",
-            detail="Analyse disponible uniquement pour un import STEP/STP.",
-            file_id=file_id,
-        ), 400
+        return jsonify(error="not_step_found",
+                       detail="Analyse disponible uniquement pour un import STEP/STP.",
+                       file_id=file_id), 400
 
-    if not q:
-        return jsonify(
-            error="rq_unavailable",
-            detail="REDIS_URL/RQ_QUEUE_NAME non configurés côté web ou connexion échouée.",
-        ), 503
-
-    # Import léger de la fonction util du module de calcul (pas de CadQuery dans le web)
+    # 1) Si RQ est dispo et connecté, tu peux (optionnel) l'utiliser.
+    # 2) SINON -> fallback synchrone immédiat (plus jamais de 503 côté front).
     try:
-        sm = import_module("shape_metrics")
-        stats_from_bytes = getattr(sm, "stats_json_from_bytes")
+        data = compute_stats_json(step_path, axis=axis, cache_dir=OUTPUT_FOLDER, file_id=file_id)
+        return jsonify(data)
     except Exception as e:
-        return jsonify(error="import_fail", detail=f"shape_metrics import: {e}"), 500
+        return jsonify(error="compute_fail", detail=str(e)), 500
 
-    # Enqueue + attente raisonnable
-    try:
-        with open(step_path, "rb") as fh:
-            blob = fh.read()
-
-        job = q.enqueue(
-            stats_from_bytes,
-            kwargs={
-                "step_bytes": blob,
-                "axis": axis,
-                "cache_dir": OUTPUT_FOLDER,
-                "file_id": file_id,
-            },
-            job_timeout=600,
-            result_ttl=3600,
-            failure_ttl=7200,
-        )
-
-        deadline = time.time() + 90.0
-        while time.time() < deadline:
-            job.refresh()
-            st = job.get_status()
-            if st == "finished" and job.result:
-                return jsonify(job.result)
-            if st == "failed":
-                return jsonify(error="compute_fail", detail=str(job.exc_info)), 500
-            time.sleep(0.5)
-
-        return jsonify(status="processing", job_id=job.get_id())
-
-    except Exception as e:
-        return jsonify(error="enqueue_fail", detail=str(e)), 500
 
 # ---------- Diag ----------
 @app.get("/__routes")
@@ -342,5 +303,21 @@ def __diag():
     except Exception as e:
         info["converter_health"] = {"ok": False, "error": str(e)}
     return jsonify(info)
+
+@app.get("/__versions")
+def __versions():
+    vers = {}
+    try:
+        import redis
+        vers["redis"] = getattr(redis, "__version__", "unknown")
+    except Exception as e:
+        vers["redis"] = f"error:{e}"
+    try:
+        import rq
+        vers["rq"] = getattr(rq, "__version__", "unknown")
+    except Exception as e:
+        vers["rq"] = f"error:{e}"
+    return jsonify(vers)
+
 
 # --- fin web.py ---
