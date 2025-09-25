@@ -159,5 +159,18 @@
 
   <!-- IMPORTANT : main.js est un module car il contient des "import" -->
   <script type="module" src="/static/js/main.js"></script>
+
+  <script type="module">
+  import {
+    Viewer, XKTLoaderPlugin, FastNavPlugin, NavCubePlugin,
+    SectionPlanesPlugin, AnnotationsPlugin,
+    DistanceMeasurementsPlugin, DistanceMeasurementsMouseControl
+  } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
+
+  console.log("module ok"); // test minimal
+</script>
+<script type="module" src="/static/js/ping.js"></script>
+
+
 </body>
 </html>
