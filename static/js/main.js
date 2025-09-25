@@ -290,7 +290,7 @@ async function loadXKT(url, nameHint){
   return id;
 }
 
-// Remplace TOUTE la fonction uploadAndShow par ceci
+// Remplace TOUTE la fonction uploadAndShow par ceci (avec un LOG en plus)
 async function uploadAndShow(file) {
   const f = file || fileInput?.files?.[0];
   if (!f) { alert("Choisis un fichier .step/.stp/.stl (ou .xkt)"); return; }
@@ -308,6 +308,7 @@ async function uploadAndShow(file) {
         for (const [, i] of models) { try { i.model.destroy(); } catch {} }
         models.clear(); selectedIds.clear();
       }
+      console.log("[viewer] loading XKT (local):", fileURL);
       await loadXKT(fileURL, f.name);
       return;
     }
@@ -325,7 +326,6 @@ async function uploadAndShow(file) {
       throw new Error(`upload failed (${res.status})`);
     }
 
-    // INFO utile en console si S3 n'est pas OK
     if (j.s3_uploaded === false) {
       console.warn("[upload] S3 non disponible -> l’analyse asynchrone ne partira pas tant que S3 n’est pas corrigé.");
     }
@@ -339,6 +339,7 @@ async function uploadAndShow(file) {
       models.clear(); selectedIds.clear();
     }
 
+    console.log("[viewer] loading XKT:", xktUrl); // <= AJOUT
     await loadXKT(xktUrl, f.name); // loadXKT déclenchera fetchStats si currentFileId est défini
   } catch (e) {
     console.error(e);

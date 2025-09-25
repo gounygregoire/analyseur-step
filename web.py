@@ -1,10 +1,13 @@
 # web.py
-import os, uuid, pathlib, json, requests
+import os, uuid, pathlib, json, requests, re, glob, tempfile
+from urllib.parse import urlparse, urlunparse, unquote
+
 from flask import Flask, request, jsonify, send_from_directory, abort, render_template
 from flask_cors import CORS
 from dotenv import load_dotenv
-from urllib.parse import urlparse, urlunparse
-from s3io import put_file
+
+# S3 helpers (optionnels, non bloquants)
+from s3io import put_file  # utilisé dans /upload
 
 load_dotenv()
 
@@ -47,8 +50,6 @@ def _first_existing(paths):
     return None
 
 # ---------- Redis / RQ : normalisation + connexion (support rediss:// + diag) ----------
-from urllib.parse import urlparse, urlunparse, unquote
-
 def _normalize_redis_url(url: str) -> str:
     """Nettoie l'URL et force TLS (rediss://) pour Redis Cloud si besoin."""
     if not url:
@@ -170,7 +171,6 @@ def upload():
     s3_uploaded = False
     s3_key = f"uploads/{file_id}{ext}"
     try:
-        from s3io import put_file
         ok = put_file(in_path, s3_key)
         s3_uploaded = bool(ok)
         if not s3_uploaded:
@@ -376,7 +376,6 @@ def __diag():
 
 @app.get("/__s3_ping")
 def __s3_ping():
-    import tempfile, uuid, os
     key = f"__ping/{uuid.uuid4().hex}.txt"
     tmp = None
     try:
@@ -419,7 +418,25 @@ def __s3_ping():
         
 @app.get("/__xkts")
 def __xkts():
-    import glob, os
     files = sorted(glob.glob(os.path.join(OUTPUT_FOLDER, "*.xkt")))
     return jsonify(count=len(files), files=[os.path.basename(p) for p in files])
 
+# -- Route pour servir les XKT générés localement --
+@app.get("/xkt/<file_id>.xkt")
+def serve_xkt(file_id: str):
+    # sécurité minimale : UUID v4 (simplifié) + .xkt
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", file_id):
+        return abort(400)
+    path = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+    if not os.path.isfile(path):
+        return abort(404)
+    # IMPORTANT : renvoyer du binaire brut
+    return send_from_directory(
+        OUTPUT_FOLDER,
+        f"{file_id}.xkt",
+        mimetype="application/octet-stream",
+        as_attachment=False,
+        max_age=0,
+        etag=False,
+        conditional=False,
+    )
