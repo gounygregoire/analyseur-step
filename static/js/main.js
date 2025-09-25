@@ -315,6 +315,10 @@ async function uploadAndShow(file){
     await loadXKT(xktUrl, f.name);
   }catch(e){ console.error(e); alert("Erreur conversion/chargement (voir Console)."); }
   finally{ if (btnVisualiser){ btnVisualiser.disabled=false; btnVisualiser.textContent="VISUALISER"; } }
+  if (j.s3_uploaded === false) {
+  console.warn("Upload S3 non effectué : l’analyse (volume/épaisseur/surface) ne pourra pas démarrer tant que S3 n’est pas OK.");
+}
+
 }
 
 /* ---------- FICHIERS UI (fiabilisé) ---------- */

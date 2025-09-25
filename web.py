@@ -160,21 +160,27 @@ def upload():
     in_path  = os.path.join(UPLOAD_FOLDER, f"{file_id}{ext}")
     out_xkt  = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
 
+    # 1) sauvegarde locale
     try:
         f.save(in_path)
     except Exception as e:
         return jsonify(error="save_fail", detail=str(e)), 500
 
-    # 👇 AJOUT : on pousse l’original STEP/STP dans S3 pour le worker
+    # 2) tentative d’upload S3 (NON BLOQUANT)
+    s3_uploaded = False
+    s3_key = f"uploads/{file_id}{ext}"
     try:
-        ok = put_file(in_path, f"uploads/{file_id}{ext}")
-        if not ok:
-            return jsonify(error="s3_upload_fail", detail="Impossible de pousser le STEP sur S3"), 500
+        from s3io import put_file
+        ok = put_file(in_path, s3_key)
+        s3_uploaded = bool(ok)
+        if not s3_uploaded:
+            app.logger.warning("S3 put_file returned False for %s", s3_key)
     except Exception as e:
-        return jsonify(error="s3_upload_exception", detail=str(e)), 500
+        # IMPORTANT : on ne bloque pas la conversion pour ça
+        app.logger.exception("S3 upload failed for %s: %s", s3_key, e)
 
+    # 3) conversion XKT via le converter
     try:
-        # Conversion XKT via le converter (comme avant)
         with open(in_path, "rb") as fh:
             resp = requests.post(
                 f"{CONVERTER_URL}/convert",
@@ -183,8 +189,10 @@ def upload():
             )
         if resp.status_code != 200:
             detail = resp.text
-            try: detail = resp.json()
-            except Exception: pass
+            try:
+                detail = resp.json()
+            except Exception:
+                pass
             return jsonify(error="convert_fail", detail=detail, status_code=resp.status_code), 500
 
         with open(out_xkt, "wb") as out:
@@ -193,14 +201,19 @@ def upload():
         if not os.path.isfile(out_xkt):
             return jsonify(error="no_xkt", detail=f".xkt introuvable: {out_xkt}"), 500
 
-        # On renvoie le file_id qui servira à l’analyse (le worker tirera le STEP depuis S3)
-        return jsonify(file_id=file_id, status="ready", xkt_url=f"/xkt/{file_id}.xkt")
+        # On renvoie aussi s3_uploaded pour que le front sache si l’analyse asynchrone pourra partir
+        return jsonify(
+            file_id=file_id,
+            status="ready",
+            xkt_url=f"/xkt/{file_id}.xkt",
+            s3_uploaded=s3_uploaded
+        )
 
     except requests.Timeout:
         return jsonify(error="convert_timeout", detail="Converter timeout (>=600s)"), 504
     except Exception as e:
         return jsonify(error="convert_fail", detail=str(e)), 500
-    
+
 # ---------- Helpers analyse / caches ----------
 def _step_path_for(file_id: str) -> str | None:
     return _first_existing([
@@ -360,3 +373,46 @@ def __diag():
     except Exception as e:
         info["converter_health"] = {"ok": False, "error": str(e)}
     return jsonify(info)
+
+@app.get("/__s3_ping")
+def __s3_ping():
+    import tempfile, uuid, os
+    key = f"__ping/{uuid.uuid4().hex}.txt"
+    tmp = None
+    try:
+        from s3io import put_file, get_file
+        # write temp file
+        fd, tmp = tempfile.mkstemp(prefix="s3ping_", suffix=".txt")
+        os.write(fd, b"ok")
+        os.close(fd)
+
+        # put then get
+        put_ok = put_file(tmp, key, content_type="text/plain")
+        if not put_ok:
+            return jsonify(ok=False, step="put_file returned False", key=key), 500
+
+        # download to another temp path
+        fd2, tmp2 = tempfile.mkstemp(prefix="s3ping_dl_", suffix=".txt")
+        os.close(fd2)
+        get_ok = get_file(key, tmp2)
+        if not get_ok:
+            return jsonify(ok=False, step="get_file returned False", key=key), 500
+
+        with open(tmp2, "rb") as fh:
+            data = fh.read()
+
+        try:
+            os.remove(tmp2)
+        except Exception:
+            pass
+
+        return jsonify(ok=(data == b"ok"), key=key)
+
+    except Exception as e:
+        return jsonify(ok=False, error=str(e), key=key), 500
+    finally:
+        try:
+            if tmp and os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
