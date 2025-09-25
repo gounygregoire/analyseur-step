@@ -1,663 +1,440 @@
-// /static/js/main.js
-import {
-  Viewer,
-  XKTLoaderPlugin,
-  FastNavPlugin,
-  NavCubePlugin,
-  SectionPlanesPlugin,
-  AnnotationsPlugin,
-  DistanceMeasurementsPlugin,
-  DistanceMeasurementsMouseControl
-} from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
-
-/* ---------- utils DOM ---------- */
-const $  = (s) => document.querySelector(s);
-const $$ = (s) => Array.from(document.querySelectorAll(s));
-
-/* ---------- sélecteurs ---------- */
-const fileInput     = $("#fileInput");
-const btnChoose     = $("#btnChoose");
-const btnVisualiser = $("#btnVisualiser");
-const chkAdditive   = $("#chkAdditive");
-const fileNameLbl   = $("#fileName");
-
-const viewerShell     = $("#viewerShell");
-const viewerContainer = $("#viewerContainer");
-const overlayHost     = $("#overlayHost");
-
-const btnFit   = $("#btnFit");
-const btnProj  = $("#btnProj");
-const chkEdges = $("#chkEdges");
-const chkXray  = $("#chkXray");
-const chkGhost = $("#chkGhost");
-const chkTheme = $("#chkTheme");
-
-const btnIsolate   = $("#btnIsolate");
-const btnHide      = $("#btnHide");
-const btnShowOnly  = $("#btnShowOnly");
-const btnClearSel  = $("#btnClearSel");
-const opacityRange = $("#opacityRange");
-
-const searchInput  = $("#searchInput");
-const btnSearch    = $("#btnSearch");
-const resultsBox   = $("#results");
-const propsPanel   = $("#propsPanel");
-
-const progressBar  = $("#progressBar");
-const btnMeasure   = $("#btnMeasure");
-const btnAnnot     = $("#btnAnnot"); // caché
-const clipButtons  = $$(".clipAxis");
-const clipRange    = $("#clipRange");
-const btnShot      = $("#btnShot");
-
-/* ====== Analyse: sélecteurs panneau ====== */
-const volVal  = $("#volVal");
-const projVal = $("#projVal");
-const tminVal = $("#tminVal");
-const tmaxVal = $("#tmaxVal");
-const axisX   = $("#axisX");
-const axisY   = $("#axisY");
-const axisZ   = $("#axisZ");
-const projAxisRadios = $$('input[name="projAxis"]');
-
-/* ---------- viewer + plugins ---------- */
-const viewer = new Viewer({
-  canvasId: "xeokit-canvas",
-  dtxEnabled: true,
-  transparent: true
-});
-new FastNavPlugin(viewer, { flyToDuration: 0.9, hideEdges:false, autoHideEdges:false });
-
-const xktLoader = new XKTLoaderPlugin(viewer, {
-  dracoDecompressorPath:
-    "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/resources/draco/"
-});
-const sections = new SectionPlanesPlugin(viewer);
-
-// On garde l’instance, mais on n’utilise plus le plugin pour la plaque
-new AnnotationsPlugin(viewer, { container: overlayHost });
-
-/* ========= Canvas & overlay sizing ========= */
-const canvasEl = document.getElementById("xeokit-canvas");
-function resizeCanvasAndOverlay() {
-  const w = Math.max(1, viewerContainer.clientWidth);
-  const h = Math.max(1, viewerContainer.clientHeight);
-  const dpr = 1;
-
-  viewerContainer.style.position = "relative";
-  overlayHost.style.position = "absolute";
-  overlayHost.style.left = "0";
-  overlayHost.style.top  = "0";
-
-  canvasEl.style.width  = w + "px";
-  canvasEl.style.height = h + "px";
-  overlayHost.style.width  = w + "px";
-  overlayHost.style.height = h + "px";
-
-  canvasEl.width  = Math.floor(w * dpr);
-  canvasEl.height = Math.floor(h * dpr);
-
-  viewer.resize?.();
-  viewer.scene?.setDirty?.(true);
-}
-new ResizeObserver(resizeCanvasAndOverlay).observe(viewerContainer);
-addEventListener("resize", resizeCanvasAndOverlay, { passive: true });
-resizeCanvasAndOverlay();
-
-/* ---------- NavCube ---------- */
-(()=>{
-  const cube=document.createElement("canvas"); cube.width=cube.height=96;
-  Object.assign(cube.style,{position:"absolute",left:"12px",top:"12px",zIndex:"5",
-    borderRadius:"12px",boxShadow:"0 6px 18px rgba(0,0,0,.25)",background:"rgba(255,255,255,.06)",backdropFilter:"blur(2px)"});
-  viewerContainer.appendChild(cube);
-  new NavCubePlugin(viewer,{canvasElement:cube,cameraFlyToDuration:0.9});
-})();
-
-/* ---------- état ---------- */
-const models = new Map();
-let lastModelId = null;
-let selectedIds = new Set();
-let appMode = "select";
-let clipAxis = null;
-let clipPlane = null;
-
-// partagées avec la plaque (SVG)
-let clipPlateWorld = null;
-let clipPlaneDir   = [1,0,0];
-
-/* ====== Analyse: état courant ====== */
-let currentFileId = null;         // défini par /upload
-let currentAxis   = "Z";          // défaut Z
-const getSelectedAxis = () => (axisX?.checked && "X") || (axisY?.checked && "Y") || "Z";
-
-const setProgress=(p)=>{ if (progressBar) progressBar.style.width = `${Math.max(0,Math.min(100,p))}%`; };
-const allIds=()=> viewer.scene?.objectIds ?? [];
-const setSome=(ids,prop,val)=> ids.forEach(id=>{const o=viewer.scene.objects[id]; if(o) o[prop]=val;});
-const setAll=(prop,val)=> allIds().forEach(id=>{const o=viewer.scene.objects[id]; if(o) o[prop]=val;});
-const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); if (propsPanel) propsPanel.innerHTML=""; };
-
-/* ---------- Mesures (affichage "mm" SANS conversion) ---------- */
-const prettyNumber = (v) => {
-  const abs = Math.abs(v);
-  if (abs < 10)   return v.toFixed(2);
-  if (abs < 100)  return v.toFixed(1);
-  return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
-};
-// Xeokit fournit des mètres. On garde la valeur et on affiche "mm".
-const formatMM = (meters) => `${prettyNumber(meters)} mm`;
-
-const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
-  container: overlayHost,
-  labelsShown: true,
-  labelFormat: formatMM
-});
-
-const distanceCtrl = new DistanceMeasurementsMouseControl(distancePlugin, { snapping: true });
-if ("snapDistance" in distanceCtrl) distanceCtrl.snapDistance = 0.001;
-if ("snapRadius"   in distanceCtrl) distanceCtrl.snapRadius   = 3;
-if ("snapToEdges"  in distanceCtrl) distanceCtrl.snapToEdges  = false;
-if ("snapToVertices" in distanceCtrl) distanceCtrl.snapToVertices = true;
-if ("snapping" in distanceCtrl) {
-  window.addEventListener("keydown", (e)=>{ if (e.altKey) distanceCtrl.snapping = false; }, {passive:true});
-  window.addEventListener("keyup",   (e)=>{ if (!e.altKey) distanceCtrl.snapping = true;  }, {passive:true});
-}
-
-/* ---- Forçage des labels : remplacer "m" par "mm" (sans *1000) ---- */
-function textMetersToMM(txt) {
-  return txt.replace(/(~?\s*)(-?\d+(?:[.,]\d+)?)\s*m(?!m)/gi, (_all, pre, num) => {
-    const val = parseFloat(String(num).replace(',', '.'));
-    if (isNaN(val)) return _all;
-    const pretty = prettyNumber(val); // même valeur, juste formatée
-    return `${pre}${pretty} mm`;
-  });
-}
-function convertNodeTextToMM(root) {
-  if (!root || root.nodeType !== 1) return;
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
-  const toEdit = [];
-  while (walker.nextNode()) toEdit.push(walker.currentNode);
-  for (const t of toEdit) {
-    const newText = textMetersToMM(t.nodeValue);
-    if (newText !== t.nodeValue) t.nodeValue = newText;
-  }
-}
-const mmObserver = new MutationObserver((mutations) => {
-  for (const m of mutations) {
-    m.addedNodes?.forEach((n) => { if (n.nodeType === 1) convertNodeTextToMM(n); });
-    if (m.type === "characterData" && m.target?.parentElement) convertNodeTextToMM(m.target.parentElement);
-  }
-});
-mmObserver.observe(overlayHost, { childList: true, subtree: true, characterData: true });
-convertNodeTextToMM(overlayHost);
-viewer.scene.on("tick", ()=> convertNodeTextToMM(overlayHost));
-
-/* ====== Panneau "Mesures" ====== */
-const leftCard = document.querySelector(".grid > .card:first-child")
-               || document.querySelector(".sidebar")
-               || document.querySelector("#leftPane")
-               || document.body;
-
-const measPane = document.createElement("div");
-measPane.className = "pane";
-measPane.innerHTML = `
-  <h4 style="margin:6px 0 10px">Mesures</h4>
-  <div id="measureList" style="display:flex;flex-direction:column;gap:6px"></div>
-  <div class="row mini" style="margin-top:6px; gap:8px">
-    <button id="btnHideAll" class="btn btn-outline mini">Tout cacher/montrer</button>
-    <button id="btnClearMeas" class="btn btn-danger mini">Tout supprimer</button>
-  </div>`;
-leftCard.appendChild(measPane);
-
-const measureListEl = measPane.querySelector("#measureList");
-const btnHideAll    = measPane.querySelector("#btnHideAll");
-const btnClearMeas  = measPane.querySelector("#btnClearMeas");
-
-const measMap  = new Map();
-let measCounter = 0;
-const getMeasId = (m)=> m.id || m._id || (m.__uiId ?? (m.__uiId = "m"+Date.now().toString(36)+Math.random().toString(36).slice(2,6)));
-
-function addMeasurementRow(m){
-  const id = getMeasId(m);
-  if (!measMap.has(id)) { measCounter += 1; measMap.set(id, { m, name: `Mesure ${measCounter}` }); }
-  const { name } = measMap.get(id);
-  if (measureListEl.querySelector(`[data-mid="${id}"]`)) return;
-
-  const row = document.createElement("div");
-  row.className = "row mini";
-  row.dataset.mid = id;
-  row.style.justifyContent = "space-between";
-  row.innerHTML = `
-    <span class="measure-name" style="font-size:12px">${name}</span>
-    <span>
-      <button class="btn btn-outline mini" data-act="toggle">Cacher</button>
-      <button class="btn btn-outline mini btn-danger" data-act="del">Suppr.</button>
-    </span>`;
-  measureListEl.appendChild(row);
-
-  const btnT = row.querySelector('[data-act="toggle"]');
-  const btnD = row.querySelector('[data-act="del"]');
-  btnT.addEventListener("click", ()=>{ m.visible = !m.visible; btnT.textContent = m.visible ? "Cacher" : "Montrer"; });
-  btnD.addEventListener("click", ()=>{ try { m.destroy ? m.destroy() : distancePlugin.destroyMeasurement?.(m.id); } catch {} measMap.delete(id); row.remove(); });
-}
-["measurementCreated","newMeasurement","measurementAdded"].forEach(evt=>{
-  distancePlugin.on?.(evt, (ev)=>{
-    const meas = ev.measurement || ev;
-    addMeasurementRow(meas);
-    setTimeout(()=> convertNodeTextToMM(overlayHost), 0);
-  });
-});
-distancePlugin.on?.("measurementDestroyed", (ev)=>{
-  const m = ev.measurement || ev;
-  const id = getMeasId(m);
-  measureListEl.querySelector(`[data-mid="${id}"]`)?.remove();
-  measMap.delete(id);
-});
-let allHidden = false;
-btnHideAll.addEventListener("click", ()=>{
-  allHidden = !allHidden;
-  for (const {m} of measMap.values()) m.visible = !allHidden;
-});
-btnClearMeas.addEventListener("click", ()=>{
-  if (typeof distancePlugin.clear === "function") distancePlugin.clear();
-  else if (typeof distancePlugin.destroyAll === "function") distancePlugin.destroyAll();
-  measureListEl.innerHTML = ""; measMap.clear(); measCounter = 0; allHidden = false;
-});
-function deactivateMeasure() { if (distanceCtrl.active) distanceCtrl.deactivate(); btnMeasure?.classList.remove("btn-primary"); }
-function activateMeasure()   { distanceCtrl.activate();  btnMeasure?.classList.add("btn-primary"); }
-function toggleMeasure()     { if (distanceCtrl.active) deactivateMeasure(); else activateMeasure(); }
-btnMeasure?.addEventListener("click", toggleMeasure);
-window.addEventListener("keydown", (e)=>{ if (e.key==="Escape" && distanceCtrl.active) deactivateMeasure(); }, {passive:true});
-if (btnAnnot) { btnAnnot.style.display = "none"; btnAnnot.disabled = true; }
-
-/* ---------- chargement XKT ---------- */
-async function loadXKT(url, nameHint){
-  const id="m"+Date.now();
-  const model=xktLoader.load({id, src:url, edges:!!chkEdges?.checked});
-  setProgress(8);
-  model.on("progress", p=> setProgress(8+Math.round(p*84)));
-  model.on("loaded", ()=>{
-    setProgress(100); setTimeout(()=>setProgress(0), 350);
-    viewer.cameraFlight.flyTo(model);
-    models.set(id,{model,name:nameHint||id,src:url}); lastModelId=id;
-    if (chkEdges?.checked) viewer.scene.edgeMaterial.edgesEnabled=true;
-
-    // === Analyse: déclenche le fetch avec le VRAI file_id et l’axe courant
-    try {
-      currentAxis = getSelectedAxis(); // Z par défaut si rien de coché
-      if (currentFileId) {
-        fetchStats(currentFileId, currentAxis);
-      }
-    } catch (e) { console.warn("[analyse] fetch initial ignoré:", e); }
-  });
-  model.on("error", e=>{ console.error(e); setProgress(0); alert("Erreur chargement XKT."); });
-  return id;
-}
-
-/* ---------- Upload / Conversion ---------- */
-async function uploadAndShow(file){
-  const f = file || fileInput?.files?.[0];
-  if (!f){ alert("Choisis un fichier .step/.stp/.stl (ou .xkt)"); return; }
-  if (fileNameLbl) fileNameLbl.textContent = f.name;
-  if (btnVisualiser){ btnVisualiser.disabled=true; btnVisualiser.textContent="Conversion…"; }
-  setProgress(12);
-  try{
-    if (/\.(xkt)$/i.test(f.name)) {
-      // Chargement direct d'un XKT local : pas d'API d'analyse (pas de file_id)
-      currentFileId = null;
-      const fileURL = URL.createObjectURL(f);
-      if (!chkAdditive?.checked){ for (const [,i] of models){ try{i.model.destroy();}catch{} } models.clear(); selectedIds.clear(); }
-      await loadXKT(fileURL, f.name);
-      return;
-    }
-    const fd=new FormData(); fd.append("file",f);
-    const res=await fetch("/upload",{method:"POST",body:fd}); // renvoie {file_id, xkt_url}
-    const j=await res.json();
-    if (!res.ok || !j.xkt_url) throw new Error(JSON.stringify(j));
-    currentFileId = j.file_id || null; // <— on garde le file_id pour /api/shape/stats
-    const xktUrl=new URL(j.xkt_url, location.origin).toString();
-    if (!chkAdditive?.checked){ for (const [,i] of models){ try{i.model.destroy();}catch{} } models.clear(); selectedIds.clear(); }
-    await loadXKT(xktUrl, f.name);
-  }catch(e){ console.error(e); alert("Erreur conversion/chargement (voir Console)."); }
-  finally{ if (btnVisualiser){ btnVisualiser.disabled=false; btnVisualiser.textContent="VISUALISER"; } }
-}
-
-/* ---------- FICHIERS UI (fiabilisé) ---------- */
-function openFileChooser(){
-  try{
-    if (fileInput && !fileInput.disabled){
-      if (typeof fileInput.showPicker === "function") {
-        fileInput.showPicker();
-      } else {
-        fileInput.click();
-      }
-      return;
-    }
-    const tmp = document.createElement("input");
-    tmp.type = "file";
-    tmp.accept = ".step,.stp,.stl,.xkt,model/step,model/stl,application/octet-stream";
-    tmp.style.position = "fixed";
-    tmp.style.left = "-9999px";
-    document.body.appendChild(tmp);
-    tmp.addEventListener("change", ()=>{ if (tmp.files?.[0]) uploadAndShow(tmp.files[0]); tmp.remove(); });
-    tmp.click();
-  }catch(err){
-    console.error(err);
-    alert("Impossible d’ouvrir le sélecteur de fichiers (popup bloquée ?).");
-  }
-}
-btnChoose?.setAttribute("type","button");
-btnChoose?.setAttribute("tabindex","0");
-btnChoose?.addEventListener("click",  (e)=>{ e.preventDefault(); openFileChooser(); });
-btnChoose?.addEventListener("keydown",(e)=>{ if (e.key==="Enter"||e.key===" ") { e.preventDefault(); openFileChooser(); } });
-
-fileInput?.addEventListener("change",()=>{
-  const f=fileInput.files?.[0];
-  if (f && fileNameLbl) fileNameLbl.textContent=f.name;
-  if (f) uploadAndShow(f);
-});
-btnVisualiser?.addEventListener("click",(e)=>{ e.preventDefault(); uploadAndShow(); });
-
-["dragenter","dragover"].forEach(ev=>{
-  viewerContainer?.addEventListener(ev,(e)=>{ e.preventDefault(); e.dataTransfer.dropEffect="copy"; }, false);
-});
-viewerContainer?.addEventListener("drop",(e)=>{
-  e.preventDefault();
-  const f = e.dataTransfer?.files?.[0];
-  if (f) uploadAndShow(f);
-});
-
-/* ---------- nav & rendu ---------- */
-btnFit?.addEventListener("click", ()=> viewer.cameraFlight.flyTo(viewer.scene));
-let proj="perspective";
-btnProj?.addEventListener("click",()=>{ proj = proj==="perspective" ? "ortho" : "perspective"; viewer.camera.projection=proj; btnProj.textContent = proj==="perspective" ? "PERSPECTIVE" : "ORTHOGRAPHIQUE"; });
-chkEdges?.addEventListener("change",()=> viewer.scene.edgeMaterial.edgesEnabled=!!chkEdges.checked);
-
-/* ---------- Sélection simple ---------- */
-viewer.scene.input.on("mouseclicked", (coords)=>{
-  if (distanceCtrl.active) return;
-  const hit = viewer.scene.pick({ canvasPos: coords, pickSurface: true });
-  if (!hit || !hit.entity) { clearSelection(); return; }
-  const id = hit.entity.id;
-  setSome(allIds(),"highlighted",false);
-  selectedIds = new Set([id]);
-  setSome([id],"highlighted",true);
-  showProps(hit.entity.metaObject || { id });
-});
-
-/* ---------- Recherche ---------- */
-btnSearch?.addEventListener("click",()=>{
-  const q=(searchInput?.value||"").toLowerCase().trim();
-  if (!resultsBox) return; resultsBox.innerHTML="";
-  if (!q) return;
-  const found=[];
-  allIds().forEach(id=>{
-    const o=viewer.scene.objects[id]; const m=o?.metaObject||{};
-    const hay=[id,m.type,m.name,m.ifcType,m.displayName].join(" ").toLowerCase();
-    if (hay.includes(q)) found.push({id,meta:m});
-  });
-  if (!found.length){ resultsBox.textContent="Aucun résultat"; return; }
-  found.slice(0,200).forEach(({id,meta})=>{
-    const div=document.createElement("div");
-    div.className="row mini"; div.style.justifyContent="space-between";
-    div.innerHTML=`<span style="font-size:12px">${meta?.name||meta?.displayName||meta?.type||id}</span>
-      <button class="btn btn-outline mini" data-id="${id}">Voir</button>`;
-    resultsBox.appendChild(div);
-  });
-  resultsBox.querySelectorAll("button").forEach(b=>{
-    b.addEventListener("click",()=>{ const id=b.dataset.id; const obj=viewer.scene.objects[id];
-      if (obj){ viewer.cameraFlight.flyTo(obj); setSome([id],"highlighted",true); }
-    });
-  });
-});
-
-/* ---------- Iso/cacher/montrer ---------- */
-btnIsolate ?.addEventListener("click",()=>{ if (!selectedIds.size) return; setAll("visible",false); setSome([...selectedIds],"visible",true); });
-btnHide    ?.addEventListener("click",()=>{ if (!selectedIds.size) return; setSome([...selectedIds],"visible",false); });
-btnShowOnly?.addEventListener("click",()=>{ if (!selectedIds.size) return; setAll("visible",false); setSome([...selectedIds],"visible",true); });
-btnClearSel?.addEventListener("click",()=>{ setAll("visible",true); setSome(allIds(),"highlighted",false); clearSelection(); });
-
-/* ---------- Propriétés ---------- */
-function showProps(meta){
-  if (!propsPanel) return;
-  propsPanel.innerHTML = "";
-  if (!meta) return;
-  const add=(k,v)=>{ const a=document.createElement("div"); a.textContent=k;
-                     const b=document.createElement("div"); b.textContent=String(v);
-                     propsPanel.append(a,b); };
-  const base={ id:meta.id, type:meta.type||meta.ifcType||"", name:meta.name||meta.displayName||"" };
-  Object.entries(base).forEach(([k,v])=> (v!==undefined && v!=="") && add(k,v));
-  const p=meta.properties||meta.props;
-  if (p && typeof p==="object")
-    Object.entries(p).forEach(([k,v])=> add(k, typeof v==="object"? JSON.stringify(v): v));
-}
-
-/* ====================== PLAQUE DE COUPE : quad SVG ====================== */
-const cross = (a,b)=> [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
-const dot   = (a,b)=> a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
-const len   = (v)=> Math.hypot(v[0],v[1],v[2]) || 1;
-const norm  = (v)=>{ const L=len(v); return [v[0]/L,v[1]/L,v[2]/L]; };
-const add3  = (a,b)=> [a[0]+b[0],a[1]+b[1],a[2]+b[2]];
-const mul3  = (v,s)=> [v[0]*s, v[1]*s, v[2]*s];
-
-function worldToOverlayXY(world){
-  const cam = viewer.camera;
-  const mV  = cam.viewMatrix;
-  const mP  = cam.projMatrix || cam.projectionMatrix;
-  if (!mV || !mP || !overlayHost) return null;
-
-  const x=world[0], y=world[1], z=world[2];
-  const vx = mV[0]*x + mV[4]*y + mV[8]*z  + mV[12];
-  const vy = mV[1]*x + mV[5]*y + mV[9]*z  + mV[13];
-  const vz = mV[2]*x + mV[6]*y + mV[10]*z + mV[14];
-  const vw = mV[3]*x + mV[7]*y + mV[11]*z + mV[15];
-
-  const cx = mP[0]*vx + mP[4]*vy + mP[8]*vz  + mP[12]*vw;
-  const cy = mP[1]*vx + mP[5]*vy + mP[9]*vz  + mP[13]*vw;
-  const cw = mP[3]*vx + mP[7]*vy + mP[11]*vz + mP[15]*vw;
-  if (!cw) return null;
-
-  const nx = cx / cw, ny = cy / cw;
-  return {
-    x: (nx * 0.5 + 0.5) * overlayHost.clientWidth,
-    y: (1 - (ny * 0.5 + 0.5)) * overlayHost.clientHeight
-  };
-}
-
-/* --- overlay SVG (quad + axe) --- */
-let cutSvg = null, cutPoly = null, cutAxisLine = null;
-function ensureCutSvg(){
-  if (cutSvg) return;
-  cutSvg = document.createElementNS("http://www.w3.org/2000/svg","svg");
-  cutSvg.setAttribute("width","100%");
-  cutSvg.setAttribute("height","100%");
-  Object.assign(cutSvg.style, { position:"absolute", inset:"0", pointerEvents:"none", zIndex:"10" });
-  overlayHost.appendChild(cutSvg);
-
-  cutPoly = document.createElementNS("http://www.w3.org/2000/svg","polygon");
-  cutPoly.setAttribute("fill","rgba(80,140,255,.20)");
-  cutPoly.setAttribute("stroke","rgba(80,140,255,.45)");
-  cutPoly.setAttribute("stroke-width","1");
-  cutPoly.style.filter = "drop-shadow(0 6px 14px rgba(20,60,140,.18))";
-  cutSvg.appendChild(cutPoly);
-
-  cutAxisLine = document.createElementNS("http://www.w3.org/2000/svg","line");
-  cutAxisLine.setAttribute("stroke","rgba(80,140,255,.65)");
-  cutAxisLine.setAttribute("stroke-width","2");
-  cutAxisLine.setAttribute("stroke-linecap","round");
-  cutSvg.appendChild(cutAxisLine);
-}
-// supprime totalement l’overlay pour éviter tout “trait” résiduel
-function clearCutSvg(){
-  try { cutSvg?.remove(); } catch {}
-  cutSvg = null; cutPoly = null; cutAxisLine = null;
-}
-
-function updateCutPlaneVisual(){
-  if (!clipPlateWorld) { if (cutPoly) cutPoly.setAttribute("points",""); return; }
-  ensureCutSvg();
-
-  const n = norm(clipPlaneDir);
-  let up = [0,1,0];
-  if (Math.abs(dot(up,n)) > 0.95) up = [1,0,0];
-  const u = norm(cross(up, n));
-  const v = norm(cross(n, u));
-
-  const aabb = viewer.scene?.aabb || [0,0,0,0,0,0];
-  const corners = [
-    [aabb[0],aabb[1],aabb[2]],[aabb[3],aabb[1],aabb[2]],[aabb[0],aabb[4],aabb[2]],[aabb[3],aabb[4],aabb[2]],
-    [aabb[0],aabb[1],aabb[5]],[aabb[3],aabb[1],aabb[5]],[aabb[0],aabb[4],aabb[5]],[aabb[3],aabb[4],aabb[5]]
-  ];
-  let minU=+Infinity,maxU=-Infinity,minV=+Infinity,maxV=-Infinity;
-  for (const p of corners){
-    const r = [p[0]-clipPlateWorld[0], p[1]-clipPlateWorld[1], p[2]-clipPlateWorld[2]];
-    const su = dot(r,u), sv = dot(r,v);
-    if (su<minU) minU=su; if (su>maxU) maxU=su;
-    if (sv<minV) minV=sv; if (sv>maxV) maxV=sv;
-  }
-  const SCALE = 0.92;
-  const halfU = Math.max((maxU-minU)*0.5*SCALE, 1e-3);
-  const halfV = Math.max((maxV-minV)*0.5*SCALE, 1e-3);
-
-  const P0 = add3( add3(clipPlateWorld, mul3(u,-halfU)), mul3(v,-halfV) );
-  const P1 = add3( add3(clipPlateWorld, mul3(u, halfU)), mul3(v,-halfV) );
-  const P2 = add3( add3(clipPlateWorld, mul3(u, halfU)), mul3(v, halfV) );
-  const P3 = add3( add3(clipPlateWorld, mul3(u,-halfU)), mul3(v, halfV) );
-
-  const q0 = worldToOverlayXY(P0),
-        q1 = worldToOverlayXY(P1),
-        q2 = worldToOverlayXY(P2),
-        q3 = worldToOverlayXY(P3);
-  if (!q0 || !q1 || !q2 || !q3){ cutPoly.setAttribute("points",""); return; }
-  cutPoly.setAttribute("points", `${q0.x},${q0.y} ${q1.x},${q1.y} ${q2.x},${q2.y} ${q3.x},${q3.y}`);
-
-  const Au = worldToOverlayXY(add3(clipPlateWorld, mul3(u, halfU*0.55)));
-  const Bu = worldToOverlayXY(add3(clipPlateWorld, mul3(u,-halfU*0.55)));
-  if (Au && Bu){
-    cutAxisLine.setAttribute("x1", Au.x); cutAxisLine.setAttribute("y1", Au.y);
-    cutAxisLine.setAttribute("x2", Bu.x); cutAxisLine.setAttribute("y2", Bu.y);
-    cutAxisLine.style.display = "block";
-  } else {
-    cutAxisLine.style.display = "none";
-  }
-}
-
-/* ---------- COUPE ---------- */
-function setClipAxis(axis){
-  const same = (clipAxis === axis);
-  clipAxis = same ? null : axis;
-
-  clipButtons.forEach(b => b.classList.toggle("btn-primary", !same && b.dataset.axis === clipAxis));
-
-  if (clipPlane){ try{ clipPlane.destroy(); }catch{} clipPlane=null; }
-  try { sections.clear?.(); } catch {}
-
-  clipPlateWorld = null;
-
-  if (!clipAxis){
-    viewer.scene.sectionPlanesEnabled=false;
-    clearCutSvg();
-    return;
-  }
-
-  const aabb   = viewer.scene?.aabb || [0,0,0, 0,0,0];
-  const center = [(aabb[0]+aabb[3])/2,(aabb[1]+aabb[4])/2,(aabb[2]+aabb[5])/2];
-  clipPlaneDir  = (clipAxis==="x") ? [1,0,0] : (clipAxis==="y") ? [0,1,0] : [0,0,1];
-
-  clipPlane = sections.createSectionPlane({ id:"cut", pos:center, dir: clipPlaneDir });
-  viewer.scene.sectionPlanesEnabled = true;
-
-  ensureCutSvg();
-  clipPlateWorld = center.slice();
-  clipRange.value = "0";
-  updateCutPlaneVisual();
-}
-clipButtons.forEach(b => b.addEventListener("click", () => setClipAxis(b.dataset.axis)));
-
-clipRange?.addEventListener("input", ()=>{
-  if (!clipPlane || !clipAxis) return;
-  const k=parseFloat(clipRange.value)||0;
-
-  const aabb=viewer.scene?.aabb || [0,0,0, 0,0,0];
-  const center=[(aabb[0]+aabb[3])/2,(aabb[1]+aabb[4])/2,(aabb[2]+aabb[5])/2];
-  const half=[(aabb[3]-aabb[0])/2,(aabb[4]-aabb[1])/2,(aabb[5]-aabb[2])/2];
-  const shift=(clipAxis==="x"?half[0]:clipAxis==="y"?half[1]:half[2])*(k/100);
-  const pos=center.slice();
-  if (clipAxis==="x") pos[0]+=shift; else if (clipAxis==="y") pos[1]+=shift; else pos[2]+=shift;
-
-  clipPlane.pos = pos;
-  clipPlateWorld = pos;
-  updateCutPlaneVisual();
-});
-
-viewer.scene.on("tick", ()=>{
-  if (chkEdges?.checked && !viewer.scene.edgeMaterial.edgesEnabled) {
-    viewer.scene.edgeMaterial.edgesEnabled = true;
-  }
-  updateCutPlaneVisual();
-});
-
-/* ---------- Switchs d’affichage ---------- */
-chkXray ?.addEventListener("change",()=>{ setAll("xrayed", !!chkXray.checked);  setSome([...selectedIds],"xrayed",false); });
-chkGhost?.addEventListener("change",()=>{ setAll("ghosted",!!chkGhost.checked); setSome([...selectedIds],"ghosted",false); });
-chkTheme?.addEventListener("change",()=> viewerShell?.classList.toggle("dark",!!chkTheme.checked));
-opacityRange?.addEventListener("input",()=> setAll("opacity", parseFloat(opacityRange.value)||1));
-
-/* ---------- Screenshot ---------- */
-btnShot?.addEventListener("click",()=>{
-  try{
-    const dataURL=canvasEl.toDataURL("image/png");
-    const a=document.createElement("a"); a.href=dataURL; a.download="cadlytics_view.png"; a.click();
-  }catch(e){ console.error(e); alert("Capture impossible."); }
-});
-
-/* ==================== ANALYSE : fetch & rendu ==================== */
-function renderStats(json){
-  if (!json || typeof json !== "object") return;
-  if (volVal)  volVal.textContent  = (json.volume_cm3 ?? "—");
-  if (projVal) projVal.textContent = (json.projected_area_cm2 ?? "—");
-  if (tminVal) tminVal.textContent = (json.thickness_min_mm ?? "—");
-  if (tmaxVal) tmaxVal.textContent = (json.thickness_max_mm ?? "—");
-
-  // fallback éventuel si tu utilises des spans data-metric=...
-  const d = (sel, v) => { const el = document.querySelector(sel); if (el) el.textContent = v; };
-  if (typeof json.volume_cm3 !== "undefined")        d('[data-metric="volume"]',         Number(json.volume_cm3).toFixed(3));
-  if (typeof json.thickness_min_mm !== "undefined")  d('[data-metric="tmin"]',           Number(json.thickness_min_mm).toFixed(3));
-  if (typeof json.thickness_max_mm !== "undefined")  d('[data-metric="tmax"]',           Number(json.thickness_max_mm).toFixed(3));
-  if (typeof json.projected_area_cm2 !== "undefined")d('[data-metric="projected_area"]', Number(json.projected_area_cm2).toFixed(3));
-}
-function clearStatsUI(){
-  renderStats({ volume_cm3:"—", projected_area_cm2:"—", thickness_min_mm:"—", thickness_max_mm:"—" });
-}
-
-/** Récupère les stats serveur pour un file_id donné + axe. */
-async function fetchStats(fileId, axis = 'Z') {
-  if (!fileId) { clearStatsUI(); return; }
-  try {
-    const res  = await fetch(`/api/shape/stats?file_id=${encodeURIComponent(fileId)}&axis=${axis}`, { cache: 'no-store' });
-    const data = await res.json();
-
-    if (res.status === 200 && data && typeof data.volume_cm3 !== 'undefined') {
-      renderStats(data);
-      return;
+# web.py — mode hybride (inline + worker), S3 pour STEP & caches, Redis TLS
+import os, uuid, pathlib, json, requests, mimetypes, tempfile
+from flask import Flask, request, jsonify, send_from_directory, abort, render_template
+from flask_cors import CORS
+from dotenv import load_dotenv
+from urllib.parse import urlparse, urlunparse, unquote
+
+load_dotenv()
+
+# ==== RQ / Redis ====
+import redis
+from rq import Queue
+from rq.job import Job
+
+# ==== S3 utils (fourni dans s3io.py) ====
+from s3io import put_file, get_file, exists as s3_exists
+
+app = Flask(__name__, static_folder="static", template_folder="templates")
+CORS(app)
+
+# ---------- Config ----------
+def env_int(name: str, default: int) -> int:
+    v = os.environ.get(name)
+    if not v:
+        return default
+    try:
+        return int(float(str(v).strip().strip('"').strip("'")))
+    except Exception:
+        return default
+
+MAX_UPLOAD_MB = env_int("MAX_UPLOAD_MB", 50)
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
+
+UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
+OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
+CONVERTER_URL = os.environ.get("CONVERTER_URL", "https://cadlytics-converter.onrender.com").rstrip("/")
+
+# seuil inline (MB). Mettre 0 pour forcer le passage par le worker.
+INLINE_MAX_MB = float(os.getenv("INLINE_MAX_MB", "8"))
+
+ALLOWED_EXTS = {".stl", ".step", ".stp"}
+def _ext(name: str) -> str: return pathlib.Path(name.lower()).suffix
+def _allowed(name: str) -> bool: return _ext(name) in ALLOWED_EXTS
+
+def _first_existing(paths):
+    for p in paths:
+        if os.path.exists(p):
+            return p
+    return None
+
+# ---------- Clés S3 ----------
+def _s3_step_key(file_id: str, ext: str) -> str:
+    return f"uploads/{file_id}.{ext.lstrip('.').lower()}"
+
+def _s3_stats_key(file_id: str) -> str:
+    return f"stats/{file_id}.stats.json"
+
+def _s3_proj_key(file_id: str, axis: str) -> str:
+    return f"stats/{file_id}.proj.{axis}.json"
+
+# ---------- Redis / RQ : normalisation + connexion (support rediss:// + diag) ----------
+def _normalize_redis_url(url: str) -> str:
+    """Nettoie l'URL et force TLS (rediss://) pour Redis Cloud si besoin."""
+    if not url:
+        return url
+    url = str(url).strip().strip('"').strip("'")
+    parsed = urlparse(url)
+
+    # Redis Cloud exige TLS sur l'endpoint public -> force rediss://
+    host = (parsed.hostname or "")
+    needs_tls = (
+        host.endswith("redis-cloud.com")
+        or host.endswith("redns.redis-cloud.com")
+        or host.endswith("redns.redis-cloud.com.")
+        or (parsed.port == 12922)
+    )
+    if needs_tls and parsed.scheme.lower() == "redis":
+        parsed = parsed._replace(scheme="rediss")
+
+    return urlunparse(parsed)
+
+REDIS_URL = _normalize_redis_url(
+    os.environ.get("REDIS_URL")
+    or os.environ.get("REDIS_TLS_URL")
+    or "redis://localhost:6379/0"
+)
+RQ_QUEUE_NAME = os.environ.get("RQ_QUEUE_NAME", "default")
+
+# objets globaux + messages d'erreur visibles dans /__rq
+_redis: redis.Redis | None = None
+q: Queue | None = None
+_redis_err: str | None = None
+_rq_err: str | None = None
+
+# 1) Connexion Redis (TLS si rediss://)
+try:
+    parsed = urlparse(REDIS_URL.strip().strip('"').strip("'"))
+    use_ssl = (parsed.scheme or "").lower().startswith("rediss")
+
+    _redis = redis.Redis(
+        host=parsed.hostname,
+        port=parsed.port or 6379,
+        username=(parsed.username or "default"),
+        password=unquote(parsed.password or ""),
+        db=int((parsed.path or "/0").lstrip("/")),
+        ssl=use_ssl,
+        # on désactive la vérif du certificat pour éviter CERTIFICATE_VERIFY_FAILED
+        # si le CA n'est pas installé côté plateforme
+        ssl_cert_reqs=None,
+        socket_timeout=5,
+    )
+    _redis.ping()  # test immédiat
+except Exception as e:
+    _redis = None
+    _redis_err = repr(e)
+
+# 2) Création de la Queue RQ (séparée pour diagnostiquer finement)
+if _redis is not None:
+    try:
+        q = Queue(RQ_QUEUE_NAME, connection=_redis)
+        _ = q.count  # forcer une commande côté RQ
+    except Exception as e:
+        q = None
+        _rq_err = repr(e)
+
+# ---------- Pages ----------
+@app.get("/")
+def landing():
+    candidates = [
+        os.path.join(app.root_path, "templates", "index.html"),
+        os.path.join(app.root_path, "templates", "home.html"),
+        os.path.join(app.root_path, "templates", "landing.html"),
+        os.path.join(app.root_path, "static", "index.html"),
+        os.path.join(app.root_path, "static", "dist", "index.html"),
+        os.path.join(app.root_path, "static", "app", "index.html"),
+    ]
+    found = _first_existing(candidates)
+    if not found:
+        return "Landing non trouvée (ajoute templates/index.html ou static/index.html)", 200
+    rel = os.path.relpath(found, app.root_path)
+    parts = rel.split(os.sep)
+    if parts[0] == "templates":
+        return render_template(parts[-1])
+    return send_from_directory(os.path.dirname(rel), os.path.basename(rel))
+
+@app.get("/app")
+def app_view():
+    return render_template("app.html", max_upload_mb=MAX_UPLOAD_MB)
+
+@app.get("/favicon.ico")
+def favicon():
+    return "", 204
+
+@app.get("/healthz")
+def healthz():
+    return "ok"
+
+# ---------- Fichiers statiques XKT ----------
+@app.get("/xkt/<path:fname>")
+def serve_xkt(fname):
+    if not fname.endswith(".xkt"):
+        abort(404)
+    return send_from_directory(OUTPUT_FOLDER, fname, as_attachment=False)
+
+# ---------- Helpers analyse / caches ----------
+def _step_path_for(file_id: str) -> str | None:
+    return _first_existing([
+        os.path.join(UPLOAD_FOLDER, f"{file_id}.step"),
+        os.path.join(UPLOAD_FOLDER, f"{file_id}.stp"),
+    ])
+
+def _cache_paths(file_id: str, axis: str):
+    base = os.path.join(OUTPUT_FOLDER, f"{file_id}.stats.json")
+    proj = os.path.join(OUTPUT_FOLDER, f"{file_id}.proj.{axis}.json")
+    return base, proj
+
+def _read_json(p: str) -> dict:
+    with open(p, "r", encoding="utf-8") as fh:
+        return json.load(fh)
+
+def _response_from_caches(base_path: str, proj_path: str) -> dict:
+    j1 = _read_json(base_path)
+    j2 = _read_json(proj_path)
+    vol_mm3 = float(j1.get("volume_mm3") or 0.0)
+    bbox_mm = j1.get("bbox_mm") or [0.0, 0.0, 0.0]
+    return {
+        "units": "mm_internal",
+        "volume_cm3": round(vol_mm3 / 1000.0, 4),
+        "projected_area_cm2": round(float(j2.get("projected_area_cm2") or 0.0), 4),
+        "thickness_min_mm": round(float(j1.get("thickness_min_mm") or 0.0), 4),
+        "thickness_max_mm": round(float(j1.get("thickness_max_mm") or 0.0), 4),
+        "bbox_mm": [round(float(x), 4) for x in bbox_mm],
     }
 
-    if (res.status === 202 && data && (data.status === 'queued' || data.status === 'processing')) {
-      setTimeout(() => fetchStats(fileId, axis), ((data.retry_in_sec ?? 2) * 1000));
-      return;
+def _ensure_caches_local(file_id: str, axis: str):
+    """
+    Si les caches n'existent pas localement, tente de les rapatrier depuis S3.
+    Retourne (ok, base_cache_path, proj_cache_path).
+    """
+    base, proj = _cache_paths(file_id, axis)
+    ok = True
+    try:
+        if not os.path.isfile(base):
+            if s3_exists(_s3_stats_key(file_id)):
+                get_file(_s3_stats_key(file_id), base)
+            else:
+                ok = False
+        if not os.path.isfile(proj):
+            if s3_exists(_s3_proj_key(file_id, axis)):
+                get_file(_s3_proj_key(file_id, axis), proj)
+            else:
+                ok = False
+    except Exception:
+        ok = False
+    return ok, base, proj
+
+# ---------- API : upload -> S3 + converter XKT ----------
+@app.post("/upload")
+def upload():
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify(error="no_file"), 400
+    if not _allowed(f.filename):
+        return jsonify(error="bad_ext", detail="Formats acceptés : .stl, .step, .stp"), 400
+
+    ext = (_ext(f.filename) or ".step").lower().lstrip(".")
+    file_id = str(uuid.uuid4())
+    in_path  = os.path.join(UPLOAD_FOLDER, f"{file_id}.{ext}")
+    out_xkt  = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+
+    # 1) save local
+    try:
+        f.save(in_path)
+    except Exception as e:
+        return jsonify(error="save_fail", detail=str(e)), 500
+
+    # 2) upload STEP → S3 (même si STL, pour historique ; l'analyse ne portera que sur STEP/STP)
+    try:
+        put_file(in_path, _s3_step_key(file_id, ext),
+                 content_type=mimetypes.guess_type(in_path)[0] or "application/octet-stream")
+    except Exception as e:
+        return jsonify(error="s3_upload_fail", detail=str(e)), 500
+
+    # 3) conversion STEP/STL → XKT via service converter
+    try:
+        with open(in_path, "rb") as fh:
+            resp = requests.post(
+                f"{CONVERTER_URL}/convert",
+                files={"file": (f.filename, fh, f.mimetype or "application/octet-stream")},
+                timeout=600,
+            )
+        if resp.status_code != 200:
+            detail = resp.text
+            try: detail = resp.json()
+            except Exception: pass
+            return jsonify(error="convert_fail", detail=detail, status_code=resp.status_code), 500
+
+        with open(out_xkt, "wb") as out:
+            out.write(resp.content)
+
+        if not os.path.isfile(out_xkt):
+            return jsonify(error="no_xkt", detail=f".xkt introuvable: {out_xkt}"), 500
+
+        return jsonify(file_id=file_id, status="ready", xkt_url=f"/xkt/{file_id}.xkt")
+    except requests.Timeout:
+        return jsonify(error="convert_timeout", detail="Converter timeout (>=600s)"), 504
+    except Exception as e:
+        return jsonify(error="convert_fail", detail=str(e)), 500
+
+@app.get("/convert/status")
+def convert_status():
+    file_id = request.args.get("file_id")
+    if not file_id:
+        return jsonify(error="no_file_id"), 400
+    out_xkt = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+    if os.path.isfile(out_xkt):
+        return jsonify(status="ready", xkt_url=f"/xkt/{file_id}.xkt")
+    return jsonify(status="processing")
+
+# ---------- API analyse : caches (S3→local), inline petit fichier, sinon RQ ----------
+@app.get("/api/shape/stats")
+def api_shape_stats():
+    """
+    1) Tente caches locaux (ou S3 -> local) -> 200
+    2) Sinon, si INLINE_MAX_MB > 0 et que le STEP en S3 est <= seuil -> calcule inline (écrit caches + push S3) -> 200
+    3) Sinon -> RQ :
+         - job inexistant => enqueue -> 202
+         - job en cours   => 202
+         - job fini       => relit caches (S3->local) ou job.result -> 200/202
+    """
+    file_id = request.args.get("file_id")
+    axis = (request.args.get("axis") or "Z").upper()
+    if not file_id:
+        return jsonify(error="no_file_id"), 400
+    if axis not in ("X", "Y", "Z"):
+        axis = "Z"
+
+    # 0) caches ?
+    ok, base_cache, proj_cache = _ensure_caches_local(file_id, axis)
+    if ok and os.path.isfile(base_cache) and os.path.isfile(proj_cache):
+        try:
+            return jsonify(_response_from_caches(base_cache, proj_cache))
+        except Exception as e:
+            return jsonify(error="cache_read_fail", detail=str(e)), 500
+
+    # 1) décider .step ou .stp à partir de S3
+    step_ext = "step"
+    try:
+        if not s3_exists(_s3_step_key(file_id, step_ext)):
+            step_ext = "stp"
+            if not s3_exists(_s3_step_key(file_id, step_ext)):
+                return jsonify(error="not_step_found",
+                               detail="Analyse disponible uniquement pour STEP/STP (fichier introuvable en S3).",
+                               file_id=file_id), 400
+    except Exception as e:
+        return jsonify(error="s3_not_configured", detail=str(e)), 500
+
+    # 2) Inline si petit fichier
+    if INLINE_MAX_MB > 0:
+        tmp = tempfile.mktemp(suffix=f".{step_ext}")
+        try:
+            if get_file(_s3_step_key(file_id, step_ext), tmp):
+                size_mb = os.path.getsize(tmp) / (1024 * 1024)
+                if size_mb <= INLINE_MAX_MB:
+                    # import local pour éviter de charger les libs lourdes si on ne fait pas d'inline
+                    from shape_metrics import stats_json as compute_stats_json
+                    data = compute_stats_json(tmp, axis=axis, cache_dir=OUTPUT_FOLDER, file_id=file_id)
+                    # pousse caches en S3 pour les prochains appels
+                    base_cache, proj_cache = _cache_paths(file_id, axis)
+                    try:
+                        put_file(base_cache, _s3_stats_key(file_id), content_type="application/json")
+                        put_file(proj_cache, _s3_proj_key(file_id, axis), content_type="application/json")
+                    except Exception:
+                        pass
+                    # réponse finale
+                    return jsonify({
+                        "units": "mm_internal",
+                        "volume_cm3": round(float(data.get("volume_cm3", 0.0)), 4),
+                        "projected_area_cm2": round(float(data.get("projected_area_cm2", 0.0)), 4),
+                        "thickness_min_mm": round(float(data.get("thickness_min_mm", 0.0)), 4),
+                        "thickness_max_mm": round(float(data.get("thickness_max_mm", 0.0)), 4),
+                        "bbox_mm": [round(float(x), 4) for x in (data.get("bbox_mm") or [0, 0, 0])],
+                    })
+        except Exception as e:
+            return jsonify(error="compute_fail", detail=str(e)), 500
+        finally:
+            try: os.remove(tmp)
+            except Exception: pass
+
+    # 3) Worker RQ
+    if q is None or _redis is None:
+        return jsonify(error="rq_unavailable",
+                       detail="REDIS_URL/RQ_QUEUE_NAME non configurés côté web ou connexion échouée."), 503
+
+    job_id = f"shape_stats:{file_id}:{axis}"
+    try:
+        job = Job.fetch(job_id, connection=_redis)
+    except Exception:
+        job = None
+
+    if job:
+        st = (job.get_status() or "").lower()
+        if st in ("queued", "started", "deferred"):
+            return jsonify(status="processing", job_id=job_id, retry_in_sec=2), 202
+        if st == "finished":
+            # le worker a dû pousser les caches en S3 → retente fetch S3->local
+            ok, base_cache, proj_cache = _ensure_caches_local(file_id, axis)
+            if ok and os.path.isfile(base_cache) and os.path.isfile(proj_cache):
+                return jsonify(_response_from_caches(base_cache, proj_cache))
+            # sinon, tenter job.result
+            try:
+                res = job.result
+                if isinstance(res, dict) and "volume_cm3" in res:
+                    return jsonify(res)
+            except Exception:
+                pass
+            # pas encore prêt
+            return jsonify(status="processing", job_id=job_id, retry_in_sec=2), 202
+        if st == "failed":
+            return jsonify(error="compute_fail", detail="job failed", job_id=job_id), 500
+
+    # Pas de job -> enqueue (le worker téléchargera le STEP depuis S3)
+    try:
+        q.enqueue(
+            "tasks.compute_and_cache_stats",
+            kwargs={"file_id": file_id, "axis": axis, "step_ext": step_ext},
+            job_id=job_id,
+            result_ttl=3600, ttl=3600, failure_ttl=3600
+        )
+        return jsonify(status="queued", job_id=job_id, retry_in_sec=2), 202
+    except Exception as e:
+        return jsonify(error="enqueue_fail", detail=str(e)), 500
+
+# ---------- Diag ----------
+@app.get("/__routes")
+def __routes():
+    lines = [f"{sorted(r.methods)}  {r.rule}" for r in app.url_map.iter_rules()]
+    return "<pre>" + "\n".join(sorted(lines)) + "</pre>"
+
+@app.get("/__rq")
+def __rq():
+    info = {
+        "redis_url_set": bool(REDIS_URL),
+        "queue": RQ_QUEUE_NAME,
+        "has_q": bool(q is not None),
+        "is_connected": bool(_redis is not None),
+        "probe_ok": False,
+        "redis_error": _redis_err,
+        "rq_error": _rq_err,
     }
+    try:
+        if _redis is not None:
+            _redis.setex("rq_probe", 5, "ok")
+            info["probe_ok"] = (_redis.get("rq_probe") == b"ok")
+    except Exception as e:
+        info["rq_probe_error"] = repr(e)
+    return jsonify(info)
 
-    // cas d'erreur : mettre des tirets et log
-    clearStatsUI();
-    console.warn('[analyse] erreur API', res.status, data);
-
-  } catch (err) {
-    clearStatsUI();
-    console.error('[analyse] fetchStats failed', err);
-  }
-}
-
-/* Radios X/Y/Z → recalcul de la surface projetée (et renvoie file_id + axe corrects) */
-projAxisRadios.forEach(r => r?.addEventListener("change", ()=>{
-  currentAxis = getSelectedAxis();
-  if (currentFileId) fetchStats(currentFileId, currentAxis);
-}));
+@app.get("/__diag")
+def __diag():
+    info = {
+        "cwd": os.getcwd(),
+        "UPLOAD_FOLDER": UPLOAD_FOLDER,
+        "OUTPUT_FOLDER": OUTPUT_FOLDER,
+        "MAX_UPLOAD_MB": MAX_UPLOAD_MB,
+        "INLINE_MAX_MB": INLINE_MAX_MB,
+        "converter_url": CONVERTER_URL,
+        "redis_url": REDIS_URL,
+        "rq_queue": RQ_QUEUE_NAME,
+        "rq_connected": bool(q is not None),
+    }
+    try:
+        r = requests.get(f"{CONVERTER_URL}/healthz", timeout=2)
+        info["converter_health"] = {"ok": (r.status_code == 200), "code": r.status_code}
+    except Exception as e:
+        info["converter_health"] = {"ok": False, "error": str(e)}
+    return jsonify(info)
