@@ -416,3 +416,10 @@ def __s3_ping():
                 os.remove(tmp)
         except Exception:
             pass
+        
+@app.get("/__xkts")
+def __xkts():
+    import glob, os
+    files = sorted(glob.glob(os.path.join(OUTPUT_FOLDER, "*.xkt")))
+    return jsonify(count=len(files), files=[os.path.basename(p) for p in files])
+

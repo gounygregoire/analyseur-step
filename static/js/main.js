@@ -290,36 +290,65 @@ async function loadXKT(url, nameHint){
   return id;
 }
 
-/* ---------- Upload / Conversion ---------- */
-async function uploadAndShow(file){
+// Remplace TOUTE la fonction uploadAndShow par ceci
+async function uploadAndShow(file) {
   const f = file || fileInput?.files?.[0];
-  if (!f){ alert("Choisis un fichier .step/.stp/.stl (ou .xkt)"); return; }
+  if (!f) { alert("Choisis un fichier .step/.stp/.stl (ou .xkt)"); return; }
   if (fileNameLbl) fileNameLbl.textContent = f.name;
-  if (btnVisualiser){ btnVisualiser.disabled=true; btnVisualiser.textContent="Conversion…"; }
+
+  if (btnVisualiser) { btnVisualiser.disabled = true; btnVisualiser.textContent = "Conversion…"; }
   setProgress(12);
-  try{
+
+  try {
+    // Cas XKT local : pas d'appel API d'analyse
     if (/\.(xkt)$/i.test(f.name)) {
       currentFileId = null;
       const fileURL = URL.createObjectURL(f);
-      if (!chkAdditive?.checked){ for (const [,i] of models){ try{i.model.destroy();}catch{} } models.clear(); selectedIds.clear(); }
+      if (!chkAdditive?.checked) {
+        for (const [, i] of models) { try { i.model.destroy(); } catch {} }
+        models.clear(); selectedIds.clear();
+      }
       await loadXKT(fileURL, f.name);
       return;
     }
-    const fd=new FormData(); fd.append("file",f);
-    const res=await fetch("/upload",{method:"POST",body:fd});
-    const j=await res.json();
-    if (!res.ok || !j.xkt_url) throw new Error(JSON.stringify(j));
+
+    // Upload & conversion serveur
+    const fd = new FormData();
+    fd.append("file", f);
+
+    const res = await fetch("/upload", { method: "POST", body: fd });
+    let j = null;
+    try { j = await res.json(); } catch { /* ignore */ }
+
+    if (!res.ok || !j || !j.xkt_url) {
+      console.error("[upload] bad response", res.status, j);
+      throw new Error(`upload failed (${res.status})`);
+    }
+
+    // INFO utile en console si S3 n'est pas OK
+    if (j.s3_uploaded === false) {
+      console.warn("[upload] S3 non disponible -> l’analyse asynchrone ne partira pas tant que S3 n’est pas corrigé.");
+    }
+
     currentFileId = j.file_id || null;
-    const xktUrl=new URL(j.xkt_url, location.origin).toString();
-    if (!chkAdditive?.checked){ for (const [,i] of models){ try{i.model.destroy();}catch{} } models.clear(); selectedIds.clear(); }
-    await loadXKT(xktUrl, f.name);
-  }catch(e){ console.error(e); alert("Erreur conversion/chargement (voir Console)."); }
-  finally{ if (btnVisualiser){ btnVisualiser.disabled=false; btnVisualiser.textContent="VISUALISER"; } }
-  if (j.s3_uploaded === false) {
-  console.warn("Upload S3 non effectué : l’analyse (volume/épaisseur/surface) ne pourra pas démarrer tant que S3 n’est pas OK.");
+    const xktUrl = new URL(j.xkt_url, location.origin).toString();
+    console.log("[upload] ok:", { file_id: currentFileId, xktUrl });
+
+    if (!chkAdditive?.checked) {
+      for (const [, i] of models) { try { i.model.destroy(); } catch {} }
+      models.clear(); selectedIds.clear();
+    }
+
+    await loadXKT(xktUrl, f.name); // loadXKT déclenchera fetchStats si currentFileId est défini
+  } catch (e) {
+    console.error(e);
+    alert("Erreur conversion/chargement (voir Console).");
+  } finally {
+    if (btnVisualiser) { btnVisualiser.disabled = false; btnVisualiser.textContent = "VISUALISER"; }
+    setProgress(0);
+  }
 }
 
-}
 
 /* ---------- FICHIERS UI (fiabilisé) ---------- */
 function openFileChooser(){
