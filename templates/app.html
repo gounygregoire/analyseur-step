@@ -99,7 +99,7 @@
             <div id="overlayHost"></div>
           </div>
 
-          <!-- === NOUVEAU : Panneau Analyse === -->
+          <!-- === Panneau Analyse === -->
           <div id="analysisPanel" class="pane" style="margin-top:12px;padding:10px;border-radius:10px;background:#fafafa;border:1px solid #eee">
             <div class="row mini" style="gap:16px;align-items:center;flex-wrap:wrap">
               <div style="display:flex;align-items:baseline;gap:6px">
@@ -142,11 +142,6 @@
               </div>
             </div>
           </div>
-          <span data-metric="volume">—</span>
-          <span data-metric="tmin">—</span>
-          <span data-metric="tmax">—</span>
-          <span data-metric="projected_area">—</span>
-
           <!-- === /Panneau Analyse === -->
 
           <!-- Progression -->
@@ -162,6 +157,7 @@
     </div> <!-- /grid -->
   </div> <!-- /wrap -->
 
+  <!-- IMPORTANT : main.js est un module car il contient des "import" -->
   <script type="module" src="/static/js/main.js"></script>
 </body>
 </html>
