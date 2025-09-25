@@ -4,6 +4,7 @@ from flask import Flask, request, jsonify, send_from_directory, abort, render_te
 from flask_cors import CORS
 from dotenv import load_dotenv
 from urllib.parse import urlparse, urlunparse
+from s3io import put_file
 
 load_dotenv()
 
@@ -155,7 +156,8 @@ def upload():
         return jsonify(error="bad_ext", detail="Formats acceptés : .stl, .step, .stp"), 400
 
     file_id = str(uuid.uuid4())
-    in_path  = os.path.join(UPLOAD_FOLDER, f"{file_id}{_ext(f.filename) or '.step'}")
+    ext = _ext(f.filename) or ".step"
+    in_path  = os.path.join(UPLOAD_FOLDER, f"{file_id}{ext}")
     out_xkt  = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
 
     try:
@@ -163,7 +165,16 @@ def upload():
     except Exception as e:
         return jsonify(error="save_fail", detail=str(e)), 500
 
+    # 👇 AJOUT : on pousse l’original STEP/STP dans S3 pour le worker
     try:
+        ok = put_file(in_path, f"uploads/{file_id}{ext}")
+        if not ok:
+            return jsonify(error="s3_upload_fail", detail="Impossible de pousser le STEP sur S3"), 500
+    except Exception as e:
+        return jsonify(error="s3_upload_exception", detail=str(e)), 500
+
+    try:
+        # Conversion XKT via le converter (comme avant)
         with open(in_path, "rb") as fh:
             resp = requests.post(
                 f"{CONVERTER_URL}/convert",
@@ -182,29 +193,14 @@ def upload():
         if not os.path.isfile(out_xkt):
             return jsonify(error="no_xkt", detail=f".xkt introuvable: {out_xkt}"), 500
 
+        # On renvoie le file_id qui servira à l’analyse (le worker tirera le STEP depuis S3)
         return jsonify(file_id=file_id, status="ready", xkt_url=f"/xkt/{file_id}.xkt")
 
     except requests.Timeout:
         return jsonify(error="convert_timeout", detail="Converter timeout (>=600s)"), 504
     except Exception as e:
         return jsonify(error="convert_fail", detail=str(e)), 500
-
-@app.get("/convert/status")
-def convert_status():
-    file_id = request.args.get("file_id")
-    if not file_id:
-        return jsonify(error="no_file_id"), 400
-    out_xkt = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
-    if os.path.isfile(out_xkt):
-        return jsonify(status="ready", xkt_url=f"/xkt/{file_id}.xkt")
-    return jsonify(status="processing")
-
-@app.get("/xkt/<path:fname>")
-def serve_xkt(fname):
-    if not fname.endswith(".xkt"):
-        abort(404)
-    return send_from_directory(OUTPUT_FOLDER, fname, as_attachment=False)
-
+    
 # ---------- Helpers analyse / caches ----------
 def _step_path_for(file_id: str) -> str | None:
     return _first_existing([
@@ -241,13 +237,6 @@ def _redis_key(file_id: str, axis: str) -> str:
 # ---------- API analyse : lecture cache / enqueue worker ----------
 @app.get("/api/shape/stats")
 def api_shape_stats():
-    """
-    1) Si caches présents -> 200 JSON
-    2) Sinon si SYNC_METRICS=1 -> calcule en synchrone (dépannage)
-    3) Sinon RQ :
-       - si job en cours -> 202
-       - si job fini -> lit caches, sinon Redis -> sinon job.result -> 202
-    """
     import json as _json
     file_id = request.args.get("file_id")
     axis = (request.args.get("axis") or "Z").upper()
@@ -256,23 +245,21 @@ def api_shape_stats():
     if axis not in ("X", "Y", "Z"):
         axis = "Z"
 
+    # On accepte STEP/STP -> on dérive l’ext local si présent (sinon "step")
     step_path = _step_path_for(file_id)
-    if not step_path:
-        return jsonify(error="not_step_found",
-                       detail="Analyse disponible uniquement pour un import STEP/STP.",
-                       file_id=file_id), 400
+    ext = pathlib.Path(step_path).suffix.lstrip(".") if step_path else "step"
 
     base_cache, proj_cache = _cache_paths(file_id, axis)
 
-    # 1) Caches locaux (si jamais présents)
+    # 1) Caches locaux si dispo
     if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
         try:
             return jsonify(_response_from_caches(base_cache, proj_cache))
         except Exception as e:
             return jsonify(error="cache_read_fail", detail=str(e)), 500
 
-    # 2) Fallback synchrone (optionnel) si tu veux tester sans le worker
-    if os.environ.get("SYNC_METRICS") == "1":
+    # 2) Fallback synchrone (optionnel)
+    if os.environ.get("SYNC_METRICS") == "1" and step_path:
         from shape_metrics import stats_json as compute_stats_json
         try:
             data = compute_stats_json(step_path, axis=axis, cache_dir=OUTPUT_FOLDER, file_id=file_id)
@@ -280,14 +267,14 @@ def api_shape_stats():
         except Exception as e:
             return jsonify(error="compute_fail", detail=str(e)), 500
 
-    # 3) RQ requis à partir d'ici
+    # 3) RQ requis
     if q is None or _redis is None:
         return jsonify(error="rq_unavailable",
                        detail="REDIS_URL/RQ_QUEUE_NAME non configurés côté web ou connexion échouée."), 503
 
     job_id = f"shape_stats:{file_id}:{axis}"
 
-    # Tente de récupérer un job existant
+    # Existe déjà ?
     try:
         job = Job.fetch(job_id, connection=_redis)
     except Exception:
@@ -297,39 +284,31 @@ def api_shape_stats():
         st = (job.get_status() or "").lower()
         if st in ("queued", "started", "deferred"):
             return jsonify(status="processing", job_id=job_id, retry_in_sec=2), 202
-
         if st == "finished":
-            # a) si des caches sont finalement apparus côté web (rare)
+            # a) si caches apparus
             if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
                 return jsonify(_response_from_caches(base_cache, proj_cache))
-
-            # b) sinon, lit le blob JSON écrit par le worker dans Redis
+            # b) sinon JSON depuis Redis
             try:
-                raw = _redis.get(_redis_key(file_id, axis))
+                raw = _redis.get(f"shape_stats:{file_id}:{axis}")
                 if raw:
                     return jsonify(_json.loads(raw))
             except Exception:
                 pass
-
-            # c) sinon, tente job.result (RQ stocke le retour de la fonction)
-            try:
-                res = job.result
-                if isinstance(res, dict) and "volume_cm3" in res:
-                    return jsonify(res)
-            except Exception:
-                pass
-
-            # Si rien encore accessible, redemander
+            # c) sinon on repoll
             return jsonify(status="processing", job_id=job_id, retry_in_sec=1), 202
-
         if st == "failed":
-            return jsonify(error="compute_fail", detail="job failed", job_id=job_id), 500
+            # 👇 petit plus : retourner l’exception RQ si tu veux
+            try:
+                return jsonify(error="compute_fail", detail="job failed", job_id=job_id), 500
+            except Exception:
+                return jsonify(error="compute_fail", detail="job failed", job_id=job_id), 500
 
-    # Pas de job -> on en crée une
+    # Pas de job -> on en crée un (S3-centré)
     try:
         q.enqueue(
             "tasks.compute_and_cache_stats",
-            kwargs={"file_id": file_id, "axis": axis, "step_path": step_path, "cache_dir": OUTPUT_FOLDER},
+            kwargs={"file_id": file_id, "axis": axis, "step_ext": ext},
             job_id=job_id,
             result_ttl=3600, ttl=3600, failure_ttl=3600
         )
