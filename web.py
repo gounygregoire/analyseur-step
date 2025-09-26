@@ -264,7 +264,6 @@ def api_shape_stats():
         axis = "Z"
 
     step_path = _step_path_for(file_id)
-    ext = pathlib.Path(step_path).suffix.lstrip(".") if step_path else "step"
     base_cache, proj_cache = _cache_paths(file_id, axis)
 
     # 1) Caches locaux si dispo
@@ -339,7 +338,6 @@ def api_shape_stats():
             kwargs={
                 "file_id": file_id,
                 "axis": axis,
-                "step_ext": ext,
                 "step_path": step_path,         # peut être None côté worker
                 "cache_dir": OUTPUT_FOLDER,     # où écrire les caches
             },
@@ -375,7 +373,6 @@ def __rq():
         info["rq_probe_error"] = repr(e)
     return jsonify(info)
 
-
 @app.get("/__diag")
 def __diag():
     info = {
@@ -394,6 +391,63 @@ def __diag():
     except Exception as e:
         info["converter_health"] = {"ok": False, "error": str(e)}
     return jsonify(info)
+
+@app.get("/__s3_env")
+def __s3_env():
+    # N'affiche pas les secrets, juste la présence/valeurs utiles
+    return jsonify({
+        "AWS_ACCESS_KEY_ID_set": bool(os.environ.get("AWS_ACCESS_KEY_ID")),
+        "AWS_SECRET_ACCESS_KEY_set": bool(os.environ.get("AWS_SECRET_ACCESS_KEY")),
+        "AWS_REGION": os.environ.get("AWS_REGION"),
+        "S3_BUCKET": os.environ.get("S3_BUCKET"),
+        "S3_ENDPOINT": os.environ.get("S3_ENDPOINT"),
+        "S3_FORCE_PATH_STYLE": os.environ.get("S3_FORCE_PATH_STYLE"),
+    })
+
+@app.get("/__s3_diag")
+def __s3_diag():
+    import boto3
+    from botocore.client import Config
+    from botocore.exceptions import ClientError, BotoCoreError
+
+    bucket = os.environ.get("S3_BUCKET")
+    region = os.environ.get("AWS_REGION", "us-east-1")
+    endpoint = os.environ.get("S3_ENDPOINT")
+    force_ps = os.environ.get("S3_FORCE_PATH_STYLE", "0") == "1"
+
+    if not (os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY") and bucket):
+        return jsonify(ok=False, error="Missing env vars (AWS keys / S3_BUCKET).")
+
+    cfg = Config(
+        s3={"addressing_style": "path" if force_ps else "virtual"},
+        retries={"max_attempts": 3, "mode": "standard"},
+        signature_version="s3v4",
+    )
+    s3 = boto3.client("s3",
+        region_name=region,
+        endpoint_url=endpoint or None,
+        aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
+        config=cfg
+    )
+
+    key = f"__diag/{uuid.uuid4().hex}.txt"
+    try:
+        # 1) Vérifie l’existence du bucket (HEAD)
+        s3.head_bucket(Bucket=bucket)
+    except ClientError as e:
+        return jsonify(ok=False, step="head_bucket", error=str(e), code=e.response.get("Error",{}).get("Code"))
+
+    try:
+        # 2) Put → Get → Delete
+        s3.put_object(Bucket=bucket, Key=key, Body=b"ok", ContentType="text/plain")
+        obj = s3.get_object(Bucket=bucket, Key=key)
+        data = obj["Body"].read()
+        s3.delete_object(Bucket=bucket, Key=key)
+        return jsonify(ok=(data == b"ok"), region=region, bucket=bucket, key=key)
+    except (ClientError, BotoCoreError, Exception) as e:
+        code = getattr(getattr(e, "response", {}), "get", lambda *_: None)("Error",{}).get("Code")
+        return jsonify(ok=False, step="put/get/delete", error=str(e), code=code, bucket=bucket, region=region, key=key)
 
 @app.get("/__s3_ping")
 def __s3_ping():
@@ -436,7 +490,7 @@ def __s3_ping():
                 os.remove(tmp)
         except Exception:
             pass
-        
+
 @app.get("/__xkts")
 def __xkts():
     files = sorted(glob.glob(os.path.join(OUTPUT_FOLDER, "*.xkt")))
