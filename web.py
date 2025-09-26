@@ -259,7 +259,7 @@ def upload():
     except Exception as e:
         return jsonify(error="convert_fail", detail=str(e)), 500
 
-# ---------- API analyse : lecture cache / enqueue worker (pas de fallback local) ----------
+# ---------- API analyse : lecture cache / enqueue worker (avec détail d'erreur) ----------
 @app.get("/api/shape/stats")
 def api_shape_stats():
     import json as _json
@@ -271,19 +271,18 @@ def api_shape_stats():
         axis = "Z"
 
     step_path = _step_path_for(file_id)
-    # >>> ajout : on dérive l'extension si on a un chemin local
     step_ext = pathlib.Path(step_path).suffix.lstrip(".") if step_path else None
 
     base_cache, proj_cache = _cache_paths(file_id, axis)
 
-    # 1) Caches locaux si dispo
+    # 1) Caches locaux
     if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
         try:
             return jsonify(_response_from_caches(base_cache, proj_cache))
         except Exception as e:
             return jsonify(error="cache_read_fail", detail=str(e)), 500
 
-    # 2) Si S3 n'est pas utilisable -> NE PAS calculer sur le web (sauf forçage)
+    # 2) S3 indispo -> calcul web seulement si SYNC_METRICS=1
     if not _s3_enabled():
         if os.environ.get("SYNC_METRICS") == "1" and step_path:
             try:
@@ -291,12 +290,10 @@ def api_shape_stats():
                 return jsonify(data)
             except Exception as e:
                 return jsonify(error="compute_fail", detail=str(e)), 500
-        return jsonify(
-            error="s3_unavailable",
-            detail="S3 indisponible et SYNC_METRICS!=1, calcul non lancé côté web."
-        ), 503
+        return jsonify(error="s3_unavailable",
+                       detail="S3 indisponible et SYNC_METRICS!=1, calcul non lancé côté web."), 503
 
-    # 3) Mode forcé synchrone (optionnel)
+    # 3) Mode forcé synchrone
     if os.environ.get("SYNC_METRICS") == "1" and step_path:
         try:
             data = _compute_stats_sync_or_error(file_id, axis, step_path)
@@ -304,14 +301,13 @@ def api_shape_stats():
         except Exception as e:
             return jsonify(error="compute_fail", detail=str(e)), 500
 
-    # 4) Sinon RQ (asynchrone) — nécessite Redis OK
+    # 4) RQ
     if q is None or _redis is None:
-        return jsonify(error="rq_unavailable",
-                       detail="REDIS_URL/RQ_QUEUE_NAME non configurés côté web ou connexion échouée."), 503
+        return jsonify(error="rq_unavailable", detail="Redis/RQ non dispo."), 503
 
     job_id = f"shape_stats:{file_id}:{axis}"
 
-    # Existe déjà ?
+    # Déjà existant ?
     try:
         job = Job.fetch(job_id, connection=_redis)
     except Exception:
@@ -322,31 +318,32 @@ def api_shape_stats():
         if st in ("queued", "started", "deferred"):
             return jsonify(status="processing", job_id=job_id, retry_in_sec=2), 202
         if st == "finished":
-            # a) si caches apparus
             if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
                 return jsonify(_response_from_caches(base_cache, proj_cache))
-            # b) sinon JSON depuis Redis
             try:
                 raw = _redis.get(f"shape_stats:{file_id}:{axis}")
                 if raw:
                     return jsonify(_json.loads(raw))
             except Exception:
                 pass
-            # c) sinon on repoll
             return jsonify(status="processing", job_id=job_id, retry_in_sec=1), 202
         if st == "failed":
-            return jsonify(error="compute_fail", detail="job failed", job_id=job_id), 500
+            # >>> NOUVEAU : on renvoie l’exception du job pour debug immédiat
+            return jsonify(error="compute_fail",
+                           job_id=job_id,
+                           status=st,
+                           exc=str(job.exc_info) if getattr(job, "exc_info", None) else None), 500
 
-    # Pas de job -> on en crée un
+    # Pas de job -> enqueue
     try:
         q.enqueue(
             "tasks.compute_and_cache_stats",
             kwargs={
                 "file_id": file_id,
                 "axis": axis,
-                "step_path": step_path,       # peut être None côté worker
-                "step_ext": step_ext,         # <<< NOUVEAU : aide le worker à choisir .step/.stp
-                "cache_dir": OUTPUT_FOLDER,   # où écrire les caches
+                "step_path": step_path,     # peut être None côté worker
+                "step_ext": step_ext,       # aide le worker à choisir .step/.stp
+                "cache_dir": OUTPUT_FOLDER,
             },
             job_id=job_id,
             result_ttl=3600, ttl=3600, failure_ttl=3600
@@ -354,6 +351,26 @@ def api_shape_stats():
         return jsonify(status="queued", job_id=job_id, retry_in_sec=2), 202
     except Exception as e:
         return jsonify(error="enqueue_fail", detail=str(e)), 500
+
+
+# ---------- Debug RQ : récupérer le statut/erreur d’un job ----------
+@app.get("/__job/<path:job_id>")
+def __job(job_id: str):
+    try:
+        job = Job.fetch(job_id, connection=_redis)
+        info = {
+            "id": job.id,
+            "status": job.get_status(),
+            "enqueued_at": str(job.enqueued_at) if job.enqueued_at else None,
+            "started_at": str(job.started_at) if job.started_at else None,
+            "ended_at": str(job.ended_at) if job.ended_at else None,
+            "result": job.result if hasattr(job, "result") else None,
+            "exc_info": job.exc_info if hasattr(job, "exc_info") else None,
+        }
+        return jsonify(ok=True, **info)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e), job_id=job_id), 500
+
 
 
 # ---------- Diag ----------
