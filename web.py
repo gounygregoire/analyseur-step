@@ -114,6 +114,44 @@ if _redis is not None:
         q = None
         _rq_err = repr(e)
 
+# ---------- Helpers génériques ----------
+def _s3_enabled() -> bool:
+    """Vrai si les 4 variables S3 sont présentes."""
+    return all(os.environ.get(k) for k in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "S3_BUCKET"))
+
+def _step_path_for(file_id: str) -> str | None:
+    return _first_existing([
+        os.path.join(UPLOAD_FOLDER, f"{file_id}.step"),
+        os.path.join(UPLOAD_FOLDER, f"{file_id}.stp"),
+    ])
+
+def _cache_paths(file_id: str, axis: str):
+    base = os.path.join(OUTPUT_FOLDER, f"{file_id}.stats.json")
+    proj = os.path.join(OUTPUT_FOLDER, f"{file_id}.proj.{axis}.json")
+    return base, proj
+
+def _read_json(p: str) -> dict:
+    with open(p, "r", encoding="utf-8") as fh:
+        return json.load(fh)
+
+def _response_from_caches(base_path: str, proj_path: str) -> dict:
+    j1 = _read_json(base_path)
+    j2 = _read_json(proj_path)
+    vol_mm3 = float(j1.get("volume_mm3") or 0.0)
+    bbox_mm = j1.get("bbox_mm") or [0.0, 0.0, 0.0]
+    return {
+        "units": "mm_internal",
+        "volume_cm3": round(vol_mm3 / 1000.0, 4),
+        "projected_area_cm2": round(float(j2.get("projected_area_cm2") or 0.0), 4),
+        "thickness_min_mm": round(float(j1.get("thickness_min_mm") or 0.0), 4),
+        "thickness_max_mm": round(float(j1.get("thickness_max_mm") or 0.0), 4),
+        "bbox_mm": [round(float(x), 4) for x in bbox_mm],
+    }
+
+def _compute_stats_sync_or_error(file_id: str, axis: str, step_path: str):
+    """Calcule en local et écrit les caches dans OUTPUT_FOLDER, renvoie le JSON final."""
+    from shape_metrics import stats_json as compute_stats_json
+    return compute_stats_json(step_path, axis=axis, cache_dir=OUTPUT_FOLDER, file_id=file_id)
 
 # ---------- Pages ----------
 @app.get("/")
@@ -214,40 +252,7 @@ def upload():
     except Exception as e:
         return jsonify(error="convert_fail", detail=str(e)), 500
 
-# ---------- Helpers analyse / caches ----------
-def _step_path_for(file_id: str) -> str | None:
-    return _first_existing([
-        os.path.join(UPLOAD_FOLDER, f"{file_id}.step"),
-        os.path.join(UPLOAD_FOLDER, f"{file_id}.stp"),
-    ])
-
-def _cache_paths(file_id: str, axis: str):
-    base = os.path.join(OUTPUT_FOLDER, f"{file_id}.stats.json")
-    proj = os.path.join(OUTPUT_FOLDER, f"{file_id}.proj.{axis}.json")
-    return base, proj
-
-def _read_json(p: str) -> dict:
-    with open(p, "r", encoding="utf-8") as fh:
-        return json.load(fh)
-
-def _response_from_caches(base_path: str, proj_path: str) -> dict:
-    j1 = _read_json(base_path)
-    j2 = _read_json(proj_path)
-    vol_mm3 = float(j1.get("volume_mm3") or 0.0)
-    bbox_mm = j1.get("bbox_mm") or [0.0, 0.0, 0.0]
-    return {
-        "units": "mm_internal",
-        "volume_cm3": round(vol_mm3 / 1000.0, 4),
-        "projected_area_cm2": round(float(j2.get("projected_area_cm2") or 0.0), 4),
-        "thickness_min_mm": round(float(j1.get("thickness_min_mm") or 0.0), 4),
-        "thickness_max_mm": round(float(j1.get("thickness_max_mm") or 0.0), 4),
-        "bbox_mm": [round(float(x), 4) for x in bbox_mm],
-    }
-def _redis_key(file_id: str, axis: str) -> str:
-    return f"shape_stats:{file_id}:{axis}"
-
-
-# ---------- API analyse : lecture cache / enqueue worker ----------
+# ---------- API analyse : lecture cache / sync fallback / enqueue worker ----------
 @app.get("/api/shape/stats")
 def api_shape_stats():
     import json as _json
@@ -258,10 +263,8 @@ def api_shape_stats():
     if axis not in ("X", "Y", "Z"):
         axis = "Z"
 
-    # On accepte STEP/STP -> on dérive l’ext local si présent (sinon "step")
     step_path = _step_path_for(file_id)
     ext = pathlib.Path(step_path).suffix.lstrip(".") if step_path else "step"
-
     base_cache, proj_cache = _cache_paths(file_id, axis)
 
     # 1) Caches locaux si dispo
@@ -271,16 +274,25 @@ def api_shape_stats():
         except Exception as e:
             return jsonify(error="cache_read_fail", detail=str(e)), 500
 
-    # 2) Fallback synchrone (optionnel)
-    if os.environ.get("SYNC_METRICS") == "1" and step_path:
-        from shape_metrics import stats_json as compute_stats_json
+    # 2) Si S3 n'est pas utilisable → calcul immédiat en local (web dyno)
+    if not _s3_enabled():
+        if not step_path:
+            return jsonify(error="no_input", detail="STEP introuvable localement et S3 indisponible."), 503
         try:
-            data = compute_stats_json(step_path, axis=axis, cache_dir=OUTPUT_FOLDER, file_id=file_id)
+            data = _compute_stats_sync_or_error(file_id, axis, step_path)
             return jsonify(data)
         except Exception as e:
             return jsonify(error="compute_fail", detail=str(e)), 500
 
-    # 3) RQ requis
+    # 3) Mode forcé synchrone (optionnel)
+    if os.environ.get("SYNC_METRICS") == "1" and step_path:
+        try:
+            data = _compute_stats_sync_or_error(file_id, axis, step_path)
+            return jsonify(data)
+        except Exception as e:
+            return jsonify(error="compute_fail", detail=str(e)), 500
+
+    # 4) Sinon RQ (asynchrone) — nécessite S3 opérationnel pour le worker
     if q is None or _redis is None:
         return jsonify(error="rq_unavailable",
                        detail="REDIS_URL/RQ_QUEUE_NAME non configurés côté web ou connexion échouée."), 503
@@ -311,17 +323,26 @@ def api_shape_stats():
             # c) sinon on repoll
             return jsonify(status="processing", job_id=job_id, retry_in_sec=1), 202
         if st == "failed":
-            # 👇 petit plus : retourner l’exception RQ si tu veux
-            try:
-                return jsonify(error="compute_fail", detail="job failed", job_id=job_id), 500
-            except Exception:
-                return jsonify(error="compute_fail", detail="job failed", job_id=job_id), 500
+            # fallback sync si on a le STEP local
+            if step_path:
+                try:
+                    data = _compute_stats_sync_or_error(file_id, axis, step_path)
+                    return jsonify(data)
+                except Exception as e:
+                    return jsonify(error="compute_fail", detail=str(e)), 500
+            return jsonify(error="compute_fail", detail="job failed and no local STEP", job_id=job_id), 500
 
-    # Pas de job -> on en crée un (S3-centré)
+    # Pas de job -> on en crée un (avec paramètres pour S3/download éventuel)
     try:
         q.enqueue(
             "tasks.compute_and_cache_stats",
-            kwargs={"file_id": file_id, "axis": axis, "step_ext": ext},
+            kwargs={
+                "file_id": file_id,
+                "axis": axis,
+                "step_ext": ext,
+                "step_path": step_path,         # peut être None côté worker
+                "cache_dir": OUTPUT_FOLDER,     # où écrire les caches
+            },
             job_id=job_id,
             result_ttl=3600, ttl=3600, failure_ttl=3600
         )
