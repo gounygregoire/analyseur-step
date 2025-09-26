@@ -217,24 +217,31 @@ def upload():
         # IMPORTANT : on ne bloque pas la conversion pour ça
         app.logger.exception("S3 upload failed for %s: %s", s3_key, e)
 
-    # 3) conversion XKT via le converter
+    # 3) conversion XKT via le converter (STREAMING pour éviter un pic mémoire)
     try:
         with open(in_path, "rb") as fh:
             resp = requests.post(
                 f"{CONVERTER_URL}/convert",
                 files={"file": (f.filename, fh, f.mimetype or "application/octet-stream")},
                 timeout=600,
+                stream=True,  # <<<<<<<<<< évite de charger tout le XKT en RAM
+                headers={"Accept": "application/octet-stream"},
             )
+
         if resp.status_code != 200:
-            detail = resp.text
+            # Petit message d'erreur lisible même en mode stream
             try:
                 detail = resp.json()
             except Exception:
-                pass
+                # .text suffit, la payload d'erreur est petite
+                detail = resp.text
             return jsonify(error="convert_fail", detail=detail, status_code=resp.status_code), 500
 
+        # ÉCRITURE STREAMING
         with open(out_xkt, "wb") as out:
-            out.write(resp.content)
+            for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    out.write(chunk)
 
         if not os.path.isfile(out_xkt):
             return jsonify(error="no_xkt", detail=f".xkt introuvable: {out_xkt}"), 500
@@ -252,7 +259,7 @@ def upload():
     except Exception as e:
         return jsonify(error="convert_fail", detail=str(e)), 500
 
-# ---------- API analyse : lecture cache / sync fallback / enqueue worker ----------
+# ---------- API analyse : lecture cache / enqueue worker (pas de fallback local) ----------
 @app.get("/api/shape/stats")
 def api_shape_stats():
     import json as _json
@@ -273,15 +280,18 @@ def api_shape_stats():
         except Exception as e:
             return jsonify(error="cache_read_fail", detail=str(e)), 500
 
-    # 2) Si S3 n'est pas utilisable → calcul immédiat en local (web dyno)
+    # 2) Si S3 n'est pas utilisable -> NE PAS calculer sur le web (sauf forçage)
     if not _s3_enabled():
-        if not step_path:
-            return jsonify(error="no_input", detail="STEP introuvable localement et S3 indisponible."), 503
-        try:
-            data = _compute_stats_sync_or_error(file_id, axis, step_path)
-            return jsonify(data)
-        except Exception as e:
-            return jsonify(error="compute_fail", detail=str(e)), 500
+        if os.environ.get("SYNC_METRICS") == "1" and step_path:
+            try:
+                data = _compute_stats_sync_or_error(file_id, axis, step_path)
+                return jsonify(data)
+            except Exception as e:
+                return jsonify(error="compute_fail", detail=str(e)), 500
+        return jsonify(
+            error="s3_unavailable",
+            detail="S3 indisponible et SYNC_METRICS!=1, calcul non lancé côté web."
+        ), 503
 
     # 3) Mode forcé synchrone (optionnel)
     if os.environ.get("SYNC_METRICS") == "1" and step_path:
@@ -291,7 +301,7 @@ def api_shape_stats():
         except Exception as e:
             return jsonify(error="compute_fail", detail=str(e)), 500
 
-    # 4) Sinon RQ (asynchrone) — nécessite S3 opérationnel pour le worker
+    # 4) Sinon RQ (asynchrone) — nécessite Redis OK
     if q is None or _redis is None:
         return jsonify(error="rq_unavailable",
                        detail="REDIS_URL/RQ_QUEUE_NAME non configurés côté web ou connexion échouée."), 503
@@ -322,16 +332,10 @@ def api_shape_stats():
             # c) sinon on repoll
             return jsonify(status="processing", job_id=job_id, retry_in_sec=1), 202
         if st == "failed":
-            # fallback sync si on a le STEP local
-            if step_path:
-                try:
-                    data = _compute_stats_sync_or_error(file_id, axis, step_path)
-                    return jsonify(data)
-                except Exception as e:
-                    return jsonify(error="compute_fail", detail=str(e)), 500
-            return jsonify(error="compute_fail", detail="job failed and no local STEP", job_id=job_id), 500
+            # NE PAS relancer un calcul local ici (risque OOM). Le forçage SYNC_METRICS a déjà été géré plus haut.
+            return jsonify(error="compute_fail", detail="job failed", job_id=job_id), 500
 
-    # Pas de job -> on en crée un (avec paramètres pour S3/download éventuel)
+    # Pas de job -> on en crée un
     try:
         q.enqueue(
             "tasks.compute_and_cache_stats",
