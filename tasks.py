@@ -1,9 +1,8 @@
-# tasks.py  (robuste : local path OU téléchargement S3)
+# tasks.py — worker RQ : télécharge le STEP depuis S3 si besoin
 import os, json, tempfile, redis
 from urllib.parse import urlparse
-
-from shape_metrics import stats_json as compute_stats_json  # ta lib de calcul
-from s3io import get_file as s3_get_file  # peut renvoyer False si S3 non configuré
+from shape_metrics import stats_json as compute_stats_json  # ta lib
+from s3io import get_file  # on s'appuie sur ton helper S3 pour rapatrier le fichier
 
 # --- même normalisation que côté web, pour Redis Cloud (TLS/rediss://) ---
 def _normalize_redis_url(url: str) -> str:
@@ -13,7 +12,6 @@ def _normalize_redis_url(url: str) -> str:
     p = urlparse(url)
     if p.scheme == "redis":
         host = (p.hostname or "")
-        # endpoints Redis Cloud -> forcer TLS
         if host.endswith("redis-cloud.com") or host.endswith("redns.redis-cloud.com") or (p.port == 12922):
             url = url.replace("redis://", "rediss://", 1)
     return url
@@ -24,66 +22,75 @@ REDIS_URL = _normalize_redis_url(
     or "redis://localhost:6379/0"
 )
 
-def _s3_enabled() -> bool:
-    return all(os.environ.get(k) for k in ("AWS_ACCESS_KEY_ID","AWS_SECRET_ACCESS_KEY","AWS_REGION","S3_BUCKET"))
-
 def _redis_key(file_id: str, axis: str) -> str:
     return f"shape_stats:{file_id}:{axis}"
 
-def compute_and_cache_stats(*, file_id: str, axis: str,
-                            step_ext: str | None = None,
-                            step_path: str | None = None,
-                            cache_dir: str | None = None) -> dict:
+def _local_step_path(file_id: str, ext: str | None, cache_dir: str) -> str | None:
+    """Essaie de trouver le STEP en local (utile si web et worker partagent un FS)."""
+    uploads_dir = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
+    if ext:
+        p = os.path.join(uploads_dir, f"{file_id}.{ext.lstrip('.')}")
+        if os.path.isfile(p):
+            return p
+    for e in (".step", ".stp"):
+        p = os.path.join(uploads_dir, f"{file_id}{e}")
+        if os.path.isfile(p):
+            return p
+    return None
+
+def _download_from_s3(file_id: str, step_ext: str | None) -> str | None:
     """
-    Job RQ appelé par web.py
-    - step_path : chemin local du STEP si le worker y a accès (souvent non)
-    - step_ext  : 'step' / 'stp' (pour récupérer via S3 si besoin)
-    - cache_dir : dossier où écrire les caches JSON (/tmp/converted par défaut)
-    Renvoie le dict final et le pousse aussi dans Redis.
+    Rapatrie le STEP depuis S3 dans /tmp/uploads et retourne le chemin local.
+    Essaie .step puis .stp si step_ext n'est pas fourni.
+    """
+    uploads_dir = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
+    os.makedirs(uploads_dir, exist_ok=True)
+
+    exts = []
+    if step_ext:
+        exts = [step_ext.lower().lstrip(".")]
+    else:
+        exts = ["step", "stp"]
+
+    for ext in exts:
+        key = f"uploads/{file_id}.{ext}"
+        local_path = os.path.join(uploads_dir, f"{file_id}.{ext}")
+        try:
+            ok = get_file(key, local_path)  # -> True si ok
+            if ok and os.path.isfile(local_path):
+                return local_path
+        except Exception as e:
+            print(f"[worker] S3 get_file FAILED for {key}: {e}")
+    return None
+
+def compute_and_cache_stats(*, file_id: str, axis: str, step_path: str | None = None,
+                            cache_dir: str = "/tmp/converted", step_ext: str | None = None) -> dict:
+    """
+    Job RQ appelé par le web.
+    - step_path : chemin local si connu (peut ne pas exister côté worker)
+    - step_ext  : 'step' ou 'stp' si connu (facilite le download S3)
+    - cache_dir : dossier où écrire les caches JSON
+    Retourne le dict final et le pousse aussi dans Redis.
     """
     axis = (axis or "Z").upper()
     if axis not in ("X", "Y", "Z"):
         axis = "Z"
 
-    upload_dir = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
-    cache_dir = cache_dir or os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
-    os.makedirs(upload_dir, exist_ok=True)
     os.makedirs(cache_dir, exist_ok=True)
 
-    # 1) Déterminer le STEP localement
-    local_path = None
-    # a) si step_path fourni et existe
-    if step_path and os.path.exists(step_path):
-        local_path = step_path
-    else:
-        # b) sinon, essayer de le retrouver localement par convention
-        ext = (step_ext or "step").lstrip(".")
-        candidate = os.path.join(upload_dir, f"{file_id}.{ext}")
-        if os.path.exists(candidate):
-            local_path = candidate
-        # c) sinon, essayer de télécharger depuis S3 si dispo
-        elif _s3_enabled():
-            key = f"uploads/{file_id}.{ext}"
-            # télécharger vers candidate
-            ok = s3_get_file(key, candidate)
-            if not ok:
-                # tenter l'extension alternative .stp/.step
-                alt = "stp" if ext == "step" else "step"
-                key2 = f"uploads/{file_id}.{alt}"
-                candidate2 = os.path.join(upload_dir, f"{file_id}.{alt}")
-                ok = s3_get_file(key2, candidate2)
-                if ok:
-                    candidate = candidate2
-            if ok and os.path.exists(candidate):
-                local_path = candidate
+    # 0) Si le chemin local reçu n'existe pas, on tente local par convention, sinon S3
+    if not step_path or not os.path.isfile(step_path):
+        step_path = _local_step_path(file_id, step_ext, cache_dir)
+    if not step_path or not os.path.isfile(step_path):
+        step_path = _download_from_s3(file_id, step_ext)
 
-    if not local_path or not os.path.exists(local_path):
-        raise RuntimeError("STEP not available for worker (no local file and S3 download failed)")
+    if not step_path or not os.path.isfile(step_path):
+        raise FileNotFoundError(f"STEP introuvable pour file_id={file_id} (ni local, ni S3).")
 
-    # 2) Calcul via ta lib (écrit aussi les caches dans cache_dir si ta lib le fait)
-    data = compute_stats_json(local_path, axis=axis, cache_dir=cache_dir, file_id=file_id)
+    print(f"[worker] computing stats for {file_id} axis={axis} using {step_path}")
+    data = compute_stats_json(step_path, axis=axis, cache_dir=cache_dir, file_id=file_id)
 
-    # 3) Mise au format (assure les champs attendus côté front)
+    # Format de sortie attendu par le front
     out = {
         "units": "mm_internal",
         "file_id": file_id,
@@ -95,12 +102,12 @@ def compute_and_cache_stats(*, file_id: str, axis: str,
         "bbox_mm": data.get("bbox_mm", [0.0, 0.0, 0.0]),
     }
 
-    # 4) Push dans Redis pour lecture immédiate par le web (fallback si caches non lus)
+    # Push dans Redis pour lecture immédiate par le web
     try:
         r = redis.from_url(REDIS_URL, ssl_cert_reqs=None)
         r.setex(_redis_key(file_id, axis), 3600, json.dumps(out))
     except Exception as e:
-        # ne pas faire échouer le job juste pour Redis
-        print("[tasks] warn: push redis failed:", repr(e))
+        print("[worker] warn: push redis failed:", repr(e))
 
+    print(f"[worker] done stats for {file_id} axis={axis}")
     return out

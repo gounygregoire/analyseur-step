@@ -271,6 +271,9 @@ def api_shape_stats():
         axis = "Z"
 
     step_path = _step_path_for(file_id)
+    # >>> ajout : on dérive l'extension si on a un chemin local
+    step_ext = pathlib.Path(step_path).suffix.lstrip(".") if step_path else None
+
     base_cache, proj_cache = _cache_paths(file_id, axis)
 
     # 1) Caches locaux si dispo
@@ -332,7 +335,6 @@ def api_shape_stats():
             # c) sinon on repoll
             return jsonify(status="processing", job_id=job_id, retry_in_sec=1), 202
         if st == "failed":
-            # NE PAS relancer un calcul local ici (risque OOM). Le forçage SYNC_METRICS a déjà été géré plus haut.
             return jsonify(error="compute_fail", detail="job failed", job_id=job_id), 500
 
     # Pas de job -> on en crée un
@@ -342,8 +344,9 @@ def api_shape_stats():
             kwargs={
                 "file_id": file_id,
                 "axis": axis,
-                "step_path": step_path,         # peut être None côté worker
-                "cache_dir": OUTPUT_FOLDER,     # où écrire les caches
+                "step_path": step_path,       # peut être None côté worker
+                "step_ext": step_ext,         # <<< NOUVEAU : aide le worker à choisir .step/.stp
+                "cache_dir": OUTPUT_FOLDER,   # où écrire les caches
             },
             job_id=job_id,
             result_ttl=3600, ttl=3600, failure_ttl=3600
@@ -351,6 +354,7 @@ def api_shape_stats():
         return jsonify(status="queued", job_id=job_id, retry_in_sec=2), 202
     except Exception as e:
         return jsonify(error="enqueue_fail", detail=str(e)), 500
+
 
 # ---------- Diag ----------
 @app.get("/__routes")
