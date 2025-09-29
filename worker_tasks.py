@@ -1,4 +1,4 @@
-# tasks.py — worker RQ : télécharge le STEP depuis S3 si besoin, logs verbeux
+# worker_tasks.py — worker RQ : télécharge le STEP depuis S3 si besoin, logs verbeux
 import os, json, redis
 from urllib.parse import urlparse
 from shape_metrics import stats_json as compute_stats_json
@@ -85,7 +85,6 @@ def compute_and_cache_stats(*, file_id: str, axis: str, step_path: str | None = 
     try:
         data = compute_stats_json(step_path, axis=axis, cache_dir=cache_dir, file_id=file_id)
     except Exception as e:
-        # Renvoyer une erreur très explicite
         raise RuntimeError(f"shape_metrics failed: {e}") from e
 
     out = {

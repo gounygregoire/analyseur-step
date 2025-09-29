@@ -1,4 +1,4 @@
-# rq_worker.py — lance un worker RQ avec un sys.path correct et une connexion Redis normalisée
+# rq_worker.py — lance un worker RQ avec un sys.path correct et Redis TLS si besoin
 import os, sys
 from urllib.parse import urlparse, unquote
 import redis
@@ -15,12 +15,11 @@ def _normalize_redis_url(url: str) -> str:
         url = url.replace("redis://", "rediss://", 1)
     return url
 
-# 1) s'assurer que la racine du projet est dans le PYTHONPATH
+# s'assurer que la racine du projet est dans le PYTHONPATH
 project_root = os.getcwd()
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-# 2) connexion Redis
 REDIS_URL = _normalize_redis_url(
     os.environ.get("REDIS_URL")
     or os.environ.get("REDIS_TLS_URL")

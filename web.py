@@ -11,18 +11,10 @@ from s3io import put_file  # utilisé dans /upload
 
 load_dotenv()
 
-# ==== RQ / Redis (connexion légère, SANS calcul local) ====
+# ==== RQ / Redis (connexion légère) ====
 import redis
 from rq import Queue
 from rq.job import Job
-
-# >>> Import optionnel de la fonction du worker (pour enqueue par objet fonction)
-try:
-    from tasks import compute_and_cache_stats as TASK_FUNC
-    TASK_IMPORT_ERR = None
-except Exception as _e:
-    TASK_FUNC = None
-    TASK_IMPORT_ERR = repr(_e)
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
@@ -47,6 +39,9 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 CONVERTER_URL = os.environ.get("CONVERTER_URL", "https://cadlytics-converter.onrender.com").rstrip("/")
 
+# Chemin de la fonction RQ (important : ne pas utiliser "tasks....")
+RQ_TASK_PATH = os.environ.get("RQ_TASK_PATH", "worker_tasks.compute_and_cache_stats")
+
 ALLOWED_EXTS = {".stl", ".step", ".stp"}
 def _ext(name: str) -> str: return pathlib.Path(name.lower()).suffix
 def _allowed(name: str) -> bool: return _ext(name) in ALLOWED_EXTS
@@ -65,6 +60,7 @@ def _normalize_redis_url(url: str) -> str:
     url = str(url).strip().strip('"').strip("'")
     parsed = urlparse(url)
 
+    # Redis Cloud exige TLS sur l'endpoint public -> force rediss://
     host = (parsed.hostname or "")
     needs_tls = (
         host.endswith("redis-cloud.com")
@@ -102,6 +98,8 @@ try:
         password=unquote(parsed.password or ""),
         db=int((parsed.path or "/0").lstrip("/")),
         ssl=use_ssl,
+        # on désactive la vérif du certificat pour éviter CERTIFICATE_VERIFY_FAILED
+        # si le CA n'est pas installé côté plateforme
         ssl_cert_reqs=None,
         socket_timeout=5,
     )
@@ -190,7 +188,7 @@ def favicon():
 def healthz():
     return "ok"
 
-# ---------- API : upload -> converter XKT ----------
+# ---------- API : upload -> converter XKT (streaming mémoire) ----------
 @app.post("/upload")
 def upload():
     f = request.files.get("file")
@@ -219,9 +217,10 @@ def upload():
         if not s3_uploaded:
             app.logger.warning("S3 put_file returned False for %s", s3_key)
     except Exception as e:
+        # IMPORTANT : on ne bloque pas la conversion pour ça
         app.logger.exception("S3 upload failed for %s: %s", s3_key, e)
 
-    # 3) conversion XKT via le converter (STREAMING pour éviter un pic mémoire)
+    # 3) conversion XKT via le converter (stream)
     try:
         with open(in_path, "rb") as fh:
             resp = requests.post(
@@ -231,7 +230,6 @@ def upload():
                 stream=True,
                 headers={"Accept": "application/octet-stream"},
             )
-
         if resp.status_code != 200:
             try:
                 detail = resp.json()
@@ -247,10 +245,11 @@ def upload():
         if not os.path.isfile(out_xkt):
             return jsonify(error="no_xkt", detail=f".xkt introuvable: {out_xkt}"), 500
 
+        # Renvoie xktUrl (camelCase) pour coller à ton front
         return jsonify(
             file_id=file_id,
             status="ready",
-            xkt_url=f"/xkt/{file_id}.xkt",
+            xktUrl=f"/xkt/{file_id}.xkt",
             s3_uploaded=s3_uploaded
         )
 
@@ -259,7 +258,7 @@ def upload():
     except Exception as e:
         return jsonify(error="convert_fail", detail=str(e)), 500
 
-# ---------- API analyse : lecture cache / enqueue worker (avec détail d'erreur) ----------
+# ---------- API analyse : lecture cache / sync fallback / enqueue worker ----------
 @app.get("/api/shape/stats")
 def api_shape_stats():
     import json as _json
@@ -272,17 +271,16 @@ def api_shape_stats():
 
     step_path = _step_path_for(file_id)
     step_ext = pathlib.Path(step_path).suffix.lstrip(".") if step_path else None
-
     base_cache, proj_cache = _cache_paths(file_id, axis)
 
-    # 1) Caches locaux
+    # 1) Caches locaux si dispo
     if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
         try:
             return jsonify(_response_from_caches(base_cache, proj_cache))
         except Exception as e:
             return jsonify(error="cache_read_fail", detail=str(e)), 500
 
-    # 2) S3 indispo -> calcul web seulement si SYNC_METRICS=1
+    # 2) Si S3 n'est pas utilisable → calcul immédiat en local (web dyno) SEULEMENT si SYNC_METRICS=1
     if not _s3_enabled():
         if os.environ.get("SYNC_METRICS") == "1" and step_path:
             try:
@@ -293,7 +291,7 @@ def api_shape_stats():
         return jsonify(error="s3_unavailable",
                        detail="S3 indisponible et SYNC_METRICS!=1, calcul non lancé côté web."), 503
 
-    # 3) Mode forcé synchrone
+    # 3) Mode forcé synchrone (optionnel)
     if os.environ.get("SYNC_METRICS") == "1" and step_path:
         try:
             data = _compute_stats_sync_or_error(file_id, axis, step_path)
@@ -301,13 +299,14 @@ def api_shape_stats():
         except Exception as e:
             return jsonify(error="compute_fail", detail=str(e)), 500
 
-    # 4) RQ
+    # 4) Sinon RQ (asynchrone)
     if q is None or _redis is None:
-        return jsonify(error="rq_unavailable", detail="Redis/RQ non dispo."), 503
+        return jsonify(error="rq_unavailable",
+                       detail="Redis/RQ non dispo."), 503
 
     job_id = f"shape_stats:{file_id}:{axis}"
 
-    # Déjà existant ?
+    # Existe déjà ?
     try:
         job = Job.fetch(job_id, connection=_redis)
     except Exception:
@@ -318,31 +317,34 @@ def api_shape_stats():
         if st in ("queued", "started", "deferred"):
             return jsonify(status="processing", job_id=job_id, retry_in_sec=2), 202
         if st == "finished":
+            # a) si caches apparus
             if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
                 return jsonify(_response_from_caches(base_cache, proj_cache))
+            # b) sinon JSON depuis Redis
             try:
                 raw = _redis.get(f"shape_stats:{file_id}:{axis}")
                 if raw:
                     return jsonify(_json.loads(raw))
             except Exception:
                 pass
+            # c) sinon on repoll
             return jsonify(status="processing", job_id=job_id, retry_in_sec=1), 202
         if st == "failed":
+            # >>> on renvoie l’exception du job pour debug immédiat
             return jsonify(error="compute_fail",
                            job_id=job_id,
                            status=st,
                            exc=str(job.exc_info) if getattr(job, "exc_info", None) else None), 500
 
-    # Pas de job -> enqueue (objet fonction si importable, sinon chemin)
-    func_to_enqueue = TASK_FUNC if TASK_FUNC is not None else "tasks.compute_and_cache_stats"
+    # Pas de job -> enqueue (via chemin sûr)
     try:
         q.enqueue(
-            func_to_enqueue,
+            RQ_TASK_PATH,
             kwargs={
                 "file_id": file_id,
                 "axis": axis,
-                "step_path": step_path,
-                "step_ext": step_ext,
+                "step_path": step_path,     # peut être None côté worker
+                "step_ext": step_ext,       # .step ou .stp (si connu)
                 "cache_dir": OUTPUT_FOLDER,
             },
             job_id=job_id,
@@ -352,7 +354,7 @@ def api_shape_stats():
     except Exception as e:
         return jsonify(error="enqueue_fail", detail=str(e)), 500
 
-# ---------- Debug RQ : récupérer le statut/erreur d’un job ----------
+# ---------- Debug RQ ----------
 @app.get("/__job/<path:job_id>")
 def __job(job_id: str):
     try:
@@ -386,8 +388,7 @@ def __rq():
         "probe_ok": False,
         "redis_error": _redis_err,
         "rq_error": _rq_err,
-        "tasks_importable_on_web": (TASK_FUNC is not None),
-        "tasks_import_error_on_web": TASK_IMPORT_ERR,
+        "task_path": RQ_TASK_PATH,
     }
     try:
         if _redis is not None:
@@ -418,6 +419,7 @@ def __diag():
 
 @app.get("/__s3_env")
 def __s3_env():
+    # N'affiche pas les secrets, juste la présence/valeurs utiles
     return jsonify({
         "AWS_ACCESS_KEY_ID_set": bool(os.environ.get("AWS_ACCESS_KEY_ID")),
         "AWS_SECRET_ACCESS_KEY_set": bool(os.environ.get("AWS_SECRET_ACCESS_KEY")),
@@ -456,11 +458,13 @@ def __s3_diag():
 
     key = f"__diag/{uuid.uuid4().hex}.txt"
     try:
+        # 1) Vérifie l’existence du bucket (HEAD)
         s3.head_bucket(Bucket=bucket)
     except ClientError as e:
         return jsonify(ok=False, step="head_bucket", error=str(e), code=e.response.get("Error",{}).get("Code"))
 
     try:
+        # 2) Put → Get → Delete
         s3.put_object(Bucket=bucket, Key=key, Body=b"ok", ContentType="text/plain")
         obj = s3.get_object(Bucket=bucket, Key=key)
         data = obj["Body"].read()
@@ -476,14 +480,17 @@ def __s3_ping():
     tmp = None
     try:
         from s3io import put_file, get_file
+        # write temp file
         fd, tmp = tempfile.mkstemp(prefix="s3ping_", suffix=".txt")
         os.write(fd, b"ok")
         os.close(fd)
 
+        # put then get
         put_ok = put_file(tmp, key, content_type="text/plain")
         if not put_ok:
             return jsonify(ok=False, step="put_file returned False", key=key), 500
 
+        # download to another temp path
         fd2, tmp2 = tempfile.mkstemp(prefix="s3ping_dl_", suffix=".txt")
         os.close(fd2)
         get_ok = get_file(key, tmp2)
@@ -517,11 +524,13 @@ def __xkts():
 # -- Route pour servir les XKT générés localement --
 @app.get("/xkt/<file_id>.xkt")
 def serve_xkt(file_id: str):
+    # sécurité minimale : UUID v4 (simplifié) + .xkt
     if not re.fullmatch(r"[0-9a-fA-F-]{36}", file_id):
         return abort(400)
     path = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
     if not os.path.isfile(path):
         return abort(404)
+    # IMPORTANT : renvoyer du binaire brut
     return send_from_directory(
         OUTPUT_FOLDER,
         f"{file_id}.xkt",
