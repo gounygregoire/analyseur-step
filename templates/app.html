@@ -141,6 +141,10 @@
                 <div style="font-size:12px;color:#666">Surface projetée</div>
                 <div id="projVal" style="font-weight:600">—</div>
                 <div style="font-size:12px;color:#666">cm²</div>
+                <!-- <<< AJOUT : note de délai pour le recalcul par axe -->
+                <span style="font-size:11px;color:#8a8a8a;margin-left:8px">
+                  (Changer d’axe peut prendre quelques secondes à s’afficher)
+                </span>
               </div>
 
               <div class="row mini" style="gap:10px;align-items:center">
@@ -222,15 +226,86 @@
     });
   </script>
 
-  <script type="module">
-    import {
-      Viewer, XKTLoaderPlugin, FastNavPlugin, NavCubePlugin,
-      SectionPlanesPlugin, AnnotationsPlugin,
-      DistanceMeasurementsPlugin, DistanceMeasurementsMouseControl
-    } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
+  <<script type="module">
+/**
+ * Trièdre d'axes qui suit la rotation de la caméra.
+ * On expose window.__drawAxesFromView(viewMatrix) que main.js appellera à chaque tick.
+ */
+(function(){
+  const canvas = document.getElementById('axisCanvas');
+  if(!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const cx = W/2, cy = H/2, L = 26;
 
-    console.log("module ok"); // test minimal
-  </script>
+  function arrow(dx,dy,label,color){
+    const x1=cx, y1=cy;
+    const x2=cx + dx*L, y2=cy + dy*L;
+    ctx.strokeStyle=color; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+    const ang = Math.atan2(y2-y1, x2-x1);
+    ctx.beginPath(); ctx.moveTo(x2,y2);
+    ctx.lineTo(x2-6*Math.cos(ang-0.5), y2-6*Math.sin(ang-0.5));
+    ctx.lineTo(x2-6*Math.cos(ang+0.5), y2-6*Math.sin(ang+0.5));
+    ctx.closePath(); ctx.fillStyle=color; ctx.fill();
+    ctx.font='12px Inter, system-ui, sans-serif'; ctx.fillStyle=color;
+    ctx.fillText(label, x2+4, y2+4);
+  }
+
+  // mV = camera.viewMatrix (Float32Array[16])
+  function drawAxesFromView(mV){
+    if (!mV) return;
+
+    // Transforme un vecteur direction (w=0) par la viewMatrix
+    const mv = (x,y,z)=>[
+      mV[0]*x + mV[4]*y + mV[8]*z,
+      mV[1]*x + mV[5]*y + mV[9]*z,
+      mV[2]*x + mV[6]*y + mV[10]*z
+    ];
+    const vX = mv(1,0,0);
+    const vY = mv(0,1,0);
+    const vZ = mv(0,0,1);
+
+    const norm2 = ([x,y]) => {
+      const n = Math.hypot(x,y) || 1;
+      return [x/n, y/n];
+    };
+
+    // En 2D écran : X→droite, Y→haut (donc -vy pour inverser l'axe Y canvas)
+    const dX = norm2([ vX[0], -vX[1] ]);
+    const dY = norm2([ vY[0], -vY[1] ]);
+    const dZ = norm2([ vZ[0], -vZ[1] ]);
+
+    const selected = (document.querySelector('input[name="projAxis"]:checked')?.value) || 'Z';
+    const dim = '#9aa3af', sel = '#111827';
+    const cX = (selected==='X') ? sel : dim;
+    const cY = (selected==='Y') ? sel : dim;
+    const cZ = (selected==='Z') ? sel : dim;
+
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle='rgba(255,255,255,.35)'; ctx.fillRect(0,0,W,H);
+
+    arrow(dX[0], dX[1], 'X', cX);
+    arrow(dY[0], dY[1], 'Y', cY);
+    arrow(dZ[0], dZ[1], 'Z', cZ);
+  }
+
+  // Expose pour main.js
+  window.__drawAxesFromView = drawAxesFromView;
+
+  // Dessin neutre au boot (caméra identité)
+  drawAxesFromView([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
+
+  // Repeindre quand on change l'axe sélectionné (pour la mise en évidence X/Y/Z)
+  document.addEventListener('change', (ev)=>{
+    const t = ev.target;
+    if (t && t.name === 'projAxis' && window.__lastViewMatrix) {
+      drawAxesFromView(window.__lastViewMatrix);
+    }
+  });
+})();
+</script>
+
   <script type="module" src="/static/js/ping.js"></script>
 </body>
 </html>

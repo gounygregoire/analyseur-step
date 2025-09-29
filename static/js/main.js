@@ -667,7 +667,14 @@ viewer.scene.on("tick", ()=>{
     viewer.scene.edgeMaterial.edgesEnabled = true;
   }
   updateCutPlaneVisual();
+
+  // <<< fait tourner le trièdre avec la caméra
+  if (window.__drawAxesFromView) {
+    window.__lastViewMatrix = viewer.camera.viewMatrix; // garde la dernière pour le repaint lors du changement d'axe
+    window.__drawAxesFromView(viewer.camera.viewMatrix);
+  }
 });
+
 
 /* ---------- Switchs d’affichage ---------- */
 chkXray ?.addEventListener("change",()=>{ setAll("xrayed", !!chkXray.checked);  setSome([...selectedIds],"xrayed",false); });
