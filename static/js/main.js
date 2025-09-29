@@ -191,7 +191,7 @@ const prettyNumber = (v) => {
   return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 };
 // Xeokit fournit des mètres. On garde la valeur et on affiche "mm".
-const formatMM = (meters) => `${prettyNumber(meters)} mm`;
+const formatMM = (meters) => `${prettyNumber(meters * 1000)} mm`;
 
 const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
   container: overlayHost,
@@ -215,7 +215,9 @@ function textMetersToMM(txt) {
     const val = parseFloat(String(num).replace(',', '.'));
     if (isNaN(val)) return _all;
     const pretty = prettyNumber(val); // même valeur, juste formatée
-    return `${pre}${pretty} mm`;
+    const mm = val * 1000;
+    const prettyMM = prettyNumber(mm);
+    return `${pre}${prettyMM} mm`;
   });
 }
 function convertNodeTextToMM(root) {
