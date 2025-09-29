@@ -156,6 +156,12 @@ def _compute_stats_sync_or_error(file_id: str, axis: str, step_path: str):
     from shape_metrics import stats_json as compute_stats_json
     return compute_stats_json(step_path, axis=axis, cache_dir=OUTPUT_FOLDER, file_id=file_id)
 
+def _abs_url(path: str) -> str:
+    """Construit une URL absolue robuste derrière proxy (Render, etc.)."""
+    proto = request.headers.get("X-Forwarded-Proto", request.scheme)
+    host  = request.headers.get("X-Forwarded-Host", request.host)
+    return f"{proto}://{host}{path}"
+
 # ---------- Pages ----------
 @app.get("/")
 def landing():
@@ -245,20 +251,16 @@ def upload():
         if not os.path.isfile(out_xkt):
             return jsonify(error="no_xkt", detail=f".xkt introuvable: {out_xkt}"), 500
 
-        # ... dans la route /upload, juste avant le return
-host = request.host_url.rstrip("/")
-xkt_rel = f"/xkt/{file_id}.xkt"
-xkt_abs = f"{host}{xkt_rel}"
-
-return jsonify(
-    file_id=file_id,
-    status="ready",
-    # renvoie les deux clés pour compatibilité front (camel + snake)
-    xktUrl=xkt_abs,
-    xkt_url=xkt_abs,
-    s3_uploaded=s3_uploaded
-)
-
+        # URL absolue (camelCase + snake_case) -> évite l'erreur "upload failed (200)" côté front
+        xkt_rel = f"/xkt/{file_id}.xkt"
+        xkt_abs = _abs_url(xkt_rel)
+        return jsonify(
+            file_id=file_id,
+            status="ready",
+            xktUrl=xkt_abs,   # camelCase
+            xkt_url=xkt_abs,  # snake_case
+            s3_uploaded=s3_uploaded
+        )
 
     except requests.Timeout:
         return jsonify(error="convert_timeout", detail="Converter timeout (>=600s)"), 504
