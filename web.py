@@ -498,17 +498,40 @@ def __s3_diag():
         retries={"max_attempts": 3, "mode": "standard"},
         signature_version="s3v4",
     )
-    s3 = boto3.client("s3",
+    s3 = boto3.client(
+        "s3",
         region_name=region,
         endpoint_url=endpoint or None,
         aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
         aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
-        config=cfg
+        config=cfg,
     )
 
     key = f"__diag/{uuid.uuid4().hex}.txt"
+
     try:
         # 1) Vérifie l’existence du bucket (HEAD)
         s3.head_bucket(Bucket=bucket)
     except ClientError as e:
-        return jsonify(ok=False, step="head_bucket", error=str(e), code=e.response.get("Error",{}).
+        # Extraction défensive du code d'erreur
+        err_code = None
+        try:
+            err_code = (e.response or {}).get("Error", {}).get("Code")
+        except Exception:
+            pass
+        return jsonify(ok=False, step="head_bucket", error=str(e), code=err_code)
+
+    try:
+        # 2) Put → Get → Delete
+        s3.put_object(Bucket=bucket, Key=key, Body=b"ok", ContentType="text/plain")
+        obj = s3.get_object(Bucket=bucket, Key=key)
+        data = obj["Body"].read()
+        s3.delete_object(Bucket=bucket, Key=key)
+        return jsonify(ok=(data == b"ok"), region=region, bucket=bucket, key=key)
+    except (ClientError, BotoCoreError, Exception) as e:
+        err_code = None
+        try:
+            err_code = getattr(getattr(e, "response", {}), "get", lambda *_: {})("Error", {}).get("Code")
+        except Exception:
+            pass
+        return jsonify(ok=False, step="put/get/delete", error=str(e), code=err_code, bucket=bucket, region=region, key=key)
