@@ -29,6 +29,12 @@ def env_int(name: str, default: int) -> int:
     except Exception:
         return default
 
+def env_bool(name: str, default: bool) -> bool:
+    v = os.environ.get(name)
+    if v is None:
+        return default
+    return str(v).strip().lower() in ("1", "true", "yes", "y", "on")
+
 MAX_UPLOAD_MB = env_int("MAX_UPLOAD_MB", 50)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
 
@@ -210,13 +216,18 @@ def _abs_url(path: str) -> str:
 
 # ---------- Raffinement des épaisseurs (ray casting) ----------
 def _try_imports_for_thickness():
+    reason = None
     try:
         import numpy as _np  # noqa
-        import trimesh as _trimesh  # noqa
-        return True
     except Exception as e:
-        app.logger.warning("[thickness] trimesh/numpy indisponibles: %s", e)
-        return False
+        reason = f"numpy manquant: {e}"
+        return False, reason
+    try:
+        import trimesh as _trimesh  # noqa
+    except Exception as e:
+        reason = f"trimesh manquant: {e}"
+        return False, reason
+    return True, None
 
 def _mesh_from_step_occ(step_path: str):
     """STEP -> trimesh via pythonocc; mm supposés (comme dans le STEP)."""
@@ -243,7 +254,6 @@ def _mesh_from_step_occ(step_path: str):
     reader.TransferRoots()
     shape = reader.OneShape()
 
-    # Tessellation
     try:
         BRepMesh_IncrementalMesh(shape, 0.15, False, 0.3, True)
     except Exception:
@@ -293,104 +303,129 @@ def _mesh_from_file(path: str):
     return None
 
 def _estimate_thickness_mm_from_mesh(mesh, samples=30000, eps_factor=1e-4, outlier_pct=0.1):
-    """Estime min/max d'épaisseur en mm par lancer de rayons selon la normale locale."""
+    """Estime min/max d'épaisseur en mm par lancer de rayons ±n depuis la surface."""
     import numpy as np
     import trimesh
-
     if not isinstance(mesh, trimesh.Trimesh):
         return None, None
 
+    # Nettoyage minimal
+    mesh.remove_unreferenced_vertices()
+    mesh.remove_degenerate_faces()
+    try:
+        mesh.fix_normals()
+    except Exception:
+        pass
+
     if not mesh.is_watertight:
-        mesh.remove_unreferenced_vertices()
-        mesh.remove_degenerate_faces()
         try:
             mesh.fill_holes()
         except Exception:
             pass
 
+    # Échantillonnage surfacique
     try:
         pts, face_idx = trimesh.sample.sample_surface_even(mesh, samples)
     except Exception:
         pts, face_idx = mesh.sample(samples, return_index=True)
+
     n = mesh.face_normals[face_idx]
 
     bbox = mesh.bounds
     diag = float(np.linalg.norm(bbox[1] - bbox[0]))
-    eps = max(diag * float(os.environ.get("THICKNESS_EPS", "1e-4")), 1e-6)
+    eps = max(diag * eps_factor, 1e-6)
 
     o1 = pts - n * eps; d1 = n
     o2 = pts + n * eps; d2 = -n
 
-    loc1, idx_ray1, _ = mesh.ray.intersects_location(o1, d1, multiple_hits=False)
-    loc2, idx_ray2, _ = mesh.ray.intersects_location(o2, d2, multiple_hits=False)
+    loc1, idx1, _ = mesh.ray.intersects_location(o1, d1, multiple_hits=False)
+    loc2, idx2, _ = mesh.ray.intersects_location(o2, d2, multiple_hits=False)
 
     dists = np.full(len(pts), np.inf)
-    if len(idx_ray1):
-        dists[idx_ray1] = np.linalg.norm(loc1 - o1[idx_ray1], axis=1)
-    if len(idx_ray2):
-        d2val = np.linalg.norm(loc2 - o2[idx_ray2], axis=1)
-        dists[idx_ray2] = np.minimum(dists[idx_ray2], d2val)
+    if len(idx1):
+        dists[idx1] = np.linalg.norm(loc1 - o1[idx1], axis=1)
+    if len(idx2):
+        d2v = np.linalg.norm(loc2 - o2[idx2], axis=1)
+        dists[idx2] = np.minimum(dists[idx2], d2v)
 
     valid = dists[np.isfinite(dists)]
     valid = valid[valid > eps * 10]
     if valid.size == 0:
         return None, None
 
+    # coupe des outliers (bords/angles)
     low = np.percentile(valid, float(outlier_pct))
     high = np.percentile(valid, 100.0 - float(outlier_pct))
     valid = valid[(valid >= low) & (valid <= high)]
 
     return float(valid.min()), float(valid.max())
 
-def _maybe_refine_thickness_with_rays(file_id: str, data: dict) -> dict:
-    """Raffine thickness_* si possible (cache local, sinon ray casting)."""
+def _maybe_refine_thickness_with_rays(file_id: str, data: dict, *, force: bool=False, dbg: dict | None=None) -> dict:
+    """Raffine thickness_* si possible (cache local, sinon ray casting). Remplit dbg si fourni."""
+    def _dbg(k, v):
+        if isinstance(dbg, dict):
+            dbg[k] = v
+
     try:
-        if os.environ.get("REFINE_THICKNESS", "1") != "1":
+        if not env_bool("REFINE_THICKNESS", True) and not force:
+            _dbg("skipped", "REFINE_THICKNESS=0")
             return data
 
-        # si déjà cache de raffinement
         thick_cache = _thickness_cache_path(file_id)
-        if os.path.isfile(thick_cache):
+        if os.path.isfile(thick_cache) and not force:
             try:
                 j = _read_json(thick_cache)
-                if j.get("tmin") is not None and j.get("tmax") is not None:
-                    data["thickness_min_mm"] = round(float(j["tmin"]), 4)
-                    data["thickness_max_mm"] = round(float(j["tmax"]), 4)
+                tmin, tmax = j.get("tmin"), j.get("tmax")
+                if tmin is not None and tmax is not None:
+                    data["thickness_min_mm"] = round(float(tmin), 4)
+                    data["thickness_max_mm"] = round(float(tmax), 4)
+                    _dbg("cache", thick_cache)
                     return data
-            except Exception:
-                pass
+            except Exception as e:
+                _dbg("cache_read_error", str(e))
 
-        # import requis
-        if not _try_imports_for_thickness():
-            return data
+        ok, reason = _try_imports_for_thickness()
+        if not ok:
+            _dbg("imports", reason);  return data
 
         src = _step_or_stl_path_for(file_id)
         if not src or not os.path.isfile(src):
-            return data
+            _dbg("src", "STEP/STL introuvable");  return data
+        _dbg("src_path", src)
 
         mesh = _mesh_from_file(src)
         if mesh is None:
-            return data
+            _dbg("mesh", "échec création mesh");  return data
 
-        samples = int(os.environ.get("THICKNESS_SAMPLES", "30000"))
+        samples = env_int("THICKNESS_SAMPLES", 30000)
+        if force and request.args.get("samples"):
+            try: samples = max(2000, int(request.args.get("samples")))
+            except Exception: pass
+        _dbg("samples", samples)
+
         tmin, tmax = _estimate_thickness_mm_from_mesh(mesh, samples=samples)
-
         if tmin is None or tmax is None:
-            return data
+            _dbg("result", "raycast vide");  return data
 
+        old_min = data.get("thickness_min_mm"); old_max = data.get("thickness_max_mm")
         data["thickness_min_mm"] = round(float(tmin), 4)
         data["thickness_max_mm"] = round(float(tmax), 4)
+        _dbg("refined_from", {"min": old_min, "max": old_max})
+        _dbg("refined_to", {"min": data["thickness_min_mm"], "max": data["thickness_max_mm"]})
 
-        # cache local
         try:
             with open(thick_cache, "w", encoding="utf-8") as fh:
                 json.dump({"tmin": data["thickness_min_mm"], "tmax": data["thickness_max_mm"]}, fh)
-        except Exception:
-            pass
+            _dbg("cache_write", thick_cache)
+        except Exception as e:
+            _dbg("cache_write_error", str(e))
 
+        app.logger.info("[thickness] refined %s: old=(%s,%s) new=(%.4f,%.4f)",
+                        file_id, old_min, old_max, data["thickness_min_mm"], data["thickness_max_mm"])
         return data
     except Exception as e:
         app.logger.warning("[thickness] refine error: %s", e)
+        _dbg("exception", str(e))
         return data
 
 # ---------- Pages ----------
@@ -489,14 +524,13 @@ def upload():
         except Exception as e:
             app.logger.warning("S3 upload XKT failed for %s: %s", file_id, e)
 
-        # URL absolue (camelCase + snake_case) -> évite 'upload failed (200)' côté front
         xkt_rel = f"/xkt/{file_id}.xkt"
         xkt_abs = _abs_url(xkt_rel)
         return jsonify(
             file_id=file_id,
             status="ready",
-            xktUrl=xkt_abs,   # camelCase
-            xkt_url=xkt_abs,  # snake_case
+            xktUrl=xkt_abs,
+            xkt_url=xkt_abs,
             s3_uploaded=s3_uploaded
         )
 
@@ -547,7 +581,6 @@ def serve_xkt(file_id: str):
         except Exception as e:
             app.logger.warning("S3 fallback error for XKT %s: %s", file_id, e)
 
-    # Toujours rien : 404
     return abort(404)
 
 # ---------- API analyse : lecture cache / sync fallback / enqueue worker ----------
@@ -615,12 +648,10 @@ def api_shape_stats():
         if st in ("queued", "started", "deferred"):
             return jsonify(status="processing", job_id=job_id, retry_in_sec=2), 202
         if st == "finished":
-            # a) si caches apparus
             if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
                 data = _response_from_caches(base_cache, proj_cache)
                 data = _maybe_refine_thickness_with_rays(file_id, data)
                 return jsonify(data)
-            # b) sinon JSON depuis Redis
             try:
                 raw = _redis.get(f"shape_stats:{file_id}:{axis}")
                 if raw:
@@ -629,7 +660,6 @@ def api_shape_stats():
                     return jsonify(data)
             except Exception:
                 pass
-            # c) sinon on repoll
             return jsonify(status="processing", job_id=job_id, retry_in_sec=1), 202
         if st == "failed":
             return jsonify(error="compute_fail",
@@ -720,7 +750,6 @@ def __diag():
 
 @app.get("/__s3_env")
 def __s3_env():
-    # N'affiche pas les secrets, juste la présence/valeurs utiles
     return jsonify({
         "AWS_ACCESS_KEY_ID_set": bool(os.environ.get("AWS_ACCESS_KEY_ID")),
         "AWS_SECRET_ACCESS_KEY_set": bool(os.environ.get("AWS_SECRET_ACCESS_KEY")),
@@ -761,10 +790,8 @@ def __s3_diag():
     key = f"__diag/{uuid.uuid4().hex}.txt"
 
     try:
-        # 1) Vérifie l’existence du bucket (HEAD)
         s3.head_bucket(Bucket=bucket)
     except ClientError as e:
-        # Extraction défensive du code d'erreur
         err_code = None
         try:
             err_code = (e.response or {}).get("Error", {}).get("Code")
@@ -773,7 +800,6 @@ def __s3_diag():
         return jsonify(ok=False, step="head_bucket", error=str(e), code=err_code)
 
     try:
-        # 2) Put → Get → Delete
         s3.put_object(Bucket=bucket, Key=key, Body=b"ok", ContentType="text/plain")
         obj = s3.get_object(Bucket=bucket, Key=key)
         data = obj["Body"].read()
@@ -786,3 +812,24 @@ def __s3_diag():
         except Exception:
             pass
         return jsonify(ok=False, step="put/get/delete", error=str(e), code=err_code, bucket=bucket, region=region, key=key)
+
+# ---------- Endpoint de diagnostic du raffinement ----------
+@app.get("/__thickness_test")
+def __thickness_test():
+    file_id = request.args.get("file_id")
+    if not file_id:
+        return jsonify(ok=False, error="file_id manquant"), 400
+
+    # valeur de base (si déjà calculée)
+    base_cache, proj_cache = _cache_paths(file_id, "Z")
+    base = {}
+    if os.path.isfile(base_cache):
+        try: base = _read_json(base_cache)
+        except Exception: base = {}
+
+    data = _normalize_metrics_dict(base) if base else {"thickness_min_mm": None, "thickness_max_mm": None}
+    dbg = {}
+    force = env_bool("REFINE_FORCE_PARAM_FALLBACK", True) or (request.args.get("force") == "1")
+    out = _maybe_refine_thickness_with_rays(file_id, data, force=force, dbg=dbg)
+
+    return jsonify(ok=True, file_id=file_id, debug=dbg, result={"tmin": out.get("thickness_min_mm"), "tmax": out.get("thickness_max_mm")})
