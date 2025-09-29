@@ -16,6 +16,14 @@ import redis
 from rq import Queue
 from rq.job import Job
 
+# >>> Import optionnel de la fonction du worker (pour enqueue par objet fonction)
+try:
+    from tasks import compute_and_cache_stats as TASK_FUNC
+    TASK_IMPORT_ERR = None
+except Exception as _e:
+    TASK_FUNC = None
+    TASK_IMPORT_ERR = repr(_e)
+
 app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
 
@@ -57,7 +65,6 @@ def _normalize_redis_url(url: str) -> str:
     url = str(url).strip().strip('"').strip("'")
     parsed = urlparse(url)
 
-    # Redis Cloud exige TLS sur l'endpoint public -> force rediss://
     host = (parsed.hostname or "")
     needs_tls = (
         host.endswith("redis-cloud.com")
@@ -95,8 +102,6 @@ try:
         password=unquote(parsed.password or ""),
         db=int((parsed.path or "/0").lstrip("/")),
         ssl=use_ssl,
-        # on désactive la vérif du certificat pour éviter CERTIFICATE_VERIFY_FAILED
-        # si le CA n'est pas installé côté plateforme
         ssl_cert_reqs=None,
         socket_timeout=5,
     )
@@ -214,7 +219,6 @@ def upload():
         if not s3_uploaded:
             app.logger.warning("S3 put_file returned False for %s", s3_key)
     except Exception as e:
-        # IMPORTANT : on ne bloque pas la conversion pour ça
         app.logger.exception("S3 upload failed for %s: %s", s3_key, e)
 
     # 3) conversion XKT via le converter (STREAMING pour éviter un pic mémoire)
@@ -224,20 +228,17 @@ def upload():
                 f"{CONVERTER_URL}/convert",
                 files={"file": (f.filename, fh, f.mimetype or "application/octet-stream")},
                 timeout=600,
-                stream=True,  # <<<<<<<<<< évite de charger tout le XKT en RAM
+                stream=True,
                 headers={"Accept": "application/octet-stream"},
             )
 
         if resp.status_code != 200:
-            # Petit message d'erreur lisible même en mode stream
             try:
                 detail = resp.json()
             except Exception:
-                # .text suffit, la payload d'erreur est petite
                 detail = resp.text
             return jsonify(error="convert_fail", detail=detail, status_code=resp.status_code), 500
 
-        # ÉCRITURE STREAMING
         with open(out_xkt, "wb") as out:
             for chunk in resp.iter_content(chunk_size=1024 * 1024):
                 if chunk:
@@ -246,7 +247,6 @@ def upload():
         if not os.path.isfile(out_xkt):
             return jsonify(error="no_xkt", detail=f".xkt introuvable: {out_xkt}"), 500
 
-        # On renvoie aussi s3_uploaded pour que le front sache si l’analyse asynchrone pourra partir
         return jsonify(
             file_id=file_id,
             status="ready",
@@ -328,21 +328,21 @@ def api_shape_stats():
                 pass
             return jsonify(status="processing", job_id=job_id, retry_in_sec=1), 202
         if st == "failed":
-            # >>> NOUVEAU : on renvoie l’exception du job pour debug immédiat
             return jsonify(error="compute_fail",
                            job_id=job_id,
                            status=st,
                            exc=str(job.exc_info) if getattr(job, "exc_info", None) else None), 500
 
-    # Pas de job -> enqueue
+    # Pas de job -> enqueue (objet fonction si importable, sinon chemin)
+    func_to_enqueue = TASK_FUNC if TASK_FUNC is not None else "tasks.compute_and_cache_stats"
     try:
         q.enqueue(
-            "tasks.compute_and_cache_stats",
+            func_to_enqueue,
             kwargs={
                 "file_id": file_id,
                 "axis": axis,
-                "step_path": step_path,     # peut être None côté worker
-                "step_ext": step_ext,       # aide le worker à choisir .step/.stp
+                "step_path": step_path,
+                "step_ext": step_ext,
                 "cache_dir": OUTPUT_FOLDER,
             },
             job_id=job_id,
@@ -351,7 +351,6 @@ def api_shape_stats():
         return jsonify(status="queued", job_id=job_id, retry_in_sec=2), 202
     except Exception as e:
         return jsonify(error="enqueue_fail", detail=str(e)), 500
-
 
 # ---------- Debug RQ : récupérer le statut/erreur d’un job ----------
 @app.get("/__job/<path:job_id>")
@@ -371,8 +370,6 @@ def __job(job_id: str):
     except Exception as e:
         return jsonify(ok=False, error=str(e), job_id=job_id), 500
 
-
-
 # ---------- Diag ----------
 @app.get("/__routes")
 def __routes():
@@ -389,6 +386,8 @@ def __rq():
         "probe_ok": False,
         "redis_error": _redis_err,
         "rq_error": _rq_err,
+        "tasks_importable_on_web": (TASK_FUNC is not None),
+        "tasks_import_error_on_web": TASK_IMPORT_ERR,
     }
     try:
         if _redis is not None:
@@ -419,7 +418,6 @@ def __diag():
 
 @app.get("/__s3_env")
 def __s3_env():
-    # N'affiche pas les secrets, juste la présence/valeurs utiles
     return jsonify({
         "AWS_ACCESS_KEY_ID_set": bool(os.environ.get("AWS_ACCESS_KEY_ID")),
         "AWS_SECRET_ACCESS_KEY_set": bool(os.environ.get("AWS_SECRET_ACCESS_KEY")),
@@ -458,13 +456,11 @@ def __s3_diag():
 
     key = f"__diag/{uuid.uuid4().hex}.txt"
     try:
-        # 1) Vérifie l’existence du bucket (HEAD)
         s3.head_bucket(Bucket=bucket)
     except ClientError as e:
         return jsonify(ok=False, step="head_bucket", error=str(e), code=e.response.get("Error",{}).get("Code"))
 
     try:
-        # 2) Put → Get → Delete
         s3.put_object(Bucket=bucket, Key=key, Body=b"ok", ContentType="text/plain")
         obj = s3.get_object(Bucket=bucket, Key=key)
         data = obj["Body"].read()
@@ -480,17 +476,14 @@ def __s3_ping():
     tmp = None
     try:
         from s3io import put_file, get_file
-        # write temp file
         fd, tmp = tempfile.mkstemp(prefix="s3ping_", suffix=".txt")
         os.write(fd, b"ok")
         os.close(fd)
 
-        # put then get
         put_ok = put_file(tmp, key, content_type="text/plain")
         if not put_ok:
             return jsonify(ok=False, step="put_file returned False", key=key), 500
 
-        # download to another temp path
         fd2, tmp2 = tempfile.mkstemp(prefix="s3ping_dl_", suffix=".txt")
         os.close(fd2)
         get_ok = get_file(key, tmp2)
@@ -524,13 +517,11 @@ def __xkts():
 # -- Route pour servir les XKT générés localement --
 @app.get("/xkt/<file_id>.xkt")
 def serve_xkt(file_id: str):
-    # sécurité minimale : UUID v4 (simplifié) + .xkt
     if not re.fullmatch(r"[0-9a-fA-F-]{36}", file_id):
         return abort(400)
     path = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
     if not os.path.isfile(path):
         return abort(404)
-    # IMPORTANT : renvoyer du binaire brut
     return send_from_directory(
         OUTPUT_FOLDER,
         f"{file_id}.xkt",
