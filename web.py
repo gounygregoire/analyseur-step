@@ -236,54 +236,7 @@ def healthz():
     return "ok"
 
 # ---------- API : upload -> converter XKT (streaming mémoire) ----------
-@app.post("/upload")
-def upload():
-    f = request.files.get("file")
-    if not f or not f.filename:
-        return jsonify(error="no_file"), 400
-    if not _allowed(f.filename):
-        return jsonify(error="bad_ext", detail="Formats acceptés : .stl, .step, .stp"), 400
-
-    file_id = str(uuid.uuid4())
-    ext = _ext(f.filename) or ".step"
-    in_path  = os.path.join(UPLOAD_FOLDER, f"{file_id}{ext}")
-    out_xkt  = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
-
-    # 1) sauvegarde locale
-    try:
-        f.save(in_path)
-    except Exception as e:
-        return jsonify(error="save_fail", detail=str(e)), 500
-
-    # 2) tentative d’upload S3 (NON BLOQUANT)
-    s3_uploaded = False
-    s3_key = f"uploads/{file_id}{ext}"
-    try:
-        ok = put_file(in_path, s3_key)
-        s3_uploaded = bool(ok)
-        if not s3_uploaded:
-            app.logger.warning("S3 put_file returned False for %s", s3_key)
-    except Exception as e:
-        # IMPORTANT : on ne bloque pas la conversion pour ça
-        app.logger.exception("S3 upload failed for %s: %s", s3_key, e)
-
-    # 3) conversion XKT via le converter (stream)
-    try:
-        with open(in_path, "rb") as fh:
-            resp = requests.post(
-                f"{CONVERTER_URL}/convert",
-                files={"file": (f.filename, fh, f.mimetype or "application/octet-stream")},
-                timeout=600,
-                stream=True,
-                headers={"Accept": "application/octet-stream"},
-            )
-        if resp.status_code != 200:
-            try:
-                detail = resp.json()
-            except Exception:
-                detail = resp.text
-            return jsonify(error="convert_fail", detail=detail, status_code=resp.status_code), 500
-
+        # ÉCRITURE STREAMING DU XKT
         with open(out_xkt, "wb") as out:
             for chunk in resp.iter_content(chunk_size=1024 * 1024):
                 if chunk:
@@ -292,9 +245,17 @@ def upload():
         if not os.path.isfile(out_xkt):
             return jsonify(error="no_xkt", detail=f".xkt introuvable: {out_xkt}"), 500
 
-        # URL absolue (camelCase + snake_case) -> évite l'erreur "upload failed (200)" côté front
+        # (NOUVEAU) — on pousse aussi le XKT sur S3 pour éliminer les 404 multi-instances
+        try:
+            if _s3_enabled():
+                put_file(out_xkt, f"xkt/{file_id}.xkt", content_type="application/octet-stream")
+        except Exception as e:
+            app.logger.warning("S3 upload XKT failed for %s: %s", file_id, e)
+
+        # URL absolue (camelCase + snake_case) -> évite 'upload failed (200)' côté front
         xkt_rel = f"/xkt/{file_id}.xkt"
         xkt_abs = _abs_url(xkt_rel)
+
         return jsonify(
             file_id=file_id,
             status="ready",
@@ -303,10 +264,50 @@ def upload():
             s3_uploaded=s3_uploaded
         )
 
-    except requests.Timeout:
-        return jsonify(error="convert_timeout", detail="Converter timeout (>=600s)"), 504
-    except Exception as e:
-        return jsonify(error="convert_fail", detail=str(e)), 500
+@app.get("/xkt/<file_id>.xkt")
+def serve_xkt(file_id: str):
+    # sécurité minimale : UUID v4 (simplifié)
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", file_id):
+        return abort(400)
+
+    path = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+
+    # Si le fichier local existe, on sert direct
+    if os.path.isfile(path):
+        return send_from_directory(
+            OUTPUT_FOLDER,
+            f"{file_id}.xkt",
+            mimetype="application/octet-stream",
+            as_attachment=False,
+            max_age=0,
+            etag=False,
+            conditional=False,
+        )
+
+    # (NOUVEAU) — fallback : tenter de rapatrier depuis S3
+    if _s3_enabled():
+        try:
+            from s3io import get_file
+            os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+            key = f"xkt/{file_id}.xkt"
+            ok = get_file(key, path)
+            if ok and os.path.isfile(path):
+                return send_from_directory(
+                    OUTPUT_FOLDER,
+                    f"{file_id}.xkt",
+                    mimetype="application/octet-stream",
+                    as_attachment=False,
+                    max_age=0,
+                    etag=False,
+                    conditional=False,
+                )
+            app.logger.warning("S3 fallback miss for XKT key=%s", key)
+        except Exception as e:
+            app.logger.warning("S3 fallback error for XKT %s: %s", file_id, e)
+
+    # Toujours rien : 404
+    return abort(404)
+
 
 # ---------- API analyse : lecture cache / sync fallback / enqueue worker ----------
 @app.get("/api/shape/stats")
