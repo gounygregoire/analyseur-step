@@ -229,6 +229,55 @@ def _try_imports_for_thickness():
         return False, reason
     return True, None
 
+# ===== Tessellation STEP via CadQuery/OCP (prioritaire) =====
+def _mesh_from_step_cadquery(step_path: str):
+    """
+    Lit un .STEP avec cadquery/ocp et retourne un mesh trimesh.
+    Unités : millimètres (CadQuery/OCP renvoie en mm).
+    """
+    try:
+        import cadquery as cq
+        import numpy as np
+        import trimesh
+    except Exception as e:
+        app.logger.warning("[thickness] cadquery indisponible: %s", e)
+        return None
+
+    try:
+        # Import STEP (cq.Shape ou cq.Compound)
+        shape = cq.importers.importStep(step_path)
+
+        # Tolérances configurables par env (défauts raisonnables en mm / radians)
+        tol_mm = float(os.environ.get("TESSELLATION_TOL_MM", "0.25"))
+        ang_rad = float(os.environ.get("TESSELLATION_ANG_RAD", "0.35"))
+
+        # Tessellation → (verts, faces)
+        verts, faces = shape.tessellate(tol_mm, angular_tolerance=ang_rad)
+        if not verts or not faces:
+            app.logger.warning("[thickness] tessellation vide pour %s", step_path)
+            return None
+
+        V = np.asarray(verts, dtype=float)   # (N, 3) en mm
+        F = np.asarray(faces, dtype=int)     # (M, 3)
+
+        mesh = trimesh.Trimesh(vertices=V, faces=F, process=False)
+        if mesh.is_empty:
+            return None
+
+        # Optionnel : tenter de fermer (améliore les intersections)
+        if not mesh.is_watertight:
+            try:
+                mesh = mesh.fill_holes()
+            except Exception:
+                pass
+
+        return mesh
+
+    except Exception as e:
+        app.logger.exception("[thickness] STEP→mesh (cadquery) failed: %s", e)
+        return None
+
+# ===== Fallback pythonocc (si dispo) =====
 def _mesh_from_step_occ(step_path: str):
     """STEP -> trimesh via pythonocc; mm supposés (comme dans le STEP)."""
     try:
@@ -288,9 +337,12 @@ def _mesh_from_step_occ(step_path: str):
     mesh = trimesh.Trimesh(vertices=np.asarray(verts_all), faces=np.asarray(faces_all), process=True)
     return mesh
 
+# ===== Choix chargeur mesh =====
 def _mesh_from_file(path: str):
     """Charge un maillage depuis STL/STEP."""
     ext = (_ext(path) or "").lower()
+
+    # STL direct via trimesh
     if ext == ".stl":
         try:
             import trimesh
@@ -298,8 +350,21 @@ def _mesh_from_file(path: str):
         except Exception as e:
             app.logger.warning("[thickness] load STL failed: %s", e)
             return None
+
+    # STEP : CadQuery/OCP d'abord, puis pythonocc si dispo
     if ext in (".step", ".stp"):
-        return _mesh_from_step_occ(path)
+        m = _mesh_from_step_cadquery(path)
+        if m is not None:
+            return m
+
+        # fallback pythonocc si installé
+        try:
+            from OCC.Core.STEPControl import STEPControl_Reader  # probe
+            return _mesh_from_step_occ(path)
+        except Exception:
+            app.logger.warning("[thickness] ni CadQuery ni pythonocc disponibles/valides pour STEP")
+            return None
+
     return None
 
 def _estimate_thickness_mm_from_mesh(mesh, samples=30000, eps_factor=1e-4, outlier_pct=0.1):
