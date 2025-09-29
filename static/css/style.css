@@ -253,3 +253,13 @@ input[type="checkbox"]{ width:14px; height:14px }
 /* ---------- Liens utilitaires ---------- */
 a{ color: var(--brand-2); text-decoration: none; }
 a:hover{ text-decoration: underline; }
+
+.axis-overlay{
+  position:absolute;
+  left:18px;      /* ajuster si besoin pour l’éloigner du NavCube */
+  top:90px;
+  width:84px;
+  height:84px;
+  pointer-events:none;
+  opacity:.9;
+}

@@ -137,22 +137,63 @@ def _read_json(p: str) -> dict:
     with open(p, "r", encoding="utf-8") as fh:
         return json.load(fh)
 
-def _response_from_caches(base_path: str, proj_path: str) -> dict:
-    j1 = _read_json(base_path)
-    j2 = _read_json(proj_path)
-    vol_mm3 = float(j1.get("volume_mm3") or 0.0)
-    bbox_mm = j1.get("bbox_mm") or [0.0, 0.0, 0.0]
+# ---- NORMALISATION MÉTRIQUES (µm → mm, mm³ → cm³) ----
+def _normalize_metrics_dict(raw: dict) -> dict:
+    """Met les champs au format attendu par le front, avec tolérance:
+       - prend volume_cm3 si présent, sinon convertit volume_mm3 -> cm3
+       - corrige les épaisseurs si elles arrivent en µm (valeurs >> plausibles en mm)
+    """
+    # volume
+    if "volume_cm3" in raw and raw.get("volume_cm3") is not None:
+        vol_cm3 = float(raw.get("volume_cm3") or 0.0)
+    else:
+        vol_mm3 = float(raw.get("volume_mm3") or 0.0)
+        vol_cm3 = vol_mm3 / 1000.0
+
+    # surface projetée (déjà en cm² en principe)
+    proj_cm2 = float(raw.get("projected_area_cm2") or 0.0)
+
+    # bbox
+    bbox_mm = raw.get("bbox_mm") or raw.get("bbox") or [0.0, 0.0, 0.0]
+
+    # épaisseurs
+    def _fix_thickness(v):
+        try:
+            x = float(v or 0.0)
+        except Exception:
+            return 0.0
+        # heuristique µm -> mm
+        if x > 1000.0:
+            x = x / 1000.0
+        return x
+
+    tmin = _fix_thickness(raw.get("thickness_min_mm") or raw.get("thickness_min"))
+    tmax = _fix_thickness(raw.get("thickness_max_mm") or raw.get("thickness_max"))
+
     return {
         "units": "mm_internal",
-        "volume_cm3": round(vol_mm3 / 1000.0, 4),
-        "projected_area_cm2": round(float(j2.get("projected_area_cm2") or 0.0), 4),
-        "thickness_min_mm": round(float(j1.get("thickness_min_mm") or 0.0), 4),
-        "thickness_max_mm": round(float(j1.get("thickness_max_mm") or 0.0), 4),
+        "volume_cm3": round(vol_cm3, 4),
+        "projected_area_cm2": round(proj_cm2, 4),
+        "thickness_min_mm": round(tmin, 4),
+        "thickness_max_mm": round(tmax, 4),
         "bbox_mm": [round(float(x), 4) for x in bbox_mm],
     }
 
+def _response_from_caches(base_path: str, proj_path: str) -> dict:
+    j1 = _read_json(base_path)
+    j2 = _read_json(proj_path)
+    merged = {
+        "volume_mm3": j1.get("volume_mm3"),
+        "volume_cm3": j1.get("volume_cm3"),  # compat éventuelle
+        "bbox_mm": j1.get("bbox_mm"),
+        "thickness_min_mm": j1.get("thickness_min_mm"),
+        "thickness_max_mm": j1.get("thickness_max_mm"),
+        "projected_area_cm2": j2.get("projected_area_cm2"),
+    }
+    return _normalize_metrics_dict(merged)
+
 def _compute_stats_sync_or_error(file_id: str, axis: str, step_path: str):
-    """Calcule en local et écrit les caches dans OUTPUT_FOLDER, renvoie le JSON final."""
+    """Calcule en local et écrit les caches dans OUTPUT_FOLDER, renvoie le JSON brut de shape_metrics."""
     from shape_metrics import stats_json as compute_stats_json
     return compute_stats_json(step_path, axis=axis, cache_dir=OUTPUT_FOLDER, file_id=file_id)
 
@@ -294,7 +335,7 @@ def api_shape_stats():
         if os.environ.get("SYNC_METRICS") == "1" and step_path:
             try:
                 data = _compute_stats_sync_or_error(file_id, axis, step_path)
-                return jsonify(data)
+                return jsonify(_normalize_metrics_dict(data))
             except Exception as e:
                 return jsonify(error="compute_fail", detail=str(e)), 500
         return jsonify(error="s3_unavailable",
@@ -304,7 +345,7 @@ def api_shape_stats():
     if os.environ.get("SYNC_METRICS") == "1" and step_path:
         try:
             data = _compute_stats_sync_or_error(file_id, axis, step_path)
-            return jsonify(data)
+            return jsonify(_normalize_metrics_dict(data))
         except Exception as e:
             return jsonify(error="compute_fail", detail=str(e)), 500
 
@@ -333,7 +374,7 @@ def api_shape_stats():
             try:
                 raw = _redis.get(f"shape_stats:{file_id}:{axis}")
                 if raw:
-                    return jsonify(_json.loads(raw))
+                    return jsonify(_normalize_metrics_dict(_json.loads(raw)))
             except Exception:
                 pass
             # c) sinon on repoll
@@ -470,82 +511,4 @@ def __s3_diag():
         # 1) Vérifie l’existence du bucket (HEAD)
         s3.head_bucket(Bucket=bucket)
     except ClientError as e:
-        return jsonify(ok=False, step="head_bucket", error=str(e), code=e.response.get("Error",{}).get("Code"))
-
-    try:
-        # 2) Put → Get → Delete
-        s3.put_object(Bucket=bucket, Key=key, Body=b"ok", ContentType="text/plain")
-        obj = s3.get_object(Bucket=bucket, Key=key)
-        data = obj["Body"].read()
-        s3.delete_object(Bucket=bucket, Key=key)
-        return jsonify(ok=(data == b"ok"), region=region, bucket=bucket, key=key)
-    except (ClientError, BotoCoreError, Exception) as e:
-        code = getattr(getattr(e, "response", {}), "get", lambda *_: None)("Error",{}).get("Code")
-        return jsonify(ok=False, step="put/get/delete", error=str(e), code=code, bucket=bucket, region=region, key=key)
-
-@app.get("/__s3_ping")
-def __s3_ping():
-    key = f"__ping/{uuid.uuid4().hex}.txt"
-    tmp = None
-    try:
-        from s3io import put_file, get_file
-        # write temp file
-        fd, tmp = tempfile.mkstemp(prefix="s3ping_", suffix=".txt")
-        os.write(fd, b"ok")
-        os.close(fd)
-
-        # put then get
-        put_ok = put_file(tmp, key, content_type="text/plain")
-        if not put_ok:
-            return jsonify(ok=False, step="put_file returned False", key=key), 500
-
-        # download to another temp path
-        fd2, tmp2 = tempfile.mkstemp(prefix="s3ping_dl_", suffix=".txt")
-        os.close(fd2)
-        get_ok = get_file(key, tmp2)
-        if not get_ok:
-            return jsonify(ok=False, step="get_file returned False", key=key), 500
-
-        with open(tmp2, "rb") as fh:
-            data = fh.read()
-
-        try:
-            os.remove(tmp2)
-        except Exception:
-            pass
-
-        return jsonify(ok=(data == b"ok"), key=key)
-
-    except Exception as e:
-        return jsonify(ok=False, error=str(e), key=key), 500
-    finally:
-        try:
-            if tmp and os.path.exists(tmp):
-                os.remove(tmp)
-        except Exception:
-            pass
-
-@app.get("/__xkts")
-def __xkts():
-    files = sorted(glob.glob(os.path.join(OUTPUT_FOLDER, "*.xkt")))
-    return jsonify(count=len(files), files=[os.path.basename(p) for p in files])
-
-# -- Route pour servir les XKT générés localement --
-@app.get("/xkt/<file_id>.xkt")
-def serve_xkt(file_id: str):
-    # sécurité minimale : UUID v4 (simplifié) + .xkt
-    if not re.fullmatch(r"[0-9a-fA-F-]{36}", file_id):
-        return abort(400)
-    path = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
-    if not os.path.isfile(path):
-        return abort(404)
-    # IMPORTANT : renvoyer du binaire brut
-    return send_from_directory(
-        OUTPUT_FOLDER,
-        f"{file_id}.xkt",
-        mimetype="application/octet-stream",
-        as_attachment=False,
-        max_age=0,
-        etag=False,
-        conditional=False,
-    )
+        return jsonify(ok=False, step="head_bucket", error=str(e), code=e.response.get("Error",{}).

@@ -104,6 +104,53 @@ new ResizeObserver(resizeCanvasAndOverlay).observe(viewerContainer);
 addEventListener("resize", resizeCanvasAndOverlay, { passive: true });
 resizeCanvasAndOverlay();
 
+function drawAxes(selected='Z'){
+  const canvas = document.getElementById('axisCanvas');
+  if(!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W=canvas.width, H=canvas.height, cx=W/2, cy=H/2, L=26;
+
+  ctx.clearRect(0,0,W,H);
+
+  function arrow(x1,y1,x2,y2,label,color){
+    ctx.strokeStyle=color; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+    const ang = Math.atan2(y2-y1, x2-x1);
+    ctx.beginPath();
+    ctx.moveTo(x2,y2);
+    ctx.lineTo(x2-6*Math.cos(ang-0.5), y2-6*Math.sin(ang-0.5));
+    ctx.lineTo(x2-6*Math.cos(ang+0.5), y2-6*Math.sin(ang+0.5));
+    ctx.closePath(); ctx.fillStyle=color; ctx.fill();
+    ctx.font='12px Inter, system-ui, sans-serif'; ctx.fillStyle=color;
+    ctx.fillText(label, x2+4, y2+4);
+  }
+
+  const dim = '#9aa3af', sel = '#111827';
+  const cX = (selected==='X') ? sel : dim;
+  const cY = (selected==='Y') ? sel : dim;
+  const cZ = (selected==='Z') ? sel : dim;
+
+  // X vers la droite, Y vers le haut, Z en pseudo 3D vers bas-gauche
+  arrow(cx,cy, cx+L,cy,      'X', cX);
+  arrow(cx,cy, cx,cy-L,      'Y', cY);
+  arrow(cx,cy, cx-0.7*L,cy+0.7*L, 'Z', cZ);
+}
+
+// 1) Dessiner au chargement
+drawAxes('Z');
+
+// 2) Quand l’utilisateur change d’axe (adapte le sélecteur à tes radios)
+document.addEventListener('change', (ev)=>{
+  const tgt = ev.target;
+  if (tgt && tgt.name === 'axis') {        // <input type="radio" name="axis" value="X|Y|Z">
+    drawAxes(tgt.value);
+  }
+});
+
+// 3) Quand ton code change d’axe côté JS (ex: boutons X/Y/Z)
+//    appelle simplement drawAxes('X'|'Y'|'Z') au même moment où tu relances la requête /api/shape/stats
+
+
 /* ---------- NavCube ---------- */
 (()=>{
   const cube=document.createElement("canvas"); cube.width=cube.height=96;

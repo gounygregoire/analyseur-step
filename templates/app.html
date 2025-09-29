@@ -7,6 +7,16 @@
 
   <!-- Style global -->
   <link rel="stylesheet" href="/static/css/style.css" />
+
+  <!-- Style léger pour le trièdre d'axes -->
+  <style>
+    .axis-overlay{
+      position:absolute; left:18px; top:90px;
+      width:84px; height:84px; z-index:6;
+      pointer-events:none; opacity:.9;
+      border-radius:12px; backdrop-filter: blur(2px);
+    }
+  </style>
 </head>
 <body>
   <div class="wrap">
@@ -97,6 +107,11 @@
             <canvas id="xeokit-canvas"></canvas>
             <!-- IMPORTANT : overlay parfaitement superposé -->
             <div id="overlayHost"></div>
+
+            <!-- Trièdre d'axes (overlay simple) -->
+            <div id="axisOverlay" class="axis-overlay">
+              <canvas id="axisCanvas" width="84" height="84"></canvas>
+            </div>
           </div>
 
           <!-- === Panneau Analyse === -->
@@ -161,16 +176,61 @@
   <script type="module" src="/static/js/main.js"></script>
 
   <script type="module">
-  import {
-    Viewer, XKTLoaderPlugin, FastNavPlugin, NavCubePlugin,
-    SectionPlanesPlugin, AnnotationsPlugin,
-    DistanceMeasurementsPlugin, DistanceMeasurementsMouseControl
-  } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
+    // Petit module pour dessiner le trièdre et refléter l'axe choisi
+    function drawAxes(selected='Z'){
+      const canvas = document.getElementById('axisCanvas');
+      if(!canvas) return;
+      const ctx = canvas.getContext('2d');
+      const W=canvas.width, H=canvas.height, cx=W/2, cy=H/2, L=26;
 
-  console.log("module ok"); // test minimal
-</script>
-<script type="module" src="/static/js/ping.js"></script>
+      ctx.clearRect(0,0,W,H);
+      // fond subtil
+      ctx.fillStyle = 'rgba(255,255,255,.35)';
+      ctx.fillRect(0,0,W,H);
 
+      function arrow(x1,y1,x2,y2,label,color){
+        ctx.strokeStyle=color; ctx.lineWidth=2;
+        ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+        const ang = Math.atan2(y2-y1, x2-x1);
+        ctx.beginPath();
+        ctx.moveTo(x2,y2);
+        ctx.lineTo(x2-6*Math.cos(ang-0.5), y2-6*Math.sin(ang-0.5));
+        ctx.lineTo(x2-6*Math.cos(ang+0.5), y2-6*Math.sin(ang+0.5));
+        ctx.closePath(); ctx.fillStyle=color; ctx.fill();
+        ctx.font='12px Inter, system-ui, sans-serif'; ctx.fillStyle=color;
+        ctx.fillText(label, x2+4, y2+4);
+      }
 
+      const dim = '#9aa3af', sel = '#111827';
+      const cX = (selected==='X') ? sel : dim;
+      const cY = (selected==='Y') ? sel : dim;
+      const cZ = (selected==='Z') ? sel : dim;
+
+      // X vers la droite, Y vers le haut, Z en pseudo 3D vers bas-gauche
+      arrow(cx,cy, cx+L,cy,        'X', cX);
+      arrow(cx,cy, cx,cy-L,        'Y', cY);
+      arrow(cx,cy, cx-0.7*L,cy+0.7*L, 'Z', cZ);
+    }
+
+    // init
+    drawAxes('Z');
+
+    // écoute les radios de sélection d'axe
+    document.addEventListener('change', (ev)=>{
+      const t = ev.target;
+      if (t && t.name === 'projAxis') drawAxes(t.value);
+    });
+  </script>
+
+  <script type="module">
+    import {
+      Viewer, XKTLoaderPlugin, FastNavPlugin, NavCubePlugin,
+      SectionPlanesPlugin, AnnotationsPlugin,
+      DistanceMeasurementsPlugin, DistanceMeasurementsMouseControl
+    } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
+
+    console.log("module ok"); // test minimal
+  </script>
+  <script type="module" src="/static/js/ping.js"></script>
 </body>
 </html>
