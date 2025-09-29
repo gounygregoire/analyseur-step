@@ -6,7 +6,7 @@ from flask import Flask, request, jsonify, send_from_directory, abort, render_te
 from flask_cors import CORS
 from dotenv import load_dotenv
 
-# S3 helpers (optionnels, non bloquants)
+# S3 helpers
 from s3io import put_file  # utilisé dans /upload
 
 load_dotenv()
@@ -236,6 +236,54 @@ def healthz():
     return "ok"
 
 # ---------- API : upload -> converter XKT (streaming mémoire) ----------
+@app.post("/upload")
+def upload():
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify(error="no_file"), 400
+    if not _allowed(f.filename):
+        return jsonify(error="bad_ext", detail="Formats acceptés : .stl, .step, .stp"), 400
+
+    file_id = str(uuid.uuid4())
+    ext = _ext(f.filename) or ".step"
+    in_path  = os.path.join(UPLOAD_FOLDER, f"{file_id}{ext}")
+    out_xkt  = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+
+    # 1) sauvegarde locale
+    try:
+        f.save(in_path)
+    except Exception as e:
+        return jsonify(error="save_fail", detail=str(e)), 500
+
+    # 2) tentative d’upload S3 (NON BLOQUANT)
+    s3_uploaded = False
+    s3_key = f"uploads/{file_id}{ext}"
+    try:
+        ok = put_file(in_path, s3_key)
+        s3_uploaded = bool(ok)
+        if not s3_uploaded:
+            app.logger.warning("S3 put_file returned False for %s", s3_key)
+    except Exception as e:
+        # IMPORTANT : on ne bloque pas la conversion pour ça
+        app.logger.exception("S3 upload failed for %s: %s", s3_key, e)
+
+    # 3) conversion XKT via le converter (stream)
+    try:
+        with open(in_path, "rb") as fh:
+            resp = requests.post(
+                f"{CONVERTER_URL}/convert",
+                files={"file": (f.filename, fh, f.mimetype or "application/octet-stream")},
+                timeout=600,
+                stream=True,
+                headers={"Accept": "application/octet-stream"},
+            )
+        if resp.status_code != 200:
+            try:
+                detail = resp.json()
+            except Exception:
+                detail = resp.text
+            return jsonify(error="convert_fail", detail=detail, status_code=resp.status_code), 500
+
         # ÉCRITURE STREAMING DU XKT
         with open(out_xkt, "wb") as out:
             for chunk in resp.iter_content(chunk_size=1024 * 1024):
@@ -255,7 +303,6 @@ def healthz():
         # URL absolue (camelCase + snake_case) -> évite 'upload failed (200)' côté front
         xkt_rel = f"/xkt/{file_id}.xkt"
         xkt_abs = _abs_url(xkt_rel)
-
         return jsonify(
             file_id=file_id,
             status="ready",
@@ -264,6 +311,12 @@ def healthz():
             s3_uploaded=s3_uploaded
         )
 
+    except requests.Timeout:
+        return jsonify(error="convert_timeout", detail="Converter timeout (>=600s)"), 504
+    except Exception as e:
+        return jsonify(error="convert_fail", detail=str(e)), 500
+
+# -- Route pour servir les XKT (fallback S3) --
 @app.get("/xkt/<file_id>.xkt")
 def serve_xkt(file_id: str):
     # sécurité minimale : UUID v4 (simplifié)
@@ -284,7 +337,7 @@ def serve_xkt(file_id: str):
             conditional=False,
         )
 
-    # (NOUVEAU) — fallback : tenter de rapatrier depuis S3
+    # Fallback : tenter de rapatrier depuis S3
     if _s3_enabled():
         try:
             from s3io import get_file
@@ -307,7 +360,6 @@ def serve_xkt(file_id: str):
 
     # Toujours rien : 404
     return abort(404)
-
 
 # ---------- API analyse : lecture cache / sync fallback / enqueue worker ----------
 @app.get("/api/shape/stats")
