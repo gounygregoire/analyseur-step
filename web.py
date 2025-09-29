@@ -60,7 +60,6 @@ def _normalize_redis_url(url: str) -> str:
     url = str(url).strip().strip('"').strip("'")
     parsed = urlparse(url)
 
-    # Redis Cloud exige TLS sur l'endpoint public -> force rediss://
     host = (parsed.hostname or "")
     needs_tls = (
         host.endswith("redis-cloud.com")
@@ -122,6 +121,13 @@ def _s3_enabled() -> bool:
     """Vrai si les 4 variables S3 sont présentes."""
     return all(os.environ.get(k) for k in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "S3_BUCKET"))
 
+def _step_or_stl_path_for(file_id: str) -> str | None:
+    return _first_existing([
+        os.path.join(UPLOAD_FOLDER, f"{file_id}.step"),
+        os.path.join(UPLOAD_FOLDER, f"{file_id}.stp"),
+        os.path.join(UPLOAD_FOLDER, f"{file_id}.stl"),
+    ])
+
 def _step_path_for(file_id: str) -> str | None:
     return _first_existing([
         os.path.join(UPLOAD_FOLDER, f"{file_id}.step"),
@@ -133,16 +139,16 @@ def _cache_paths(file_id: str, axis: str):
     proj = os.path.join(OUTPUT_FOLDER, f"{file_id}.proj.{axis}.json")
     return base, proj
 
+def _thickness_cache_path(file_id: str) -> str:
+    return os.path.join(OUTPUT_FOLDER, f"{file_id}.thick.json")
+
 def _read_json(p: str) -> dict:
     with open(p, "r", encoding="utf-8") as fh:
         return json.load(fh)
 
 # ---- NORMALISATION MÉTRIQUES (µm → mm, mm³ → cm³) ----
 def _normalize_metrics_dict(raw: dict) -> dict:
-    """Met les champs au format attendu par le front, avec tolérance:
-       - prend volume_cm3 si présent, sinon convertit volume_mm3 -> cm3
-       - corrige les épaisseurs si elles arrivent en µm (valeurs >> plausibles en mm)
-    """
+    """Met les champs au format attendu par le front, avec tolérance."""
     # volume
     if "volume_cm3" in raw and raw.get("volume_cm3") is not None:
         vol_cm3 = float(raw.get("volume_cm3") or 0.0)
@@ -162,8 +168,7 @@ def _normalize_metrics_dict(raw: dict) -> dict:
             x = float(v or 0.0)
         except Exception:
             return 0.0
-        # heuristique µm -> mm
-        if x > 1000.0:
+        if x > 1000.0:  # heuristique µm -> mm
             x = x / 1000.0
         return x
 
@@ -202,6 +207,191 @@ def _abs_url(path: str) -> str:
     proto = request.headers.get("X-Forwarded-Proto", request.scheme)
     host  = request.headers.get("X-Forwarded-Host", request.host)
     return f"{proto}://{host}{path}"
+
+# ---------- Raffinement des épaisseurs (ray casting) ----------
+def _try_imports_for_thickness():
+    try:
+        import numpy as _np  # noqa
+        import trimesh as _trimesh  # noqa
+        return True
+    except Exception as e:
+        app.logger.warning("[thickness] trimesh/numpy indisponibles: %s", e)
+        return False
+
+def _mesh_from_step_occ(step_path: str):
+    """STEP -> trimesh via pythonocc; mm supposés (comme dans le STEP)."""
+    try:
+        import numpy as np
+        import trimesh
+        from OCC.Core.STEPControl import STEPControl_Reader, STEPControl_AsIs
+        from OCC.Core.IFSelect import IFSelect_RetDone
+        from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
+        from OCC.Core.TopExp import TopExp_Explorer
+        from OCC.Core.TopAbs import TopAbs_FACE
+        from OCC.Core.BRep import BRep_Tool
+        from OCC.Core.Poly import Poly_Triangulation
+        from OCC.Core.TopoDS import TopoDS_Face
+    except Exception as e:
+        app.logger.warning("[thickness] pythonocc indisponible: %s", e)
+        return None
+
+    reader = STEPControl_Reader()
+    status = reader.ReadFile(step_path)
+    if status != IFSelect_RetDone:
+        app.logger.warning("[thickness] STEP read fail: %s", step_path)
+        return None
+    reader.TransferRoots()
+    shape = reader.OneShape()
+
+    # Tessellation
+    try:
+        BRepMesh_IncrementalMesh(shape, 0.15, False, 0.3, True)
+    except Exception:
+        BRepMesh_IncrementalMesh(shape, 0.5, False, 0.5, True)
+
+    verts_all, faces_all = [], []
+    v_offset = 0
+
+    exp = TopExp_Explorer(shape, TopAbs_FACE)
+    while exp.More():
+        face = TopoDS_Face(exp.Current())
+        triangulation = BRep_Tool.Triangulation(face, None)
+        if triangulation is not None and isinstance(triangulation, Poly_Triangulation):
+            pts = triangulation.Nodes()
+            tris = triangulation.Triangles()
+            npts = pts.Size()
+            ntris = tris.Size()
+            for i in range(1, npts + 1):
+                p = pts.Value(i)
+                verts_all.append([p.X(), p.Y(), p.Z()])
+            for i in range(1, ntris + 1):
+                t = tris.Value(i)
+                a, b, c = t.Get()
+                faces_all.append([v_offset + a - 1, v_offset + b - 1, v_offset + c - 1])
+            v_offset += npts
+        exp.Next()
+
+    if not verts_all or not faces_all:
+        app.logger.warning("[thickness] tessellation vide")
+        return None
+
+    mesh = trimesh.Trimesh(vertices=np.asarray(verts_all), faces=np.asarray(faces_all), process=True)
+    return mesh
+
+def _mesh_from_file(path: str):
+    """Charge un maillage depuis STL/STEP."""
+    ext = (_ext(path) or "").lower()
+    if ext == ".stl":
+        try:
+            import trimesh
+            return trimesh.load_mesh(path, force="mesh")
+        except Exception as e:
+            app.logger.warning("[thickness] load STL failed: %s", e)
+            return None
+    if ext in (".step", ".stp"):
+        return _mesh_from_step_occ(path)
+    return None
+
+def _estimate_thickness_mm_from_mesh(mesh, samples=30000, eps_factor=1e-4, outlier_pct=0.1):
+    """Estime min/max d'épaisseur en mm par lancer de rayons selon la normale locale."""
+    import numpy as np
+    import trimesh
+
+    if not isinstance(mesh, trimesh.Trimesh):
+        return None, None
+
+    if not mesh.is_watertight:
+        mesh.remove_unreferenced_vertices()
+        mesh.remove_degenerate_faces()
+        try:
+            mesh.fill_holes()
+        except Exception:
+            pass
+
+    try:
+        pts, face_idx = trimesh.sample.sample_surface_even(mesh, samples)
+    except Exception:
+        pts, face_idx = mesh.sample(samples, return_index=True)
+    n = mesh.face_normals[face_idx]
+
+    bbox = mesh.bounds
+    diag = float(np.linalg.norm(bbox[1] - bbox[0]))
+    eps = max(diag * float(os.environ.get("THICKNESS_EPS", "1e-4")), 1e-6)
+
+    o1 = pts - n * eps; d1 = n
+    o2 = pts + n * eps; d2 = -n
+
+    loc1, idx_ray1, _ = mesh.ray.intersects_location(o1, d1, multiple_hits=False)
+    loc2, idx_ray2, _ = mesh.ray.intersects_location(o2, d2, multiple_hits=False)
+
+    dists = np.full(len(pts), np.inf)
+    if len(idx_ray1):
+        dists[idx_ray1] = np.linalg.norm(loc1 - o1[idx_ray1], axis=1)
+    if len(idx_ray2):
+        d2val = np.linalg.norm(loc2 - o2[idx_ray2], axis=1)
+        dists[idx_ray2] = np.minimum(dists[idx_ray2], d2val)
+
+    valid = dists[np.isfinite(dists)]
+    valid = valid[valid > eps * 10]
+    if valid.size == 0:
+        return None, None
+
+    low = np.percentile(valid, float(outlier_pct))
+    high = np.percentile(valid, 100.0 - float(outlier_pct))
+    valid = valid[(valid >= low) & (valid <= high)]
+
+    return float(valid.min()), float(valid.max())
+
+def _maybe_refine_thickness_with_rays(file_id: str, data: dict) -> dict:
+    """Raffine thickness_* si possible (cache local, sinon ray casting)."""
+    try:
+        if os.environ.get("REFINE_THICKNESS", "1") != "1":
+            return data
+
+        # si déjà cache de raffinement
+        thick_cache = _thickness_cache_path(file_id)
+        if os.path.isfile(thick_cache):
+            try:
+                j = _read_json(thick_cache)
+                if j.get("tmin") is not None and j.get("tmax") is not None:
+                    data["thickness_min_mm"] = round(float(j["tmin"]), 4)
+                    data["thickness_max_mm"] = round(float(j["tmax"]), 4)
+                    return data
+            except Exception:
+                pass
+
+        # import requis
+        if not _try_imports_for_thickness():
+            return data
+
+        src = _step_or_stl_path_for(file_id)
+        if not src or not os.path.isfile(src):
+            return data
+
+        mesh = _mesh_from_file(src)
+        if mesh is None:
+            return data
+
+        samples = int(os.environ.get("THICKNESS_SAMPLES", "30000"))
+        tmin, tmax = _estimate_thickness_mm_from_mesh(mesh, samples=samples)
+
+        if tmin is None or tmax is None:
+            return data
+
+        data["thickness_min_mm"] = round(float(tmin), 4)
+        data["thickness_max_mm"] = round(float(tmax), 4)
+
+        # cache local
+        try:
+            with open(thick_cache, "w", encoding="utf-8") as fh:
+                json.dump({"tmin": data["thickness_min_mm"], "tmax": data["thickness_max_mm"]}, fh)
+        except Exception:
+            pass
+
+        return data
+    except Exception as e:
+        app.logger.warning("[thickness] refine error: %s", e)
+        return data
 
 # ---------- Pages ----------
 @app.get("/")
@@ -264,7 +454,6 @@ def upload():
         if not s3_uploaded:
             app.logger.warning("S3 put_file returned False for %s", s3_key)
     except Exception as e:
-        # IMPORTANT : on ne bloque pas la conversion pour ça
         app.logger.exception("S3 upload failed for %s: %s", s3_key, e)
 
     # 3) conversion XKT via le converter (stream)
@@ -379,7 +568,9 @@ def api_shape_stats():
     # 1) Caches locaux si dispo
     if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
         try:
-            return jsonify(_response_from_caches(base_cache, proj_cache))
+            data = _response_from_caches(base_cache, proj_cache)
+            data = _maybe_refine_thickness_with_rays(file_id, data)
+            return jsonify(data)
         except Exception as e:
             return jsonify(error="cache_read_fail", detail=str(e)), 500
 
@@ -388,7 +579,9 @@ def api_shape_stats():
         if os.environ.get("SYNC_METRICS") == "1" and step_path:
             try:
                 data = _compute_stats_sync_or_error(file_id, axis, step_path)
-                return jsonify(_normalize_metrics_dict(data))
+                data = _normalize_metrics_dict(data)
+                data = _maybe_refine_thickness_with_rays(file_id, data)
+                return jsonify(data)
             except Exception as e:
                 return jsonify(error="compute_fail", detail=str(e)), 500
         return jsonify(error="s3_unavailable",
@@ -398,7 +591,9 @@ def api_shape_stats():
     if os.environ.get("SYNC_METRICS") == "1" and step_path:
         try:
             data = _compute_stats_sync_or_error(file_id, axis, step_path)
-            return jsonify(_normalize_metrics_dict(data))
+            data = _normalize_metrics_dict(data)
+            data = _maybe_refine_thickness_with_rays(file_id, data)
+            return jsonify(data)
         except Exception as e:
             return jsonify(error="compute_fail", detail=str(e)), 500
 
@@ -422,18 +617,21 @@ def api_shape_stats():
         if st == "finished":
             # a) si caches apparus
             if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
-                return jsonify(_response_from_caches(base_cache, proj_cache))
+                data = _response_from_caches(base_cache, proj_cache)
+                data = _maybe_refine_thickness_with_rays(file_id, data)
+                return jsonify(data)
             # b) sinon JSON depuis Redis
             try:
                 raw = _redis.get(f"shape_stats:{file_id}:{axis}")
                 if raw:
-                    return jsonify(_normalize_metrics_dict(_json.loads(raw)))
+                    data = _normalize_metrics_dict(_json.loads(raw))
+                    data = _maybe_refine_thickness_with_rays(file_id, data)
+                    return jsonify(data)
             except Exception:
                 pass
             # c) sinon on repoll
             return jsonify(status="processing", job_id=job_id, retry_in_sec=1), 202
         if st == "failed":
-            # >>> on renvoie l’exception du job pour debug immédiat
             return jsonify(error="compute_fail",
                            job_id=job_id,
                            status=st,
