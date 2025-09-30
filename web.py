@@ -17,7 +17,7 @@ from rq import Queue
 from rq.job import Job
 
 # Épaisseur via converter (lecture STEP + algo ±normales -> mm)
-from converter import compute_thickness_mm_from_step
+from xkt_converter import compute_thickness_mm_from_step
 
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
