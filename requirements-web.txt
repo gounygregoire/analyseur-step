@@ -37,17 +37,14 @@ Flask-Compress==1.18
 
 gunicorn==23.0.0
 Pillow==11.2.1
-reportlab==4.4.2
-# pyembree>=0.1.10
 
-# === AJOUTER à requirements-web.txt ===
-# … le reste de tes deps …
+# ---- Géométrie / calcul épaisseur ----
 numpy==1.24.4
+scipy==1.10.1
 trimesh==4.6.13
 networkx==3.4.2
+Rtree==1.2.0
 cadquery==2.4.0
 cadquery-ocp==7.7.2.2b2
-Pillow==11.2.1
-
-Rtree==1.2.0    # <— AJOUT
-scipy==1.10.1
+# pyembree est optionnel (trimesh bascule en fallback si absent)
+# pyembree==0.1.10
