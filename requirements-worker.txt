@@ -4,17 +4,25 @@ python-dotenv==1.0.0
 boto3==1.35.0
 requests==2.32.4
 
+# Noyau scientifique
 numpy==1.24.4
 scipy==1.10.1
-matplotlib==3.10.3
+
+# Géométrie / maillage
 trimesh==4.6.13
 networkx==3.4.2
 
+# STEP -> mesh (CadQuery + OCP)
 cadquery==2.4.0
 cadquery-ocp==7.7.2.2b2
+
+# Divers déjà présents dans ton worker
 ezdxf==1.4.2
 nptyping==2.0.1
 nlopt==2.9.1
 casadi==3.7.2
-Rtree==1.2.0
 Pillow==11.2.1
+Rtree==1.2.0
+
+# *** NOUVEAU pour VOXEL/SDF ***
+scikit-image==0.22.0
