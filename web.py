@@ -383,16 +383,17 @@ def serve_xkt(file_id: str):
 @app.get("/api/shape/stats")
 def api_shape_stats():
     """
-    - Si caches présents -> on renvoie (merge épaisseur worker)
-    - Sinon on tente pull S3 -> puis renvoie si OK
-    - Sinon: enqueue le job RQ et 202 (queued/processing)
-    Paramètre facultatif: ?recompute=1 pour IGNORER les caches, les purger et forcer un nouveau job.
+    - Si caches présents -> renvoie (merge épaisseur worker)
+    - Sinon (ou si ?recompute=1) -> enfile un job RQ
+    Spécial:
+      * ?recompute=1 force un NOUVEAU job_id (suffixe UUID) et ignore TOUT fallback.
     """
-    import json as _json
+    import json as _json, glob, pathlib, uuid as _uuid
 
     file_id = request.args.get("file_id")
     axis = (request.args.get("axis") or "Z").upper()
     recompute = (request.args.get("recompute") == "1")
+    allow_raw_fallback = env_bool("ALLOW_REDIS_RAW_FALLBACK", False)  # <— par défaut OFF
 
     if not file_id or not re.fullmatch(r"[0-9a-fA-F-]{36}", file_id):
         return jsonify(error="bad_file_id", detail="file_id doit être un UUID v4"), 400
@@ -401,14 +402,16 @@ def api_shape_stats():
 
     base_cache, proj_cache = _cache_paths(file_id, axis)
 
-    # Recompute forcé : purge locale + passe direct en RQ
+    # -- Recompute forcé: purge locale + on n'utilise AUCUN fallback
     if recompute:
         for p in glob.glob(os.path.join(OUTPUT_FOLDER, f"{file_id}.*")):
-            try: os.remove(p)
-            except Exception: pass
+            try:
+                os.remove(p)
+            except Exception:
+                pass
 
-    # 0) caches locaux ?
-    if not recompute and os.path.isfile(base_cache) and os.path.isfile(proj_cache):
+    # 0) caches locaux ? (on ne lit pas les caches si recompute=1)
+    if (not recompute) and os.path.isfile(base_cache) and os.path.isfile(proj_cache):
         try:
             data = _response_from_caches(base_cache, proj_cache)
             data = _merge_thickness_from_worker(file_id, data, prefer_worker=True)
@@ -418,60 +421,62 @@ def api_shape_stats():
         except Exception as e:
             return jsonify(error="cache_read_fail", detail=str(e)), 500
 
-    # 1) pull S3 (si activé)
-    pulled = _pull_converted_from_s3_if_missing(file_id, axis) if not recompute else {"base_ok": False, "proj_ok": False}
-    if not recompute and pulled.get("base_ok") and pulled.get("proj_ok"):
-        try:
-            data = _response_from_caches(base_cache, proj_cache)
-            data = _merge_thickness_from_worker(file_id, data, prefer_worker=True)
-            if env_bool("THICKNESS_ON_WEB", False):
-                data = _ensure_thickness_via_converter(file_id, data)
-            return jsonify(data)
-        except Exception as e:
-            return jsonify(error="cache_read_fail", detail=f"after_s3: {e}"), 500
-
-    # 2) envoi en RQ
-    if q is None or _redis is None:
-        return jsonify(error="rq_unavailable", detail="Redis/RQ non dispo sur le web service."), 503
-
-    job_id = f"shape_stats:{file_id}:{axis}"
-
-    try:
-        job = Job.fetch(job_id, connection=_redis)
-    except Exception:
-        job = None
-
-    if job:
-        st = (job.get_status() or "").lower()
-        if st in ("queued", "started", "deferred"):
-            return jsonify(status="processing", job_id=job_id, retry_in_sec=2), 202
-        if st == "finished":
-            # tenter caches
-            if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
+    # 1) (désactivé quand recompute=1) pull S3 si activé et caches absents
+    if (not recompute):
+        pulled = _pull_converted_from_s3_if_missing(file_id, axis)
+        if pulled.get("base_ok") and pulled.get("proj_ok"):
+            try:
                 data = _response_from_caches(base_cache, proj_cache)
                 data = _merge_thickness_from_worker(file_id, data, prefer_worker=True)
                 if env_bool("THICKNESS_ON_WEB", False):
                     data = _ensure_thickness_via_converter(file_id, data)
                 return jsonify(data)
-            # sinon clé redis brute (si le worker en a éventuellement posé une — optionnel)
-            try:
-                raw = _redis.get(f"shape_stats:{file_id}:{axis}")
-                if raw:
-                    data = _normalize_metrics_dict(_json.loads(raw))
+            except Exception as e:
+                return jsonify(error="cache_read_fail", detail=f"after_s3: {e}"), 500
+
+    # 2) RQ nécessaire
+    if q is None or _redis is None:
+        return jsonify(error="rq_unavailable", detail="Redis/RQ non dispo sur le web service."), 503
+
+    job_base = f"shape_stats:{file_id}:{axis}"
+    # IMPORTANT: pour recompute on FABRIQUE un job_id UNIQUE
+    job_id = job_base if not recompute else f"{job_base}:{_uuid.uuid4().hex[:8]}"
+
+    # Si pas en recompute, on peut réutiliser un job existant
+    if not recompute:
+        try:
+            job = Job.fetch(job_id, connection=_redis)
+        except Exception:
+            job = None
+
+        if job:
+            st = (job.get_status() or "").lower()
+            if st in ("queued", "started", "deferred"):
+                return jsonify(status="processing", job_id=job_id, retry_in_sec=2), 202
+            if st == "finished":
+                # Ne lire Redis brut QUE si autorisé (par défaut: OFF)
+                if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
+                    data = _response_from_caches(base_cache, proj_cache)
                     data = _merge_thickness_from_worker(file_id, data, prefer_worker=True)
                     if env_bool("THICKNESS_ON_WEB", False):
                         data = _ensure_thickness_via_converter(file_id, data)
                     return jsonify(data)
-            except Exception:
-                pass
-            return jsonify(status="processing", job_id=job_id, retry_in_sec=1), 202
-        if st == "failed":
-            return jsonify(error="compute_fail", job_id=job_id, status=st, exc=str(job.exc_info) if getattr(job, "exc_info", None) else None), 500
+                if allow_raw_fallback:
+                    try:
+                        raw = _redis.get(f"shape_stats:{file_id}:{axis}")
+                        if raw:
+                            data = _normalize_metrics_dict(_json.loads(raw))
+                            data = _merge_thickness_from_worker(file_id, data, prefer_worker=True)
+                            if env_bool("THICKNESS_ON_WEB", False):
+                                data = _ensure_thickness_via_converter(file_id, data)
+                            return jsonify(data)
+                    except Exception:
+                        pass
+                # Sinon on retombe en (ré)enfilage de job plus bas
 
-    # pas de job existant: on l’enqueue
+    # Enfiler un (nouveau) job
     try:
-        # NB: step_path/step_ext sont passés si le web a le fichier en local (sinon le worker tirera S3)
-        step_path = _step_path_for(file_id)
+        step_path = _step_path_for(file_id)  # facultatif
         step_ext = pathlib.Path(step_path).suffix.lstrip(".") if step_path else None
         q.enqueue(
             RQ_TASK_PATH,
