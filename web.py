@@ -406,63 +406,91 @@ def _mesh_from_file(path: str):
 
     return None
 
-def _estimate_thickness_mm_from_mesh(mesh, samples=30000, eps_factor=1e-4, outlier_pct=0.1):
-    """Estime min/max d'épaisseur en mm par lancer de rayons ±n depuis la surface."""
+def _estimate_thickness_mm_from_mesh(mesh, samples=30000, eps_factor=1e-5, outlier_pct=0.1, backface_dot=-0.3):
+    """
+    Estime min/max d'épaisseur (mm) en tirant des rayons ±n depuis la surface.
+    Améliorations:
+      - Intersector pyembree si dispo (>> rapide)
+      - Rejet des "mêmes faces" (back-face filter)
+      - Epsilon proportionnel au diag
+    """
     import numpy as np
     import trimesh
+
     if not isinstance(mesh, trimesh.Trimesh):
         return None, None
 
-    # Nettoyage minimal
+    # Nettoyage minimum
+    try: mesh.fix_normals()
+    except Exception: pass
     mesh.remove_unreferenced_vertices()
     mesh.remove_degenerate_faces()
     try:
-        mesh.fix_normals()
+        if not mesh.is_watertight:
+            mesh = mesh.fill_holes()
     except Exception:
         pass
 
-    if not mesh.is_watertight:
-        try:
-            mesh.fill_holes()
-        except Exception:
-            pass
-
-    # Échantillonnage surfacique
+    # Intersector
     try:
-        pts, face_idx = trimesh.sample.sample_surface_even(mesh, samples)
+        from trimesh.ray.ray_pyembree import RayMeshIntersector
+        inter = RayMeshIntersector(mesh)
     except Exception:
-        pts, face_idx = mesh.sample(samples, return_index=True)
+        from trimesh.ray.ray_triangle import RayMeshIntersector
+        inter = RayMeshIntersector(mesh)
 
-    n = mesh.face_normals[face_idx]
+    # Échantillonnage surfacique (droit au but)
+    try:
+        pts, f_idx = trimesh.sample.sample_surface_even(mesh, samples)
+    except Exception:
+        pts, f_idx = mesh.sample(samples, return_index=True)
 
-    bbox = mesh.bounds
-    diag = float(np.linalg.norm(bbox[1] - bbox[0]))
+    n = mesh.face_normals[f_idx]
+
+    # Epsilon adapté à la taille
+    bb = mesh.bounds
+    diag = float(np.linalg.norm(bb[1] - bb[0]))
     eps = max(diag * eps_factor, 1e-6)
 
-    o1 = pts - n * eps; d1 = n
-    o2 = pts + n * eps; d2 = -n
+    origins_p = pts + n * eps
+    origins_m = pts - n * eps
 
-    loc1, idx1, _ = mesh.ray.intersects_location(o1, d1, multiple_hits=False)
-    loc2, idx2, _ = mesh.ray.intersects_location(o2, d2, multiple_hits=False)
+    # 1er impact + index de la face touchée
+    loc_p, ir_p, it_p = inter.intersects_location(origins_p,  n, multiple_hits=False)
+    loc_m, ir_m, it_m = inter.intersects_location(origins_m, -n, multiple_hits=False)
 
-    dists = np.full(len(pts), np.inf)
-    if len(idx1):
-        dists[idx1] = np.linalg.norm(loc1 - o1[idx1], axis=1)
-    if len(idx2):
-        d2v = np.linalg.norm(loc2 - o2[idx2], axis=1)
-        dists[idx2] = np.minimum(dists[idx2], d2v)
+    dist = np.full(len(pts), np.inf)
 
-    valid = dists[np.isfinite(dists)]
-    valid = valid[valid > eps * 10]
-    if valid.size == 0:
+    if len(ir_p):
+        d = np.linalg.norm(loc_p - origins_p[ir_p], axis=1)
+        nf = mesh.face_normals[it_p]
+        good = (np.einsum("ij,ij->i", nf, n[ir_p]) < backface_dot)  # face opposée
+        d[~good] = np.inf
+        dist[ir_p] = np.minimum(dist[ir_p], d)
+
+    if len(ir_m):
+        d = np.linalg.norm(loc_m - origins_m[ir_m], axis=1)
+        nf = mesh.face_normals[it_m]
+        good = (np.einsum("ij,ij->i", nf, -n[ir_m]) < backface_dot)
+        d[~good] = np.inf
+        dist[ir_m] = np.minimum(dist[ir_m], d)
+
+    d = dist[np.isfinite(dist)]
+    d = d[d > eps * 10]
+    if d.size == 0:
         return None, None
 
-    # coupe des outliers (bords/angles)
-    low = np.percentile(valid, float(outlier_pct))
-    high = np.percentile(valid, 100.0 - float(outlier_pct))
-    valid = valid[(valid >= low) & (valid <= high)]
+    # Coupe légère des outliers → stabilise le max
+    if 0.0 < outlier_pct < 5.0:
+        lo = np.percentile(d, outlier_pct)
+        hi = np.percentile(d, 100.0 - outlier_pct)
+        d = d[(d >= lo) & (d <= hi)]
 
-    return float(valid.min()), float(valid.max())
+    tmin = float(d.min())
+    tmax = float(np.percentile(d, 99.9))
+    # limite physique simple
+    tmax = min(tmax, float(min(mesh.extents)))
+    return tmin, tmax
 
 def _maybe_refine_thickness_with_rays(file_id: str, data: dict, *, force: bool=False, dbg: dict | None=None) -> dict:
     """Raffine thickness_* si possible (cache local, sinon ray casting). Remplit dbg si fourni."""

@@ -184,22 +184,39 @@ def _read_step_shape(step_path: str):
     return shape
 
 
-def _occ_to_trimesh(shape, lin_def: float = 0.15, ang_def: float = 0.35):
+# --- remplace _occ_to_trimesh dans converter.py ---
+def _occ_to_trimesh(shape, lin_def: float | None = None, ang_def: float | None = None):
     """
-    Maillage OCC → trimesh.Trimesh
+    Maillage OCC → trimesh.Trimesh, avec déflection adaptative.
+    ENV (optionnel):
+      THICK_LIN_DEF_MM  (ex: 0.03)
+      THICK_ANG_DEF_RAD (ex: 0.15)
     """
     import numpy as np
     import trimesh
+    from OCC.Core.Bnd import Bnd_Box
+    from OCC.Core.BRepBndLib import brepbndlib_Add
     from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
     from OCC.Core.BRep import BRep_Tool
     from OCC.Core.TopLoc import TopLoc_Location
     from OCC.Core.TopAbs import TopAbs_FACE
     from OCC.Core.TopExp import TopExp_Explorer
 
+    # --- bbox pour adapter la déflection ---
+    box = Bnd_Box()
+    brepbndlib_Add(shape, box, True)
+    xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
+    dx, dy, dz = xmax - xmin, ymax - ymin, zmax - zmin
+    diag = float((dx**2 + dy**2 + dz**2) ** 0.5)
+
+    # Déflection par défaut (mm) = min(1/2000 du diag, 0.08)
+    lin_def_auto = max(1e-3, min(diag / 2000.0, 0.08))
+    lin_def = float(os.getenv("THICK_LIN_DEF_MM", lin_def or lin_def_auto))
+    ang_def = float(os.getenv("THICK_ANG_DEF_RAD", ang_def or 0.25))
+
     BRepMesh_IncrementalMesh(shape, lin_def, False, ang_def, True).Perform()
 
-    vertices = []
-    faces = []
+    vertices, faces = [], []
     v_offset = 0
 
     exp = TopExp_Explorer(shape, TopAbs_FACE)
@@ -208,21 +225,16 @@ def _occ_to_trimesh(shape, lin_def: float = 0.15, ang_def: float = 0.35):
         loc = TopLoc_Location()
         tri = BRep_Tool.Triangulation(face, loc)
         if tri is None:
-            exp.Next()
-            continue
-
+            exp.Next(); continue
         trsf = loc.Transformation()
         nodes = tri.Nodes()
-
         for i in range(1, nodes.Size() + 1):
             p = nodes.Value(i).Transformed(trsf)
             vertices.append([p.X(), p.Y(), p.Z()])
-
         tris = tri.Triangles()
         for i in range(1, tris.Size() + 1):
             a, b, c = tris.Value(i).Get()
             faces.append([v_offset + a - 1, v_offset + b - 1, v_offset + c - 1])
-
         v_offset = len(vertices)
         exp.Next()
 
@@ -230,12 +242,16 @@ def _occ_to_trimesh(shape, lin_def: float = 0.15, ang_def: float = 0.35):
                            faces=np.asarray(faces, dtype=np.int64),
                            process=True)
     if not mesh.is_watertight:
-        mesh.remove_degenerate_faces()
-        mesh.remove_duplicate_faces()
-        mesh.remove_unreferenced_vertices()
-        mesh.fill_holes()
-        mesh.process(validate=True)
+        try:
+            mesh.remove_degenerate_faces()
+            mesh.remove_duplicate_faces()
+            mesh.remove_unreferenced_vertices()
+            mesh.fill_holes()
+            mesh.process(validate=True)
+        except Exception:
+            pass
     return mesh
+
 
 
 def _make_intersector(mesh):
@@ -253,8 +269,9 @@ def _make_intersector(mesh):
 def compute_thickness_mm_from_mesh(
     mesh,
     unit_scale_mm: float = 1.0,
-    samples_per_face: int = 2,
-    max_samples: int = 50000,
+    # --- dans compute_thickness_mm_from_occ_shape (converter.py) ---
+    samples_per_face = int(os.getenv("THICKNESS_SPF", samples_per_face))
+    max_samples      = int(os.getenv("THICKNESS_MAX_SAMPLES", max_samples))
     backface_dot: float = -0.3,
     eps: float = 1e-6,
 ):
