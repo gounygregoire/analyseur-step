@@ -1,5 +1,5 @@
 # web.py
-import os, uuid, pathlib, json, requests, re, glob
+import os, uuid, pathlib, json, requests, re, glob, socket
 from urllib.parse import urlparse, urlunparse, unquote
 
 from flask import Flask, request, jsonify, send_from_directory, abort, render_template
@@ -7,7 +7,10 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 
 # S3 helpers
-from s3io import put_file  # utilisé dans /upload
+from s3io import put_file  # utilisé pour les XKT (upload)
+
+# (Optionnel) converter local — gardé mais off par défaut
+from xkt_converter import compute_thickness_mm_from_step
 
 load_dotenv()
 
@@ -15,9 +18,6 @@ load_dotenv()
 import redis
 from rq import Queue
 from rq.job import Job
-
-# (Optionnel) Épaisseur via converter local (CadQuery/pythonocc). Gardé mais inactif par défaut.
-from xkt_converter import compute_thickness_mm_from_step
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
@@ -47,7 +47,10 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 CONVERTER_URL = os.environ.get("CONVERTER_URL", "https://cadlytics-converter.onrender.com").rstrip("/")
-RQ_TASK_PATH   = os.environ.get("RQ_TASK_PATH", "worker_tasks.compute_and_cache_stats")
+RQ_TASK_PATH = os.environ.get("RQ_TASK_PATH", "worker_tasks.compute_and_cache_stats")
+
+# Pull des caches depuis S3 si absents localement (recommandé en multi-instance)
+PULL_CONVERTED_FROM_S3 = env_bool("PULL_CONVERTED_FROM_S3", True)
 
 ALLOWED_EXTS = {".stl", ".step", ".stp"}
 def _ext(name: str) -> str: return pathlib.Path(name.lower()).suffix
@@ -59,7 +62,7 @@ def _first_existing(paths):
             return p
     return None
 
-# ---------- Redis / RQ : normalisation + connexion ----------
+# ---------- Redis / RQ ----------
 def _normalize_redis_url(url: str) -> str:
     if not url:
         return url
@@ -114,23 +117,22 @@ if _redis is not None:
         q = None
         _rq_err = repr(e)
 
-# ---------- Helpers génériques ----------
+# ---------- S3 helpers ----------
 def _s3_enabled() -> bool:
     return all(os.environ.get(k) for k in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "S3_BUCKET"))
 
-def _step_or_stl_path_for(file_id: str) -> str | None:
-    return _first_existing([
-        os.path.join(UPLOAD_FOLDER, f"{file_id}.step"),
-        os.path.join(UPLOAD_FOLDER, f"{file_id}.stp"),
-        os.path.join(UPLOAD_FOLDER, f"{file_id}.stl"),
-    ])
+def _s3_get(key: str, dest_path: str) -> bool:
+    if not _s3_enabled():
+        return False
+    try:
+        from s3io import get_file
+        ok = get_file(key, dest_path)
+        return bool(ok and os.path.isfile(dest_path))
+    except Exception as e:
+        app.logger.warning("[web] S3 get_file failed key=%s: %s", key, e)
+        return False
 
-def _step_path_for(file_id: str) -> str | None:
-    return _first_existing([
-        os.path.join(UPLOAD_FOLDER, f"{file_id}.step"),
-        os.path.join(UPLOAD_FOLDER, f"{file_id}.stp"),
-    ])
-
+# ---------- Helpers métriques ----------
 def _cache_paths(file_id: str, axis: str):
     base = os.path.join(OUTPUT_FOLDER, f"{file_id}.stats.json")
     proj = os.path.join(OUTPUT_FOLDER, f"{file_id}.proj.{axis}.json")
@@ -151,15 +153,19 @@ def _normalize_metrics_dict(raw: dict) -> dict:
         vol_cm3 = vol_mm3 / 1000.0
     proj_cm2 = float(raw.get("projected_area_cm2") or 0.0)
     bbox_mm = raw.get("bbox_mm") or raw.get("bbox") or [0.0, 0.0, 0.0]
-    def _fix(v):
+
+    def _fix_thick(v):
         try:
             x = float(v or 0.0)
         except Exception:
             return 0.0
-        if x > 1000.0: x = x / 1000.0
+        if x > 1000.0:
+            x = x / 1000.0
         return x
-    tmin = _fix(raw.get("thickness_min_mm") or raw.get("thickness_min"))
-    tmax = _fix(raw.get("thickness_max_mm") or raw.get("thickness_max"))
+
+    tmin = _fix_thick(raw.get("thickness_min_mm") or raw.get("thickness_min"))
+    tmax = _fix_thick(raw.get("thickness_max_mm") or raw.get("thickness_max"))
+
     return {
         "units": "mm_internal",
         "volume_cm3": round(vol_cm3, 4),
@@ -187,52 +193,7 @@ def _abs_url(path: str) -> str:
     host  = request.headers.get("X-Forwarded-Host", request.host)
     return f"{proto}://{host}{path}"
 
-# ---------- NEW: pull des artefacts worker depuis S3 -------------------------
-def _pull_worker_artifacts_from_s3(file_id: str, axis: str, *, force: bool = False) -> dict:
-    """
-    Télécharge vers OUTPUT_FOLDER si absent ou si force=True :
-      converted/<id>.stats.json      -> {OUTPUT}/{id}.stats.json
-      converted/<id>.proj.<axis>.json-> {OUTPUT}/{id}.proj.<axis>.json
-      thick/<id>.json                -> {OUTPUT}/{id}.thick.json
-    """
-    res = {"stats": False, "proj": False, "thick": False}
-    if not _s3_enabled():
-        return res
-    try:
-        from s3io import get_file
-    except Exception as e:
-        app.logger.warning("s3io.get_file indisponible: %s", e)
-        return res
-
-    dst = os.path.join(OUTPUT_FOLDER, f"{file_id}.stats.json")
-    if force or not os.path.isfile(dst):
-        for key in (f"converted/{file_id}.stats.json", f"shape/{file_id}.stats.json"):
-            try:
-                if get_file(key, dst):
-                    res["stats"] = True; break
-            except Exception as e:
-                app.logger.warning("S3 get_file fail stats %s: %s", key, e)
-
-    dst = os.path.join(OUTPUT_FOLDER, f"{file_id}.proj.{axis}.json")
-    if force or not os.path.isfile(dst):
-        for key in (f"converted/{file_id}.proj.{axis}.json", f"shape/{file_id}.proj.{axis}.json"):
-            try:
-                if get_file(key, dst):
-                    res["proj"] = True; break
-            except Exception as e:
-                app.logger.warning("S3 get_file fail proj %s: %s", key, e)
-
-    dst = _thickness_cache_path(file_id)
-    if force or not os.path.isfile(dst):
-        for key in (f"thick/{file_id}.json", f"converted/{file_id}.thick.json", f"{file_id}.thick.json"):
-            try:
-                if get_file(key, dst):
-                    res["thick"] = True; break
-            except Exception as e:
-                app.logger.warning("S3 get_file fail thick %s: %s", key, e)
-    return res
-
-# ---------- Épaisseur : merge valeurs du worker ------------------------------
+# ---------- Merge épaisseur worker ----------
 def _merge_thickness_from_worker(file_id: str, data: dict, prefer_worker: bool = True) -> dict:
     p = _thickness_cache_path(file_id)
     if os.path.isfile(p):
@@ -243,13 +204,20 @@ def _merge_thickness_from_worker(file_id: str, data: dict, prefer_worker: bool =
                 if prefer_worker or data.get("thickness_source") in (None, "cache", "raycast"):
                     data["thickness_min_mm"] = round(float(tmin), 4)
                     data["thickness_max_mm"] = round(float(tmax), 4)
-                    data["thickness_source"] = "worker"
+                    data["thickness_source"] = str(j.get("method") or "worker")
                     data.pop("thickness_warning", None)
         except Exception as e:
             app.logger.warning("[thickness] merge worker file failed: %s", e)
     return data
 
-# ---------- Converter local (optionnel) --------------------------------------
+# ---------- Converter local (optionnel) ----------
+def _step_path_for(file_id: str) -> str | None:
+    for ext in (".step", ".stp"):
+        p = os.path.join(UPLOAD_FOLDER, f"{file_id}{ext}")
+        if os.path.isfile(p):
+            return p
+    return None
+
 def _ensure_thickness_via_converter(file_id: str, data: dict) -> dict:
     try:
         step_path = _step_path_for(file_id)
@@ -258,8 +226,7 @@ def _ensure_thickness_via_converter(file_id: str, data: dict) -> dict:
         unit_hint = os.getenv("THICKNESS_UNIT_HINT", "mm")
         ctmin, ctmax = compute_thickness_mm_from_step(step_path, unit_hint=unit_hint)
         if ctmin is None or ctmax is None or not (ctmin == ctmin and ctmax == ctmax):
-            data["thickness_warning"] = "converter_returned_nan"
-            return data
+            data["thickness_warning"] = "converter_returned_nan";  return data
         data["thickness_min_mm"] = round(float(ctmin), 4)
         data["thickness_max_mm"] = round(float(ctmax), 4)
         data["thickness_source"] = "converter"
@@ -268,22 +235,32 @@ def _ensure_thickness_via_converter(file_id: str, data: dict) -> dict:
         data["thickness_warning"] = f"{e.__class__.__name__}: {e}"
     return data
 
-# ---------- (Optionnel) ray casting local conservé ---------------------------
-def _try_imports_for_thickness():
-    reason = None
+# ---------- Pull S3 des caches converted/* ----------
+def _pull_converted_from_s3_if_missing(file_id: str, axis: str) -> dict:
+    """Essaie de rapatrier depuis S3 si absent localement. Renvoie {base_ok, proj_ok, thick_ok}."""
+    res = {"base_ok": False, "proj_ok": False, "thick_ok": False}
+    if not (_s3_enabled() and PULL_CONVERTED_FROM_S3):
+        return res
+    base, proj = _cache_paths(file_id, axis)
+    thick = _thickness_cache_path(file_id)
     try:
-        import numpy as _np  # noqa
+        if not os.path.isfile(base):
+            res["base_ok"]  = _s3_get(f"converted/{file_id}.stats.json", base)
+        else:
+            res["base_ok"]  = True
+        if not os.path.isfile(proj):
+            res["proj_ok"]  = _s3_get(f"converted/{file_id}.proj.{axis}.json", proj)
+        else:
+            res["proj_ok"]  = True
+        if not os.path.isfile(thick):
+            res["thick_ok"] = _s3_get(f"converted/{file_id}.thick.json", thick)
+        else:
+            res["thick_ok"] = True
     except Exception as e:
-        reason = f"numpy manquant: {e}"; return False, reason
-    try:
-        import trimesh as _trimesh  # noqa
-    except Exception as e:
-        reason = f"trimesh manquant: {e}"; return False, reason
-    return True, None
+        app.logger.warning("[web] pull S3 error: %s", e)
+    return res
 
-# (les helpers ray casting restent inchangés dans ta base et sont conservés)
-
-# ---------- Pages ------------------------------------------------------------
+# ---------- Pages ----------
 @app.get("/")
 def landing():
     candidates = [
@@ -315,7 +292,7 @@ def favicon():
 def healthz():
     return "ok"
 
-# ---------- Upload -> converter XKT ------------------------------------------
+# ---------- Upload -> XKT ----------
 @app.post("/upload")
 def upload():
     f = request.files.get("file")
@@ -349,17 +326,21 @@ def upload():
             resp = requests.post(
                 f"{CONVERTER_URL}/convert",
                 files={"file": (f.filename, fh, f.mimetype or "application/octet-stream")},
-                timeout=600, stream=True,
+                timeout=600,
+                stream=True,
                 headers={"Accept": "application/octet-stream"},
             )
         if resp.status_code != 200:
-            try: detail = resp.json()
-            except Exception: detail = resp.text
+            try:
+                detail = resp.json()
+            except Exception:
+                detail = resp.text
             return jsonify(error="convert_fail", detail=detail, status_code=resp.status_code), 500
 
         with open(out_xkt, "wb") as out:
             for chunk in resp.iter_content(chunk_size=1024 * 1024):
-                if chunk: out.write(chunk)
+                if chunk:
+                    out.write(chunk)
 
         if not os.path.isfile(out_xkt):
             return jsonify(error="no_xkt", detail=f".xkt introuvable: {out_xkt}"), 500
@@ -373,22 +354,18 @@ def upload():
         xkt_rel = f"/xkt/{file_id}.xkt"
         xkt_abs = _abs_url(xkt_rel)
         return jsonify(file_id=file_id, status="ready", xktUrl=xkt_abs, xkt_url=xkt_abs, s3_uploaded=s3_uploaded)
-
     except requests.Timeout:
         return jsonify(error="convert_timeout", detail="Converter timeout (>=600s)"), 504
     except Exception as e:
         return jsonify(error="convert_fail", detail=str(e)), 500
 
-# -- Serve XKT (fallback S3) --------------------------------------------------
 @app.get("/xkt/<file_id>.xkt")
 def serve_xkt(file_id: str):
     if not re.fullmatch(r"[0-9a-fA-F-]{36}", file_id):
         return abort(400)
     path = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
     if os.path.isfile(path):
-        return send_from_directory(OUTPUT_FOLDER, f"{file_id}.xkt",
-                                  mimetype="application/octet-stream",
-                                  as_attachment=False, max_age=0, etag=False, conditional=False)
+        return send_from_directory(OUTPUT_FOLDER, f"{file_id}.xkt", mimetype="application/octet-stream", as_attachment=False, max_age=0, etag=False, conditional=False)
     if _s3_enabled():
         try:
             from s3io import get_file
@@ -396,27 +373,27 @@ def serve_xkt(file_id: str):
             key = f"xkt/{file_id}.xkt"
             ok = get_file(key, path)
             if ok and os.path.isfile(path):
-                return send_from_directory(OUTPUT_FOLDER, f"{file_id}.xkt",
-                                          mimetype="application/octet-stream",
-                                          as_attachment=False, max_age=0, etag=False, conditional=False)
+                return send_from_directory(OUTPUT_FOLDER, f"{file_id}.xkt", mimetype="application/octet-stream", as_attachment=False, max_age=0, etag=False, conditional=False)
             app.logger.warning("S3 fallback miss for XKT key=%s", key)
         except Exception as e:
             app.logger.warning("S3 fallback error for XKT %s: %s", file_id, e)
     return abort(404)
 
-# ---------- API analyse : ASYNC ONLY ----------------------------------------
+# ---------- API analyse (ASYNC par défaut) ----------
 @app.get("/api/shape/stats")
 def api_shape_stats():
     """
-    - Pull S3 -> caches locaux si besoin
-    - Si caches présents -> on répond 200 (merge tmin/tmax worker)
-    - Sinon -> enqueue job RQ -> 202
-    Aucun calcul lourd local par défaut (THICKNESS_ON_WEB=0).
+    - Si caches présents -> on renvoie (merge épaisseur worker)
+    - Sinon on tente pull S3 -> puis renvoie si OK
+    - Sinon: enqueue le job RQ et 202 (queued/processing)
+    Paramètre facultatif: ?recompute=1 pour IGNORER les caches, les purger et forcer un nouveau job.
     """
     import json as _json
 
     file_id = request.args.get("file_id")
     axis = (request.args.get("axis") or "Z").upper()
+    recompute = (request.args.get("recompute") == "1")
+
     if not file_id or not re.fullmatch(r"[0-9a-fA-F-]{36}", file_id):
         return jsonify(error="bad_file_id", detail="file_id doit être un UUID v4"), 400
     if axis not in ("X", "Y", "Z"):
@@ -424,26 +401,41 @@ def api_shape_stats():
 
     base_cache, proj_cache = _cache_paths(file_id, axis)
 
-    # NEW: rapatrier depuis S3 (par défaut force=1 pour éviter les vieux caches)
-    _pull_worker_artifacts_from_s3(file_id, axis, force=env_bool("PULL_ALWAYS_FROM_S3", True))
+    # Recompute forcé : purge locale + passe direct en RQ
+    if recompute:
+        for p in glob.glob(os.path.join(OUTPUT_FOLDER, f"{file_id}.*")):
+            try: os.remove(p)
+            except Exception: pass
 
-    # 0) caches présents ?
-    if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
+    # 0) caches locaux ?
+    if not recompute and os.path.isfile(base_cache) and os.path.isfile(proj_cache):
         try:
             data = _response_from_caches(base_cache, proj_cache)
             data = _merge_thickness_from_worker(file_id, data, prefer_worker=True)
-
             if env_bool("THICKNESS_ON_WEB", False):
                 data = _ensure_thickness_via_converter(file_id, data)
             return jsonify(data)
         except Exception as e:
             return jsonify(error="cache_read_fail", detail=str(e)), 500
 
-    # 1) pas de caches -> worker
+    # 1) pull S3 (si activé)
+    pulled = _pull_converted_from_s3_if_missing(file_id, axis) if not recompute else {"base_ok": False, "proj_ok": False}
+    if not recompute and pulled.get("base_ok") and pulled.get("proj_ok"):
+        try:
+            data = _response_from_caches(base_cache, proj_cache)
+            data = _merge_thickness_from_worker(file_id, data, prefer_worker=True)
+            if env_bool("THICKNESS_ON_WEB", False):
+                data = _ensure_thickness_via_converter(file_id, data)
+            return jsonify(data)
+        except Exception as e:
+            return jsonify(error="cache_read_fail", detail=f"after_s3: {e}"), 500
+
+    # 2) envoi en RQ
     if q is None or _redis is None:
         return jsonify(error="rq_unavailable", detail="Redis/RQ non dispo sur le web service."), 503
 
     job_id = f"shape_stats:{file_id}:{axis}"
+
     try:
         job = Job.fetch(job_id, connection=_redis)
     except Exception:
@@ -454,40 +446,44 @@ def api_shape_stats():
         if st in ("queued", "started", "deferred"):
             return jsonify(status="processing", job_id=job_id, retry_in_sec=2), 202
         if st == "finished":
-            _pull_worker_artifacts_from_s3(file_id, axis, force=True)
+            # tenter caches
             if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
                 data = _response_from_caches(base_cache, proj_cache)
                 data = _merge_thickness_from_worker(file_id, data, prefer_worker=True)
                 if env_bool("THICKNESS_ON_WEB", False):
                     data = _ensure_thickness_via_converter(file_id, data)
                 return jsonify(data)
+            # sinon clé redis brute (si le worker en a éventuellement posé une — optionnel)
             try:
                 raw = _redis.get(f"shape_stats:{file_id}:{axis}")
                 if raw:
                     data = _normalize_metrics_dict(_json.loads(raw))
                     data = _merge_thickness_from_worker(file_id, data, prefer_worker=True)
+                    if env_bool("THICKNESS_ON_WEB", False):
+                        data = _ensure_thickness_via_converter(file_id, data)
                     return jsonify(data)
             except Exception:
                 pass
             return jsonify(status="processing", job_id=job_id, retry_in_sec=1), 202
         if st == "failed":
-            return jsonify(error="compute_fail", job_id=job_id,
-                           status=st, exc=str(job.exc_info) if getattr(job, "exc_info", None) else None), 500
+            return jsonify(error="compute_fail", job_id=job_id, status=st, exc=str(job.exc_info) if getattr(job, "exc_info", None) else None), 500
 
-    # 2) enqueue
-    step_path = _step_path_for(file_id)
-    step_ext = pathlib.Path(step_path).suffix.lstrip(".") if step_path else None
+    # pas de job existant: on l’enqueue
     try:
+        # NB: step_path/step_ext sont passés si le web a le fichier en local (sinon le worker tirera S3)
+        step_path = _step_path_for(file_id)
+        step_ext = pathlib.Path(step_path).suffix.lstrip(".") if step_path else None
         q.enqueue(
             RQ_TASK_PATH,
             kwargs={"file_id": file_id, "axis": axis, "step_path": step_path, "step_ext": step_ext, "cache_dir": OUTPUT_FOLDER},
-            job_id=job_id, result_ttl=3600, ttl=3600, failure_ttl=3600
+            job_id=job_id,
+            result_ttl=3600, ttl=3600, failure_ttl=3600
         )
         return jsonify(status="queued", job_id=job_id, retry_in_sec=2), 202
     except Exception as e:
         return jsonify(error="enqueue_fail", detail=str(e)), 500
 
-# ---------- Debug / Diag -----------------------------------------------------
+# ---------- Debug ----------
 @app.get("/__job/<path:job_id>")
 def __job(job_id: str):
     try:
@@ -512,13 +508,9 @@ def __routes():
 @app.get("/__rq")
 def __rq():
     info = {
-        "redis_url_set": bool(REDIS_URL),
-        "queue": RQ_QUEUE_NAME,
-        "has_q": bool(q is not None),
-        "is_connected": bool(_redis is not None),
-        "probe_ok": False,
-        "redis_error": _redis_err,
-        "rq_error": _rq_err,
+        "redis_url_set": bool(REDIS_URL), "queue": RQ_QUEUE_NAME,
+        "has_q": bool(q is not None), "is_connected": bool(_redis is not None),
+        "probe_ok": False, "redis_error": _redis_err, "rq_error": _rq_err,
         "task_path": RQ_TASK_PATH,
     }
     try:
@@ -532,6 +524,7 @@ def __rq():
 @app.get("/__diag")
 def __diag():
     info = {
+        "host": socket.gethostname(),
         "cwd": os.getcwd(),
         "UPLOAD_FOLDER": UPLOAD_FOLDER,
         "OUTPUT_FOLDER": OUTPUT_FOLDER,
@@ -557,75 +550,27 @@ def __s3_env():
         "S3_BUCKET": os.environ.get("S3_BUCKET"),
         "S3_ENDPOINT": os.environ.get("S3_ENDPOINT"),
         "S3_FORCE_PATH_STYLE": os.environ.get("S3_FORCE_PATH_STYLE"),
+        "PULL_CONVERTED_FROM_S3": PULL_CONVERTED_FROM_S3,
     })
 
-@app.get("/__s3_diag")
-def __s3_diag():
-    import boto3
-    from botocore.client import Config
-    from botocore.exceptions import ClientError, BotoCoreError
-
-    bucket = os.environ.get("S3_BUCKET")
-    region = os.environ.get("AWS_REGION", "us-east-1")
-    endpoint = os.environ.get("S3_ENDPOINT")
-    force_ps = os.environ.get("S3_FORCE_PATH_STYLE", "0") == "1"
-
-    if not (os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY") and bucket):
-        return jsonify(ok=False, error="Missing env vars (AWS keys / S3_BUCKET).")
-
-    cfg = Config(
-        s3={"addressing_style": "path" if force_ps else "virtual"},
-        retries={"max_attempts": 3, "mode": "standard"},
-        signature_version="s3v4",
-    )
-    s3 = boto3.client(
-        "s3",
-        region_name=region,
-        endpoint_url=endpoint or None,
-        aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
-        aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
-        config=cfg,
-    )
-
-    key = f"__diag/{uuid.uuid4().hex}.txt"
-
-    try:
-        s3.head_bucket(Bucket=bucket)
-    except ClientError as e:
-        err_code = None
-        try: err_code = (e.response or {}).get("Error", {}).get("Code")
-        except Exception: pass
-        return jsonify(ok=False, step="head_bucket", error=str(e), code=err_code)
-
-    try:
-        s3.put_object(Bucket=bucket, Key=key, Body=b"ok", ContentType="text/plain")
-        obj = s3.get_object(Bucket=bucket, Key=key)
-        data = obj["Body"].read()
-        s3.delete_object(Bucket=bucket, Key=key)
-        return jsonify(ok=(data == b"ok"), region=region, bucket=bucket, key=key)
-    except (ClientError, BotoCoreError, Exception) as e:
-        err_code = None
-        try:
-            err_code = getattr(getattr(e, "response", {}), "get", lambda *_: {})("Error", {}).get("Code")
-        except Exception:
-            pass
-        return jsonify(ok=False, step="put/get/delete", error=str(e), code=err_code, bucket=bucket, region=region, key=key)
-
-# ---------- Diag épaisseur vue par le web -----------------------------------
+# Voir la présence des fichiers cache/thickness
 @app.get("/__thick/<file_id>")
 def __thick(file_id: str):
-    axis = (request.args.get("axis") or "Z").upper()
-    pulled = _pull_worker_artifacts_from_s3(file_id, axis, force=False)
     p = _thickness_cache_path(file_id)
-    info = {"exists": os.path.isfile(p), "path": p, "pulled": pulled}
     if os.path.isfile(p):
         try:
-            info["content"] = _read_json(p)
+            return jsonify(ok=True, path=p, data=_read_json(p))
         except Exception as e:
-            info["read_error"] = str(e)
-    return jsonify(info)
+            return jsonify(ok=False, error=str(e), path=p), 500
+    return jsonify(ok=False, error="not_found", path=p), 404
 
-# --- Maintenance -------------------------------------------------------------
+@app.get("/__list_caches/<file_id>")
+def __list_caches(file_id: str):
+    glob_pat = os.path.join(OUTPUT_FOLDER, f"{file_id}.*")
+    matches = [os.path.basename(x) for x in glob.glob(glob_pat)]
+    return jsonify(ok=True, folder=OUTPUT_FOLDER, files=sorted(matches))
+
+# Purge simple
 @app.post("/__clear_caches")
 def __clear_caches():
     file_id = request.args.get("file_id") or (request.json.get("file_id") if request.is_json else None)
@@ -634,7 +579,8 @@ def __clear_caches():
     removed = []
     for p in glob.glob(os.path.join(OUTPUT_FOLDER, f"{file_id}.*")):
         try:
-            os.remove(p); removed.append(os.path.basename(p))
+            os.remove(p)
+            removed.append(os.path.basename(p))
         except Exception:
             pass
     return jsonify(ok=True, removed=removed)

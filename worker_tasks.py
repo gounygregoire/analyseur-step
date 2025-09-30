@@ -6,15 +6,42 @@ from typing import Optional, Tuple, List
 logging.basicConfig(level=os.getenv("LOGLEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
-# --- Dossiers (compat avec le web)
-UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
-OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
+# ----------------- ENV helpers -----------------
+def env_bool(name: str, default: bool) -> bool:
+    v = os.environ.get(name)
+    if v is None:
+        return default
+    return str(v).strip().lower() in ("1", "true", "yes", "y", "on")
+
+def env_float(name: str, default: float) -> float:
+    v = os.environ.get(name)
+    try:
+        return float(v) if v is not None else default
+    except Exception:
+        return default
+
+# ----------------- Dossiers -----------------
+UPLOAD_FOLDER  = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
+OUTPUT_FOLDER  = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-# --- S3 helpers --------------------------------------------------------------
+# ----------------- S3 helpers (optionnels) -----------------
 def _s3_enabled() -> bool:
     return all(os.environ.get(k) for k in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "S3_BUCKET"))
+
+def _s3_put(local_path: str, key: str, content_type: Optional[str] = None) -> bool:
+    if not _s3_enabled():
+        return False
+    try:
+        from s3io import put_file
+        ok = put_file(local_path, key, content_type=content_type)
+        if not ok:
+            logger.warning("[worker] S3 put_file returned False key=%s", key)
+        return bool(ok)
+    except Exception as e:
+        logger.warning("[worker] S3 upload failed key=%s: %s", key, e)
+        return False
 
 def _s3_get(key: str, dest_path: str) -> bool:
     if not _s3_enabled():
@@ -27,37 +54,24 @@ def _s3_get(key: str, dest_path: str) -> bool:
         logger.warning("[worker] S3 get_file failed key=%s: %s", key, e)
         return False
 
-def _s3_put(path: str, key: str, *, content_type: str = "application/json") -> bool:
-    if not _s3_enabled() or not os.path.isfile(path):
-        return False
-    try:
-        from s3io import put_file
-        ok = put_file(path, key, content_type=content_type)
-        return bool(ok)
-    except Exception as e:
-        logger.warning("[worker] S3 put_file failed key=%s: %s", key, e)
-        return False
-
-# --- Caches, mêmes noms que côté web ----------------------------------------
-def _cache_paths(file_id: str, axis: str) -> Tuple[str, str]:
+# ----------------- Caches -----------------
+def _cache_paths(file_id: str, axis: str) -> Tuple[str, str, str]:
     base = os.path.join(OUTPUT_FOLDER, f"{file_id}.stats.json")
     proj = os.path.join(OUTPUT_FOLDER, f"{file_id}.proj.{axis}.json")
-    return base, proj
+    thick = os.path.join(OUTPUT_FOLDER, f"{file_id}.thick.json")
+    return base, proj, thick
 
-def _thick_path(file_id: str) -> str:
-    return os.path.join(OUTPUT_FOLDER, f"{file_id}.thick.json")
-
-# --- Chargement STEP/STL -> trimesh -----------------------------------------
+# ----------------- STEP/STL -> trimesh -----------------
 def _mesh_from_step(step_path: str):
-    """
-    Tessellation STEP via CadQuery/OCP -> trimesh.Trimesh (en mm).
-    """
     import numpy as np
     import trimesh
-    import cadquery as cq
+    try:
+        import cadquery as cq
+    except Exception as e:
+        raise RuntimeError(f"CadQuery indisponible: {e}")
 
-    tol_mm = float(os.getenv("TESSELLATION_TOL_MM", "0.05"))
-    ang_rd = float(os.getenv("TESSELLATION_ANG_RAD", "0.25"))
+    tol_mm = env_float("TESSELLATION_TOL_MM", 0.05)
+    ang_rd = env_float("TESSELLATION_ANG_RAD", 0.25)
 
     shape = cq.importers.importStep(step_path)
     verts, faces = shape.tessellate(tol_mm, angular_tolerance=ang_rd)
@@ -66,16 +80,16 @@ def _mesh_from_step(step_path: str):
 
     V = np.asarray(verts, dtype=float)
     F = np.asarray(faces, dtype=int)
-    m = trimesh.Trimesh(vertices=V, faces=F, process=True)
+    mesh = trimesh.Trimesh(vertices=V, faces=F, process=True)
 
-    if m.is_empty:
-        raise RuntimeError("Mesh vide après tessellation")
+    if mesh.is_empty:
+        raise RuntimeError("Mesh vide")
     try:
-        if not m.is_watertight:
-            m = m.fill_holes()
+        if not mesh.is_watertight:
+            mesh = mesh.fill_holes()
     except Exception:
         pass
-    return m
+    return mesh
 
 def _mesh_from_stl(stl_path: str):
     import trimesh
@@ -97,7 +111,7 @@ def _load_mesh(path: str):
         return _mesh_from_step(path)
     raise RuntimeError(f"Extension non supportée: {ext}")
 
-# --- Mesures de base ---------------------------------------------------------
+# ----------------- Mesures -----------------
 def _bbox_mm(mesh) -> List[float]:
     import numpy as np
     ext = mesh.extents.astype(float)
@@ -133,18 +147,12 @@ def _projected_area_cm2(mesh, axis: str) -> float:
         n = mesh.face_normals
         scale = np.abs((n * d).sum(axis=1))
         a_mm2 = float((area_faces * scale).sum())
-        return round(a_mm2 / 100.0, 4)  # mm^2 -> cm^2
+        return round(a_mm2 / 100.0, 4)  # mm² -> cm²
     except Exception:
         return 0.0
 
-# --- Épaisseur via voxel + EDT + squelette 3D -------------------------------
-def _thickness_mm_voxel(mesh, pitch_mm: Optional[float] = None,
-                        max_voxels: int = 80_000_000, dbg: dict | None = None):
-    """
-    1) voxelisation (pas pitch_mm en mm)
-    2) distance transform (EDT) -> rayon local (mm)
-    3) squelette 3D -> min/max rayons -> épaisseur = 2 * rayon
-    """
+# ----------------- Épaisseur via voxel + EDT + squelette -----------------
+def _thickness_mm_voxel(mesh, pitch_mm: Optional[float] = None, max_voxels: int = 80_000_000, dbg: dict | None = None):
     import numpy as np
     from scipy.ndimage import distance_transform_edt
     try:
@@ -153,9 +161,8 @@ def _thickness_mm_voxel(mesh, pitch_mm: Optional[float] = None,
         raise RuntimeError(f"scikit-image manquant: {e}")
 
     if pitch_mm is None:
-        pitch_mm = float(os.getenv("VOXEL_PITCH_MM", "0.12"))
+        pitch_mm = env_float("VOXEL_PITCH_MM", 0.12)
 
-    # Contrôle du nombre de voxels
     ext = mesh.extents.astype(float)
     dims = np.ceil(ext / pitch_mm).astype(int)
     voxels = int(dims[0]) * int(dims[1]) * int(dims[2])
@@ -163,7 +170,7 @@ def _thickness_mm_voxel(mesh, pitch_mm: Optional[float] = None,
         scale = (voxels / float(max_voxels)) ** (1.0 / 3.0)
         pitch_mm *= scale
         dims = np.ceil(ext / pitch_mm).astype(int)
-        if isinstance(dbg, dict):
+        if dbg is not None:
             dbg["voxel_pitch_scaled_mm"] = float(pitch_mm)
 
     vg = mesh.voxelized(pitch_mm).fill()
@@ -171,7 +178,7 @@ def _thickness_mm_voxel(mesh, pitch_mm: Optional[float] = None,
     if vol.size == 0 or not vol.any():
         return None, None
 
-    if isinstance(dbg, dict):
+    if dbg is not None:
         dbg["voxel_shape"] = list(vol.shape)
         dbg["voxel_pitch_mm"] = float(pitch_mm)
 
@@ -185,21 +192,19 @@ def _thickness_mm_voxel(mesh, pitch_mm: Optional[float] = None,
     tmax = float(2.0 * vals.max())
     return tmin, tmax
 
-# --- Résolution de la source (local/S3) -------------------------------------
+# ----------------- Résolution du chemin source -----------------
 def _resolve_source_path(file_id: str, step_path: Optional[str], step_ext: Optional[str]) -> str:
-    # 1) chemin fourni et présent ?
+    # 1) direct
     if step_path and os.path.isfile(step_path):
         return step_path
-
-    # 2) UPLOAD_FOLDER local ?
+    # 2) local
     for ext in (step_ext, "step", "stp", "stl"):
         if not ext:
             continue
         p = os.path.join(UPLOAD_FOLDER, f"{file_id}.{ext}")
         if os.path.isfile(p):
             return p
-
-    # 3) S3 (uploads/<id>.<ext>)
+    # 3) S3 (facultatif)
     if _s3_enabled():
         for ext in (step_ext, "step", "stp", "stl"):
             if not ext:
@@ -208,49 +213,36 @@ def _resolve_source_path(file_id: str, step_path: Optional[str], step_ext: Optio
             dest = os.path.join(UPLOAD_FOLDER, f"{file_id}.{ext}")
             if _s3_get(key, dest):
                 return dest
-
     raise FileNotFoundError(f"Fichier introuvable pour file_id={file_id} (step_path={step_path}, step_ext={step_ext})")
 
-# --- Job principal RQ --------------------------------------------------------
-def compute_and_cache_stats(*, file_id: str, axis: str,
-                            step_path: Optional[str],
-                            step_ext: Optional[str],
-                            cache_dir: Optional[str] = None) -> dict:
-    """
-    Ecrit :
-      - {OUTPUT}/{file_id}.stats.json
-      - {OUTPUT}/{file_id}.proj.{axis}.json
-      - {OUTPUT}/{file_id}.thick.json   (tmin/tmax uniquement)
-    Puis upload vers S3 :
-      - converted/<file_id>.stats.json
-      - converted/<file_id>.proj.<axis>.json
-      - thick/<file_id>.json
-    """
+# ----------------- Job RQ principal -----------------
+def compute_and_cache_stats(*, file_id: str, axis: str, step_path: Optional[str], step_ext: Optional[str], cache_dir: Optional[str] = None) -> dict:
     axis = (axis or "Z").upper()
     out_dir = cache_dir or OUTPUT_FOLDER
     os.makedirs(out_dir, exist_ok=True)
-    base_cache, proj_cache = _cache_paths(file_id, axis)
-    thick_cache = _thick_path(file_id)
+    base_cache, proj_cache, thick_cache = _cache_paths(file_id, axis)
 
     dbg = {}
 
-    # 1) Source
+    # 1) Charger la source
     src_path = _resolve_source_path(file_id, step_path, step_ext)
 
     # 2) Mesh
     mesh = _load_mesh(src_path)
 
-    # 3) Mesures
+    # 3) BBox / Volume
     bbox = _bbox_mm(mesh)
     vol_mm3 = _volume_mm3(mesh)
+
+    # 4) Aire projetée
     proj_cm2 = _projected_area_cm2(mesh, axis=axis)
 
-    # 4) Épaisseurs (voxel/SDF only)
-    pitch = os.getenv("VOXEL_PITCH_MM")
-    pitch = float(pitch) if pitch else None
+    # 5) Épaisseur (VOXEL/SDF only)
+    pitch_env = os.getenv("VOXEL_PITCH_MM")
+    pitch = float(pitch_env) if pitch_env else None
     tmin, tmax = _thickness_mm_voxel(mesh, pitch_mm=pitch, dbg=dbg)
 
-    # 5) Ecriture caches locaux
+    # 6) Écrire caches
     base_payload = {
         "volume_mm3": vol_mm3,
         "bbox_mm": bbox,
@@ -261,20 +253,31 @@ def compute_and_cache_stats(*, file_id: str, axis: str,
     with open(base_cache, "w", encoding="utf-8") as fh:
         json.dump(base_payload, fh)
 
+    proj_payload = {"projected_area_cm2": round(float(proj_cm2), 4)}
     with open(proj_cache, "w", encoding="utf-8") as fh:
-        json.dump({"projected_area_cm2": round(float(proj_cm2), 4)}, fh)
+        json.dump(proj_payload, fh)
 
+    # 6b) Écrire le fichier d’épaisseur dédié (lu par le web)
+    thick_payload = {
+        "tmin": base_payload["thickness_min_mm"],
+        "tmax": base_payload["thickness_max_mm"],
+        "method": "voxel_sdf",
+        "debug": dbg,
+    }
     with open(thick_cache, "w", encoding="utf-8") as fh:
-        json.dump({"tmin": base_payload["thickness_min_mm"], "tmax": base_payload["thickness_max_mm"]}, fh)
+        json.dump(thick_payload, fh)
 
-    logger.info("[worker] caches écrits file_id=%s axis=%s bbox=%s vol=%.4f cm3 t=(%s,%s) proj=%.4f",
-                file_id, axis, bbox, (vol_mm3 / 1000.0 if vol_mm3 else 0.0),
-                base_payload["thickness_min_mm"], base_payload["thickness_max_mm"], proj_cm2)
+    logger.info(
+        "[worker] file_id=%s axis=%s bbox=%s vol_cm3=%.4f t=(%s,%s)mm proj=%.4fcm2 pitch=%s",
+        file_id, axis, bbox, (vol_mm3 / 1000.0 if vol_mm3 else 0.0),
+        thick_payload["tmin"], thick_payload["tmax"], proj_payload["projected_area_cm2"], pitch
+    )
 
-    # 6) Upload S3 (best-effort)
-    _s3_put(base_cache, f"converted/{file_id}.stats.json")
-    _s3_put(proj_cache, f"converted/{file_id}.proj.{axis}.json")
-    _s3_put(thick_cache, f"thick/{file_id}.json")
+    # 7) Upload S3 (optionnel, recommandé en multi-instance)
+    if _s3_enabled() and env_bool("UPLOAD_RESULTS_TO_S3", True):
+        _s3_put(base_cache,   f"converted/{file_id}.stats.json", "application/json")
+        _s3_put(proj_cache,   f"converted/{file_id}.proj.{axis}.json", "application/json")
+        _s3_put(thick_cache,  f"converted/{file_id}.thick.json", "application/json")
 
     return {
         "ok": True,
