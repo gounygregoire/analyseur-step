@@ -266,15 +266,39 @@ def _make_intersector(mesh):
         return RayMeshIntersector(mesh)
 
 
-def compute_thickness_mm_from_mesh(
-    mesh,
-    unit_scale_mm: float = 1.0,
-    # --- dans compute_thickness_mm_from_occ_shape (converter.py) ---
-    samples_per_face = int(os.getenv("THICKNESS_SPF", samples_per_face))
-    max_samples      = int(os.getenv("THICKNESS_MAX_SAMPLES", max_samples))
+def compute_thickness_mm_from_occ_shape(
+    shape,
+    unit_hint: str | None = None,
+    samples_per_face: int = 2,
+    max_samples: int = 50000,
     backface_dot: float = -0.3,
-    eps: float = 1e-6,
 ):
+    """
+    Wrapper OCC -> mesh -> thickness (mm).
+    Les deux paramètres d'échantillonnage peuvent être surchargés par ENV :
+      THICKNESS_SPF, THICKNESS_MAX_SAMPLES
+    """
+    # ⚠️ Les overrides ENV doivent être dans le corps de la fonction (pas dans l'entête)
+    try:
+        samples_per_face = int(os.getenv("THICKNESS_SPF", samples_per_face))
+    except Exception:
+        pass
+    try:
+        max_samples = int(os.getenv("THICKNESS_MAX_SAMPLES", max_samples))
+    except Exception:
+        pass
+
+    mesh = _occ_to_trimesh(shape)
+    unit_scale_mm = _resolve_unit_scale_mm(unit_hint, default=1.0)
+
+    return _compute_thickness_mm_from_mesh(
+        mesh,
+        unit_scale_mm=unit_scale_mm,
+        samples_per_face=samples_per_face,
+        max_samples=max_samples,
+        backface_dot=backface_dot,
+    )
+
     """
     Calcule l'épaisseur locale par tirs de rayons ± normale depuis la peau du mesh.
     Retourne (t_min_mm, t_max_mm) en millimètres.
