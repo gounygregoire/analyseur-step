@@ -705,6 +705,7 @@ def api_shape_stats():
     import json as _json
     file_id = request.args.get("file_id")
     axis = (request.args.get("axis") or "Z").upper()
+    force_recalc = (request.args.get("recalc") == "1")  # <— NOUVEAU
     if not file_id:
         return jsonify(error="no_file_id"), 400
     if axis not in ("X", "Y", "Z"):
@@ -715,7 +716,7 @@ def api_shape_stats():
     base_cache, proj_cache = _cache_paths(file_id, axis)
 
     # 1) Caches locaux si dispo
-    if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
+    if os.path.isfile(base_cache) and os.path.isfile(proj_cache) and not force_recalc:
         try:
             data = _response_from_caches(base_cache, proj_cache)
             data = _ensure_thickness_via_converter(file_id, data)  # écrase si ok
@@ -725,40 +726,26 @@ def api_shape_stats():
         except Exception as e:
             return jsonify(error="cache_read_fail", detail=str(e)), 500
 
-    # 2) Pas S3 -> calcul local si SYNC_METRICS=1
-    if not _s3_enabled():
-        if os.environ.get("SYNC_METRICS") == "1" and step_path:
-            try:
-                data = _compute_stats_sync_or_error(file_id, axis, step_path)
-                data = _normalize_metrics_dict(data)
-                data = _ensure_thickness_via_converter(file_id, data)
-                if data.get("thickness_source") != "converter":
-                    data = _maybe_refine_thickness_with_rays(file_id, data)
-                return jsonify(data)
-            except Exception as e:
-                return jsonify(error="compute_fail", detail=str(e)), 500
-        return jsonify(error="s3_unavailable",
-                       detail="S3 indisponible et SYNC_METRICS!=1, calcul non lancé côté web."), 503
-
-    # 3) Mode forcé synchrone
-    if os.environ.get("SYNC_METRICS") == "1" and step_path:
+    # 2) Calcul synchrone local si possible (ou si recalc=1)
+    if step_path:
         try:
             data = _compute_stats_sync_or_error(file_id, axis, step_path)
             data = _normalize_metrics_dict(data)
             data = _ensure_thickness_via_converter(file_id, data)
-            if data.get("thickness_source") != "converter":
-                data = _maybe_refine_thickness_with_rays(file_id, data)
+            # si pas de converter, tente le ray casting (force si recalc=1)
+            data = _maybe_refine_thickness_with_rays(file_id, data, force=force_recalc)
             return jsonify(data)
         except Exception as e:
-            return jsonify(error="compute_fail", detail=str(e)), 500
+            # si on ne peut pas faire en synchrone, on passe à RQ (sauf si pas de S3)
+            if not _s3_enabled():
+                return jsonify(error="compute_fail", detail=str(e)), 500
 
-    # 4) Sinon RQ
+    # 3) Sinon RQ (asynchrone)
     if q is None or _redis is None:
         return jsonify(error="rq_unavailable",
                        detail="Redis/RQ non dispo."), 503
 
     job_id = f"shape_stats:{file_id}:{axis}"
-
     try:
         job = Job.fetch(job_id, connection=_redis)
     except Exception:
@@ -792,7 +779,6 @@ def api_shape_stats():
                            status=st,
                            exc=str(job.exc_info) if getattr(job, "exc_info", None) else None), 500
 
-    # enqueue
     try:
         q.enqueue(
             RQ_TASK_PATH,
@@ -964,3 +950,29 @@ def __thickness_test():
         "tmax": out.get("thickness_max_mm"),
         "source": out.get("thickness_source")
     })
+
+# --- Diag: CadQuery dispo ? ---
+@app.get("/__cadquery")
+def __cadquery():
+    try:
+        import cadquery as cq
+        import cadquery.ocp as ocp
+        return jsonify(ok=True, cadquery=cq.__version__, ocp=getattr(ocp, "__version__", "unknown"))
+    except Exception as e:
+        return jsonify(ok=False, error=str(e.__class__.__name__), detail=str(e))
+
+# --- Maintenance: Purger les caches d'un file_id ---
+@app.post("/__clear_caches")
+def __clear_caches():
+    file_id = request.args.get("file_id") or request.json.get("file_id")
+    if not file_id:
+        return jsonify(ok=False, error="file_id manquant"), 400
+    removed = []
+    for p in glob.glob(os.path.join(OUTPUT_FOLDER, f"{file_id}.*")):
+        try:
+            os.remove(p)
+            removed.append(os.path.basename(p))
+        except Exception:
+            pass
+    return jsonify(ok=True, removed=removed)
+
