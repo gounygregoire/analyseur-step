@@ -207,11 +207,6 @@ def _response_from_caches(base_path: str, proj_path: str) -> dict:
     }
     return _normalize_metrics_dict(merged)
 
-def _compute_stats_sync_or_error(file_id: str, axis: str, step_path: str):
-    """Calcule en local et écrit les caches dans OUTPUT_FOLDER, renvoie le JSON brut de shape_metrics."""
-    from shape_metrics import stats_json as compute_stats_json
-    return compute_stats_json(step_path, axis=axis, cache_dir=OUTPUT_FOLDER, file_id=file_id)
-
 def _abs_url(path: str) -> str:
     """Construit une URL absolue robuste derrière proxy (Render, etc.)."""
     proto = request.headers.get("X-Forwarded-Proto", request.scheme)
@@ -221,13 +216,10 @@ def _abs_url(path: str) -> str:
 # ---------- Épaisseur (converter) : helper intégré ----------
 def _ensure_thickness_via_converter(file_id: str, data: dict) -> dict:
     """
-    Si un STEP est dispo pour file_id, calcule tmin/tmax en mm via converter
-    et ÉCRASE les valeurs existantes si le calcul réussit. Écrit un cache .thick.json.
+    Tente le calcul via converter (CadQuery/pythonocc selon son implémentation).
+    - En cas de succès: écrit min/max + source="converter"
+    - En cas d'échec: met thickness_warning et NE TOUCHE PAS min/max
     """
-        # coupe-circuit si désactivé par ENV (utile si tu veux 0 risque côté web)
-    if not env_bool("THICKNESS_ON_WEB", True):
-        return data
-        
     try:
         step_path = _step_path_for(file_id)
         if not step_path or not os.path.isfile(step_path):
@@ -236,37 +228,19 @@ def _ensure_thickness_via_converter(file_id: str, data: dict) -> dict:
         unit_hint = os.getenv("THICKNESS_UNIT_HINT", "mm")
         ctmin, ctmax = compute_thickness_mm_from_step(step_path, unit_hint=unit_hint)
 
-        # Vérif NaN/None et > 0
-        if (ctmin is None or ctmax is None) or not (ctmin == ctmin and ctmax == ctmax):
-            data.setdefault("thickness_warning", "Impossible de calculer l'épaisseur (NaN).")
+        # NaN / None?
+        if ctmin is None or ctmax is None or not (ctmin == ctmin and ctmax == ctmax):
+            data["thickness_warning"] = "converter_returned_nan"
             return data
-        if float(ctmin) <= 0 or float(ctmax) <= 0:
-            data.setdefault("thickness_warning", "Épaisseur calculée <= 0 (ignorer).")
-            return data
-
-        old_min = data.get("thickness_min_mm")
-        old_max = data.get("thickness_max_mm")
 
         data["thickness_min_mm"] = round(float(ctmin), 4)
         data["thickness_max_mm"] = round(float(ctmax), 4)
         data["thickness_source"] = "converter"
-        if "thickness_warning" in data:
-            try: del data["thickness_warning"]
-            except Exception: pass
-
-        # cache local
-        try:
-            with open(_thickness_cache_path(file_id), "w", encoding="utf-8") as fh:
-                json.dump({"tmin": data["thickness_min_mm"], "tmax": data["thickness_max_mm"]}, fh)
-        except Exception:
-            pass
-
-        app.logger.info("[thickness] converter %s: old=(%s,%s) new=(%.4f,%.4f)",
-                        file_id, old_min, old_max, data["thickness_min_mm"], data["thickness_max_mm"])
-
+        data.pop("thickness_warning", None)
     except Exception as e:
-        data.setdefault("thickness_warning", f"thickness(converter) error: {e.__class__.__name__}: {e}")
+        data["thickness_warning"] = f"{e.__class__.__name__}: {e}"
     return data
+
 
 # ---------- Raffinement des épaisseurs (ray casting) ----------
 def _try_imports_for_thickness():
@@ -703,7 +677,7 @@ def serve_xkt(file_id: str):
 
     return abort(404)
 
-# ---------- API analyse : lecture cache / sync fallback / enqueue worker ----------
+# ---------- API analyse : ASYNC ONLY ----------
 @app.get("/api/shape/stats")
 def api_shape_stats():
     """
@@ -716,8 +690,8 @@ def api_shape_stats():
 
     file_id = request.args.get("file_id")
     axis = (request.args.get("axis") or "Z").upper()
-    if not file_id:
-        return jsonify(error="no_file_id"), 400
+    if not file_id or not re.fullmatch(r"[0-9a-fA-F-]{36}", file_id):
+        return jsonify(error="bad_file_id", detail="file_id doit être un UUID v4"), 400
     if axis not in ("X", "Y", "Z"):
         axis = "Z"
 
@@ -731,9 +705,8 @@ def api_shape_stats():
             data = _response_from_caches(base_cache, proj_cache)
 
             # --- ÉPAISSEUR PRÉCISE (côté web), désactivable par env ---
-            # THICKNESS_ON_WEB=1 pour activer; 0 pour sauter (utile si ça te gêne)
             if env_bool("THICKNESS_ON_WEB", True):
-                data = _ensure_thickness_via_converter(file_id, data)  # CadQuery
+                data = _ensure_thickness_via_converter(file_id, data)  # CadQuery/pythonocc (selon converter)
                 if data.get("thickness_source") != "converter":
                     # fallback ray casting si on n'a pas réussi le converter
                     data = _maybe_refine_thickness_with_rays(file_id, data)
@@ -956,10 +929,10 @@ def __thickness_test():
     out = _maybe_refine_thickness_with_rays(file_id, data, force=force, dbg=dbg)
 
     return jsonify(ok=True, file_id=file_id, debug=dbg, result={
-    "tmin": out.get("thickness_min_mm"),
-    "tmax": out.get("thickness_max_mm"),
-    "source": out.get("thickness_source", "unknown")
-})
+        "tmin": out.get("thickness_min_mm"),
+        "tmax": out.get("thickness_max_mm"),
+        "source": out.get("thickness_source", "unknown")
+    })
 
 # --- Diag: CadQuery dispo ? ---
 @app.get("/__cadquery")
@@ -984,11 +957,10 @@ def __cadquery():
     info["ok"] = bool(cq_ok and ocp_ok)
     return jsonify(info)
 
-
 # --- Maintenance: Purger les caches d'un file_id ---
 @app.post("/__clear_caches")
 def __clear_caches():
-    file_id = request.args.get("file_id") or request.json.get("file_id")
+    file_id = request.args.get("file_id") or (request.json.get("file_id") if request.is_json else None)
     if not file_id:
         return jsonify(ok=False, error="file_id manquant"), 400
     removed = []
@@ -999,4 +971,3 @@ def __clear_caches():
         except Exception:
             pass
     return jsonify(ok=True, removed=removed)
-
