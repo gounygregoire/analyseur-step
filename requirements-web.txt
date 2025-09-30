@@ -38,6 +38,7 @@ Flask-Compress==1.18
 gunicorn==23.0.0
 Pillow==11.2.1
 reportlab==4.4.2
+# pyembree>=0.1.10
 
 # === AJOUTER à requirements-web.txt ===
 # … le reste de tes deps …

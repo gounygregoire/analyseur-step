@@ -16,6 +16,10 @@ import redis
 from rq import Queue
 from rq.job import Job
 
+# Épaisseur via converter (lecture STEP + algo ±normales -> mm)
+from converter import compute_thickness_mm_from_step
+
+
 app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
 
@@ -213,6 +217,41 @@ def _abs_url(path: str) -> str:
     proto = request.headers.get("X-Forwarded-Proto", request.scheme)
     host  = request.headers.get("X-Forwarded-Host", request.host)
     return f"{proto}://{host}{path}"
+
+# ---------- Épaisseur (converter) : helper intégré ----------
+def _ensure_thickness_via_converter(file_id: str, data: dict) -> dict:
+    """
+    Si un STEP est dispo pour file_id, calcule tmin/tmax en mm via converter
+    et les insère dans data. N'écrase pas si déjà présentes et cohérentes.
+    """
+    try:
+        tmin = data.get("thickness_min_mm")
+        tmax = data.get("thickness_max_mm")
+        # si déjà présents & > 0 -> on ne touche pas
+        if (tmin is not None and tmax is not None) and (float(tmin) > 0 and float(tmax) > 0):
+            return data
+
+        step_path = _step_path_for(file_id)
+        if not step_path or not os.path.isfile(step_path):
+            return data  # pas de STEP => on laissera le fallback ray casting faire
+
+        unit_hint = os.getenv("THICKNESS_UNIT_HINT", "mm")
+        ctmin, ctmax = compute_thickness_mm_from_step(step_path, unit_hint=unit_hint)
+        # NaN check
+        if not (ctmin == ctmin and ctmax == ctmax):
+            data["thickness_warning"] = "Impossible de calculer l'épaisseur (NaN)."
+            return data
+
+        data["thickness_min_mm"] = round(float(ctmin), 4)
+        data["thickness_max_mm"] = round(float(ctmax), 4)
+        # si on est passé par le converter avec succès, on supprime un éventuel warning précédent
+        if "thickness_warning" in data:
+            try: del data["thickness_warning"]
+            except Exception: pass
+
+    except Exception as e:
+        data.setdefault("thickness_warning", f"thickness(converter) error: {e.__class__.__name__}: {e}")
+    return data
 
 # ---------- Raffinement des épaisseurs (ray casting) ----------
 def _try_imports_for_thickness():
@@ -435,6 +474,17 @@ def _maybe_refine_thickness_with_rays(file_id: str, data: dict, *, force: bool=F
         if not env_bool("REFINE_THICKNESS", True) and not force:
             _dbg("skipped", "REFINE_THICKNESS=0")
             return data
+
+        # Si on a déjà des valeurs via converter et qu'on ne force pas,
+        # on ne refait pas un ray casting (évite d'écraser un résultat fiable).
+        if not force:
+            tmin = data.get("thickness_min_mm"); tmax = data.get("thickness_max_mm")
+            try:
+                if tmin is not None and tmax is not None and float(tmin) > 0 and float(tmax) > 0:
+                    _dbg("skip_reason", "already_have_converter_values")
+                    return data
+            except Exception:
+                pass
 
         thick_cache = _thickness_cache_path(file_id)
         if os.path.isfile(thick_cache) and not force:
@@ -667,7 +717,11 @@ def api_shape_stats():
     if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
         try:
             data = _response_from_caches(base_cache, proj_cache)
-            data = _maybe_refine_thickness_with_rays(file_id, data)
+            # Étape 1 : tenter via converter (prioritaire si STEP dispo)
+            data = _ensure_thickness_via_converter(file_id, data)
+            # Étape 2 : fallback ray casting seulement si pas d'info épaisseur
+            if data.get("thickness_min_mm") in (None, 0.0) or data.get("thickness_max_mm") in (None, 0.0):
+                data = _maybe_refine_thickness_with_rays(file_id, data)
             return jsonify(data)
         except Exception as e:
             return jsonify(error="cache_read_fail", detail=str(e)), 500
@@ -678,7 +732,9 @@ def api_shape_stats():
             try:
                 data = _compute_stats_sync_or_error(file_id, axis, step_path)
                 data = _normalize_metrics_dict(data)
-                data = _maybe_refine_thickness_with_rays(file_id, data)
+                data = _ensure_thickness_via_converter(file_id, data)
+                if data.get("thickness_min_mm") in (None, 0.0) or data.get("thickness_max_mm") in (None, 0.0):
+                    data = _maybe_refine_thickness_with_rays(file_id, data)
                 return jsonify(data)
             except Exception as e:
                 return jsonify(error="compute_fail", detail=str(e)), 500
@@ -690,7 +746,9 @@ def api_shape_stats():
         try:
             data = _compute_stats_sync_or_error(file_id, axis, step_path)
             data = _normalize_metrics_dict(data)
-            data = _maybe_refine_thickness_with_rays(file_id, data)
+            data = _ensure_thickness_via_converter(file_id, data)
+            if data.get("thickness_min_mm") in (None, 0.0) or data.get("thickness_max_mm") in (None, 0.0):
+                data = _maybe_refine_thickness_with_rays(file_id, data)
             return jsonify(data)
         except Exception as e:
             return jsonify(error="compute_fail", detail=str(e)), 500
@@ -715,13 +773,17 @@ def api_shape_stats():
         if st == "finished":
             if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
                 data = _response_from_caches(base_cache, proj_cache)
-                data = _maybe_refine_thickness_with_rays(file_id, data)
+                data = _ensure_thickness_via_converter(file_id, data)
+                if data.get("thickness_min_mm") in (None, 0.0) or data.get("thickness_max_mm") in (None, 0.0):
+                    data = _maybe_refine_thickness_with_rays(file_id, data)
                 return jsonify(data)
             try:
                 raw = _redis.get(f"shape_stats:{file_id}:{axis}")
                 if raw:
                     data = _normalize_metrics_dict(_json.loads(raw))
-                    data = _maybe_refine_thickness_with_rays(file_id, data)
+                    data = _ensure_thickness_via_converter(file_id, data)
+                    if data.get("thickness_min_mm") in (None, 0.0) or data.get("thickness_max_mm") in (None, 0.0):
+                        data = _maybe_refine_thickness_with_rays(file_id, data)
                     return jsonify(data)
             except Exception:
                 pass
@@ -894,7 +956,12 @@ def __thickness_test():
 
     data = _normalize_metrics_dict(base) if base else {"thickness_min_mm": None, "thickness_max_mm": None}
     dbg = {}
-    force = env_bool("REFINE_FORCE_PARAM_FALLBACK", True) or (request.args.get("force") == "1")
+
+    # 1) Converter si STEP dispo
+    data = _ensure_thickness_via_converter(file_id, data)
+    # 2) Fallback ray casting si encore vide
+    need_raycast = (data.get("thickness_min_mm") in (None, 0.0) or data.get("thickness_max_mm") in (None, 0.0))
+    force = env_bool("REFINE_FORCE_PARAM_FALLBACK", True) or (request.args.get("force") == "1") or need_raycast
     out = _maybe_refine_thickness_with_rays(file_id, data, force=force, dbg=dbg)
 
     return jsonify(ok=True, file_id=file_id, debug=dbg, result={"tmin": out.get("thickness_min_mm"), "tmax": out.get("thickness_max_mm")})
