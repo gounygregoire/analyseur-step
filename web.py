@@ -16,9 +16,8 @@ import redis
 from rq import Queue
 from rq.job import Job
 
-# Épaisseur via converter (lecture STEP + algo ±normales -> mm)
+# (Optionnel) Épaisseur via converter local (CadQuery/pythonocc). Gardé mais inactif par défaut.
 from xkt_converter import compute_thickness_mm_from_step
-
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
@@ -129,7 +128,7 @@ if _redis is not None:
 # ---------- Helpers génériques ----------
 def _s3_enabled() -> bool:
     """Vrai si les 4 variables S3 sont présentes."""
-    return all(os.environ.get(k) for k in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "S3_BUCKET"))
+    return all(os.environ.get(k) for k in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "S3_BUNDLE" if os.environ.get("S3_BUNDLE") else "S3_BUCKET"))
 
 def _step_or_stl_path_for(file_id: str) -> str | None:
     return _first_existing([
@@ -213,7 +212,28 @@ def _abs_url(path: str) -> str:
     host  = request.headers.get("X-Forwarded-Host", request.host)
     return f"{proto}://{host}{path}"
 
-# ---------- Épaisseur (converter) : helper intégré ----------
+# ---------- Épaisseur : merge des valeurs calculées par le worker (voxel/SDF) ----------
+def _merge_thickness_from_worker(file_id: str, data: dict, prefer_worker: bool = True) -> dict:
+    """
+    Si le worker a écrit /converted/<file_id>.thick.json, on merge tmin/tmax (mm).
+    Ne fait qu'une lecture de fichier. Source renseignée: 'worker'.
+    """
+    p = _thickness_cache_path(file_id)
+    if os.path.isfile(p):
+        try:
+            j = _read_json(p)
+            tmin, tmax = j.get("tmin"), j.get("tmax")
+            if tmin is not None and tmax is not None and float(tmin) > 0 and float(tmax) > 0:
+                if prefer_worker or data.get("thickness_source") in (None, "cache", "raycast"):
+                    data["thickness_min_mm"] = round(float(tmin), 4)
+                    data["thickness_max_mm"] = round(float(tmax), 4)
+                    data["thickness_source"] = "worker"
+                    data.pop("thickness_warning", None)
+        except Exception as e:
+            app.logger.warning("[thickness] merge worker file failed: %s", e)
+    return data
+
+# ---------- Épaisseur (converter local) : helper (désactivé par défaut) ----------
 def _ensure_thickness_via_converter(file_id: str, data: dict) -> dict:
     """
     Tente le calcul via converter (CadQuery/pythonocc selon son implémentation).
@@ -241,8 +261,7 @@ def _ensure_thickness_via_converter(file_id: str, data: dict) -> dict:
         data["thickness_warning"] = f"{e.__class__.__name__}: {e}"
     return data
 
-
-# ---------- Raffinement des épaisseurs (ray casting) ----------
+# ---------- (Conservé) Raffinement ray casting — non utilisé si THICKNESS_ON_WEB=0 ----------
 def _try_imports_for_thickness():
     reason = None
     try:
@@ -257,12 +276,7 @@ def _try_imports_for_thickness():
         return False, reason
     return True, None
 
-# ===== Tessellation STEP via CadQuery/OCP (prioritaire) =====
 def _mesh_from_step_cadquery(step_path: str):
-    """
-    Lit un .STEP avec cadquery/ocp et retourne un mesh trimesh.
-    Unités : millimètres (CadQuery/OCP renvoie en mm).
-    """
     try:
         import cadquery as cq
         import numpy as np
@@ -295,9 +309,7 @@ def _mesh_from_step_cadquery(step_path: str):
         app.logger.exception("[thickness] STEP→mesh (cadquery) failed: %s", e)
         return None
 
-# ===== Fallback pythonocc (si dispo) =====
 def _mesh_from_step_occ(step_path: str):
-    """STEP -> trimesh via pythonocc; mm supposés (comme dans le STEP)."""
     try:
         import numpy as np
         import trimesh
@@ -355,9 +367,7 @@ def _mesh_from_step_occ(step_path: str):
     mesh = trimesh.Trimesh(vertices=np.asarray(verts_all), faces=np.asarray(faces_all), process=True)
     return mesh
 
-# ===== Choix chargeur mesh =====
 def _mesh_from_file(path: str):
-    """Charge un maillage depuis STL/STEP."""
     ext = (_ext(path) or "").lower()
 
     if ext == ".stl":
@@ -381,9 +391,6 @@ def _mesh_from_file(path: str):
     return None
 
 def _estimate_thickness_mm_from_mesh(mesh, samples=30000, eps_factor=1e-5, outlier_pct=0.1, backface_dot=-0.3):
-    """
-    Estime min/max d'épaisseur (mm) en tirant des rayons ±n depuis la surface.
-    """
     import numpy as np
     import trimesh
 
@@ -456,17 +463,15 @@ def _estimate_thickness_mm_from_mesh(mesh, samples=30000, eps_factor=1e-5, outli
     return tmin, tmax
 
 def _maybe_refine_thickness_with_rays(file_id: str, data: dict, *, force: bool=False, dbg: dict | None=None) -> dict:
-    """Raffine thickness_* si possible (cache local, sinon ray casting). Remplit dbg si fourni."""
     def _dbg(k, v):
         if isinstance(dbg, dict):
             dbg[k] = v
 
     try:
-        if not env_bool("REFINE_THICKNESS", True) and not force:
+        if not env_bool("REFINE_THICKNESS", False) and not force:
             _dbg("skipped", "REFINE_THICKNESS=0")
             return data
 
-        # Si on dispose d'une valeur "converter" fiable et qu'on ne force pas, on ne remplace pas.
         if not force and data.get("thickness_source") == "converter":
             _dbg("skip_reason", "has_converter_values")
             return data
@@ -682,9 +687,9 @@ def serve_xkt(file_id: str):
 def api_shape_stats():
     """
     STRICTEMENT ASYNCHRONE:
-    - si caches présents -> lit + calcule épaisseur précise (optionnel) -> 200
+    - si caches présents -> lit -> merge épaisseur worker -> (optionnel: converter/raycast si activé) -> 200
     - sinon -> enqueue job RQ et répond 202 (queued/processing)
-    Jamais de calcul local lourd (pas d'import shape_metrics ici).
+    Aucun calcul lourd en local par défaut (THICKNESS_ON_WEB=0).
     """
     import json as _json
 
@@ -699,16 +704,19 @@ def api_shape_stats():
     step_ext = pathlib.Path(step_path).suffix.lstrip(".") if step_path else None
     base_cache, proj_cache = _cache_paths(file_id, axis)
 
-    # 0) si caches présents -> on sert tout de suite (léger)
+    # 0) Caches présents -> on sert tout de suite (léger)
     if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
         try:
             data = _response_from_caches(base_cache, proj_cache)
+            # Merge épaisseur SDF/voxel écrite par le worker (prioritaire)
+            data = _merge_thickness_from_worker(file_id, data, prefer_worker=True)
 
-            # --- ÉPAISSEUR PRÉCISE (côté web), désactivable par env ---
-            if env_bool("THICKNESS_ON_WEB", True):
-                data = _ensure_thickness_via_converter(file_id, data)  # CadQuery/pythonocc (selon converter)
+            # Optionnel: calcul local si explicitement activé
+            if env_bool("THICKNESS_ON_WEB", False):
+                # converter d'abord
+                data = _ensure_thickness_via_converter(file_id, data)
+                # si le converter n'a pas fourni, fallback ray casting (si activé via REFINE_THICKNESS)
                 if data.get("thickness_source") != "converter":
-                    # fallback ray casting si on n'a pas réussi le converter
                     data = _maybe_refine_thickness_with_rays(file_id, data)
 
             return jsonify(data)
@@ -736,7 +744,9 @@ def api_shape_stats():
             # le worker a fini: on tente de lire les caches
             if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
                 data = _response_from_caches(base_cache, proj_cache)
-                if env_bool("THICKNESS_ON_WEB", True):
+                # Merge worker
+                data = _merge_thickness_from_worker(file_id, data, prefer_worker=True)
+                if env_bool("THICKNESS_ON_WEB", False):
                     data = _ensure_thickness_via_converter(file_id, data)
                     if data.get("thickness_source") != "converter":
                         data = _maybe_refine_thickness_with_rays(file_id, data)
@@ -746,7 +756,9 @@ def api_shape_stats():
                 raw = _redis.get(f"shape_stats:{file_id}:{axis}")
                 if raw:
                     data = _normalize_metrics_dict(_json.loads(raw))
-                    if env_bool("THICKNESS_ON_WEB", True):
+                    # Merge worker
+                    data = _merge_thickness_from_worker(file_id, data, prefer_worker=True)
+                    if env_bool("THICKNESS_ON_WEB", False):
                         data = _ensure_thickness_via_converter(file_id, data)
                         if data.get("thickness_source") != "converter":
                             data = _maybe_refine_thickness_with_rays(file_id, data)
@@ -914,7 +926,7 @@ def __thickness_test():
     if not file_id:
         return jsonify(ok=False, error="file_id manquant"), 400
 
-    base_cache, proj_cache = _cache_paths(file_id, "Z")
+    base_cache, _ = _cache_paths(file_id, "Z")
     base = {}
     if os.path.isfile(base_cache):
         try: base = _read_json(base_cache)
@@ -923,16 +935,32 @@ def __thickness_test():
     data = _normalize_metrics_dict(base) if base else {"thickness_min_mm": None, "thickness_max_mm": None}
     dbg = {}
 
-    data = _ensure_thickness_via_converter(file_id, data)
-    need_raycast = (data.get("thickness_source") != "converter")
-    force = env_bool("REFINE_FORCE_PARAM_FALLBACK", True) or (request.args.get("force") == "1") or need_raycast
-    out = _maybe_refine_thickness_with_rays(file_id, data, force=force, dbg=dbg)
+    # Merge worker en premier (source = 'worker' si présent)
+    data = _merge_thickness_from_worker(file_id, data, prefer_worker=True)
+
+    # Optionnel: converter/raycast seulement si explicitement activé
+    if env_bool("THICKNESS_ON_WEB", False):
+        data = _ensure_thickness_via_converter(file_id, data)
+        need_raycast = (data.get("thickness_source") != "converter")
+        force = env_bool("REFINE_FORCE_PARAM_FALLBACK", False) or (request.args.get("force") == "1") or need_raycast
+        data = _maybe_refine_thickness_with_rays(file_id, data, force=force, dbg=dbg)
 
     return jsonify(ok=True, file_id=file_id, debug=dbg, result={
-        "tmin": out.get("thickness_min_mm"),
-        "tmax": out.get("thickness_max_mm"),
-        "source": out.get("thickness_source", "unknown")
+        "tmin": data.get("thickness_min_mm"),
+        "tmax": data.get("thickness_max_mm"),
+        "source": data.get("thickness_source", "unknown")
     })
+
+# --- Diag rapide: voir le fichier d'épaisseur écrit par le worker ---
+@app.get("/__thick/<file_id>")
+def __thick(file_id: str):
+    p = _thickness_cache_path(file_id)
+    if os.path.isfile(p):
+        try:
+            return jsonify(ok=True, path=p, data=_read_json(p))
+        except Exception as e:
+            return jsonify(ok=False, error=str(e), path=p), 500
+    return jsonify(ok=False, error="not_found", path=p), 404
 
 # --- Diag: CadQuery dispo ? ---
 @app.get("/__cadquery")
