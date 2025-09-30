@@ -224,6 +224,10 @@ def _ensure_thickness_via_converter(file_id: str, data: dict) -> dict:
     Si un STEP est dispo pour file_id, calcule tmin/tmax en mm via converter
     et ÉCRASE les valeurs existantes si le calcul réussit. Écrit un cache .thick.json.
     """
+        # coupe-circuit si désactivé par ENV (utile si tu veux 0 risque côté web)
+    if not env_bool("THICKNESS_ON_WEB", True):
+        return data
+        
     try:
         step_path = _step_path_for(file_id)
         if not step_path or not os.path.isfile(step_path):
@@ -702,50 +706,50 @@ def serve_xkt(file_id: str):
 # ---------- API analyse : lecture cache / sync fallback / enqueue worker ----------
 @app.get("/api/shape/stats")
 def api_shape_stats():
+    """
+    STRICTEMENT ASYNCHRONE:
+    - si caches présents -> lit + calcule épaisseur précise (optionnel) -> 200
+    - sinon -> enqueue job RQ et répond 202 (queued/processing)
+    Jamais de calcul local lourd (pas d'import shape_metrics ici).
+    """
     import json as _json
+
     file_id = request.args.get("file_id")
     axis = (request.args.get("axis") or "Z").upper()
-    force_recalc = (request.args.get("recalc") == "1")  # <— NOUVEAU
     if not file_id:
         return jsonify(error="no_file_id"), 400
     if axis not in ("X", "Y", "Z"):
         axis = "Z"
 
-    step_path = _step_path_for(file_id)
+    step_path = _step_path_for(file_id)  # peut être None
     step_ext = pathlib.Path(step_path).suffix.lstrip(".") if step_path else None
     base_cache, proj_cache = _cache_paths(file_id, axis)
 
-    # 1) Caches locaux si dispo
-    if os.path.isfile(base_cache) and os.path.isfile(proj_cache) and not force_recalc:
+    # 0) si caches présents -> on sert tout de suite (léger)
+    if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
         try:
             data = _response_from_caches(base_cache, proj_cache)
-            data = _ensure_thickness_via_converter(file_id, data)  # écrase si ok
-            if data.get("thickness_source") != "converter":
-                data = _maybe_refine_thickness_with_rays(file_id, data)
+
+            # --- ÉPAISSEUR PRÉCISE (côté web), désactivable par env ---
+            # THICKNESS_ON_WEB=1 pour activer; 0 pour sauter (utile si ça te gêne)
+            if env_bool("THICKNESS_ON_WEB", True):
+                data = _ensure_thickness_via_converter(file_id, data)  # CadQuery
+                if data.get("thickness_source") != "converter":
+                    # fallback ray casting si on n'a pas réussi le converter
+                    data = _maybe_refine_thickness_with_rays(file_id, data)
+
             return jsonify(data)
         except Exception as e:
             return jsonify(error="cache_read_fail", detail=str(e)), 500
 
-    # 2) Calcul synchrone local si possible (ou si recalc=1)
-    if step_path:
-        try:
-            data = _compute_stats_sync_or_error(file_id, axis, step_path)
-            data = _normalize_metrics_dict(data)
-            data = _ensure_thickness_via_converter(file_id, data)
-            # si pas de converter, tente le ray casting (force si recalc=1)
-            data = _maybe_refine_thickness_with_rays(file_id, data, force=force_recalc)
-            return jsonify(data)
-        except Exception as e:
-            # si on ne peut pas faire en synchrone, on passe à RQ (sauf si pas de S3)
-            if not _s3_enabled():
-                return jsonify(error="compute_fail", detail=str(e)), 500
-
-    # 3) Sinon RQ (asynchrone)
+    # 1) pas de caches -> on DOIT passer par RQ (strictement asynchrone)
     if q is None or _redis is None:
         return jsonify(error="rq_unavailable",
-                       detail="Redis/RQ non dispo."), 503
+                       detail="Redis/RQ non dispo sur le web service."), 503
 
     job_id = f"shape_stats:{file_id}:{axis}"
+
+    # existe déjà ?
     try:
         job = Job.fetch(job_id, connection=_redis)
     except Exception:
@@ -756,22 +760,27 @@ def api_shape_stats():
         if st in ("queued", "started", "deferred"):
             return jsonify(status="processing", job_id=job_id, retry_in_sec=2), 202
         if st == "finished":
+            # le worker a fini: on tente de lire les caches
             if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
                 data = _response_from_caches(base_cache, proj_cache)
-                data = _ensure_thickness_via_converter(file_id, data)
-                if data.get("thickness_source") != "converter":
-                    data = _maybe_refine_thickness_with_rays(file_id, data)
+                if env_bool("THICKNESS_ON_WEB", True):
+                    data = _ensure_thickness_via_converter(file_id, data)
+                    if data.get("thickness_source") != "converter":
+                        data = _maybe_refine_thickness_with_rays(file_id, data)
                 return jsonify(data)
+            # sinon on regarde la clé redis brute comme secours
             try:
                 raw = _redis.get(f"shape_stats:{file_id}:{axis}")
                 if raw:
                     data = _normalize_metrics_dict(_json.loads(raw))
-                    data = _ensure_thickness_via_converter(file_id, data)
-                    if data.get("thickness_source") != "converter":
-                        data = _maybe_refine_thickness_with_rays(file_id, data)
+                    if env_bool("THICKNESS_ON_WEB", True):
+                        data = _ensure_thickness_via_converter(file_id, data)
+                        if data.get("thickness_source") != "converter":
+                            data = _maybe_refine_thickness_with_rays(file_id, data)
                     return jsonify(data)
             except Exception:
                 pass
+            # rien trouvé -> redemande patiente
             return jsonify(status="processing", job_id=job_id, retry_in_sec=1), 202
         if st == "failed":
             return jsonify(error="compute_fail",
@@ -779,14 +788,15 @@ def api_shape_stats():
                            status=st,
                            exc=str(job.exc_info) if getattr(job, "exc_info", None) else None), 500
 
+    # 2) pas de job: on l'enqueue
     try:
         q.enqueue(
             RQ_TASK_PATH,
             kwargs={
                 "file_id": file_id,
                 "axis": axis,
-                "step_path": step_path,
-                "step_ext": step_ext,
+                "step_path": step_path,     # peut être None côté worker
+                "step_ext": step_ext,       # .step ou .stp si connu
                 "cache_dir": OUTPUT_FOLDER,
             },
             job_id=job_id,
