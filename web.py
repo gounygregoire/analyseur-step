@@ -946,20 +946,34 @@ def __thickness_test():
     out = _maybe_refine_thickness_with_rays(file_id, data, force=force, dbg=dbg)
 
     return jsonify(ok=True, file_id=file_id, debug=dbg, result={
-        "tmin": out.get("thickness_min_mm"),
-        "tmax": out.get("thickness_max_mm"),
-        "source": out.get("thickness_source")
-    })
+    "tmin": out.get("thickness_min_mm"),
+    "tmax": out.get("thickness_max_mm"),
+    "source": out.get("thickness_source", "unknown")
+})
 
 # --- Diag: CadQuery dispo ? ---
 @app.get("/__cadquery")
 def __cadquery():
+    info = {}
     try:
         import cadquery as cq
-        import cadquery.ocp as ocp
-        return jsonify(ok=True, cadquery=cq.__version__, ocp=getattr(ocp, "__version__", "unknown"))
+        info["cadquery"] = getattr(cq, "__version__", "unknown")
+        cq_ok = True
     except Exception as e:
-        return jsonify(ok=False, error=str(e.__class__.__name__), detail=str(e))
+        cq_ok = False
+        info["cadquery_error"] = f"{e.__class__.__name__}: {e}"
+
+    try:
+        import OCP as ocp     # <-- le bon module !
+        info["OCP"] = getattr(ocp, "__version__", "unknown")
+        ocp_ok = True
+    except Exception as e:
+        ocp_ok = False
+        info["OCP_error"] = f"{e.__class__.__name__}: {e}"
+
+    info["ok"] = bool(cq_ok and ocp_ok)
+    return jsonify(info)
+
 
 # --- Maintenance: Purger les caches d'un file_id ---
 @app.post("/__clear_caches")
