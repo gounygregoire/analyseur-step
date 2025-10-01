@@ -2,19 +2,43 @@
 from __future__ import annotations
 import os, io, json, math, tempfile, pathlib, logging
 from typing import Optional, Tuple, List
+from datetime import timedelta
 
+# =========================
+# Logs
+# =========================
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=os.getenv("LOGLEVEL", "INFO"))
+logging.basicConfig(
+    level=getattr(logging, os.getenv("LOGLEVEL", "INFO").upper(), logging.INFO),
+    format="%(asctime)s %(levelname)s [worker] %(message)s"
+)
 
-# --- Dossiers (compat avec le web)
-UPLOAD_FOLDER  = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
-OUTPUT_FOLDER  = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
+# =========================
+# Dossiers (mêmes valeurs que côté web)
+# =========================
+UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
+OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-# --- S3 helper (optionnel)
+# =========================
+# Helpers S3 (optionnels)
+# =========================
 def _s3_enabled() -> bool:
     return all(os.environ.get(k) for k in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "S3_BUCKET"))
+
+def _s3_put(local_path: str, key: str, content_type: str = "application/json") -> bool:
+    if not (_s3_enabled() and os.path.isfile(local_path)):
+        return False
+    try:
+        from s3io import put_file
+        ok = put_file(local_path, key, content_type=content_type)
+        if not ok:
+            logger.warning("S3 put_file returned False for key=%s", key)
+        return bool(ok)
+    except Exception as e:
+        logger.warning("S3 upload failed key=%s: %s", key, e)
+        return False
 
 def _try_get_from_s3(key: str, dest_path: str) -> bool:
     if not _s3_enabled():
@@ -22,26 +46,63 @@ def _try_get_from_s3(key: str, dest_path: str) -> bool:
     try:
         from s3io import get_file
         ok = get_file(key, dest_path)
-        if ok and os.path.isfile(dest_path):
-            return True
+        return bool(ok and os.path.isfile(dest_path))
     except Exception as e:
-        logger.warning("[worker] S3 get_file failed key=%s: %s", key, e)
-    return False
+        logger.warning("S3 get_file failed key=%s: %s", key, e)
+        return False
 
-# --- Caches, mêmes noms que le web
-def _cache_paths(file_id: str, axis: str) -> Tuple[str, str]:
-    base = os.path.join(OUTPUT_FOLDER, f"{file_id}.stats.json")
-    proj = os.path.join(OUTPUT_FOLDER, f"{file_id}.proj.{axis}.json")
+# =========================
+# Redis publish (pour fallback web)
+# =========================
+def _normalize_redis_url(url: str) -> str:
+    from urllib.parse import urlparse, urlunparse
+    if not url:
+        return url
+    parsed = urlparse(str(url).strip().strip('"').strip("'"))
+    host = (parsed.hostname or "")
+    needs_tls = (
+        host.endswith("redis-cloud.com")
+        or host.endswith("redns.redis-cloud.com")
+        or host.endswith("redns.redis-cloud.com.")
+        or (parsed.port == 12922)
+    )
+    if needs_tls and parsed.scheme.lower() == "redis":
+        parsed = parsed._replace(scheme="rediss")
+    return urlunparse(parsed)
+
+def _redis_client():
+    import redis
+    REDIS_URL = _normalize_redis_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+    return redis.from_url(REDIS_URL, ssl_cert_reqs=None, socket_timeout=5)
+
+def _publish_redis(file_id: str, axis: str, payload: dict, ttl_sec: int = 3600) -> None:
+    try:
+        r = _redis_client()
+        r.setex(f"shape_stats:{file_id}:{axis}", timedelta(seconds=ttl_sec), json.dumps(payload))
+    except Exception as e:
+        # Non bloquant
+        logger.info("Redis publish skipped: %s", e)
+
+# =========================
+# Noms des caches (acceptent base_dir)
+# =========================
+def _cache_paths(file_id: str, axis: str, base_dir: Optional[str] = None) -> Tuple[str, str]:
+    base_dir = base_dir or OUTPUT_FOLDER
+    base = os.path.join(base_dir, f"{file_id}.stats.json")
+    proj = os.path.join(base_dir, f"{file_id}.proj.{axis}.json")
     return base, proj
 
-def _thickness_cache_path(file_id: str) -> str:
-    return os.path.join(OUTPUT_FOLDER, f"{file_id}.thick.json")
+def _thickness_cache_path(file_id: str, base_dir: Optional[str] = None) -> str:
+    base_dir = base_dir or OUTPUT_FOLDER
+    return os.path.join(base_dir, f"{file_id}.thick.json")
 
-# --- STEP/STL -> mesh
+# =========================
+# Chargement / maillage
+# =========================
 def _mesh_from_step(step_path: str):
     """
-    Tessellation STEP via CadQuery en exportant un STL temporaire
-    (robuste avec Workplane). Retourne un trimesh.Trimesh en mm.
+    Tessellation STEP via CadQuery -> export STL temporaire -> charge avec trimesh.
+    Unités supposées en mm (STEP doit être cohérent).
     """
     import cadquery as cq
     import trimesh
@@ -49,13 +110,14 @@ def _mesh_from_step(step_path: str):
     tol_mm = float(os.getenv("TESSELLATION_TOL_MM", "0.05"))
     ang_rd = float(os.getenv("TESSELLATION_ANG_RAD", "0.25"))
 
-    wp = cq.importers.importStep(step_path)
+    logger.info("Import STEP with CadQuery: %s", step_path)
+    wp = cq.importers.importStep(step_path)  # Workplane/Compound
 
     tmp = tempfile.NamedTemporaryFile(suffix=".stl", delete=False)
     tmp_path = tmp.name
     tmp.close()
+
     try:
-        # CadQuery sait exporter un Workplane directement
         cq.exporters.export(
             wp,
             tmp_path,
@@ -78,10 +140,12 @@ def _mesh_from_step(step_path: str):
             m = m.fill_holes()
     except Exception:
         pass
+
     return m
 
 def _mesh_from_stl(stl_path: str):
     import trimesh
+    logger.info("Load STL: %s", stl_path)
     m = trimesh.load_mesh(stl_path, force="mesh")
     if m.is_empty:
         raise RuntimeError("STL vide")
@@ -100,33 +164,32 @@ def _load_mesh(path: str):
         return _mesh_from_step(path)
     raise RuntimeError(f"Extension non supportée: {ext}")
 
-# --- Mesures géométriques de base
+# =========================
+# Métriques géométriques
+# =========================
 def _bbox_mm(mesh) -> List[float]:
     import numpy as np
-    ext = mesh.extents.astype(float)  # mm
+    ext = mesh.extents.astype(float)
     return [float(np.round(ext[0], 4)), float(np.round(ext[1], 4)), float(np.round(ext[2], 4))]
 
 def _volume_mm3(mesh) -> Optional[float]:
     try:
-        vol = float(mesh.volume)  # mm^3 si le mesh est en mm et watertight
+        vol = float(mesh.volume)
         if vol > 0:
             return vol
     except Exception:
         pass
-    # Fallback: sommer volumes des composants étanches
     try:
         parts = mesh.split(only_watertight=True)
-        if parts:
-            s = sum(float(p.volume) for p in parts if p.volume > 0)
-            return s if s > 0 else None
+        s = sum(float(p.volume) for p in parts if getattr(p, "volume", 0) > 0)
+        return s if s > 0 else None
     except Exception:
-        pass
-    return None
+        return None
 
 def _projected_area_cm2(mesh, axis: str) -> float:
     """
-    Aire projetée sur le plan perpendiculaire à axis (X/Y/Z).
-    Utilise: somme(face_area * |n · d|). Convertit mm^2 -> cm^2 (/100).
+    Aire projetée sur le plan ⟂ à axis (X/Y/Z).
+    a_proj = Σ (area_face * |n·d|).  mm² -> cm² (/100).
     """
     import numpy as np
     axis = (axis or "Z").upper()
@@ -136,71 +199,80 @@ def _projected_area_cm2(mesh, axis: str) -> float:
         d = np.array([0.0, 1.0, 0.0])
     else:
         d = np.array([0.0, 0.0, 1.0])
+
     try:
-        area_faces = mesh.area_faces
-        n = mesh.face_normals
-        scale = np.abs((n * d).sum(axis=1))
-        a_mm2 = float((area_faces * scale).sum())
-        return round(a_mm2 / 100.0, 4)  # mm^2 -> cm^2
+        a_mm2 = float((mesh.area_faces * np.abs((mesh.face_normals * d).sum(axis=1))).sum())
+        return round(a_mm2 / 100.0, 4)
     except Exception:
         return 0.0
 
-# --- Épaisseur via Voxel + EDT + squelette 3D
-def _thickness_mm_voxel(mesh, pitch_mm: Optional[float]=None, max_voxels: int=80_000_000, dbg: dict | None=None):
+# =========================
+# Épaisseur via voxel + EDT + squelette (robuste)
+# =========================
+def _thickness_mm_voxel(
+    mesh,
+    pitch_mm: Optional[float] = None,
+    max_voxels: int = 80_000_000,
+    dbg: dict | None = None
+) -> tuple[float | None, float | None]:
     """
-    Calcule tmin/tmax robustes (mm) :
-      1) voxelisation (pas 'pitch_mm' en mm)
-      2) distance transform (EDT) -> rayon local (mm)
-      3) squelette 3D -> min/max rayons squelettiques
+    1) voxelisation (pitch_mm)  2) EDT -> rayon local (mm)  3) squelette -> min/max*2.
+    Retourne (tmin, tmax) en mm ou (None, None) si indisponible.
     """
-    import numpy as np
-    from scipy.ndimage import distance_transform_edt
-    from skimage.morphology import skeletonize_3d
+    try:
+        import numpy as np
+        from scipy.ndimage import distance_transform_edt
+        from skimage.morphology import skeletonize_3d
+    except Exception as e:
+        logger.info("Thickness voxel disabled (missing deps?): %s", e)
+        return None, None
 
     if pitch_mm is None:
         pitch_mm = float(os.getenv("VOXEL_PITCH_MM", "0.12"))
 
-    # Ajustement de pas si trop de voxels
     ext = mesh.extents.astype(float)
-    dims = np.ceil(ext / pitch_mm).astype(int)
-    voxels = int(dims[0]) * int(dims[1]) * int(dims[2])
-    if voxels > max_voxels:
-        scale = (voxels / float(max_voxels)) ** (1.0/3.0)
+    dims = (ext / pitch_mm).clip(min=1.0)
+    voxels_est = int(math.ceil(dims[0])) * int(math.ceil(dims[1])) * int(math.ceil(dims[2]))
+    if voxels_est > max_voxels:
+        scale = (voxels_est / float(max_voxels)) ** (1.0 / 3.0)
         pitch_mm *= scale
-        dims = np.ceil(ext / pitch_mm).astype(int)
-        if isinstance(dbg, dict):
+        if dbg is not None:
             dbg["voxel_pitch_scaled_mm"] = float(pitch_mm)
 
-    # Voxelisation
     vg = mesh.voxelized(pitch_mm).fill()
     vol = vg.matrix.astype(bool)
     if vol.size == 0 or not vol.any():
         return None, None
 
-    if isinstance(dbg, dict):
+    if dbg is not None:
         dbg["voxel_shape"] = list(vol.shape)
         dbg["voxel_pitch_mm"] = float(pitch_mm)
 
-    # Distance transform -> rayon en mm
     edt = distance_transform_edt(vol) * float(pitch_mm)
+    try:
+        skel = skeletonize_3d(vol)
+    except Exception:
+        # au pire: min/max global EDT
+        v = edt[vol]
+        if v.size == 0:
+            return None, None
+        return float(2.0 * v.min()), float(2.0 * v.max())
 
-    # Squelette + lecture des rayons le long du squelette
-    skel = skeletonize_3d(vol)
     vals = edt[skel]
     if vals.size == 0:
         return None, None
 
-    tmin = float(2.0 * vals.min())
-    tmax = float(2.0 * vals.max())
-    return tmin, tmax
+    return float(2.0 * vals.min()), float(2.0 * vals.max())
 
-# --- Résolution du fichier (local/S3)
+# =========================
+# Résolution du fichier source (local / S3)
+# =========================
 def _resolve_source_path(file_id: str, step_path: Optional[str], step_ext: Optional[str]) -> str:
-    # 1) chemin direct ?
+    # 1) chemin direct fourni ?
     if step_path and os.path.isfile(step_path):
         return step_path
 
-    # 2) dans UPLOAD_FOLDER ?
+    # 2) uploads locaux (on tente plusieurs extensions)
     for ext in (step_ext, "step", "stp", "stl"):
         if not ext:
             continue
@@ -208,9 +280,8 @@ def _resolve_source_path(file_id: str, step_path: Optional[str], step_ext: Optio
         if os.path.isfile(p):
             return p
 
-    # 3) S3 ?
+    # 3) S3 (uploads/*)
     if _s3_enabled():
-        # Tente step/stp/stl
         for ext in (step_ext, "step", "stp", "stl"):
             if not ext:
                 continue
@@ -219,27 +290,43 @@ def _resolve_source_path(file_id: str, step_path: Optional[str], step_ext: Optio
             if _try_get_from_s3(key, dest):
                 return dest
 
-    raise FileNotFoundError(f"Impossible de localiser le fichier pour file_id={file_id} (step_path={step_path}, step_ext={step_ext})")
+    raise FileNotFoundError(
+        f"Impossible de localiser le fichier pour file_id={file_id} (step_path={step_path}, step_ext={step_ext})"
+    )
 
-# --- Job principal appelé par RQ
-def compute_and_cache_stats(*, file_id: str, axis: str, step_path: Optional[str], step_ext: Optional[str], cache_dir: Optional[str]=None) -> dict:
+# =========================
+# Job principal (appelé par RQ)
+# =========================
+def compute_and_cache_stats(
+    *,
+    file_id: str,
+    axis: str,
+    step_path: Optional[str],
+    step_ext: Optional[str],
+    cache_dir: Optional[str] = None
+) -> dict:
     """
-    Job RQ.
-    Ecrit:
-      - {OUTPUT}/{file_id}.stats.json            (volume_mm3, bbox_mm, thickness_min_mm, thickness_max_mm)
-      - {OUTPUT}/{file_id}.proj.{axis}.json      (projected_area_cm2)
-      - {OUTPUT}/{file_id}.thick.json            (tmin/tmax seuls)
+    Écrit:
+      - {cache_dir}/{fid}.stats.json       (volume_mm3, bbox_mm, thickness_min_mm, thickness_max_mm, volume_cm3)
+      - {cache_dir}/{fid}.proj.{axis}.json (projected_area_cm2)
+      - {cache_dir}/{fid}.thick.json       (optionnel: tmin/tmax)
+    Pousse aussi vers S3 (converted/*) si configuré et publie une clé Redis pour fallback web.
     """
     axis = (axis or "Z").upper()
+    if axis not in ("X", "Y", "Z"):
+        axis = "Z"
+
     out_dir = cache_dir or OUTPUT_FOLDER
     os.makedirs(out_dir, exist_ok=True)
-    base_cache, proj_cache = _cache_paths(file_id, axis)
-    thick_cache = _thickness_cache_path(file_id)
 
-    dbg = {}
+    base_cache, proj_cache = _cache_paths(file_id, axis, base_dir=out_dir)
+    thick_cache = _thickness_cache_path(file_id, base_dir=out_dir)
+
+    dbg: dict = {}
 
     # 1) Résoudre la source
     src_path = _resolve_source_path(file_id, step_path, step_ext)
+    logger.info("Source resolved: %s", src_path)
 
     # 2) Charger le mesh
     mesh = _load_mesh(src_path)
@@ -247,50 +334,70 @@ def compute_and_cache_stats(*, file_id: str, axis: str, step_path: Optional[str]
     # 3) BBox & volume
     bbox = _bbox_mm(mesh)
     vol_mm3 = _volume_mm3(mesh)
+    vol_cm3 = round(vol_mm3 / 1000.0, 4) if vol_mm3 is not None else None
 
-    # 4) Aire projetée (pour l'axe demandé uniquement)
+    # 4) Aire projetée (uniquement l’axe demandé)
     proj_cm2 = _projected_area_cm2(mesh, axis=axis)
 
-    # 5) Épaisseur (VOXEL/SDF only)
-    pitch = os.getenv("VOXEL_PITCH_MM")
-    pitch = float(pitch) if pitch else None
+    # 5) Épaisseur (voxel EDT)
+    pitch_env = os.getenv("VOXEL_PITCH_MM")
+    pitch = float(pitch_env) if pitch_env else None
     tmin, tmax = _thickness_mm_voxel(mesh, pitch_mm=pitch, dbg=dbg)
 
-    # 6) Ecrire les caches
+    # 6) Écrire les caches (toujours écrire stats + proj)
     base_payload = {
-        "volume_mm3": vol_mm3,
+        "volume_mm3": float(vol_mm3) if vol_mm3 is not None else None,
+        "volume_cm3": vol_cm3,
         "bbox_mm": bbox,
         "thickness_min_mm": round(float(tmin), 4) if tmin is not None else None,
         "thickness_max_mm": round(float(tmax), 4) if tmax is not None else None,
-        # pour compat éventuelle avec le web
-        "volume_cm3": round(vol_mm3/1000.0, 4) if (vol_mm3 is not None) else None,
     }
     with open(base_cache, "w", encoding="utf-8") as fh:
         json.dump(base_payload, fh)
 
-    proj_payload = {
-        "projected_area_cm2": round(float(proj_cm2), 4)
-    }
+    proj_payload = {"projected_area_cm2": round(float(proj_cm2), 4)}
     with open(proj_cache, "w", encoding="utf-8") as fh:
         json.dump(proj_payload, fh)
 
-    # Cache épaisseur dédié pour le merge côté web
-    try:
-        with open(thick_cache, "w", encoding="utf-8") as fh:
-            json.dump({
-                "tmin": base_payload["thickness_min_mm"],
-                "tmax": base_payload["thickness_max_mm"],
-                "method": "voxel_edt"
-            }, fh)
-    except Exception as e:
-        logger.warning("[worker] impossible d'écrire %s: %s", thick_cache, e)
+    if base_payload["thickness_min_mm"] is not None and base_payload["thickness_max_mm"] is not None:
+        try:
+            with open(thick_cache, "w", encoding="utf-8") as fh:
+                json.dump(
+                    {
+                        "tmin": base_payload["thickness_min_mm"],
+                        "tmax": base_payload["thickness_max_mm"],
+                        "method": "voxel_edt",
+                    },
+                    fh,
+                )
+        except Exception as e:
+            logger.warning("Impossible d'écrire %s: %s", thick_cache, e)
+
+    # 7) Upload converted/* (optionnel)
+    _s3_put(base_cache, f"converted/{pathlib.Path(base_cache).name}")
+    _s3_put(proj_cache, f"converted/{pathlib.Path(proj_cache).name}")
+    if os.path.isfile(thick_cache):
+        _s3_put(thick_cache, f"converted/{pathlib.Path(thick_cache).name}")
+
+    # 8) Publier une clé Redis pour fallback immédiat côté web
+    merged_for_redis = {
+        "volume_mm3": base_payload["volume_mm3"],
+        "bbox_mm": base_payload["bbox_mm"],
+        "thickness_min_mm": base_payload["thickness_min_mm"],
+        "thickness_max_mm": base_payload["thickness_max_mm"],
+        "projected_area_cm2": proj_payload["projected_area_cm2"],
+    }
+    _publish_redis(file_id, axis, merged_for_redis, ttl_sec=3600)
 
     logger.info(
-        "[worker] caches écrits file_id=%s axis=%s  bbox=%s  vol=%.4f cm3  t=(%s,%s) mm  proj=%.4f cm2",
-        file_id, axis, bbox,
-        (vol_mm3/1000.0 if vol_mm3 else 0.0),
-        base_payload["thickness_min_mm"], base_payload["thickness_max_mm"],
-        proj_payload["projected_area_cm2"]
+        "Caches écrits file_id=%s axis=%s  bbox=%s  vol=%s cm3  t=(%s,%s) mm  proj=%s cm2",
+        file_id,
+        axis,
+        bbox,
+        f"{vol_cm3:.4f}" if vol_cm3 is not None else "None",
+        base_payload["thickness_min_mm"],
+        base_payload["thickness_max_mm"],
+        proj_payload["projected_area_cm2"],
     )
 
     return {
@@ -300,7 +407,7 @@ def compute_and_cache_stats(*, file_id: str, axis: str, step_path: Optional[str]
         "written": {
             "stats": base_cache,
             "proj": proj_cache,
-            "thick": thick_cache,
+            "thick": (thick_cache if os.path.isfile(thick_cache) else None),
         },
-        "debug": dbg
+        "debug": dbg,
     }
