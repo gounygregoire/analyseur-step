@@ -29,30 +29,24 @@ CORS(app)
 # ---------- Config ----------
 def env_int(name: str, default: int) -> int:
     v = os.environ.get(name)
+    if not v:
+        return default
     try:
-        step_path = _step_path_for(file_id)  # facultatif
-        step_ext = _pl.Path(step_path).suffix.lstrip(".") if step_path else None
-        # Allow per-deployment override of the job timeout (seconds)
-        JOB_TIMEOUT = env_int("RQ_JOB_TIMEOUT_SEC", 900)  # 15 min par défaut
-        q.enqueue(
-            RQ_TASK_PATH,
-            kwargs={
-                "file_id": file_id,
-                "axis": axis,
-                "step_path": step_path,
-                "step_ext": step_ext,
-                "cache_dir": OUTPUT_FOLDER,
-            },
-            job_id=job_id,
-            result_ttl=3600,
-            ttl=3600,
-            failure_ttl=3600,
-            job_timeout=RQ_JOB_TIMEOUT_SEC,   # <— IMPORTANT
-        )
+        return int(float(str(v).strip().strip('"').strip("'")))
+    except Exception:
+        return default
 
-        return jsonify(status="queued", job_id=job_id, retry_in_sec=2), 202
-    except Exception as e:
-        return jsonify(error="enqueue_fail", detail=str(e)), 500
+
+def env_bool(name: str, default: bool) -> bool:
+    v = os.environ.get(name)
+    if v is None:
+        return default
+    return str(v).strip().lower() in ("1", "true", "yes", "y", "on")
+
+MAX_UPLOAD_MB = env_int("MAX_UPLOAD_MB", 50)
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
+# Timeout RQ appliqué aux jobs (en secondes)
+RQ_JOB_TIMEOUT_SEC = env_int("RQ_JOB_TIMEOUT_SEC", 1200)  # 20 min par défaut
 
 
 CONVERTER_URL = os.environ.get("CONVERTER_URL", "https://cadlytics-converter.onrender.com").rstrip("/")
