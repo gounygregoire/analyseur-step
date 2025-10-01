@@ -330,6 +330,8 @@ def upload():
         app.logger.exception("S3 upload failed for %s: %s", s3_key, e)
 
     try:
+        # Log for debugging: which converter URL and local paths are used (safe to log paths)
+        app.logger.info("[upload] sending to converter %s (in_path=%s, out_xkt=%s)", CONVERTER_URL, in_path, out_xkt)
         with open(in_path, "rb") as fh:
             resp = requests.post(
                 f"{CONVERTER_URL}/convert",
@@ -338,12 +340,20 @@ def upload():
                 stream=True,
                 headers={"Accept": "application/octet-stream"},
             )
+
+        app.logger.info("[upload] converter responded status=%s for file_id=%s", resp.status_code, file_id)
+
         if resp.status_code != 200:
+            # Try to extract JSON detail but fallback to text; log a snippet to avoid huge logs
             try:
                 detail = resp.json()
             except Exception:
                 detail = resp.text
-            return jsonify(error="convert_fail", detail=detail, status_code=resp.status_code), 500
+            safe_detail = str(detail)
+            app.logger.warning("[upload] converter failure status=%s detail=%s", resp.status_code, safe_detail[:1000])
+            if env_bool("DEV_SHOW_ERRORS", False):
+                return jsonify(error="convert_fail", detail=detail, status_code=resp.status_code), 500
+            return jsonify(error="convert_fail", status_code=resp.status_code), 500
 
         with open(out_xkt, "wb") as out:
             for chunk in resp.iter_content(chunk_size=1024 * 1024):
@@ -351,6 +361,7 @@ def upload():
                     out.write(chunk)
 
         if not os.path.isfile(out_xkt):
+            app.logger.error("[upload] no .xkt produced at %s", out_xkt)
             return jsonify(error="no_xkt", detail=f".xkt introuvable: {out_xkt}"), 500
 
         try:
@@ -363,9 +374,14 @@ def upload():
         xkt_abs = _abs_url(xkt_rel)
         return jsonify(file_id=file_id, status="ready", xktUrl=xkt_abs, xkt_url=xkt_abs, s3_uploaded=s3_uploaded)
     except requests.Timeout:
+        app.logger.exception("[upload] converter timeout for file_id=%s", file_id)
         return jsonify(error="convert_timeout", detail="Converter timeout (>=600s)"), 504
     except Exception as e:
-        return jsonify(error="convert_fail", detail=str(e)), 500
+        # Log full traceback server-side; return detail only when DEV_SHOW_ERRORS is enabled
+        app.logger.exception("[upload] unexpected failure for file_id=%s: %s", file_id, e)
+        if env_bool("DEV_SHOW_ERRORS", False):
+            return jsonify(error="convert_fail", detail=str(e)), 500
+        return jsonify(error="convert_fail"), 500
 
 @app.get("/xkt/<file_id>.xkt")
 def serve_xkt(file_id: str):
