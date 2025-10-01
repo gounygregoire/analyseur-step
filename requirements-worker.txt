@@ -1,28 +1,26 @@
+# --- Infra / file IO ---
 redis==4.6.0
 rq==1.15.1
-python-dotenv==1.0.0
 boto3==1.35.0
 requests==2.32.4
 
-# Noyau scientifique
-numpy==1.24.4
+# --- NumPy stack (reste en 1.x) ---
+numpy==1.26.4
 scipy==1.10.1
+scikit-image==0.21.0
 
-# Géométrie / maillage
+# --- Géométrie / meshes ---
 trimesh==4.6.13
 networkx==3.4.2
+Rtree==1.2.0
+ezdxf==1.4.2
 
-# STEP -> mesh (CadQuery + OCP)
+# --- CadQuery / OCP (inclut vtk via wheels) ---
 cadquery==2.4.0
 cadquery-ocp==7.7.2.2b2
+vtk==9.2.6
 
-# Divers déjà présents dans ton worker
-ezdxf==1.4.2
-nptyping==2.0.1
-nlopt==2.9.1
-casadi==3.7.2
-Pillow==11.2.1
-Rtree==1.2.0
-
-# *** NOUVEAU pour VOXEL/SDF ***
-scikit-image==0.22.0
+# --- IMPORTANT : ne pas installer ces libs dans le worker ---
+# nlopt      # -> déclenche numpy>=2, conflit avec scipy 1.10
+# casadi     # lourd, inutile ici
+# pyembree   # force trimesh<4 ; inutile pour la voie voxel/EDT
