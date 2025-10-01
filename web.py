@@ -40,6 +40,9 @@ def env_bool(name: str, default: bool) -> bool:
 
 MAX_UPLOAD_MB = env_int("MAX_UPLOAD_MB", 50)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
+# Timeout RQ appliqué aux jobs (en secondes)
+RQ_JOB_TIMEOUT_SEC = env_int("RQ_JOB_TIMEOUT_SEC", 1200)  # 20 min par défaut
+
 
 UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
 OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
@@ -817,6 +820,7 @@ def __diag():
         "redis_url": REDIS_URL,
         "rq_queue": RQ_QUEUE_NAME,
         "rq_connected": bool(q is not None),
+        
     }
     try:
         r = requests.get(f"{CONVERTER_URL}/healthz", timeout=2)
