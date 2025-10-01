@@ -59,6 +59,12 @@ ALLOWED_EXTS = {".stl", ".step", ".stp"}
 def _ext(name: str) -> str: return pathlib.Path(name.lower()).suffix
 def _allowed(name: str) -> bool: return _ext(name) in ALLOWED_EXTS
 
+# Upload / output folders (defaults et création)
+UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
+OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
 def _first_existing(paths):
     for p in paths:
         if os.path.exists(p):
