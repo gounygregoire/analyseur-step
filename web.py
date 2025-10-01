@@ -16,7 +16,7 @@ load_dotenv()
 
 # ==== RQ / Redis (connexion légère) ====
 import redis
-from rq import Queue
+from rq import Queue, Worker
 from rq.job import Job
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
@@ -365,7 +365,9 @@ def serve_xkt(file_id: str):
         return abort(400)
     path = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
     if os.path.isfile(path):
-        return send_from_directory(OUTPUT_FOLDER, f"{file_id}.xkt", mimetype="application/octet-stream", as_attachment=False, max_age=0, etag=False, conditional=False)
+        return send_from_directory(OUTPUT_FOLDER, f"{file_id}.xkt",
+                                   mimetype="application/octet-stream",
+                                   as_attachment=False, max_age=0, etag=False, conditional=False)
     if _s3_enabled():
         try:
             from s3io import get_file
@@ -373,7 +375,9 @@ def serve_xkt(file_id: str):
             key = f"xkt/{file_id}.xkt"
             ok = get_file(key, path)
             if ok and os.path.isfile(path):
-                return send_from_directory(OUTPUT_FOLDER, f"{file_id}.xkt", mimetype="application/octet-stream", as_attachment=False, max_age=0, etag=False, conditional=False)
+                return send_from_directory(OUTPUT_FOLDER, f"{file_id}.xkt",
+                                           mimetype="application/octet-stream",
+                                           as_attachment=False, max_age=0, etag=False, conditional=False)
             app.logger.warning("S3 fallback miss for XKT key=%s", key)
         except Exception as e:
             app.logger.warning("S3 fallback error for XKT %s: %s", file_id, e)
@@ -388,7 +392,7 @@ def api_shape_stats():
     Spécial:
       * ?recompute=1 force un NOUVEAU job_id (suffixe UUID) et ignore TOUT fallback.
     """
-    import json as _json, glob, pathlib, uuid as _uuid
+    import json as _json, glob as _glob, pathlib as _pl, uuid as _uuid
 
     file_id = request.args.get("file_id")
     axis = (request.args.get("axis") or "Z").upper()
@@ -404,7 +408,7 @@ def api_shape_stats():
 
     # -- Recompute forcé: purge locale + on n'utilise AUCUN fallback
     if recompute:
-        for p in glob.glob(os.path.join(OUTPUT_FOLDER, f"{file_id}.*")):
+        for p in _glob.glob(os.path.join(OUTPUT_FOLDER, f"{file_id}.*")):
             try:
                 os.remove(p)
             except Exception:
@@ -477,7 +481,7 @@ def api_shape_stats():
     # Enfiler un (nouveau) job
     try:
         step_path = _step_path_for(file_id)  # facultatif
-        step_ext = pathlib.Path(step_path).suffix.lstrip(".") if step_path else None
+        step_ext = _pl.Path(step_path).suffix.lstrip(".") if step_path else None
         q.enqueue(
             RQ_TASK_PATH,
             kwargs={"file_id": file_id, "axis": axis, "step_path": step_path, "step_ext": step_ext, "cache_dir": OUTPUT_FOLDER},
@@ -487,6 +491,80 @@ def api_shape_stats():
         return jsonify(status="queued", job_id=job_id, retry_in_sec=2), 202
     except Exception as e:
         return jsonify(error="enqueue_fail", detail=str(e)), 500
+
+# ---------- Estimation raycast pour l'API /api/shape/thickness ----------
+def _estimate_thickness_mm_from_mesh(mesh, samples=30000, eps_factor=1e-5, outlier_pct=0.1, backface_dot=-0.3):
+    import numpy as np
+    import trimesh
+
+    if not isinstance(mesh, trimesh.Trimesh):
+        return None, None
+
+    try: mesh.fix_normals()
+    except Exception: pass
+    mesh.remove_unreferenced_vertices()
+    mesh.remove_degenerate_faces()
+    try:
+        if not mesh.is_watertight:
+            mesh = mesh.fill_holes()
+    except Exception:
+        pass
+
+    try:
+        from trimesh.ray.ray_pyembree import RayMeshIntersector
+        inter = RayMeshIntersector(mesh)
+    except Exception:
+        from trimesh.ray.ray_triangle import RayMeshIntersector
+        inter = RayMeshIntersector(mesh)
+
+    try:
+        pts, f_idx = trimesh.sample.sample_surface_even(mesh, samples)
+    except Exception:
+        pts, f_idx = mesh.sample(samples, return_index=True)
+
+    n = mesh.face_normals[f_idx]
+
+    bb = mesh.bounds
+    diag = float(np.linalg.norm(bb[1] - bb[0]))
+    eps = max(diag * eps_factor, 1e-6)
+
+    origins_p = pts + n * eps
+    origins_m = pts - n * eps
+
+    loc_p, ir_p, it_p = inter.intersects_location(origins_p,  n, multiple_hits=False)
+    loc_m, ir_m, it_m = inter.intersects_location(origins_m, -n, multiple_hits=False)
+
+    dist = np.full(len(pts), np.inf)
+
+    if len(ir_p):
+        d = np.linalg.norm(loc_p - origins_p[ir_p], axis=1)
+        nf = mesh.face_normals[it_p]
+        good = (np.einsum("ij,ij->i", nf, n[ir_p]) < backface_dot)
+        d[~good] = np.inf
+        dist[ir_p] = np.minimum(dist[ir_p], d)
+
+    if len(ir_m):
+        d = np.linalg.norm(loc_m - origins_m[ir_m], axis=1)
+        nf = mesh.face_normals[it_m]
+        good = (np.einsum("ij,ij->i", nf, -n[ir_m]) < backface_dot)
+        d[~good] = np.inf
+        dist[ir_m] = np.minimum(dist[ir_m], d)
+
+    d = dist[np.isfinite(dist)]
+    d = d[d > eps * 10]
+    if d.size == 0:
+        return None, None
+
+    if 0.0 < outlier_pct < 5.0:
+        lo = np.percentile(d, outlier_pct)
+        hi = np.percentile(d, 100.0 - outlier_pct)
+        d = d[(d >= lo) & (d <= hi)]
+
+    tmin = float(d.min())
+    tmax = float(np.percentile(d, 99.9))
+    tmax = min(tmax, float(min(mesh.extents)))
+    return tmin, tmax
+
 # ---------- Calcul épaisseur locale (optionnel) ----------
 def compute_thickness_mm_from_occ_shape(
     shape,
@@ -520,7 +598,7 @@ def compute_thickness_mm_from_occ_shape(
     tol = float(os.getenv("TESSELLATION_TOL_MM", "0.05")) if tol_lin_mm is None else float(tol_lin_mm)
     ang = float(os.getenv("TESSELLATION_ANG_RAD", "0.25")) if ang_rad is None else float(ang_rad)
 
-    # OCC triangulation (tolérance en unités du modèle ; si mm interne, pas d’échelle ici)
+    # OCC triangulation (tolérance en unités du modèle)
     try:
         BRepMesh_IncrementalMesh(shape, tol * unit_scale_mm, False, ang, True)
     except Exception:
@@ -543,15 +621,14 @@ def compute_thickness_mm_from_occ_shape(
             npts  = nodes.Size()
             ntri  = tris.Size()
 
-            # sommets
+            # sommets (convertis en mm)
             for i in range(1, npts + 1):
                 p = nodes.Value(i)
-                # coordonnées en unités du STEP → converties en mm
                 verts.append([float(p.X()) * unit_scale_mm,
                               float(p.Y()) * unit_scale_mm,
                               float(p.Z()) * unit_scale_mm])
 
-            # triangles (indices 1-based côté OCC)
+            # triangles (indices 1-based OCC)
             for i in range(1, ntri + 1):
                 t = tris.Value(i)
                 a, b, c = t.Get()
@@ -579,7 +656,7 @@ def compute_thickness_mm_from_occ_shape(
     if samples is None:
         samples = int(os.getenv("THICKNESS_SAMPLES", "30000"))
 
-    # On réutilise ton estimateur robuste (ray cast ±n avec filtrage backfaces)
+    # Estimation épaisseur
     tmin, tmax = _estimate_thickness_mm_from_mesh(mesh, samples=samples)
     if tmin is None or tmax is None:
         return None, None
@@ -640,7 +717,6 @@ def api_shape_thickness():
     except Exception as e:
         return jsonify(error="thickness_exception", detail=str(e)), 500
 
-    
 # ---------- Debug ----------
 @app.get("/__job/<path:job_id>")
 def __job(job_id: str):
@@ -657,6 +733,48 @@ def __job(job_id: str):
         return jsonify(ok=True, **info)
     except Exception as e:
         return jsonify(ok=False, error=str(e), job_id=job_id), 500
+
+# --- RQ: liste des workers connectés ---
+@app.get("/__rq_workers")
+def __rq_workers():
+    if _redis is None:
+        return jsonify(ok=False, error="no redis"), 503
+    try:
+        out = []
+        for w in Worker.all(connection=_redis):
+            out.append({
+                "name": w.name,
+                "state": getattr(w, "state", None),
+                "queues": [qq.name for qq in getattr(w, "queues", [])],
+                "current_job_id": (w.get_current_job_id() if hasattr(w, "get_current_job_id") else None),
+            })
+        return jsonify(ok=True, queue=RQ_QUEUE_NAME, workers=out)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e)), 500
+
+# --- RQ: contenu de la queue ---
+@app.get("/__rq_queue")
+def __rq_queue():
+    if q is None:
+        return jsonify(ok=False, error="no queue"), 503
+    try:
+        jobs = [j.id for j in q.jobs]
+        return jsonify(ok=True, queue=RQ_QUEUE_NAME, count=len(jobs), jobs=jobs)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e)), 500
+
+# --- RQ: envoi d'un ping au worker ---
+@app.get("/__worker_ping")
+def __worker_ping():
+    if q is None:
+        return jsonify(ok=False, error="no queue"), 503
+    job_id = f"ping:{uuid.uuid4().hex}"
+    try:
+        q.enqueue("worker_tasks.ping", kwargs={"payload": "ok"}, job_id=job_id,
+                  result_ttl=120, ttl=120, failure_ttl=120)
+        return jsonify(ok=True, job_id=job_id)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e)), 500
 
 @app.get("/__routes")
 def __routes():
