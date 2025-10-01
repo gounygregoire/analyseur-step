@@ -10,7 +10,11 @@ from dotenv import load_dotenv
 from s3io import put_file  # utilisé pour les XKT (upload)
 
 # (Optionnel) converter local — gardé mais off par défaut
-from xkt_converter import compute_thickness_mm_from_step
+# (Optionnel) converter local — ignoré s'il n'est pas présent ou incomplet
+try:
+    from xkt_converter import compute_thickness_mm_from_step  # type: ignore
+except Exception:
+    compute_thickness_mm_from_step = None  # désactive le chemin local
 
 load_dotenv()
 
@@ -222,6 +226,9 @@ def _step_path_for(file_id: str) -> str | None:
     return None
 
 def _ensure_thickness_via_converter(file_id: str, data: dict) -> dict:
+    # Si le converter local n'est pas dispo, on ne fait rien
+    if compute_thickness_mm_from_step is None:
+        return data
     try:
         step_path = _step_path_for(file_id)
         if not step_path or not os.path.isfile(step_path):
@@ -229,7 +236,8 @@ def _ensure_thickness_via_converter(file_id: str, data: dict) -> dict:
         unit_hint = os.getenv("THICKNESS_UNIT_HINT", "mm")
         ctmin, ctmax = compute_thickness_mm_from_step(step_path, unit_hint=unit_hint)
         if ctmin is None or ctmax is None or not (ctmin == ctmin and ctmax == ctmax):
-            data["thickness_warning"] = "converter_returned_nan";  return data
+            data["thickness_warning"] = "converter_returned_nan"
+            return data
         data["thickness_min_mm"] = round(float(ctmin), 4)
         data["thickness_max_mm"] = round(float(ctmax), 4)
         data["thickness_source"] = "converter"
@@ -237,6 +245,7 @@ def _ensure_thickness_via_converter(file_id: str, data: dict) -> dict:
     except Exception as e:
         data["thickness_warning"] = f"{e.__class__.__name__}: {e}"
     return data
+
 
 # ---------- Pull S3 des caches converted/* ----------
 def _pull_converted_from_s3_if_missing(file_id: str, axis: str) -> dict:
