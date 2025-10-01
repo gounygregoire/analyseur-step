@@ -39,8 +39,8 @@ services:
       - key: OUTPUT_FOLDER
         value: /tmp/converted
     buildCommand: |
-      pip install --no-cache-dir -r requirements.txt
-    startCommand: python worker.py
+      pip install --no-cache-dir -r requirements-worker.txt
+    startCommand: python rq_worker.py
 
 databases:
   - name: cadlytics-redis
