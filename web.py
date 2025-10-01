@@ -483,11 +483,19 @@ def api_shape_stats():
         step_path = _step_path_for(file_id)  # facultatif
         step_ext = _pl.Path(step_path).suffix.lstrip(".") if step_path else None
         q.enqueue(
-            RQ_TASK_PATH,
-            kwargs={"file_id": file_id, "axis": axis, "step_path": step_path, "step_ext": step_ext, "cache_dir": OUTPUT_FOLDER},
-            job_id=job_id,
-            result_ttl=3600, ttl=3600, failure_ttl=3600
-        )
+    RQ_TASK_PATH,
+    kwargs={
+        "file_id": file_id,
+        "axis": axis,
+        "step_path": step_path,
+        "step_ext": step_ext,
+        "cache_dir": OUTPUT_FOLDER,
+    },
+    job_id=job_id,
+    job_timeout=RQ_JOB_TIMEOUT_SEC,     # ← IMPORTANT
+    result_ttl=3600, ttl=3600, failure_ttl=3600
+)
+
         return jsonify(status="queued", job_id=job_id, retry_in_sec=2), 202
     except Exception as e:
         return jsonify(error="enqueue_fail", detail=str(e)), 500
