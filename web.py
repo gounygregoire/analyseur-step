@@ -487,7 +487,160 @@ def api_shape_stats():
         return jsonify(status="queued", job_id=job_id, retry_in_sec=2), 202
     except Exception as e:
         return jsonify(error="enqueue_fail", detail=str(e)), 500
+# ---------- Calcul épaisseur locale (optionnel) ----------
+def compute_thickness_mm_from_occ_shape(
+    shape,
+    unit_hint: str | None = "mm",
+    tol_lin_mm: float | None = None,
+    ang_rad: float | None = None,
+    samples: int | None = None,
+) -> tuple[float | None, float | None]:
+    """
+    Triangule le shape OCC, construit un Trimesh, puis appelle
+    _estimate_thickness_mm_from_mesh(...) pour obtenir (tmin, tmax) en mm.
+    """
+    try:
+        import numpy as np
+        import trimesh
+        from OCC.Core.BRep import BRep_Tool
+        from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
+        from OCC.Core.TopExp import TopExp_Explorer
+        from OCC.Core.TopAbs import TopAbs_FACE
+    except ImportError as e:
+        raise ImportError("pythonocc-core + trimesh requis") from e
 
+    # Échelle unités -> mm (on suppose que le STEP est cohérent)
+    uh = (unit_hint or "mm").strip().lower()
+    unit_scale_mm = {"mm": 1.0, "millimeter": 1.0, "millimetre": 1.0,
+                     "cm": 10.0, "centimeter": 10.0, "centimetre": 10.0,
+                     "m": 1000.0, "meter": 1000.0, "metre": 1000.0,
+                     "in": 25.4, "inch": 25.4, "inches": 25.4}.get(uh, 1.0)
+
+    # Paramètres de tessel issus des env si absents
+    tol = float(os.getenv("TESSELLATION_TOL_MM", "0.05")) if tol_lin_mm is None else float(tol_lin_mm)
+    ang = float(os.getenv("TESSELLATION_ANG_RAD", "0.25")) if ang_rad is None else float(ang_rad)
+
+    # OCC triangulation (tolérance en unités du modèle ; si mm interne, pas d’échelle ici)
+    try:
+        BRepMesh_IncrementalMesh(shape, tol * unit_scale_mm, False, ang, True)
+    except Exception:
+        # fallback plus relâché
+        BRepMesh_IncrementalMesh(shape, max(tol * unit_scale_mm, 0.5), False, max(ang, 0.5), True)
+
+    # Extraction verts/faces globaux
+    verts: list[list[float]] = []
+    faces: list[list[int]] = []
+    v_off = 0
+
+    exp = TopExp_Explorer(shape, TopAbs_FACE)
+    while exp.More():
+        f = exp.Current()
+        loc = f.Location()
+        tri = BRep_Tool.Triangulation(f, loc)
+        if tri is not None:
+            nodes = tri.Nodes()
+            tris  = tri.Triangles()
+            npts  = nodes.Size()
+            ntri  = tris.Size()
+
+            # sommets
+            for i in range(1, npts + 1):
+                p = nodes.Value(i)
+                # coordonnées en unités du STEP → converties en mm
+                verts.append([float(p.X()) * unit_scale_mm,
+                              float(p.Y()) * unit_scale_mm,
+                              float(p.Z()) * unit_scale_mm])
+
+            # triangles (indices 1-based côté OCC)
+            for i in range(1, ntri + 1):
+                t = tris.Value(i)
+                a, b, c = t.Get()
+                faces.append([v_off + a - 1, v_off + b - 1, v_off + c - 1])
+
+            v_off += npts
+        exp.Next()
+
+    if not verts or not faces:
+        raise RuntimeError("Triangulation OCC vide")
+
+    mesh = trimesh.Trimesh(vertices=np.asarray(verts, dtype=float),
+                           faces=np.asarray(faces, dtype=int),
+                           process=True)
+
+    if mesh.is_empty:
+        raise RuntimeError("Mesh vide après triangulation")
+    try:
+        if not mesh.is_watertight:
+            mesh = mesh.fill_holes()
+    except Exception:
+        pass
+
+    # Nombre d’échantillons pour l’estimateur
+    if samples is None:
+        samples = int(os.getenv("THICKNESS_SAMPLES", "30000"))
+
+    # On réutilise ton estimateur robuste (ray cast ±n avec filtrage backfaces)
+    tmin, tmax = _estimate_thickness_mm_from_mesh(mesh, samples=samples)
+    if tmin is None or tmax is None:
+        return None, None
+    return round(float(tmin), 4), round(float(tmax), 4)
+
+# ---------- API épaisseur (optionnel) ----------
+@app.get("/api/shape/thickness")
+def api_shape_thickness():
+    """
+    Calcul d'épaisseur côté web (debug). À n'activer que si THICKNESS_ON_WEB=1.
+    Écrit aussi /tmp/converted/<fid>.thick.json pour que /api/shape/stats merge ces valeurs.
+    """
+    if not env_bool("THICKNESS_ON_WEB", False):
+        return jsonify(error="disabled", detail="THICKNESS_ON_WEB=0"), 403
+
+    file_id = request.args.get("file_id")
+    if not file_id or not re.fullmatch(r"[0-9a-fA-F-]{36}", file_id):
+        return jsonify(error="bad_file_id", detail="file_id doit être un UUID v4"), 400
+
+    step_path = _step_path_for(file_id)
+    if not step_path or not os.path.isfile(step_path):
+        return jsonify(error="no_step", detail="Fichier STEP introuvable"), 404
+
+    try:
+        # Lecture STEP via OCC
+        from OCC.Core.STEPControl import STEPControl_Reader
+        from OCC.Core.IFSelect import IFSelect_RetDone
+
+        reader = STEPControl_Reader()
+        if reader.ReadFile(step_path) != IFSelect_RetDone:
+            return jsonify(error="step_read_fail"), 500
+        if not reader.TransferRoots():
+            return jsonify(error="step_transfer_fail"), 500
+        shape = reader.OneShape()
+
+        tmin, tmax = compute_thickness_mm_from_occ_shape(
+            shape,
+            unit_hint=os.getenv("THICKNESS_UNIT_HINT", "mm"),
+            tol_lin_mm=float(os.getenv("THICK_LIN_DEF_MM", os.getenv("TESSELLATION_TOL_MM", "0.05"))),
+            ang_rad=float(os.getenv("THICK_ANG_DEF_RAD", os.getenv("TESSELLATION_ANG_RAD", "0.25"))),
+            samples=env_int("THICKNESS_SAMPLES", 30000),
+        )
+        if tmin is None or tmax is None:
+            return jsonify(error="thickness_compute_fail"), 500
+
+        # Cache pour merge côté /api/shape/stats
+        thick_cache = _thickness_cache_path(file_id)
+        try:
+            with open(thick_cache, "w", encoding="utf-8") as fh:
+                json.dump({"tmin": tmin, "tmax": tmax, "method": "occ_raycast"}, fh)
+        except Exception as e:
+            app.logger.warning("write thick cache failed %s: %s", thick_cache, e)
+
+        return jsonify(thickness_min_mm=tmin, thickness_max_mm=tmax, thickness_source="occ_raycast")
+
+    except ImportError:
+        return jsonify(error="missing_dependency", detail="pythonocc-core + trimesh requis"), 501
+    except Exception as e:
+        return jsonify(error="thickness_exception", detail=str(e)), 500
+
+    
 # ---------- Debug ----------
 @app.get("/__job/<path:job_id>")
 def __job(job_id: str):
