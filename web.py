@@ -7,6 +7,9 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 import requests, mimetypes
 from pathlib import Path
+from rq import Queue
+from rq.registry import StartedJobRegistry, FailedJobRegistry
+from redis import from_url
 
 # S3 helpers
 from s3io import put_file  # utilisé pour les XKT (upload)
@@ -840,6 +843,30 @@ def __rq_queue():
         return jsonify(ok=True, queue=RQ_QUEUE_NAME, count=len(jobs), jobs=jobs)
     except Exception as e:
         return jsonify(ok=False, error=str(e)), 500
+
+def _rq():
+    r = from_url(_normalize_redis_url(os.getenv("REDIS_URL")), ssl_cert_reqs=None, socket_timeout=5)
+    qname = os.getenv("RQ_QUEUE_NAME", "default")
+    q = Queue(qname, connection=r)
+    return r, q
+
+@app.get("/__rq_started")
+def rq_started_list():
+    r, q = _rq()
+    reg = StartedJobRegistry(queue=q)
+    return jsonify(ok=True, queue=q.name, started=reg.get_job_ids())
+
+@app.post("/__rq_requeue_started")
+def rq_requeue_started():
+    r, q = _rq()
+    reg = StartedJobRegistry(queue=q)
+    done = []
+    for jid in reg.get_job_ids():
+        job = q.job_class.fetch(jid, connection=r)
+        reg.remove(job, delete_job=False)
+        q.enqueue_job(job)
+        done.append(jid)
+    return jsonify(ok=True, queue=q.name, requeued=done)
 
 # --- RQ: ping ---
 @app.get("/__worker_ping")
