@@ -189,28 +189,38 @@ def _volume_mm3(mesh) -> Optional[float]:
     except Exception:
         return None
 
-def _projected_area_cm2(mesh, axis: str) -> float:
+def _projected_area_cm2_voxel(mesh, axis: str) -> float:
     """
-    Aire projetée sur le plan ⟂ à axis (X/Y/Z) : a_proj = Σ(area_face * |n·d|).
-    Conversion mm² -> cm² (/100).
+    Aire de l'ombre 2D (union) par voxelisation.
+    Garantit A_proj <= face de la bbox. mm² -> cm² (/100).
     """
     import numpy as np
-    axis = (axis or "Z").upper()
-    if axis == "X":
-        d = np.array([1.0, 0.0, 0.0])
-    elif axis == "Y":
-        d = np.array([0.0, 1.0, 0.0])
-    else:
-        d = np.array([0.0, 0.0, 1.0])
 
-    try:
-        areas = mesh.area_faces
-        normals = mesh.face_normals
-        scale = np.abs((normals * d).sum(axis=1))
-        a_mm2 = float((areas * scale).sum())
-        return round(a_mm2 / 100.0, 4)
-    except Exception:
+    axis = (axis or "Z").upper()
+    # pitch pour l’aire: plus fin que l’EDT mais borné
+    bbox = mesh.extents.astype(float)
+    bbox_min = float(np.clip(bbox.min(), 1e-6, None))
+    pitch = min(
+        float(os.getenv("AREA_PITCH_MM", "0.10")),
+        max( bbox_min / 400.0, 0.04 )  # ~400 pixels sur le côté le plus court, min 0.04mm
+    )
+
+    vg = mesh.voxelized(pitch).fill()
+    vol = vg.matrix.astype(bool)
+    if vol.size == 0:
         return 0.0
+
+    # masque 2D (ombre) selon l’axe demandé
+    if axis == "X":
+        mask = vol.any(axis=2)  # yz
+    elif axis == "Y":
+        mask = vol.any(axis=1)  # xz
+    else:
+        mask = vol.any(axis=0)  # xy
+
+    a_mm2 = float(mask.sum()) * (pitch * pitch)
+    return round(a_mm2 / 100.0, 4)
+
 
 # =========================
 # Épaisseur via voxel + EDT + squelette (robuste)
@@ -470,8 +480,8 @@ def compute_and_cache_stats(
     vol_mm3 = _volume_mm3(mesh)
     vol_cm3 = round(vol_mm3 / 1000.0, 4) if vol_mm3 is not None else None
 
-    # 4) Aire projetée (uniquement l’axe demandé)
-    proj_cm2 = _projected_area_cm2(mesh, axis=axis)
+    # 4) Aire projetée (uniquement l’axe demandé) — version ombre 2D
+    proj_cm2 = _projected_area_cm2_voxel(mesh, axis=axis)
 
     # 5) Épaisseur (voxel EDT) avec raffinage adaptatif
     pitch_env = os.getenv("VOXEL_PITCH_MM")
