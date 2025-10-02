@@ -5,13 +5,12 @@ from urllib.parse import urlparse, urlunparse, unquote
 from flask import Flask, request, jsonify, send_from_directory, abort, render_template
 from flask_cors import CORS
 from dotenv import load_dotenv
-import uuid, requests, mimetypes, os
+import requests, mimetypes
 from pathlib import Path
 
 # S3 helpers
 from s3io import put_file  # utilisé pour les XKT (upload)
 
-# (Optionnel) converter local — gardé mais off par défaut
 # (Optionnel) converter local — ignoré s'il n'est pas présent ou incomplet
 try:
     from xkt_converter import compute_thickness_mm_from_step  # type: ignore
@@ -20,7 +19,7 @@ except Exception:
 
 load_dotenv()
 
-# ==== RQ / Redis (connexion légère) ====
+# ==== RQ / Redis ====
 import redis
 from rq import Queue, Worker
 from rq.job import Job
@@ -38,7 +37,6 @@ def env_int(name: str, default: int) -> int:
     except Exception:
         return default
 
-
 def env_bool(name: str, default: bool) -> bool:
     v = os.environ.get(name)
     if v is None:
@@ -47,9 +45,9 @@ def env_bool(name: str, default: bool) -> bool:
 
 MAX_UPLOAD_MB = env_int("MAX_UPLOAD_MB", 50)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
+
 # Timeout RQ appliqué aux jobs (en secondes)
 RQ_JOB_TIMEOUT_SEC = env_int("RQ_JOB_TIMEOUT_SEC", 1200)  # 20 min par défaut
-
 
 CONVERTER_URL = os.environ.get("CONVERTER_URL", "https://cadlytics-converter.onrender.com").rstrip("/")
 RQ_TASK_PATH = os.environ.get("RQ_TASK_PATH", "worker_tasks.compute_and_cache_stats")
@@ -184,6 +182,7 @@ def _normalize_metrics_dict(raw: dict) -> dict:
         "thickness_min_mm": round(tmin, 4),
         "thickness_max_mm": round(tmax, 4),
         "bbox_mm": [round(float(x), 4) for x in bbox_mm],
+        "status": "ok",
     }
 
 def _response_from_caches(base_path: str, proj_path: str) -> dict:
@@ -230,7 +229,6 @@ def _step_path_for(file_id: str) -> str | None:
     return None
 
 def _ensure_thickness_via_converter(file_id: str, data: dict) -> dict:
-    # Si le converter local n'est pas dispo, on ne fait rien
     if compute_thickness_mm_from_step is None:
         return data
     try:
@@ -249,7 +247,6 @@ def _ensure_thickness_via_converter(file_id: str, data: dict) -> dict:
     except Exception as e:
         data["thickness_warning"] = f"{e.__class__.__name__}: {e}"
     return data
-
 
 # ---------- Pull S3 des caches converted/* ----------
 def _pull_converted_from_s3_if_missing(file_id: str, axis: str) -> dict:
@@ -309,14 +306,10 @@ def healthz():
     return "ok"
 
 # ---------- Upload -> XKT ----------
-
-
 @app.post("/upload")
 def upload():
-    # --- helpers we already have in web.py ---
-    # _allowed, _ext, _abs_url, _s3_enabled, _normalize_redis_url
     try:
-        from s3io import put_file  # ok even if S3 disabled
+        from s3io import put_file  # ok même si S3 désactivé
     except Exception:
         put_file = None
 
@@ -361,18 +354,18 @@ def upload():
         app.logger.warning("[upload] S3 upload (src) failed: %s", e)
 
     # 3) call converter → XKT
-    CONVERTER_URL = os.getenv("CONVERTER_URL", "").rstrip("/")
-    if not CONVERTER_URL:
+    conv_url = os.getenv("CONVERTER_URL", "").rstrip("/")
+    if not conv_url:
         app.logger.error("[upload] CONVERTER_URL is not set")
         return jsonify(error="convert_fail", detail="CONVERTER_URL not set"), 500
 
     try:
         send_ct = "model/step" if ext == ".step" else ("model/stl" if ext == ".stl" else f.mimetype or "application/octet-stream")
-        app.logger.info("[upload] sending to converter %s (in_path=%s, out_xkt=%s)", CONVERTER_URL, in_path, out_xkt)
+        app.logger.info("[upload] sending to converter %s (in_path=%s, out_xkt=%s)", conv_url, in_path, out_xkt)
 
         with open(in_path, "rb") as fh:
             resp = requests.post(
-                f"{CONVERTER_URL}/convert",
+                f"{conv_url}/convert",
                 files={"file": (Path(in_path).name, fh, send_ct)},
                 timeout=600,
                 stream=True,
@@ -381,7 +374,6 @@ def upload():
 
         app.logger.info("[upload] converter status=%s file_id=%s", resp.status_code, file_id)
         if resp.status_code != 200:
-            # show useful detail when available
             try:
                 detail = resp.json()
             except Exception:
@@ -418,10 +410,10 @@ def upload():
         try:
             from rq import Queue
             from redis import from_url as _rfromurl
-            REDIS_URL = _normalize_redis_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
-            q = Queue(os.getenv("RQ_QUEUE_NAME", "default"), connection=_rfromurl(REDIS_URL, ssl_cert_reqs=None))
+            rurl = _normalize_redis_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+            qq = Queue(os.getenv("RQ_QUEUE_NAME", "default"), connection=_rfromurl(rurl, ssl_cert_reqs=None))
             job_timeout = int(os.getenv("RQ_JOB_TIMEOUT_SEC", "1200"))
-            job = q.enqueue(
+            job = qq.enqueue(
                 "worker_tasks.compute_and_cache_stats",
                 kwargs=dict(file_id=file_id, axis="Z", step_path=None, step_ext=ext.lstrip("."), cache_dir=OUTPUT_FOLDER),
                 job_timeout=job_timeout, result_ttl=3600, failure_ttl=3600, ttl=job_timeout,
@@ -442,7 +434,6 @@ def upload():
         s3_uploaded_xkt=s3_uploaded_xkt,
         warm_job_id=warm_job_id,
     )
-
 
 @app.get("/xkt/<file_id>.xkt")
 def serve_xkt(file_id: str):
@@ -468,21 +459,42 @@ def serve_xkt(file_id: str):
             app.logger.warning("S3 fallback error for XKT %s: %s", file_id, e)
     return abort(404)
 
-# ---------- API analyse (ASYNC par défaut) ----------
+# ---------- Helper: lecture stats depuis Redis (clé publiée par le worker) ----------
+def _read_stats_from_redis(file_id: str, axis: str):
+    if not _redis:
+        return None
+    try:
+        raw = _redis.get(f"shape_stats:{file_id}:{axis}")
+        if not raw:
+            return None
+        data = json.loads(raw.decode("utf-8"))
+        # structure minimale, normalisée pour l'UI
+        norm = {
+            "volume_mm3": data.get("volume_mm3"),
+            "volume_cm3": (float(data.get("volume_mm3") or 0) / 1000.0) if data.get("volume_cm3") is None else data.get("volume_cm3"),
+            "bbox_mm": data.get("bbox_mm"),
+            "thickness_min_mm": data.get("thickness_min_mm"),
+            "thickness_max_mm": data.get("thickness_max_mm"),
+            "projected_area_cm2": data.get("projected_area_cm2"),
+        }
+        return _normalize_metrics_dict(norm)
+    except Exception as e:
+        app.logger.info("[stats] Redis read error: %s", e)
+        return None
+
+# ---------- API analyse (fallback Redis + S3 + RQ) ----------
 @app.get("/api/shape/stats")
 def api_shape_stats():
     """
-    - Si caches présents -> renvoie (merge épaisseur worker)
-    - Sinon (ou si ?recompute=1) -> enfile un job RQ
-    Spécial:
-      * ?recompute=1 force un NOUVEAU job_id (suffixe UUID) et ignore TOUT fallback.
+    Ordre:
+      1) Caches locaux (stats.json + proj.json) -> OK
+      2) Redis (clé shape_stats:<fid>:<axis>)      -> OK
+      3) S3 converted/* (si activé)                -> OK
+      4) Enfile un job RQ et renvoie 202 (queued/processing)
     """
-    import json as _json, glob as _glob, pathlib as _pl, uuid as _uuid
-
-    file_id = request.args.get("file_id")
+    file_id = request.args.get("file_id", "").strip()
     axis = (request.args.get("axis") or "Z").upper()
-    recompute = (request.args.get("recompute") == "1")
-    allow_raw_fallback = env_bool("ALLOW_REDIS_RAW_FALLBACK", False)  # <— par défaut OFF
+    recompute = (request.args.get("recompute") or "0").lower() in ("1", "true", "yes", "on")
 
     if not file_id or not re.fullmatch(r"[0-9a-fA-F-]{36}", file_id):
         return jsonify(error="bad_file_id", detail="file_id doit être un UUID v4"), 400
@@ -491,15 +503,13 @@ def api_shape_stats():
 
     base_cache, proj_cache = _cache_paths(file_id, axis)
 
-    # -- Recompute forcé: purge locale + on n'utilise AUCUN fallback
+    # Recompute -> purge locale et on force un nouveau job_id
     if recompute:
-        for p in _glob.glob(os.path.join(OUTPUT_FOLDER, f"{file_id}.*")):
-            try:
-                os.remove(p)
-            except Exception:
-                pass
+        for p in glob.glob(os.path.join(OUTPUT_FOLDER, f"{file_id}.*")):
+            try: os.remove(p)
+            except Exception: pass
 
-    # 0) caches locaux ? (on ne lit pas les caches si recompute=1)
+    # 1) caches locaux ?
     if (not recompute) and os.path.isfile(base_cache) and os.path.isfile(proj_cache):
         try:
             data = _response_from_caches(base_cache, proj_cache)
@@ -510,10 +520,20 @@ def api_shape_stats():
         except Exception as e:
             return jsonify(error="cache_read_fail", detail=str(e)), 500
 
-    # 1) (désactivé quand recompute=1) pull S3 si activé et caches absents
+    # 2) Redis fallback immédiat ?
+    if not recompute:
+        rj = _read_stats_from_redis(file_id, axis)
+        if rj:
+            rj = _merge_thickness_from_worker(file_id, rj, prefer_worker=True)
+            if env_bool("THICKNESS_ON_WEB", False):
+                rj = _ensure_thickness_via_converter(file_id, rj)
+            return jsonify(rj)
+
+    # 3) S3 -> local -> lecture
     if (not recompute):
         pulled = _pull_converted_from_s3_if_missing(file_id, axis)
-        if pulled.get("base_ok") and pulled.get("proj_ok"):
+        if (pulled.get("base_ok") and pulled.get("proj_ok")
+            and os.path.isfile(base_cache) and os.path.isfile(proj_cache)):
             try:
                 data = _response_from_caches(base_cache, proj_cache)
                 data = _merge_thickness_from_worker(file_id, data, prefer_worker=True)
@@ -523,50 +543,36 @@ def api_shape_stats():
             except Exception as e:
                 return jsonify(error="cache_read_fail", detail=f"after_s3: {e}"), 500
 
-    # 2) RQ nécessaire
+    # 4) Enqueue job RQ
     if q is None or _redis is None:
         return jsonify(error="rq_unavailable", detail="Redis/RQ non dispo sur le web service."), 503
 
     job_base = f"shape_stats:{file_id}:{axis}"
-    # IMPORTANT: pour recompute on FABRIQUE un job_id UNIQUE
-    job_id = job_base if not recompute else f"{job_base}:{_uuid.uuid4().hex[:8]}"
+    job_id = job_base if not recompute else f"{job_base}:{uuid.uuid4().hex[:8]}"
 
-    # Si pas en recompute, on peut réutiliser un job existant
+    # Si un job identique existe déjà et qu'on n'est pas en recompute → 202 processing
     if not recompute:
         try:
             job = Job.fetch(job_id, connection=_redis)
         except Exception:
             job = None
-
         if job:
             st = (job.get_status() or "").lower()
             if st in ("queued", "started", "deferred"):
                 return jsonify(status="processing", job_id=job_id, retry_in_sec=2), 202
             if st == "finished":
-                # Ne lire Redis brut QUE si autorisé (par défaut: OFF)
-                if os.path.isfile(base_cache) and os.path.isfile(proj_cache):
-                    data = _response_from_caches(base_cache, proj_cache)
-                    data = _merge_thickness_from_worker(file_id, data, prefer_worker=True)
+                # Dernière chance: lecture Redis (si présent)
+                rj = _read_stats_from_redis(file_id, axis)
+                if rj:
+                    rj = _merge_thickness_from_worker(file_id, rj, prefer_worker=True)
                     if env_bool("THICKNESS_ON_WEB", False):
-                        data = _ensure_thickness_via_converter(file_id, data)
-                    return jsonify(data)
-                if allow_raw_fallback:
-                    try:
-                        raw = _redis.get(f"shape_stats:{file_id}:{axis}")
-                        if raw:
-                            data = _normalize_metrics_dict(_json.loads(raw))
-                            data = _merge_thickness_from_worker(file_id, data, prefer_worker=True)
-                            if env_bool("THICKNESS_ON_WEB", False):
-                                data = _ensure_thickness_via_converter(file_id, data)
-                            return jsonify(data)
-                    except Exception:
-                        pass
-                # Sinon on retombe en (ré)enfilage de job plus bas
+                        rj = _ensure_thickness_via_converter(file_id, rj)
+                    return jsonify(rj)
 
-    # Enfiler un (nouveau) job
     try:
-        step_path = _step_path_for(file_id)  # facultatif
-        step_ext = _pl.Path(step_path).suffix.lstrip(".") if step_path else None
+        step_path = _step_path_for(file_id)  # facultatif (si upload local)
+        step_ext = pathlib.Path(step_path).suffix.lstrip(".") if step_path else None
+
         q.enqueue(
             RQ_TASK_PATH,
             kwargs={
@@ -575,12 +581,11 @@ def api_shape_stats():
                 "step_path": step_path,
                 "step_ext": step_ext,
                 "cache_dir": OUTPUT_FOLDER,
-    },
-    job_id=job_id,
-    job_timeout=RQ_JOB_TIMEOUT_SEC,     # ← IMPORTANT
-    result_ttl=3600, ttl=3600, failure_ttl=3600
-)
-
+            },
+            job_id=job_id,
+            job_timeout=RQ_JOB_TIMEOUT_SEC,
+            result_ttl=3600, ttl=3600, failure_ttl=3600
+        )
         return jsonify(status="queued", job_id=job_id, retry_in_sec=2), 202
     except Exception as e:
         return jsonify(error="enqueue_fail", detail=str(e)), 500
@@ -666,10 +671,6 @@ def compute_thickness_mm_from_occ_shape(
     ang_rad: float | None = None,
     samples: int | None = None,
 ) -> tuple[float | None, float | None]:
-    """
-    Triangule le shape OCC, construit un Trimesh, puis appelle
-    _estimate_thickness_mm_from_mesh(...) pour obtenir (tmin, tmax) en mm.
-    """
     try:
         import numpy as np
         import trimesh
@@ -680,25 +681,20 @@ def compute_thickness_mm_from_occ_shape(
     except ImportError as e:
         raise ImportError("pythonocc-core + trimesh requis") from e
 
-    # Échelle unités -> mm (on suppose que le STEP est cohérent)
     uh = (unit_hint or "mm").strip().lower()
     unit_scale_mm = {"mm": 1.0, "millimeter": 1.0, "millimetre": 1.0,
                      "cm": 10.0, "centimeter": 10.0, "centimetre": 10.0,
                      "m": 1000.0, "meter": 1000.0, "metre": 1000.0,
                      "in": 25.4, "inch": 25.4, "inches": 25.4}.get(uh, 1.0)
 
-    # Paramètres de tessel issus des env si absents
     tol = float(os.getenv("TESSELLATION_TOL_MM", "0.05")) if tol_lin_mm is None else float(tol_lin_mm)
     ang = float(os.getenv("TESSELLATION_ANG_RAD", "0.25")) if ang_rad is None else float(ang_rad)
 
-    # OCC triangulation (tolérance en unités du modèle)
     try:
         BRepMesh_IncrementalMesh(shape, tol * unit_scale_mm, False, ang, True)
     except Exception:
-        # fallback plus relâché
         BRepMesh_IncrementalMesh(shape, max(tol * unit_scale_mm, 0.5), False, max(ang, 0.5), True)
 
-    # Extraction verts/faces globaux
     verts: list[list[float]] = []
     faces: list[list[int]] = []
     v_off = 0
@@ -714,14 +710,12 @@ def compute_thickness_mm_from_occ_shape(
             npts  = nodes.Size()
             ntri  = tris.Size()
 
-            # sommets (convertis en mm)
             for i in range(1, npts + 1):
                 p = nodes.Value(i)
                 verts.append([float(p.X()) * unit_scale_mm,
                               float(p.Y()) * unit_scale_mm,
                               float(p.Z()) * unit_scale_mm])
 
-            # triangles (indices 1-based OCC)
             for i in range(1, ntri + 1):
                 t = tris.Value(i)
                 a, b, c = t.Get()
@@ -745,11 +739,9 @@ def compute_thickness_mm_from_occ_shape(
     except Exception:
         pass
 
-    # Nombre d’échantillons pour l’estimateur
     if samples is None:
         samples = int(os.getenv("THICKNESS_SAMPLES", "30000"))
 
-    # Estimation épaisseur
     tmin, tmax = _estimate_thickness_mm_from_mesh(mesh, samples=samples)
     if tmin is None or tmax is None:
         return None, None
@@ -758,10 +750,6 @@ def compute_thickness_mm_from_occ_shape(
 # ---------- API épaisseur (optionnel) ----------
 @app.get("/api/shape/thickness")
 def api_shape_thickness():
-    """
-    Calcul d'épaisseur côté web (debug). À n'activer que si THICKNESS_ON_WEB=1.
-    Écrit aussi /tmp/converted/<fid>.thick.json pour que /api/shape/stats merge ces valeurs.
-    """
     if not env_bool("THICKNESS_ON_WEB", False):
         return jsonify(error="disabled", detail="THICKNESS_ON_WEB=0"), 403
 
@@ -774,7 +762,6 @@ def api_shape_thickness():
         return jsonify(error="no_step", detail="Fichier STEP introuvable"), 404
 
     try:
-        # Lecture STEP via OCC
         from OCC.Core.STEPControl import STEPControl_Reader
         from OCC.Core.IFSelect import IFSelect_RetDone
 
@@ -795,7 +782,6 @@ def api_shape_thickness():
         if tmin is None or tmax is None:
             return jsonify(error="thickness_compute_fail"), 500
 
-        # Cache pour merge côté /api/shape/stats
         thick_cache = _thickness_cache_path(file_id)
         try:
             with open(thick_cache, "w", encoding="utf-8") as fh:
@@ -855,7 +841,7 @@ def __rq_queue():
     except Exception as e:
         return jsonify(ok=False, error=str(e)), 500
 
-# --- RQ: envoi d'un ping au worker ---
+# --- RQ: ping ---
 @app.get("/__worker_ping")
 def __worker_ping():
     if q is None:
@@ -901,7 +887,6 @@ def __diag():
         "redis_url": REDIS_URL,
         "rq_queue": RQ_QUEUE_NAME,
         "rq_connected": bool(q is not None),
-        
     }
     try:
         r = requests.get(f"{CONVERTER_URL}/healthz", timeout=2)
