@@ -513,13 +513,13 @@ def api_shape_stats():
         step_path = _step_path_for(file_id)  # facultatif
         step_ext = _pl.Path(step_path).suffix.lstrip(".") if step_path else None
         q.enqueue(
-    RQ_TASK_PATH,
-    kwargs={
-        "file_id": file_id,
-        "axis": axis,
-        "step_path": step_path,
-        "step_ext": step_ext,
-        "cache_dir": OUTPUT_FOLDER,
+            RQ_TASK_PATH,
+            kwargs={
+                "file_id": file_id,
+                "axis": axis,
+                "step_path": step_path,
+                "step_ext": step_ext,
+                "cache_dir": OUTPUT_FOLDER,
     },
     job_id=job_id,
     job_timeout=RQ_JOB_TIMEOUT_SEC,     # ← IMPORTANT
@@ -775,21 +775,20 @@ def __job(job_id: str):
 # --- RQ: liste des workers connectés ---
 @app.get("/__rq_workers")
 def __rq_workers():
-    if _redis is None:
-        return jsonify(ok=False, error="no redis"), 503
     try:
-        out = []
-        for w in Worker.all(connection=_redis):
-            out.append({
-                "name": w.name,
-                "state": getattr(w, "state", None),
-                "queues": [qq.name for qq in getattr(w, "queues", [])],
-                "current_job_id": (w.get_current_job_id() if hasattr(w, "get_current_job_id") else None),
-            })
-        return jsonify(ok=True, queue=RQ_QUEUE_NAME, workers=out)
+        workers = []
+        if _redis is not None:
+            for w in Worker.all(connection=_redis):
+                workers.append({
+                    "name": w.name,
+                    "state": w.get_state(),
+                    "queues": [q.name for q in w.queues],
+                    "current_job_id": getattr(w, "get_current_job_id", lambda: None)()
+                })
+        return jsonify(ok=True, queue=RQ_QUEUE_NAME, workers=workers)
     except Exception as e:
         return jsonify(ok=False, error=str(e)), 500
-
+        
 # --- RQ: contenu de la queue ---
 @app.get("/__rq_queue")
 def __rq_queue():

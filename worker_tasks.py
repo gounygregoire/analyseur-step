@@ -1,7 +1,7 @@
 # worker_tasks.py
 from __future__ import annotations
 import os, io, json, math, tempfile, pathlib, logging
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict
 from datetime import timedelta
 
 # =========================
@@ -102,7 +102,7 @@ def _thickness_cache_path(file_id: str, base_dir: Optional[str] = None) -> str:
 def _mesh_from_step(step_path: str):
     """
     Tessellation STEP via CadQuery -> export STL temporaire -> charge avec trimesh.
-    Unités supposées en mm (STEP doit être cohérent).
+    Unités supposées en mm (STEP cohérent).
     """
     import cadquery as cq
     import trimesh
@@ -118,6 +118,7 @@ def _mesh_from_step(step_path: str):
     tmp.close()
 
     try:
+        # exportType="STL" sait traiter Workplane/Compound
         cq.exporters.export(
             wp,
             tmp_path,
@@ -173,12 +174,14 @@ def _bbox_mm(mesh) -> List[float]:
     return [float(np.round(ext[0], 4)), float(np.round(ext[1], 4)), float(np.round(ext[2], 4))]
 
 def _volume_mm3(mesh) -> Optional[float]:
+    # volume direct (mm³) si watertight
     try:
         vol = float(mesh.volume)
         if vol > 0:
             return vol
     except Exception:
         pass
+    # fallback: somme des pièces étanches
     try:
         parts = mesh.split(only_watertight=True)
         s = sum(float(p.volume) for p in parts if getattr(p, "volume", 0) > 0)
@@ -188,8 +191,8 @@ def _volume_mm3(mesh) -> Optional[float]:
 
 def _projected_area_cm2(mesh, axis: str) -> float:
     """
-    Aire projetée sur le plan ⟂ à axis (X/Y/Z).
-    a_proj = Σ (area_face * |n·d|).  mm² -> cm² (/100).
+    Aire projetée sur le plan ⟂ à axis (X/Y/Z) : a_proj = Σ(area_face * |n·d|).
+    Conversion mm² -> cm² (/100).
     """
     import numpy as np
     axis = (axis or "Z").upper()
@@ -201,7 +204,10 @@ def _projected_area_cm2(mesh, axis: str) -> float:
         d = np.array([0.0, 0.0, 1.0])
 
     try:
-        a_mm2 = float((mesh.area_faces * np.abs((mesh.face_normals * d).sum(axis=1))).sum())
+        areas = mesh.area_faces
+        normals = mesh.face_normals
+        scale = np.abs((normals * d).sum(axis=1))
+        a_mm2 = float((areas * scale).sum())
         return round(a_mm2 / 100.0, 4)
     except Exception:
         return 0.0
@@ -230,14 +236,13 @@ def _thickness_mm_voxel(
     if pitch_mm is None:
         pitch_mm = float(os.getenv("VOXEL_PITCH_MM", "0.12"))
 
+    # Ajuste le pitch si trop de voxels
     ext = mesh.extents.astype(float)
     dims = (ext / pitch_mm).clip(min=1.0)
     voxels_est = int(math.ceil(dims[0])) * int(math.ceil(dims[1])) * int(math.ceil(dims[2]))
     if voxels_est > max_voxels:
         scale = (voxels_est / float(max_voxels)) ** (1.0 / 3.0)
         pitch_mm *= scale
-        if dbg is not None:
-            dbg["voxel_pitch_scaled_mm"] = float(pitch_mm)
 
     vg = mesh.voxelized(pitch_mm).fill()
     vol = vg.matrix.astype(bool)
@@ -249,20 +254,85 @@ def _thickness_mm_voxel(
         dbg["voxel_pitch_mm"] = float(pitch_mm)
 
     edt = distance_transform_edt(vol) * float(pitch_mm)
+
+    # squelette
     try:
         skel = skeletonize_3d(vol)
+        vals = edt[skel]
+        if vals.size == 0:
+            return None, None
+        tmin = float(2.0 * vals.min())
+        tmax = float(2.0 * vals.max())
+        return tmin, tmax
     except Exception:
-        # au pire: min/max global EDT
+        # fallback: min/max EDT sur l’intérieur
         v = edt[vol]
         if v.size == 0:
             return None, None
         return float(2.0 * v.min()), float(2.0 * v.max())
 
-    vals = edt[skel]
-    if vals.size == 0:
-        return None, None
+# =========================
+# Validations "sanity check"
+# =========================
+def _bbox_product_mm3(bbox_mm: List[float]) -> Optional[float]:
+    try:
+        return float(bbox_mm[0]) * float(bbox_mm[1]) * float(bbox_mm[2])
+    except Exception:
+        return None
 
-    return float(2.0 * vals.min()), float(2.0 * vals.max())
+def _bbox_face_cm2(bbox_mm: List[float], axis: str) -> Optional[float]:
+    try:
+        x, y, z = [float(b) for b in bbox_mm]
+    except Exception:
+        return None
+    if axis == "X":
+        area_mm2 = y * z
+    elif axis == "Y":
+        area_mm2 = x * z
+    else:
+        area_mm2 = x * y
+    return area_mm2 / 100.0  # mm² -> cm²
+
+def _validate_metrics(data: Dict, axis: str) -> Dict:
+    bbox = data.get("bbox_mm") or [0, 0, 0]
+    vol = data.get("volume_mm3")
+    proj = data.get("projected_area_cm2")
+    tmin = data.get("thickness_min_mm")
+    tmax = data.get("thickness_max_mm")
+
+    bbox_prod = _bbox_product_mm3(bbox) or 0.0
+    bbox_min = min([b for b in bbox if isinstance(b, (int, float))] or [0.0])
+    bbox_face = _bbox_face_cm2(bbox, axis) or 0.0
+
+    # Volume borné
+    if isinstance(vol, (int, float)):
+        if vol <= 0 or (bbox_prod > 0 and vol > 1.01 * bbox_prod):
+            logger.warning("volume_mm3 invalid -> None (vol=%s, bbox_prod=%s)", vol, bbox_prod)
+            data["volume_mm3"] = None
+
+    # Aire projetée bornée
+    if isinstance(proj, (int, float)):
+        if proj < 0 or (bbox_face > 0 and proj > 1.01 * bbox_face):
+            logger.warning("projected_area_cm2 invalid -> 0 (proj=%s, bbox_face=%s)", proj, bbox_face)
+            data["projected_area_cm2"] = 0.0
+
+    # Épaisseurs bornées
+    if isinstance(tmin, (int, float)) and isinstance(tmax, (int, float)):
+        if tmin < 0:
+            tmin = 0.0
+        if tmax < tmin:
+            tmax = tmin
+        if bbox_min > 0 and tmax > 1.01 * bbox_min:
+            logger.warning("thickness_max_mm clipped to bbox_min (tmax=%s, bbox_min=%s)", tmax, bbox_min)
+            tmax = bbox_min
+        data["thickness_min_mm"] = round(float(tmin), 4)
+        data["thickness_max_mm"] = round(float(tmax), 4)
+    else:
+        # invalide -> None
+        data["thickness_min_mm"] = None
+        data["thickness_max_mm"] = None
+
+    return data
 
 # =========================
 # Résolution du fichier source (local / S3)
@@ -272,7 +342,7 @@ def _resolve_source_path(file_id: str, step_path: Optional[str], step_ext: Optio
     if step_path and os.path.isfile(step_path):
         return step_path
 
-    # 2) uploads locaux (on tente plusieurs extensions)
+    # 2) uploads locaux
     for ext in (step_ext, "step", "stp", "stl"):
         if not ext:
             continue
@@ -344,7 +414,7 @@ def compute_and_cache_stats(
     pitch = float(pitch_env) if pitch_env else None
     tmin, tmax = _thickness_mm_voxel(mesh, pitch_mm=pitch, dbg=dbg)
 
-    # 6) Écrire les caches (toujours écrire stats + proj)
+    # 6) Écrire les caches (toujours stats + proj)
     base_payload = {
         "volume_mm3": float(vol_mm3) if vol_mm3 is not None else None,
         "volume_cm3": vol_cm3,
@@ -352,10 +422,19 @@ def compute_and_cache_stats(
         "thickness_min_mm": round(float(tmin), 4) if tmin is not None else None,
         "thickness_max_mm": round(float(tmax), 4) if tmax is not None else None,
     }
+    # validations bornées
+    base_payload = _validate_metrics(base_payload, axis)
+
     with open(base_cache, "w", encoding="utf-8") as fh:
         json.dump(base_payload, fh)
 
     proj_payload = {"projected_area_cm2": round(float(proj_cm2), 4)}
+    # revalider l’aire aussi (au cas où bbox a été corrigée)
+    proj_payload["projected_area_cm2"] = _validate_metrics(
+        {"projected_area_cm2": proj_payload["projected_area_cm2"], "bbox_mm": bbox, "volume_mm3": base_payload["volume_mm3"]},
+        axis
+    )["projected_area_cm2"]
+
     with open(proj_cache, "w", encoding="utf-8") as fh:
         json.dump(proj_payload, fh)
 
@@ -390,7 +469,7 @@ def compute_and_cache_stats(
     _publish_redis(file_id, axis, merged_for_redis, ttl_sec=3600)
 
     logger.info(
-        "Caches écrits file_id=%s axis=%s  bbox=%s  vol=%s cm3  t=(%s,%s) mm  proj=%s cm2",
+        "Caches écrits file_id=%s axis=%s  bbox=%s  vol=%s cm3  t=(%s,%s) mm  proj=%s cm2  debug=%s",
         file_id,
         axis,
         bbox,
@@ -398,6 +477,7 @@ def compute_and_cache_stats(
         base_payload["thickness_min_mm"],
         base_payload["thickness_max_mm"],
         proj_payload["projected_area_cm2"],
+        dbg,
     )
 
     return {
