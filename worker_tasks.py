@@ -189,37 +189,47 @@ def _volume_mm3(mesh) -> Optional[float]:
     except Exception:
         return None
 
-def _projected_area_cm2_voxel(mesh, axis: str) -> float:
+def _projected_area_cm2(mesh, axis: str) -> float:
     """
-    Aire de l'ombre 2D (union) par voxelisation.
-    Garantit A_proj <= face de la bbox. mm² -> cm² (/100).
+    Aire projetée 'analytique' (Σ area_face * |n·d|), puis clamp à la face de la bbox.
+    mm² -> cm² (/100). Toujours bornée par la face de la bbox.
     """
     import numpy as np
 
     axis = (axis or "Z").upper()
-    # pitch pour l’aire: plus fin que l’EDT mais borné
-    bbox = mesh.extents.astype(float)
-    bbox_min = float(np.clip(bbox.min(), 1e-6, None))
-    pitch = min(
-        float(os.getenv("AREA_PITCH_MM", "0.10")),
-        max( bbox_min / 400.0, 0.04 )  # ~400 pixels sur le côté le plus court, min 0.04mm
-    )
-
-    vg = mesh.voxelized(pitch).fill()
-    vol = vg.matrix.astype(bool)
-    if vol.size == 0:
-        return 0.0
-
-    # masque 2D (ombre) selon l’axe demandé
     if axis == "X":
-        mask = vol.any(axis=2)  # yz
+        d = np.array([1.0, 0.0, 0.0])
     elif axis == "Y":
-        mask = vol.any(axis=1)  # xz
+        d = np.array([0.0, 1.0, 0.0])
     else:
-        mask = vol.any(axis=0)  # xy
+        d = np.array([0.0, 0.0, 1.0])
 
-    a_mm2 = float(mask.sum()) * (pitch * pitch)
-    return round(a_mm2 / 100.0, 4)
+    # brut (peut compter les recouvrements, mais on clippe ensuite)
+    try:
+        areas = mesh.area_faces
+        normals = mesh.face_normals
+        scale = np.abs((normals * d).sum(axis=1))
+        a_raw_mm2 = float((areas * scale).sum())
+        a_raw_cm2 = a_raw_mm2 / 100.0
+    except Exception:
+        a_raw_cm2 = 0.0
+
+    # clamp à la face de la bbox (ombre 2D ne peut pas dépasser ça)
+    try:
+        x, y, z = [float(v) for v in mesh.extents.astype(float)]
+        bbox_face_cm2 = {
+            "X": (y * z) / 100.0,
+            "Y": (x * z) / 100.0,
+            "Z": (x * y) / 100.0,
+        }[axis]
+    except Exception:
+        bbox_face_cm2 = 0.0
+
+    if a_raw_cm2 < 0:
+        return 0.0
+    if bbox_face_cm2 > 0:
+        return round(min(a_raw_cm2, bbox_face_cm2), 4)
+    return round(a_raw_cm2, 4)
 
 
 # =========================
@@ -257,67 +267,83 @@ def _edt_subvoxel_min(edt) -> float:
 def _thickness_mm_voxel(
     mesh,
     pitch_mm: Optional[float] = None,
-    max_voxels: int = 80_000_000,
+    max_voxels: Optional[int] = None,
     dbg: dict | None = None
 ) -> tuple[float | None, float | None]:
     """
-    1) voxelisation (pitch_mm)  2) EDT -> rayon local (mm)  3) squelette -> min/max*2.
-    Retourne (tmin, tmax) en mm ou (None, None) si indisponible.
+    1) voxelisation (pitch_mm), 2) EDT -> rayon local (mm), 3) squelette -> tmin/tmax.
+    Fait N passes de raffinement si possible (sans dépasser max_voxels).
+    ENV:
+      VOXEL_PITCH_MM (def 0.10)
+      VOXEL_MAX_VOXELS (def 40000000)
+      VOXEL_REFINE_PASSES (def 2)
+      VOXEL_REFINE_FACTOR (def 0.6)
     """
+    import numpy as np
+    from scipy.ndimage import distance_transform_edt
     try:
-        import numpy as np
-        from scipy.ndimage import distance_transform_edt
         from skimage.morphology import skeletonize_3d
-    except Exception as e:
-        logger.info("Thickness voxel disabled (missing deps?): %s", e)
-        return None, None
+        have_skel = True
+    except Exception:
+        have_skel = False
 
     if pitch_mm is None:
-        pitch_mm = float(os.getenv("VOXEL_PITCH_MM", "0.12"))
+        pitch_mm = float(os.getenv("VOXEL_PITCH_MM", "0.10"))
+    if max_voxels is None:
+        max_voxels = int(os.getenv("VOXEL_MAX_VOXELS", "40000000"))
 
-    # Ajuste le pitch si trop de voxels (contrôle mémoire)
+    refine_passes = int(os.getenv("VOXEL_REFINE_PASSES", "2"))
+    refine_factor = float(os.getenv("VOXEL_REFINE_FACTOR", "0.6"))
+
     ext = mesh.extents.astype(float)
-    dims = (ext / pitch_mm).clip(min=1.0)
-    voxels_est = int(math.ceil(dims[0])) * int(math.ceil(dims[1])) * int(math.ceil(dims[2]))
-    if voxels_est > max_voxels:
-        scale = (voxels_est / float(max_voxels)) ** (1.0 / 3.0)
-        pitch_mm *= scale
+    tmin_all, tmax_all = [], []
+    used_pitches = []
 
-    vg = mesh.voxelized(pitch_mm).fill()
-    vol = vg.matrix.astype(bool)
-    if vol.size == 0 or not vol.any():
-        return None, None
+    cur_pitch = float(pitch_mm)
+    for _ in range(max(1, refine_passes + 1)):
+        dims = np.ceil(ext / cur_pitch).astype(int)
+        voxels_est = int(dims[0]) * int(dims[1]) * int(dims[2])
+        if voxels_est > max_voxels:
+            scale = (voxels_est / float(max_voxels)) ** (1.0 / 3.0)
+            cur_pitch *= scale
+            dims = np.ceil(ext / cur_pitch).astype(int)
+        used_pitches.append(float(cur_pitch))
+
+        vg = mesh.voxelized(cur_pitch).fill()
+        vol = vg.matrix.astype(bool)
+        if vol.size == 0 or not vol.any():
+            break
+
+        edt = distance_transform_edt(vol) * float(cur_pitch)
+        if have_skel:
+            skel = skeletonize_3d(vol)
+            vals = edt[skel]
+            if vals.size == 0:
+                vals = edt[vol]
+        else:
+            vals = edt[vol]
+
+        if vals.size == 0:
+            break
+
+        tmin_all.append(float(2.0 * vals.min()))
+        tmax_all.append(float(2.0 * vals.max()))
+
+        # passe suivante plus fine si on reste sous la limite
+        next_pitch = cur_pitch * refine_factor
+        ndims = np.ceil(ext / next_pitch).astype(int)
+        nvox = int(ndims[0]) * int(ndims[1]) * int(ndims[2])
+        if nvox > max_voxels:
+            break
+        cur_pitch = next_pitch
 
     if isinstance(dbg, dict):
-        dbg["voxel_shape"] = list(vol.shape)
-        dbg["voxel_pitch_mm"] = float(pitch_mm)
+        dbg["refine_pitches"] = used_pitches
 
-    edt = distance_transform_edt(vol) * float(pitch_mm)
+    if not tmin_all or not tmax_all:
+        return None, None
+    return float(min(tmin_all)), float(max(tmax_all))
 
-    # Squelette + lecture min/max sur le squelette
-    try:
-        skel = skeletonize_3d(vol)
-        vals = edt[skel]
-        if vals.size == 0:
-            return None, None
-        # Sub-voxel pour le minimum
-        try:
-            dmin = min(vals.min(), _edt_subvoxel_min(edt))
-        except Exception:
-            dmin = float(vals.min())
-        tmin = float(2.0 * dmin)
-        tmax = float(2.0 * vals.max())
-        return tmin, tmax
-    except Exception:
-        # fallback: min/max EDT global
-        v = edt[vol]
-        if v.size == 0:
-            return None, None
-        try:
-            dmin = min(v.min(), _edt_subvoxel_min(edt))
-        except Exception:
-            dmin = float(v.min())
-        return float(2.0 * dmin), float(2.0 * v.max())
 
 # --------- Raffinage adaptatif (2–3 passes) ----------
 def _thickness_mm_adaptive(mesh, pitch_hint: float | None, dbg: dict | None):
@@ -481,7 +507,8 @@ def compute_and_cache_stats(
     vol_cm3 = round(vol_mm3 / 1000.0, 4) if vol_mm3 is not None else None
 
     # 4) Aire projetée (uniquement l’axe demandé) — version ombre 2D
-    proj_cm2 = _projected_area_cm2_voxel(mesh, axis=axis)
+    proj_cm2 = _projected_area_cm2(mesh, axis=axis)
+
 
     # 5) Épaisseur (voxel EDT) avec raffinage adaptatif
     pitch_env = os.getenv("VOXEL_PITCH_MM")
