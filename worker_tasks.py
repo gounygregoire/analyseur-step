@@ -271,43 +271,73 @@ def _thickness_mm_voxel(
     dbg: dict | None = None
 ) -> tuple[float | None, float | None]:
     """
-    1) voxelisation (pitch_mm), 2) EDT -> rayon local (mm), 3) squelette -> tmin/tmax.
-    Fait N passes de raffinement si possible (sans dépasser max_voxels).
+    Calcule tmin/tmax (mm) par voxelisation + EDT. Squelette 3D utilisé
+    seulement si la grille est raisonnable. Plusieurs passes de raffinement
+    tant qu'on ne dépasse pas max_voxels. Si la squelettisation dépasse
+    un petit budget temps, on bascule en EDT-only.
+
     ENV:
-      VOXEL_PITCH_MM (def 0.10)
-      VOXEL_MAX_VOXELS (def 40000000)
-      VOXEL_REFINE_PASSES (def 2)
-      VOXEL_REFINE_FACTOR (def 0.6)
+      VOXEL_PITCH_MM           (def 0.12)
+      VOXEL_MAX_VOXELS         (def 30000000)
+      VOXEL_REFINE_PASSES      (def 1)
+      VOXEL_REFINE_FACTOR      (def 0.65)
+      VOXEL_SKELETON_MAX_VOX   (def 8000000)    # au-delà => pas de squelette
+      THICKNESS_PASS_TIMEOUT_S (def 8)          # budget temps par passe squelette
+      DISABLE_SKELETONIZE      (def 0)          # 1 => force EDT-only
     """
     import numpy as np
     from scipy.ndimage import distance_transform_edt
-    try:
-        from skimage.morphology import skeletonize_3d
-        have_skel = True
-    except Exception:
-        have_skel = False
+    import time, signal
 
+    # options
     if pitch_mm is None:
-        pitch_mm = float(os.getenv("VOXEL_PITCH_MM", "0.10"))
+        pitch_mm = float(os.getenv("VOXEL_PITCH_MM", "0.12"))
     if max_voxels is None:
-        max_voxels = int(os.getenv("VOXEL_MAX_VOXELS", "40000000"))
+        max_voxels = int(os.getenv("VOXEL_MAX_VOXELS", "30000000"))
+    refine_passes   = int(os.getenv("VOXEL_REFINE_PASSES", "1"))
+    refine_factor   = float(os.getenv("VOXEL_REFINE_FACTOR", "0.65"))
+    skel_max_vox    = int(os.getenv("VOXEL_SKELETON_MAX_VOX", "8000000"))
+    pass_timeout_s  = int(os.getenv("THICKNESS_PASS_TIMEOUT_S", "8"))
+    disable_skel    = os.getenv("DISABLE_SKELETONIZE", "0").strip().lower() in ("1","true","yes","on")
 
-    refine_passes = int(os.getenv("VOXEL_REFINE_PASSES", "2"))
-    refine_factor = float(os.getenv("VOXEL_REFINE_FACTOR", "0.6"))
+    # essaie d'importer le squelette
+    have_skel = False
+    if not disable_skel:
+        try:
+            from skimage.morphology import skeletonize_3d
+            have_skel = True
+        except Exception:
+            have_skel = False
+
+    def _timeout_call(fn, seconds: int, *args, **kwargs):
+        def _handler(signum, frame):
+            raise TimeoutError("skeletonize timeout")
+        signal.signal(signal.SIGALRM, _handler)
+        signal.alarm(max(1, int(seconds)))
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            signal.alarm(0)
 
     ext = mesh.extents.astype(float)
-    tmin_all, tmax_all = [], []
-    used_pitches = []
+    tmins: list[float] = []
+    tmaxs: list[float] = []
+    used_pitches: list[float] = []
 
     cur_pitch = float(pitch_mm)
-    for _ in range(max(1, refine_passes + 1)):
+    passes = max(1, refine_passes + 1)
+    for _ in range(passes):
         dims = np.ceil(ext / cur_pitch).astype(int)
         voxels_est = int(dims[0]) * int(dims[1]) * int(dims[2])
         if voxels_est > max_voxels:
-            scale = (voxels_est / float(max_voxels)) ** (1.0 / 3.0)
+            scale = (voxels_est / float(max_voxels)) ** (1.0/3.0)
             cur_pitch *= scale
             dims = np.ceil(ext / cur_pitch).astype(int)
+            voxels_est = int(dims[0]) * int(dims[1]) * int(dims[2])
+
         used_pitches.append(float(cur_pitch))
+        if dbg is not None:
+            dbg.setdefault("passes", []).append({"pitch_mm": float(cur_pitch), "dims": [int(dims[0]), int(dims[1]), int(dims[2])], "vox_est": int(voxels_est)})
 
         vg = mesh.voxelized(cur_pitch).fill()
         vol = vg.matrix.astype(bool)
@@ -315,10 +345,24 @@ def _thickness_mm_voxel(
             break
 
         edt = distance_transform_edt(vol) * float(cur_pitch)
-        if have_skel:
-            skel = skeletonize_3d(vol)
-            vals = edt[skel]
-            if vals.size == 0:
+
+        # squelette seulement si raisonnable
+        use_skel = have_skel and (voxels_est <= skel_max_vox)
+        vals = None
+        if use_skel:
+            try:
+                start = time.time()
+                vals = _timeout_call(lambda v: skeletonize_3d(v), pass_timeout_s, vol)
+                vals = edt[vals]
+                if vals.size == 0:
+                    vals = edt[vol]
+                if dbg is not None:
+                    dbg.setdefault("skeleton_used", True)
+                    dbg.setdefault("skeleton_time_s", []).append(round(time.time()-start,3))
+            except Exception as e:
+                # timeout ou erreur -> fallback EDT-only
+                if dbg is not None:
+                    dbg.setdefault("skeleton_fallback", []).append(str(e))
                 vals = edt[vol]
         else:
             vals = edt[vol]
@@ -326,10 +370,10 @@ def _thickness_mm_voxel(
         if vals.size == 0:
             break
 
-        tmin_all.append(float(2.0 * vals.min()))
-        tmax_all.append(float(2.0 * vals.max()))
+        tmins.append(float(2.0 * vals.min()))
+        tmaxs.append(float(2.0 * vals.max()))
 
-        # passe suivante plus fine si on reste sous la limite
+        # prépare un pas plus fin si on reste sous max_voxels
         next_pitch = cur_pitch * refine_factor
         ndims = np.ceil(ext / next_pitch).astype(int)
         nvox = int(ndims[0]) * int(ndims[1]) * int(ndims[2])
@@ -337,12 +381,12 @@ def _thickness_mm_voxel(
             break
         cur_pitch = next_pitch
 
-    if isinstance(dbg, dict):
+    if dbg is not None:
         dbg["refine_pitches"] = used_pitches
 
-    if not tmin_all or not tmax_all:
+    if not tmins or not tmaxs:
         return None, None
-    return float(min(tmin_all)), float(max(tmax_all))
+    return float(min(tmins)), float(max(tmaxs))
 
 
 # --------- Raffinage adaptatif (2–3 passes) ----------
