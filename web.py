@@ -309,85 +309,150 @@ def healthz():
 # ---------- Upload -> XKT ----------
 @app.post("/upload")
 def upload():
+    import uuid, requests, mimetypes
+    from s3io import put_file  # doit être installée et configurée côté web
+
     f = request.files.get("file")
     if not f or not f.filename:
         return jsonify(error="no_file"), 400
     if not _allowed(f.filename):
         return jsonify(error="bad_ext", detail="Formats acceptés : .stl, .step, .stp"), 400
 
+    # ---------- IDs / chemins ----------
     file_id = str(uuid.uuid4())
-    ext = _ext(f.filename) or ".step"
+    ext = (_ext(f.filename) or ".step").lower()
+    if ext == ".stp":
+        ext = ".step"
     in_path  = os.path.join(UPLOAD_FOLDER, f"{file_id}{ext}")
     out_xkt  = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
+    # ---------- Sauvegarde locale de l'original ----------
     try:
         f.save(in_path)
     except Exception as e:
+        current_app.logger.exception("[upload] save_fail: %s", e)
         return jsonify(error="save_fail", detail=str(e)), 500
 
-    s3_uploaded = False
-    s3_key = f"uploads/{file_id}{ext}"
+    # ---------- Upload S3 de l'original (pour le worker) ----------
+    s3_uploaded_src = False
     try:
-        ok = put_file(in_path, s3_key)
-        s3_uploaded = bool(ok)
-        if not s3_uploaded:
-            app.logger.warning("S3 put_file returned False for %s", s3_key)
+        if _s3_enabled():
+            s3_key_src = f"uploads/{file_id}{ext}"
+            # type MIME raisonnable
+            if ext == ".step":
+                src_ct = "model/step"
+            elif ext == ".stl":
+                src_ct = "model/stl"
+            else:
+                src_ct = mimetypes.guess_type(in_path)[0] or "application/octet-stream"
+            ok = put_file(in_path, s3_key_src, content_type=src_ct)
+            s3_uploaded_src = bool(ok)
+            if not s3_uploaded_src:
+                current_app.logger.warning("[upload] S3 put returned False for %s", s3_key_src)
+        else:
+            current_app.logger.info("[upload] S3 disabled; worker devra trouver le fichier local (non partagé)")
     except Exception as e:
-        app.logger.exception("S3 upload failed for %s: %s", s3_key, e)
+        current_app.logger.warning("[upload] S3 upload (src) failed: %s", e)
 
+    # ---------- Conversion -> XKT ----------
     try:
-        # Log for debugging: which converter URL and local paths are used (safe to log paths)
-        app.logger.info("[upload] sending to converter %s (in_path=%s, out_xkt=%s)", CONVERTER_URL, in_path, out_xkt)
+        # On rouvre depuis le disque (fiable) avec un content-type cohérent
+        if ext == ".step":
+            send_ct = "model/step"
+        elif ext == ".stl":
+            send_ct = "model/stl"
+        else:
+            send_ct = f.mimetype or "application/octet-stream"
+
+        current_app.logger.info(
+            "[upload] sending to converter %s (in_path=%s, out_xkt=%s)",
+            CONVERTER_URL, in_path, out_xkt
+        )
         with open(in_path, "rb") as fh:
             resp = requests.post(
                 f"{CONVERTER_URL}/convert",
-                files={"file": (f.filename, fh, f.mimetype or "application/octet-stream")},
+                files={"file": (f.filename, fh, send_ct)},
                 timeout=600,
                 stream=True,
                 headers={"Accept": "application/octet-stream"},
             )
-
-        app.logger.info("[upload] converter responded status=%s for file_id=%s", resp.status_code, file_id)
+        current_app.logger.info("[upload] converter status=%s file_id=%s", resp.status_code, file_id)
 
         if resp.status_code != 200:
-            # Try to extract JSON detail but fallback to text; log a snippet to avoid huge logs
+            # message d’erreur le plus utile possible (sans loguer des blobs énormes)
             try:
                 detail = resp.json()
             except Exception:
                 detail = resp.text
-            safe_detail = str(detail)
-            app.logger.warning("[upload] converter failure status=%s detail=%s", resp.status_code, safe_detail[:1000])
+            current_app.logger.warning("[upload] converter failed: %s", str(detail)[:1000])
             if env_bool("DEV_SHOW_ERRORS", False):
-                return jsonify(error="convert_fail", detail=detail, status_code=resp.status_code), 500
+                return jsonify(error="convert_fail", status_code=resp.status_code, detail=detail), 500
             return jsonify(error="convert_fail", status_code=resp.status_code), 500
 
+        # Ecriture du .xkt local
         with open(out_xkt, "wb") as out:
             for chunk in resp.iter_content(chunk_size=1024 * 1024):
                 if chunk:
                     out.write(chunk)
-
         if not os.path.isfile(out_xkt):
-            app.logger.error("[upload] no .xkt produced at %s", out_xkt)
+            current_app.logger.error("[upload] no .xkt produced at %s", out_xkt)
             return jsonify(error="no_xkt", detail=f".xkt introuvable: {out_xkt}"), 500
 
-        try:
-            if _s3_enabled():
-                put_file(out_xkt, f"xkt/{file_id}.xkt", content_type="application/octet-stream")
-        except Exception as e:
-            app.logger.warning("S3 upload XKT failed for %s: %s", file_id, e)
-
-        xkt_rel = f"/xkt/{file_id}.xkt"
-        xkt_abs = _abs_url(xkt_rel)
-        return jsonify(file_id=file_id, status="ready", xktUrl=xkt_abs, xkt_url=xkt_abs, s3_uploaded=s3_uploaded)
     except requests.Timeout:
-        app.logger.exception("[upload] converter timeout for file_id=%s", file_id)
+        current_app.logger.exception("[upload] converter timeout file_id=%s", file_id)
         return jsonify(error="convert_timeout", detail="Converter timeout (>=600s)"), 504
     except Exception as e:
-        # Log full traceback server-side; return detail only when DEV_SHOW_ERRORS is enabled
-        app.logger.exception("[upload] unexpected failure for file_id=%s: %s", file_id, e)
+        current_app.logger.exception("[upload] unexpected converter error: %s", e)
         if env_bool("DEV_SHOW_ERRORS", False):
             return jsonify(error="convert_fail", detail=str(e)), 500
         return jsonify(error="convert_fail"), 500
+
+    # ---------- Upload S3 du XKT (pour le viewer CDN/s3) ----------
+    s3_uploaded_xkt = False
+    try:
+        if _s3_enabled():
+            put_file(out_xkt, f"xkt/{file_id}.xkt", content_type="application/octet-stream")
+            s3_uploaded_xkt = True
+    except Exception as e:
+        current_app.logger.warning("[upload] S3 upload XKT failed for %s: %s", file_id, e)
+
+    # ---------- (Optionnel) pré-chauffer les métriques via RQ ----------
+    warm_job_id = None
+    if env_bool("WARM_STATS_ON_UPLOAD", False):
+        try:
+            from rq import Queue
+            from redis import from_url as _rfromurl
+            REDIS_URL = _normalize_redis_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+            q = Queue(os.getenv("RQ_QUEUE_NAME", "default"), connection=_rfromurl(REDIS_URL, ssl_cert_reqs=None))
+            job_timeout = int(os.getenv("RQ_JOB_TIMEOUT_SEC", "1200"))
+            job = q.enqueue(
+                "worker_tasks.compute_and_cache_stats",
+                kwargs=dict(file_id=file_id, axis="Z", step_path=None, step_ext=ext.lstrip("."), cache_dir=OUTPUT_FOLDER),
+                job_timeout=job_timeout,
+                result_ttl=3600,
+                failure_ttl=3600,
+                ttl=job_timeout,
+            )
+            warm_job_id = job.id
+            current_app.logger.info("[upload] warm stats enqueued job_id=%s", warm_job_id)
+        except Exception as e:
+            current_app.logger.info("[upload] warm stats skipped: %s", e)
+
+    # ---------- Réponse ----------
+    xkt_rel = f"/xkt/{file_id}.xkt"
+    xkt_abs = _abs_url(xkt_rel)
+    return jsonify(
+        file_id=file_id,
+        status="ready",
+        xktUrl=xkt_abs,   # compat front
+        xkt_url=xkt_abs,  # alias
+        s3_uploaded_src=s3_uploaded_src,
+        s3_uploaded_xkt=s3_uploaded_xkt,
+        warm_job_id=warm_job_id
+    )
+
 
 @app.get("/xkt/<file_id>.xkt")
 def serve_xkt(file_id: str):
@@ -788,7 +853,7 @@ def __rq_workers():
         return jsonify(ok=True, queue=RQ_QUEUE_NAME, workers=workers)
     except Exception as e:
         return jsonify(ok=False, error=str(e)), 500
-        
+
 # --- RQ: contenu de la queue ---
 @app.get("/__rq_queue")
 def __rq_queue():
