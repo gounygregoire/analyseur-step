@@ -215,6 +215,35 @@ def _projected_area_cm2(mesh, axis: str) -> float:
 # =========================
 # Épaisseur via voxel + EDT + squelette (robuste)
 # =========================
+def _edt_subvoxel_min(edt) -> float:
+    """Affinage sub-voxel du minimum EDT par interpolation tri-linéaire autour du min discret."""
+    try:
+        import numpy as np
+        from scipy.ndimage import map_coordinates
+    except Exception:
+        # SciPy indisponible -> valeur discrète
+        return float(edt.min())
+
+    z, y, x = np.unravel_index(np.argmin(edt), edt.shape)
+    nz, ny, nx = edt.shape
+    z0, z1 = max(z - 1, 0), min(z + 1, nz - 1)
+    y0, y1 = max(y - 1, 0), min(y + 1, ny - 1)
+    x0, x1 = max(x - 1, 0), min(x + 1, nx - 1)
+
+    gz = 0.5 * (edt[z1, y, x] - edt[z0, y, x])
+    gy = 0.5 * (edt[z, y1, x] - edt[z, y0, x])
+    gx = 0.5 * (edt[z, y, x1] - edt[z, y, x0])
+    g = np.array([gz, gy, gx], dtype=float)
+    n = float(np.linalg.norm(g))
+    if n < 1e-8:
+        return float(edt[z, y, x])
+
+    # reculer d'un demi-voxel vers la décroissance du champ de distance
+    step = -0.5 * (g / n)
+    zz, yy, xx = z + step[0], y + step[1], x + step[2]
+    val = map_coordinates(edt, [[zz], [yy], [xx]], order=1, mode="nearest")
+    return float(val.ravel()[0])
+
 def _thickness_mm_voxel(
     mesh,
     pitch_mm: Optional[float] = None,
@@ -236,7 +265,7 @@ def _thickness_mm_voxel(
     if pitch_mm is None:
         pitch_mm = float(os.getenv("VOXEL_PITCH_MM", "0.12"))
 
-    # Ajuste le pitch si trop de voxels
+    # Ajuste le pitch si trop de voxels (contrôle mémoire)
     ext = mesh.extents.astype(float)
     dims = (ext / pitch_mm).clip(min=1.0)
     voxels_est = int(math.ceil(dims[0])) * int(math.ceil(dims[1])) * int(math.ceil(dims[2]))
@@ -249,27 +278,62 @@ def _thickness_mm_voxel(
     if vol.size == 0 or not vol.any():
         return None, None
 
-    if dbg is not None:
+    if isinstance(dbg, dict):
         dbg["voxel_shape"] = list(vol.shape)
         dbg["voxel_pitch_mm"] = float(pitch_mm)
 
     edt = distance_transform_edt(vol) * float(pitch_mm)
 
-    # squelette
+    # Squelette + lecture min/max sur le squelette
     try:
         skel = skeletonize_3d(vol)
         vals = edt[skel]
         if vals.size == 0:
             return None, None
-        tmin = float(2.0 * vals.min())
+        # Sub-voxel pour le minimum
+        try:
+            dmin = min(vals.min(), _edt_subvoxel_min(edt))
+        except Exception:
+            dmin = float(vals.min())
+        tmin = float(2.0 * dmin)
         tmax = float(2.0 * vals.max())
         return tmin, tmax
     except Exception:
-        # fallback: min/max EDT sur l’intérieur
+        # fallback: min/max EDT global
         v = edt[vol]
         if v.size == 0:
             return None, None
-        return float(2.0 * v.min()), float(2.0 * v.max())
+        try:
+            dmin = min(v.min(), _edt_subvoxel_min(edt))
+        except Exception:
+            dmin = float(v.min())
+        return float(2.0 * dmin), float(2.0 * v.max())
+
+# --------- Raffinage adaptatif (2–3 passes) ----------
+def _thickness_mm_adaptive(mesh, pitch_hint: float | None, dbg: dict | None):
+    VOX_MAX = int(os.getenv("VOXEL_MAX_VOXELS", "40000000"))
+    MIN_PITCH = 0.04  # borne basse sûre (mm)
+    passes = int(os.getenv("VOXEL_REFINE_PASSES", "3"))
+
+    pitch = float(os.getenv("VOXEL_PITCH_MM", "0.15")) if pitch_hint is None else float(pitch_hint)
+    tmin = tmax = None
+    if isinstance(dbg, dict):
+        dbg.setdefault("refine_pitches", [])
+
+    for _ in range(max(1, passes)):
+        tmin, tmax = _thickness_mm_voxel(mesh, pitch_mm=pitch, max_voxels=VOX_MAX, dbg=dbg)
+        if isinstance(dbg, dict):
+            dbg["refine_pitches"].append(float(pitch))
+        if tmin is None:
+            break
+        # Règle: pitch <= tmin/8 ; sinon on affine en divisant ~2.5
+        target = min(max(MIN_PITCH, tmin / 8.0), pitch / 2.5)
+        # si on ne gagne presque plus, stop
+        if target >= pitch * 0.95:
+            break
+        pitch = target
+
+    return tmin, tmax
 
 # =========================
 # Validations "sanity check"
@@ -409,10 +473,10 @@ def compute_and_cache_stats(
     # 4) Aire projetée (uniquement l’axe demandé)
     proj_cm2 = _projected_area_cm2(mesh, axis=axis)
 
-    # 5) Épaisseur (voxel EDT)
+    # 5) Épaisseur (voxel EDT) avec raffinage adaptatif
     pitch_env = os.getenv("VOXEL_PITCH_MM")
-    pitch = float(pitch_env) if pitch_env else None
-    tmin, tmax = _thickness_mm_voxel(mesh, pitch_mm=pitch, dbg=dbg)
+    pitch_hint = float(pitch_env) if pitch_env else None
+    tmin, tmax = _thickness_mm_adaptive(mesh, pitch_hint=pitch_hint, dbg=dbg)
 
     # 6) Écrire les caches (toujours stats + proj)
     base_payload = {
@@ -445,7 +509,7 @@ def compute_and_cache_stats(
                     {
                         "tmin": base_payload["thickness_min_mm"],
                         "tmax": base_payload["thickness_max_mm"],
-                        "method": "voxel_edt",
+                        "method": "voxel_edt_refine",
                     },
                     fh,
                 )
