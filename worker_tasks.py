@@ -1,8 +1,5 @@
 # worker_tasks.py
-import os
-import json
-import time
-import pathlib
+import os, json, time, pathlib
 from typing import Optional, Tuple, Dict, Any
 
 import numpy as np
@@ -17,7 +14,6 @@ UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "/tmp/uploads")
 OUTPUT_FOLDER = os.getenv("OUTPUT_FOLDER", "/tmp/converted")
 AXES = ("X", "Y", "Z")
 
-# Soft timeout pour toute la tâche
 STATS_SOFT_TIMEOUT_SEC = int(os.getenv("STATS_SOFT_TIMEOUT_SEC", "600"))  # 10 min
 TESSELLATION_TOL_MM = float(os.getenv("TESSELLATION_TOL_MM", "0.05"))
 TESSELLATION_ANG_RAD = float(os.getenv("TESSELLATION_ANG_RAD", "0.25"))
@@ -26,7 +22,7 @@ WORKER_COMPUTE_THICKNESS = str(os.getenv("WORKER_COMPUTE_THICKNESS", "0")).lower
 THICKNESS_SAMPLES = int(os.getenv("THICKNESS_SAMPLES", "30000"))
 PULL_UPLOADS_FROM_S3 = str(os.getenv("PULL_UPLOADS_FROM_S3", "1")).lower() in ("1", "true", "yes", "on")
 
-# ---------- Redis helpers ----------
+# ---------- Redis ----------
 def _normalize_redis_url(url: str) -> str:
     if not url:
         return url
@@ -50,17 +46,14 @@ def _redis_conn() -> redis.Redis:
     parsed = urlparse(REDIS_URL.strip().strip('"').strip("'"))
     use_ssl = (parsed.scheme or "").lower().startswith("rediss")
     return redis.Redis(
-        host=parsed.hostname,
-        port=parsed.port or 6379,
+        host=parsed.hostname, port=parsed.port or 6379,
         username=(parsed.username or "default"),
         password=unquote(parsed.password or ""),
         db=int((parsed.path or "/0").lstrip("/")),
-        ssl=use_ssl,
-        ssl_cert_reqs=None,
-        socket_timeout=5,
+        ssl=use_ssl, ssl_cert_reqs=None, socket_timeout=5,
     )
 
-# --- S3 helpers (download + upload) ---
+# ---------- S3 ----------
 def _s3_enabled() -> bool:
     return all(os.environ.get(k) for k in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "S3_BUCKET"))
 
@@ -74,7 +67,6 @@ def _s3_put(local_path: str, key: str, content_type: Optional[str] = None) -> bo
         return False
 
 def _s3_get(key: str, dest_path: str) -> bool:
-    """Télécharge un objet S3 dans dest_path. Retourne True si le fichier existe à la fin."""
     if not _s3_enabled():
         return False
     try:
@@ -102,14 +94,7 @@ def _deadline_reached(start_ts: float) -> bool:
     return (time.monotonic() - start_ts) > STATS_SOFT_TIMEOUT_SEC
 
 def _ensure_local_step(file_id: str, step_ext_hint: Optional[str]) -> Optional[str]:
-    """
-    Retourne un chemin local vers le STEP/STL, en le téléchargeant depuis S3 si besoin.
-    Cherche dans UPLOAD_FOLDER: <fid>.step | .stp | .stl
-    Puis dans S3: uploads/<fid>.<ext>.
-    """
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
-    # 1) local direct
     for ext in (step_ext_hint, "step", "stp", "stl"):
         if not ext:
             continue
@@ -117,11 +102,8 @@ def _ensure_local_step(file_id: str, step_ext_hint: Optional[str]) -> Optional[s
         p = os.path.join(UPLOAD_FOLDER, f"{file_id}{e}")
         if os.path.isfile(p):
             return p
-
-    # 2) S3 pull si activé
     if not (_s3_enabled() and PULL_UPLOADS_FROM_S3):
         return None
-
     bump_stage("pull_step_s3_begin")
     for ext in ("step", "stp", "stl"):
         key = f"uploads/{file_id}.{ext}"
@@ -129,48 +111,29 @@ def _ensure_local_step(file_id: str, step_ext_hint: Optional[str]) -> Optional[s
         if _s3_get(key, dest):
             bump_stage("pull_step_s3_ok", {"ext": ext, "key": key})
             return dest
-
     bump_stage("pull_step_s3_miss")
     return None
 
-# ---------- OCCT loader (log détaillé) ----------
+# ---------- OCCT loader (sans exiger BRepGProp) ----------
 _OCCT = None
 _OCCT_LIB = None
 
 def _occt():
     """
     Charge OCCT via OCP (cadquery-ocp) en priorité, fallback pythonocc-core.
-    Supporte les variantes de noms des méthodes statiques: ...Properties ou ...Properties_s.
-    En cas d'échec, lève ImportError avec les VRAIES raisons (OCP puis OCC).
+    NE force PAS BRepGProp au chargement (certains wheels OCP n'exposent pas ces symboles).
     """
     global _OCCT, _OCCT_LIB
     if _OCCT is not None:
         return _OCCT
 
-    ocp_err = None
-    occ_err = None
-
-    # Tentative OCP (cadquery-ocp)
+    # OCP
     try:
-        # Import module-level namespaces puis résout les symboles
-        from OCP import STEPControl, IFSelect, BRepGProp, GProp, Bnd, BRepBndLib, TopAbs, TopExp, BRep, BRepMesh
-
-        # Résolution tolérante des fonctions statiques
-        vol_fn = getattr(BRepGProp, "brepgprop_VolumeProperties", None) or getattr(BRepGProp, "brepgprop_VolumeProperties_s", None)
-        surf_fn = getattr(BRepGProp, "brepgprop_SurfaceProperties", None) or getattr(BRepGProp, "brepgprop_SurfaceProperties_s", None)
-        if vol_fn is None or surf_fn is None:
-            raise ImportError(
-                "BRepGProp.*Properties introuvables. Dispo: "
-                + ", ".join([n for n in dir(BRepGProp) if "Properties" in n])
-            )
-
+        from OCP import STEPControl, IFSelect, Bnd, BRepBndLib, TopAbs, TopExp, BRep, BRepMesh
         _OCCT_LIB = "OCP"
         _OCCT = {
             "STEPControl_Reader": STEPControl.STEPControl_Reader,
             "IFSelect_RetDone": IFSelect.IFSelect_RetDone,
-            "brepgprop_VolumeProperties": vol_fn,
-            "brepgprop_SurfaceProperties": surf_fn,
-            "GProp_GProps": GProp.GProp_GProps,
             "Bnd_Box": Bnd.Bnd_Box,
             "brepbndlib_Add": BRepBndLib.brepbndlib_Add,
             "TopAbs_FACE": TopAbs.TopAbs_FACE,
@@ -179,30 +142,16 @@ def _occt():
             "BRepMesh_IncrementalMesh": BRepMesh.BRepMesh_IncrementalMesh,
         }
         return _OCCT
-    except Exception as e:
-        import traceback
-        ocp_err = f"{e.__class__.__name__}: {e}"
-        ocp_tb = traceback.format_exc()
+    except Exception:
+        pass
 
-    # Tentative OCC (pythonocc-core)
+    # OCC
     try:
-        from OCC.Core import STEPControl, IFSelect, BRepGProp, GProp, Bnd, BRepBndLib, TopAbs, TopExp, BRep, BRepMesh
-
-        vol_fn = getattr(BRepGProp, "brepgprop_VolumeProperties", None) or getattr(BRepGProp, "brepgprop_VolumeProperties_s", None)
-        surf_fn = getattr(BRepGProp, "brepgprop_SurfaceProperties", None) or getattr(BRepGProp, "brepgprop_SurfaceProperties_s", None)
-        if vol_fn is None or surf_fn is None:
-            raise ImportError(
-                "OCC BRepGProp.*Properties introuvables. Dispo: "
-                + ", ".join([n for n in dir(BRepGProp) if "Properties" in n])
-            )
-
+        from OCC.Core import STEPControl, IFSelect, Bnd, BRepBndLib, TopAbs, TopExp, BRep, BRepMesh
         _OCCT_LIB = "OCC"
         _OCCT = {
             "STEPControl_Reader": STEPControl.STEPControl_Reader,
             "IFSelect_RetDone": IFSelect.IFSelect_RetDone,
-            "brepgprop_VolumeProperties": vol_fn,
-            "brepgprop_SurfaceProperties": surf_fn,
-            "GProp_GProps": GProp.GProp_GProps,
             "Bnd_Box": Bnd.Bnd_Box,
             "brepbndlib_Add": BRepBndLib.brepbndlib_Add,
             "TopAbs_FACE": TopAbs.TopAbs_FACE,
@@ -212,24 +161,14 @@ def _occt():
         }
         return _OCCT
     except Exception as e2:
-        import traceback
-        occ_err = f"{e2.__class__.__name__}: {e2}"
-        occ_tb = traceback.format_exc()
-
-    msg = "OCCT introuvable: ni OCP (cadquery-ocp) ni OCC (pythonocc-core)."
-    if ocp_err:
-        msg += f"\n- OCP error: {ocp_err}"
-        if 'ocp_tb' in locals():
-            msg += f"\n{ocp_tb}"
-    if occ_err:
-        msg += f"\n- OCC error: {occ_err}"
-        if 'occ_tb' in locals():
-            msg += f"\n{occ_tb}"
-    raise ImportError(msg)
+        raise ImportError("OCCT introuvable (ni OCP ni OCC)") from e2
 
 def occt_lib_name() -> Optional[str]:
-    _occt()
-    return _OCCT_LIB
+    try:
+        _occt()
+        return _OCCT_LIB
+    except Exception:
+        return None
 
 # ---------- STEP & géométrie ----------
 def _read_step_shape(step_path: str):
@@ -249,24 +188,12 @@ def _shape_bbox_mm(shape) -> Tuple[float, float, float, float, float, float]:
     xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
     return float(xmin), float(ymin), float(zmin), float(xmax), float(ymax), float(zmax)
 
-def _shape_volume_surface_mm(shape) -> Tuple[float, float]:
-    c = _occt()
-    g = c["GProp_GProps"]()
-    c["brepgprop_VolumeProperties"](shape, g)
-    vol = float(g.Mass())  # mm^3
-    g2 = c["GProp_GProps"]()
-    c["brepgprop_SurfaceProperties"](shape, g2)
-    area = float(g2.Mass())  # mm^2
-    return vol, area
-
 def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.Trimesh:
     c = _occt()
     c["BRepMesh_IncrementalMesh"](shape, tol_mm, False, ang_rad, True)
-
     verts: list[list[float]] = []
     faces: list[list[int]] = []
     v_off = 0
-
     exp = c["TopExp_Explorer"](shape, c["TopAbs_FACE"])
     while exp.More():
         f = exp.Current()
@@ -286,40 +213,88 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
                 faces.append([v_off + a - 1, v_off + b - 1, v_off + cidx - 1])
             v_off += npts
         exp.Next()
-
     if not verts or not faces:
         raise RuntimeError("Triangulation vide")
-
-    mesh = trimesh.Trimesh(
-        vertices=np.asarray(verts, dtype=float),
-        faces=np.asarray(faces, dtype=int),
-        process=True,
-    )
+    mesh = trimesh.Trimesh(vertices=np.asarray(verts, dtype=float),
+                           faces=np.asarray(faces, dtype=int),
+                           process=True)
     return mesh
 
-# ---------- Projected area (cm^2) ----------
+# ---------- Mass properties (robuste) ----------
+def _shape_volume_surface_mm(shape) -> Tuple[Optional[float], Optional[float], str]:
+    """
+    Tente OCCT (BRepGProp) si dispo, sinon fallback mesh:
+    - surface = mesh.area
+    - volume  = mesh.volume (si maillage étanche), sinon heuristique
+    Retourne (vol_mm3, surf_mm2, source)
+    """
+    # 1) Essai OCCT (BRepGProp) si disponible
+    try:
+        try:
+            # OCP
+            import OCP.BRepGProp as BG
+            import OCP.GProp as GP
+        except Exception:
+            # OCC
+            from OCC.Core import BRepGProp as BG, GProp as GP  # type: ignore
+        # Résolution nom tolérante
+        names = dir(BG)
+        vol_name = next((n for n in names if "VolumeProperties" in n), None)
+        surf_name = next((n for n in names if "SurfaceProperties" in n), None)
+        if vol_name and surf_name:
+            g1 = GP.GProp_GProps()
+            getattr(BG, vol_name)(shape, g1)
+            vol = float(g1.Mass())
+            g2 = GP.GProp_GProps()
+            getattr(BG, surf_name)(shape, g2)
+            area = float(g2.Mass())
+            return vol, area, "occt"
+    except Exception:
+        pass
+
+    # 2) Fallback mesh (toujours dispo)
+    mesh = _triangulate_shape_to_mesh(shape, TESSELLATION_TOL_MM, TESSELLATION_ANG_RAD)
+    try:
+        if not mesh.is_watertight:
+            mesh = mesh.fill_holes()
+    except Exception:
+        pass
+    area = float(mesh.area)
+    vol = None
+    # volume si possible
+    try:
+        if mesh.is_watertight:
+            vol = float(mesh.volume)
+        else:
+            # heuristique : volume du hull comme borne sup (évite 0)
+            hull = mesh.convex_hull
+            if hull.is_volume:
+                vol = float(hull.volume)
+    except Exception:
+        vol = None
+    return vol, area, "mesh"
+
+# ---------- Projected area ----------
 def _projected_area_cm2(mesh: trimesh.Trimesh, axis: str) -> float:
-    axis = axis.upper()
+    axis = (axis or "Z").upper()
     if axis not in AXES:
         axis = "Z"
-
     if axis == "Z":
-        tri = mesh.triangles[:, :, :2]           # XY
+        tri = mesh.triangles[:, :, :2]
     elif axis == "Y":
-        tri = mesh.triangles[:, :, [0, 2]]       # XZ
+        tri = mesh.triangles[:, :, [0, 2]]
     else:
-        tri = mesh.triangles[:, :, [1, 2]]       # YZ
-
+        tri = mesh.triangles[:, :, [1, 2]]
     v0 = tri[:, 0, :]
     v1 = tri[:, 1, :]
     v2 = tri[:, 2, :]
     area2d = 0.5 * np.abs(
-        v0[:, 0] * (v1[:, 1] - v2[:, 1]) +
-        v1[:, 0] * (v2[:, 1] - v0[:, 1]) +
-        v2[:, 0] * (v0[:, 1] - v1[:, 1])
+        v0[:, 0]*(v1[:, 1]-v2[:, 1]) +
+        v1[:, 0]*(v2[:, 1]-v0[:, 1]) +
+        v2[:, 0]*(v0[:, 1]-v1[:, 1])
     )
     mm2 = float(area2d.sum())
-    return mm2 / 100.0  # mm^2 -> cm^2
+    return mm2 / 100.0
 
 # ---------- Thickness (optionnel) ----------
 def _estimate_thickness_mm(mesh: trimesh.Trimesh, samples: int = 30000) -> Tuple[Optional[float], Optional[float]]:
@@ -330,44 +305,35 @@ def _estimate_thickness_mm(mesh: trimesh.Trimesh, samples: int = 30000) -> Tuple
         except Exception:
             from trimesh.ray.ray_triangle import RayMeshIntersector
             inter = RayMeshIntersector(mesh)
-
         pts, f_idx = trimesh.sample.sample_surface_even(mesh, samples)
         n = mesh.face_normals[f_idx]
-
         bb = mesh.bounds
         diag = float(np.linalg.norm(bb[1] - bb[0]))
         eps = max(diag * 1e-5, 1e-6)
         origins_p = pts + n * eps
         origins_m = pts - n * eps
-
-        loc_p, ir_p, it_p = inter.intersects_location(origins_p, n, multiple_hits=False)
+        loc_p, ir_p, it_p = inter.intersects_location(origins_p,  n, multiple_hits=False)
         loc_m, ir_m, it_m = inter.intersects_location(origins_m, -n, multiple_hits=False)
-
         dist = np.full(len(pts), np.inf)
-
         if len(ir_p):
             d = np.linalg.norm(loc_p - origins_p[ir_p], axis=1)
             nf = mesh.face_normals[it_p]
             good = (np.einsum("ij,ij->i", nf, n[ir_p]) < -0.3)
             d[~good] = np.inf
             dist[ir_p] = np.minimum(dist[ir_p], d)
-
         if len(ir_m):
             d = np.linalg.norm(loc_m - origins_m[ir_m], axis=1)
             nf = mesh.face_normals[it_m]
             good = (np.einsum("ij,ij->i", nf, -n[ir_m]) < -0.3)
             d[~good] = np.inf
             dist[ir_m] = np.minimum(dist[ir_m], d)
-
         d = dist[np.isfinite(dist)]
         d = d[d > eps * 10]
         if d.size == 0:
             return None, None
-
         lo = np.percentile(d, 0.1)
         hi = np.percentile(d, 99.9)
         d = d[(d >= lo) & (d <= hi)]
-
         tmin = float(d.min())
         tmax = float(min(np.percentile(d, 99.9), float(min(mesh.extents))))
         return round(tmin, 4), round(tmax, 4)
@@ -406,7 +372,7 @@ def compute_and_cache_stats(
     t0 = time.monotonic()
     bump_stage("start", {"file_id": file_id, "axis": axis})
 
-    # Trace runtime (diagnostic)
+    # Trace env
     import sys, traceback
     bump_stage("runtime_env", {
         "python": sys.executable,
@@ -418,60 +384,42 @@ def compute_and_cache_stats(
     if axis not in AXES:
         axis = "Z"
 
-    # 0) Résoudre / rapatrier le STEP local si pas fourni
-    local = None
-    if step_path and os.path.isfile(step_path):
-        local = step_path
-    else:
-        local = _ensure_local_step(file_id, step_ext)
-
+    # STEP local / S3
+    local = step_path if (step_path and os.path.isfile(step_path)) else _ensure_local_step(file_id, step_ext)
     if not local or not os.path.isfile(local):
         bump_stage("error_no_step", {"path": local or (step_path or f"/tmp/uploads/{file_id}.step")})
         raise FileNotFoundError(f"STEP introuvable pour {file_id}")
-
     step_path = local
     step_ext = pathlib.Path(step_path).suffix.lstrip(".")
     bump_stage("step_ready", {"step_path": step_path, "step_ext": step_ext})
 
-    # OCCT lib (OCP/OCC) — log stack trace complète si échec
-    try:
-        _ = _occt()  # force l'import; lève avec message détaillé si problème
-        lib = occt_lib_name() or "?"
-        bump_stage("occt_lib", {"lib": lib})
-    except Exception as e:
-        bump_stage("occt_import_fail", {
-            "occt_error": repr(e),
-            "trace": traceback.format_exc(),
-        })
-        raise
+    # Charge OCCT (sans exiger BRepGProp)
+    lib = occt_lib_name()
+    bump_stage("occt_lib", {"lib": lib})
+    if lib is None:
+        raise ImportError("Aucune lib OCCT disponible (ni OCP ni OCC)")
 
     # 1) Read STEP
-    if _deadline_reached(t0):
-        raise TimeoutError("deadline before read")
+    if _deadline_reached(t0): raise TimeoutError("deadline before read")
     bump_stage("read_step", {"step_path": step_path})
     shape = _read_step_shape(step_path)
 
     # 2) BBox
-    if _deadline_reached(t0):
-        raise TimeoutError("deadline before bbox")
+    if _deadline_reached(t0): raise TimeoutError("deadline before bbox")
     xmin, ymin, zmin, xmax, ymax, zmax = _shape_bbox_mm(shape)
-    bbox_mm = [
-        round(float(xmax - xmin), 4),
-        round(float(ymax - ymin), 4),
-        round(float(zmax - zmin), 4),
-    ]
+    bbox_mm = [round(float(xmax - xmin), 4),
+               round(float(ymax - ymin), 4),
+               round(float(zmax - zmin), 4)]
     bump_stage("bbox_ok", {"bbox_mm": bbox_mm})
 
-    # 3) Volume / Surface
-    if _deadline_reached(t0):
-        raise TimeoutError("deadline before volume_surface")
+    # 3) Volume / Surface (robuste)
+    if _deadline_reached(t0): raise TimeoutError("deadline before volume_surface")
     bump_stage("volume_surface_begin")
-    vol_mm3, surf_mm2 = _shape_volume_surface_mm(shape)
-    bump_stage("volume_surface_ok", {"vol_mm3": vol_mm3, "surf_mm2": surf_mm2})
+    vol_mm3, surf_mm2, source = _shape_volume_surface_mm(shape)
+    bump_stage("volume_surface_ok", {"vol_mm3": vol_mm3, "surf_mm2": surf_mm2, "massprop_source": source})
 
-    # 4) Triangulation → mesh
-    if _deadline_reached(t0):
-        raise TimeoutError("deadline before triangulate")
+    # 4) Triangulation → mesh (pour proj/thickness et/ou fallback volume)
+    if _deadline_reached(t0): raise TimeoutError("deadline before triangulate")
     bump_stage("triangulate_begin")
     mesh = _triangulate_shape_to_mesh(shape, TESSELLATION_TOL_MM, TESSELLATION_ANG_RAD)
     try:
@@ -482,8 +430,7 @@ def compute_and_cache_stats(
     bump_stage("triangulate_ok", {"faces": int(mesh.faces.shape[0])})
 
     # 5) Projected area
-    if _deadline_reached(t0):
-        raise TimeoutError("deadline before projected_area")
+    if _deadline_reached(t0): raise TimeoutError("deadline before projected_area")
     bump_stage("projected_area_begin", {"axis": axis})
     proj_cm2 = _projected_area_cm2(mesh, axis)
     bump_stage("projected_area_ok", {"projected_area_cm2": proj_cm2})
@@ -491,28 +438,25 @@ def compute_and_cache_stats(
     # 6) Épaisseurs (optionnel)
     tmin = tmax = None
     if WORKER_COMPUTE_THICKNESS:
-        if _deadline_reached(t0):
-            raise TimeoutError("deadline before thickness")
+        if _deadline_reached(t0): raise TimeoutError("deadline before thickness")
         bump_stage("thickness_begin", {"samples": THICKNESS_SAMPLES})
         tmin, tmax = _estimate_thickness_mm(mesh, samples=THICKNESS_SAMPLES)
         bump_stage("thickness_ok", {"tmin": tmin, "tmax": tmax})
 
     # 7) Caches
-    if _deadline_reached(t0):
-        raise TimeoutError("deadline before write_caches")
+    if _deadline_reached(t0): raise TimeoutError("deadline before write_caches")
     bump_stage("write_caches_begin")
     base_path, proj_path, thick_path = _cache_paths(file_id, axis)
-
     base_payload = {
-        "volume_mm3": round(float(vol_mm3), 4),
-        "volume_cm3": round(float(vol_mm3) / 1000.0, 4),
-        "surface_mm2": round(float(surf_mm2), 4),
+        "volume_mm3": round(float(vol_mm3), 4) if vol_mm3 is not None else None,
+        "volume_cm3": round(float(vol_mm3) / 1000.0, 4) if vol_mm3 is not None else None,
+        "surface_mm2": round(float(surf_mm2), 4) if surf_mm2 is not None else None,
         "bbox_mm": bbox_mm,
         "thickness_min_mm": tmin,
         "thickness_max_mm": tmax,
+        "massprop_source": source,
     }
     proj_payload = {"projected_area_cm2": round(float(proj_cm2), 4), "axis": axis}
-
     _write_json(base_path, base_payload)
     _write_json(proj_path, proj_payload)
     if tmin is not None and tmax is not None:
@@ -527,10 +471,9 @@ def compute_and_cache_stats(
                 _s3_put(thick_path, f"{file_id}.thick.json", content_type="application/json")
         except Exception:
             pass
-
     bump_stage("write_caches_ok")
 
-    # 9) Redis publish
+    # 9) Redis
     payload = {
         "volume_mm3": base_payload["volume_mm3"],
         "volume_cm3": base_payload["volume_cm3"],
@@ -538,11 +481,11 @@ def compute_and_cache_stats(
         "projected_area_cm2": proj_payload["projected_area_cm2"],
         "thickness_min_mm": tmin,
         "thickness_max_mm": tmax,
+        "massprop_source": source,
     }
     _publish_redis(file_id, axis, payload)
     bump_stage("publish_redis_ok")
 
-    # 10) Done
     bump_stage("done", {"lib": occt_lib_name()})
     return payload
 

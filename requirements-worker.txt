@@ -16,7 +16,9 @@ Rtree==1.2.0
 ezdxf==1.4.2
 
 # --- OCCT (bindings) via CadQuery OCP wheels ---
-cadquery-ocp==7.7.2.2b2
+cadquery-ocp==7.7.2.2
+cadquery==2.4.0
+vtk==9.2.6
 
 # À ne PAS installer:
 # OCP
