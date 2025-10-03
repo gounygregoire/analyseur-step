@@ -20,6 +20,7 @@ TESSELLATION_ANG_RAD = float(os.getenv("TESSELLATION_ANG_RAD", "0.25"))
 
 WORKER_COMPUTE_THICKNESS = str(os.getenv("WORKER_COMPUTE_THICKNESS", "0")).lower() in ("1", "true", "yes", "on")
 THICKNESS_SAMPLES = int(os.getenv("THICKNESS_SAMPLES", "30000"))
+PULL_UPLOADS_FROM_S3 = str(os.getenv("PULL_UPLOADS_FROM_S3", "1")).lower() in ("1", "true", "yes", "on")
 
 # ---------- Redis helpers ----------
 def _normalize_redis_url(url: str) -> str:
@@ -52,6 +53,7 @@ def _redis_conn() -> redis.Redis:
         ssl=use_ssl, ssl_cert_reqs=None, socket_timeout=5,
     )
 
+# --- S3 helpers (download + upload) ---
 def _s3_enabled() -> bool:
     return all(os.environ.get(k) for k in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "S3_BUCKET"))
 
@@ -60,11 +62,22 @@ def _s3_put(local_path: str, key: str, content_type: Optional[str] = None) -> bo
         return False
     try:
         from s3io import put_file
-        # on stocke dans converted/ côté bucket
+        # on écrit sous converted/
         return bool(put_file(local_path, f"converted/{os.path.basename(key)}", content_type=content_type))
     except Exception:
         return False
 
+def _s3_get(key: str, dest_path: str) -> bool:
+    """Télécharge un objet S3 dans dest_path. Retourne True si le fichier existe à la fin."""
+    if not _s3_enabled():
+        return False
+    try:
+        from s3io import get_file
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        ok = get_file(key, dest_path)
+        return bool(ok and os.path.isfile(dest_path))
+    except Exception:
+        return False
 # ---------- RQ meta ----------
 def bump_stage(stage: str, extra: Dict[str, Any] = None):
     job = get_current_job()
@@ -80,6 +93,38 @@ def bump_stage(stage: str, extra: Dict[str, Any] = None):
 
 def _deadline_reached(start_ts: float) -> bool:
     return (time.monotonic() - start_ts) > STATS_SOFT_TIMEOUT_SEC
+
+def _ensure_local_step(file_id: str, step_ext_hint: Optional[str]) -> Optional[str]:
+    """
+    Retourne un chemin local vers le STEP/STL, en le téléchargeant depuis S3 si besoin.
+    Cherche dans UPLOAD_FOLDER: <fid>.step | .stp | .stl
+    Puis dans S3: uploads/<fid>.<ext>.
+    """
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    # 1) local direct
+    for ext in (step_ext_hint, "step", "stp", "stl"):
+        if not ext:
+            continue
+        e = ext if ext.startswith(".") else f".{ext}"
+        p = os.path.join(UPLOAD_FOLDER, f"{file_id}{e}")
+        if os.path.isfile(p):
+            return p
+
+    # 2) S3 pull si activé
+    if not (_s3_enabled() and PULL_UPLOADS_FROM_S3):
+        return None
+
+    bump_stage("pull_step_s3_begin")
+    for ext in ("step", "stp", "stl"):
+        key = f"uploads/{file_id}.{ext}"
+        dest = os.path.join(UPLOAD_FOLDER, f"{file_id}.{ext}")
+        if _s3_get(key, dest):
+            bump_stage("pull_step_s3_ok", {"ext": ext, "key": key})
+            return dest
+
+    bump_stage("pull_step_s3_miss")
+    return None
+
 
 # ---------- OCCT shim (OCP d'abord, fallback OCC) ----------
 _OCCT = None   # cache du module choisi
@@ -332,17 +377,20 @@ def compute_and_cache_stats(file_id: str, axis: str = "Z",
     if axis not in AXES:
         axis = "Z"
 
-    # Résoudre le STEP local si pas fourni
-    if not step_path:
-        for ext in (".step", ".stp"):
-            p = os.path.join(UPLOAD_FOLDER, f"{file_id}{ext}")
-            if os.path.isfile(p):
-                step_path = p
-                step_ext = ext.lstrip(".")
-                break
-    if not step_path or not os.path.isfile(step_path):
-        bump_stage("error_no_step", {"path": step_path})
-        raise FileNotFoundError(f"STEP introuvable pour {file_id}")
+# Résoudre / rapatrier le STEP local si pas fourni
+local = None
+if step_path and os.path.isfile(step_path):
+    local = step_path
+else:
+    local = _ensure_local_step(file_id, step_ext)
+
+if not local or not os.path.isfile(local):
+    bump_stage("error_no_step", {"path": local or (step_path or f"/tmp/uploads/{file_id}.step")})
+    raise FileNotFoundError(f"STEP introuvable pour {file_id}")
+
+step_path = local
+step_ext = pathlib.Path(step_path).suffix.lstrip(".")
+bump_stage("step_ready", {"step_path": step_path, "step_ext": step_ext})
 
     # OCCT lib (OCP/OCC)
     lib = occt_lib_name()
