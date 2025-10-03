@@ -1,5 +1,5 @@
 # web.py
-import os, uuid, pathlib, json, requests, re, glob, socket
+import os, uuid, pathlib, json, requests, re, glob, socket, time
 from urllib.parse import urlparse, urlunparse, unquote
 
 from flask import Flask, request, jsonify, send_from_directory, abort, render_template
@@ -49,8 +49,10 @@ def env_bool(name: str, default: bool) -> bool:
 MAX_UPLOAD_MB = env_int("MAX_UPLOAD_MB", 50)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
 
-# Timeout RQ appliqué aux jobs (en secondes)
-RQ_JOB_TIMEOUT_SEC = env_int("RQ_JOB_TIMEOUT_SEC", 1200)  # 20 min par défaut
+# Timeouts globaux
+RQ_JOB_TIMEOUT_SEC = env_int("RQ_JOB_TIMEOUT_SEC", 1200)  # 20 min
+HTTP_CONNECT_TIMEOUT_SEC = env_int("HTTP_CONNECT_TIMEOUT_SEC", 10)
+HTTP_READ_TIMEOUT_SEC    = env_int("HTTP_READ_TIMEOUT_SEC", 540)
 
 CONVERTER_URL = os.environ.get("CONVERTER_URL", "https://cadlytics-converter.onrender.com").rstrip("/")
 RQ_TASK_PATH = os.environ.get("RQ_TASK_PATH", "worker_tasks.compute_and_cache_stats")
@@ -128,6 +130,10 @@ if _redis is not None:
     except Exception as e:
         q = None
         _rq_err = repr(e)
+
+# ---------- HTTP helpers avec timeouts ----------
+def _http_timeout():
+    return (HTTP_CONNECT_TIMEOUT_SEC, HTTP_READ_TIMEOUT_SEC)
 
 # ---------- S3 helpers ----------
 def _s3_enabled() -> bool:
@@ -370,7 +376,7 @@ def upload():
             resp = requests.post(
                 f"{conv_url}/convert",
                 files={"file": (Path(in_path).name, fh, send_ct)},
-                timeout=600,
+                timeout=_http_timeout(),
                 stream=True,
                 headers={"Accept": "application/octet-stream"},
             )
@@ -393,7 +399,7 @@ def upload():
 
     except requests.Timeout:
         app.logger.exception("[upload] converter timeout file_id=%s", file_id)
-        return jsonify(error="convert_timeout", detail="Converter timeout (>=600s)"), 504
+        return jsonify(error="convert_timeout", detail=f"Converter timeout (>{HTTP_READ_TIMEOUT_SEC}s)"), 504
     except Exception as e:
         app.logger.exception("[upload] unexpected converter error: %s", e)
         return jsonify(error="convert_fail", detail=str(e)), 500
@@ -804,13 +810,16 @@ def api_shape_thickness():
 def __job(job_id: str):
     try:
         job = Job.fetch(job_id, connection=_redis)
+        # expose meta (stage) pour diagnostiquer les blocages
         info = {
-            "id": job.id, "status": job.get_status(),
+            "id": job.id,
+            "status": job.get_status(),
             "enqueued_at": str(job.enqueued_at) if job.enqueued_at else None,
             "started_at": str(job.started_at) if job.started_at else None,
             "ended_at": str(job.ended_at) if job.ended_at else None,
             "result": job.result if hasattr(job, "result") else None,
             "exc_info": job.exc_info if hasattr(job, "exc_info") else None,
+            "meta": getattr(job, "meta", None),
         }
         return jsonify(ok=True, **info)
     except Exception as e:
@@ -826,7 +835,7 @@ def __rq_workers():
                 workers.append({
                     "name": w.name,
                     "state": w.get_state(),
-                    "queues": [q.name for q in w.queues],
+                    "queues": [qq.name for qq in w.queues],
                     "current_job_id": getattr(w, "get_current_job_id", lambda: None)()
                 })
         return jsonify(ok=True, queue=RQ_QUEUE_NAME, workers=workers)
@@ -846,8 +855,7 @@ def __rq_queue():
 
 def _rq():
     r = from_url(_normalize_redis_url(os.getenv("REDIS_URL")), ssl_cert_reqs=None, socket_timeout=5)
-    qname = os.getenv("RQ_QUEUE_NAME", "default")
-    q = Queue(qname, connection=r)
+    q = Queue(os.getenv("RQ_QUEUE_NAME", "default"), connection=r)
     return r, q
 
 @app.get("/__rq_started")
@@ -893,6 +901,7 @@ def __rq():
         "has_q": bool(q is not None), "is_connected": bool(_redis is not None),
         "probe_ok": False, "redis_error": _redis_err, "rq_error": _rq_err,
         "task_path": RQ_TASK_PATH,
+        "rq_job_timeout_sec": RQ_JOB_TIMEOUT_SEC,
     }
     try:
         if _redis is not None:
@@ -914,9 +923,12 @@ def __diag():
         "redis_url": REDIS_URL,
         "rq_queue": RQ_QUEUE_NAME,
         "rq_connected": bool(q is not None),
+        "http_connect_timeout_sec": HTTP_CONNECT_TIMEOUT_SEC,
+        "http_read_timeout_sec": HTTP_READ_TIMEOUT_SEC,
+        "rq_job_timeout_sec": RQ_JOB_TIMEOUT_SEC,
     }
     try:
-        r = requests.get(f"{CONVERTER_URL}/healthz", timeout=2)
+        r = requests.get(f"{CONVERTER_URL}/healthz", timeout=_http_timeout())
         info["converter_health"] = {"ok": (r.status_code == 200), "code": r.status_code}
     except Exception as e:
         info["converter_health"] = {"ok": False, "error": str(e)}
@@ -965,3 +977,6 @@ def __clear_caches():
         except Exception:
             pass
     return jsonify(ok=True, removed=removed)
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
