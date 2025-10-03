@@ -126,17 +126,24 @@ def _ensure_local_step(file_id: str, step_ext_hint: Optional[str]) -> Optional[s
     bump_stage("pull_step_s3_miss")
     return None
 
-# ---------- OCCT shim (OCP d'abord, fallback OCC) ----------
-_OCCT = None   # cache du module choisi
+# ---------- OCCT loader (log détaillé) ----------
+_OCCT = None
 _OCCT_LIB = None
 
 def _occt():
-    """Charge et retourne un 'namespace' avec les symboles OCCT, en préférant OCP (CadQuery)."""
+    """
+    Charge OCCT via OCP (cadquery-ocp) en priorité, fallback pythonocc-core.
+    En cas d'échec, lève ImportError avec les VRAIES raisons (OCP puis OCC).
+    """
     global _OCCT, _OCCT_LIB
     if _OCCT is not None:
         return _OCCT
+
+    ocp_err = None
+    occ_err = None
+
+    # Tentative OCP (cadquery-ocp)
     try:
-        # Chemin CadQuery moderne
         from OCP.STEPControl import STEPControl_Reader
         from OCP.IFSelect import IFSelect_RetDone
         from OCP.BRepGProp import brepgprop_VolumeProperties, brepgprop_SurfaceProperties
@@ -163,10 +170,13 @@ def _occt():
             "BRepMesh_IncrementalMesh": BRepMesh_IncrementalMesh,
         }
         return _OCCT
-    except Exception:
-        pass
+    except Exception as e:
+        import traceback
+        ocp_err = f"{e.__class__.__name__}: {e}"
+        ocp_tb = traceback.format_exc()
+
+    # Tentative OCC (pythonocc-core)
     try:
-        # Fallback pythonocc-core classique
         from OCC.Core.STEPControl import STEPControl_Reader
         from OCC.Core.IFSelect import IFSelect_RetDone
         from OCC.Core.BRepGProp import brepgprop_VolumeProperties, brepgprop_SurfaceProperties
@@ -193,8 +203,22 @@ def _occt():
             "BRepMesh_IncrementalMesh": BRepMesh_IncrementalMesh,
         }
         return _OCCT
-    except Exception as e:
-        raise ImportError("OCCT introuvable: ni OCP (CadQuery) ni OCC (pythonocc-core)") from e
+    except Exception as e2:
+        import traceback
+        occ_err = f"{e2.__class__.__name__}: {e2}"
+        occ_tb = traceback.format_exc()
+
+    # Si on arrive ici, OCP et OCC ont échoué : on remonte TOUT
+    msg = "OCCT introuvable: ni OCP (cadquery-ocp) ni OCC (pythonocc-core)."
+    if ocp_err:
+        msg += f"\n- OCP error: {ocp_err}"
+        if 'ocp_tb' in locals():
+            msg += f"\n{ocp_tb}"
+    if occ_err:
+        msg += f"\n- OCC error: {occ_err}"
+        if 'occ_tb' in locals():
+            msg += f"\n{occ_tb}"
+    raise ImportError(msg)
 
 def occt_lib_name() -> Optional[str]:
     try:
@@ -202,6 +226,7 @@ def occt_lib_name() -> Optional[str]:
         return _OCCT_LIB
     except Exception:
         return None
+
 
 # ---------- STEP & géométrie ----------
 def _read_step_shape(step_path: str):
@@ -372,7 +397,13 @@ def compute_and_cache_stats(file_id: str, axis: str = "Z",
                             cache_dir: Optional[str] = None):
     t0 = time.monotonic()
     bump_stage("start", {"file_id": file_id, "axis": axis})
-
+    
+import sys, os
+bump_stage("runtime_env", {
+    "python": sys.executable,
+    "cwd": os.getcwd(),
+    "path0": sys.path[:5],
+})
     axis = (axis or "Z").upper()
     if axis not in AXES:
         axis = "Z"
