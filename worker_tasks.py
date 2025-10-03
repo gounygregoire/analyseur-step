@@ -113,7 +113,7 @@ def _ensure_local_step(file_id: str, step_ext_hint: Optional[str]) -> Optional[s
     for ext in (step_ext_hint, "step", "stp", "stl"):
         if not ext:
             continue
-        e = ext if ext.startswith(".") else f".{ext}"
+        e = ext if str(ext).startswith(".") else f".{ext}"
         p = os.path.join(UPLOAD_FOLDER, f"{file_id}{e}")
         if os.path.isfile(p):
             return p
@@ -133,14 +133,14 @@ def _ensure_local_step(file_id: str, step_ext_hint: Optional[str]) -> Optional[s
     bump_stage("pull_step_s3_miss")
     return None
 
-# ---------- OCCT loader (OCP puis OCC), sans dépendre de Bnd/GProp ----------
+# ---------- OCCT loader (OCP puis OCC) ----------
 _OCCT = None
 _OCCT_LIB = None
 
 def _occt():
     """
     Charge OCCT via OCP (cadquery-ocp) en priorité, fallback pythonocc-core.
-    N'importe que les modules nécessaires à la lecture STEP + tessellation.
+    N'importe que les modules nécessaires à la lecture STEP + tessellation + casting Face.
     """
     global _OCCT, _OCCT_LIB
     if _OCCT is not None:
@@ -149,6 +149,7 @@ def _occt():
     ocp_err = None
     try:
         from OCP import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh
+        from OCP.TopoDS import topods_Face, TopoDS_Face
         _OCCT_LIB = "OCP"
         _OCCT = {
             "STEPControl_Reader": STEPControl.STEPControl_Reader,
@@ -157,6 +158,8 @@ def _occt():
             "TopExp_Explorer": TopExp.TopExp_Explorer,
             "BRep_Tool": BRep.BRep_Tool,
             "BRepMesh_IncrementalMesh": BRepMesh.BRepMesh_IncrementalMesh,
+            "topods_Face": topods_Face,
+            "TopoDS_Face": TopoDS_Face,
         }
         return _OCCT
     except Exception as e:
@@ -164,6 +167,7 @@ def _occt():
 
     try:
         from OCC.Core import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh
+        from OCC.Core.TopoDS import topods_Face, TopoDS_Face
         _OCCT_LIB = "OCC"
         _OCCT = {
             "STEPControl_Reader": STEPControl.STEPControl_Reader,
@@ -172,6 +176,8 @@ def _occt():
             "TopExp_Explorer": TopExp.TopExp_Explorer,
             "BRep_Tool": BRep.BRep_Tool,
             "BRepMesh_IncrementalMesh": BRepMesh.BRepMesh_IncrementalMesh,
+            "topods_Face": topods_Face,
+            "TopoDS_Face": TopoDS_Face,
         }
         return _OCCT
     except Exception as e2:
@@ -200,28 +206,35 @@ def _read_step_shape(step_path: str):
 
 def _face_triangulation(face, loc, c):
     """
-    Retourne la Poly_Triangulation d'une face, en gérant les variantes OCP :
-    - BRep_Tool.Triangulation(face, loc)
-    - BRep_Tool.Triangulation_s(face, loc)
+    Retourne la Poly_Triangulation d'une face en gérant :
+    - cast Shape -> Face
+    - Triangulation(face, loc) vs Triangulation_s(face, loc[, purpose])
     """
     BT = c["BRep_Tool"]
+    face = c["topods_Face"](face)  # cast obligatoire pour OCP 7.7.x
+
     if hasattr(BT, "Triangulation"):
         return BT.Triangulation(face, loc)
-    if hasattr(BT, "Triangulation_s"):
-        return BT.Triangulation_s(face, loc)
-    raise AttributeError("Aucune méthode Triangulation(_s) disponible sur BRep_Tool")
 
+    if hasattr(BT, "Triangulation_s"):
+        try:
+            return BT.Triangulation_s(face, loc)
+        except TypeError:
+            return BT.Triangulation_s(face, loc, 0)
+
+    raise AttributeError("Aucune méthode Triangulation(_s) disponible sur BRep_Tool")
 
 def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.Trimesh:
     c = _occt()
 
-    # Tesselation OCCT
+    # Tessellation OCCT (compat multi signatures)
     try:
-        # (shape, linearDeflection, isRelative, angularDeflection, parallel)
         c["BRepMesh_IncrementalMesh"](shape, tol_mm, False, ang_rad, True)
     except TypeError:
-        # certaines builds n'acceptent pas le 5e paramètre
-        c["BRepMesh_IncrementalMesh"](shape, tol_mm, False, ang_rad)
+        try:
+            c["BRepMesh_IncrementalMesh"](shape, tol_mm, False, ang_rad)
+        except TypeError:
+            c["BRepMesh_IncrementalMesh"](shape, tol_mm)
 
     verts: list[list[float]] = []
     faces: list[list[int]] = []
@@ -237,10 +250,7 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
             exp.Next()
             continue
 
-        # --- Extraction robuste des noeuds/triangles selon le binding ---
-        npts = ntri = 0
-
-        # Essai style "arrays" (Nodes/Triangles)
+        # Deux styles d'API Poly_Triangulation
         try:
             nodes = tri.Nodes()
             tris = tri.Triangles()
@@ -255,9 +265,7 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
                 t = tris.Value(i)
                 a, b, cidx = t.Get()  # 1-based
                 return (a, b, cidx)
-
         except Exception:
-            # Essai style "direct" (NbNodes/Node, NbTriangles/Triangle)
             npts = tri.NbNodes()
             ntri = tri.NbTriangles()
 
@@ -274,7 +282,6 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
             exp.Next()
             continue
 
-        # Empilement
         for i in range(1, npts + 1):
             x, y, z = get_node(i)
             verts.append([x, y, z])
@@ -294,12 +301,16 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
         faces=np.asarray(faces, dtype=int),
         process=True,
     )
+    # Éventuelle fermeture de petits trous (in-place selon trimesh)
+    try:
+        if not mesh.is_watertight:
+            mesh.fill_holes()
+    except Exception:
+        pass
+
     return mesh
 
-
-
 def _bbox_from_mesh_mm(mesh: trimesh.Trimesh) -> Tuple[float, float, float]:
-    # bounds shape (2,3) -> extents
     ex = mesh.bounds[1] - mesh.bounds[0]
     return round(float(ex[0]), 4), round(float(ex[1]), 4), round(float(ex[2]), 4)
 
@@ -439,12 +450,11 @@ def compute_and_cache_stats(
     step_ext = pathlib.Path(step_path).suffix.lstrip(".")
     bump_stage("step_ready", {"step_path": step_path, "step_ext": step_ext})
 
-    # OCCT lib (OCP/OCC) minimale (STEP + tessellation)
+    # OCCT lib (OCP/OCC)
     lib = occt_lib_name()
     bump_stage("occt_lib", {"lib": lib})
     if lib is None:
-        # force ImportError détaillé
-        _ = _occt()
+        _ = _occt()  # force ImportError détaillé
 
     # 1) Read STEP
     if _deadline_reached(t0):
@@ -452,31 +462,25 @@ def compute_and_cache_stats(
     bump_stage("read_step", {"step_path": step_path})
     shape = _read_step_shape(step_path)
 
-    # 2) Triangulation → mesh (base de tous les calculs pour compat max)
+    # 2) Triangulation → mesh
     if _deadline_reached(t0):
         raise TimeoutError("deadline before triangulate")
     bump_stage("triangulate_begin", {"tol_mm": TESSELLATION_TOL_MM, "ang_rad": TESSELLATION_ANG_RAD})
     mesh = _triangulate_shape_to_mesh(shape, TESSELLATION_TOL_MM, TESSELLATION_ANG_RAD)
-    try:
-        if not mesh.is_watertight:
-            mesh = mesh.fill_holes()
-    except Exception:
-        pass
     bump_stage("triangulate_ok", {"faces": int(mesh.faces.shape[0])})
 
-    # 3) BBox depuis le mesh (robuste à tous bindings)
+    # 3) BBox depuis le mesh (robuste)
     if _deadline_reached(t0):
         raise TimeoutError("deadline before bbox")
     bx, by, bz = _bbox_from_mesh_mm(mesh)
     bbox_mm = [bx, by, bz]
     bump_stage("bbox_ok", {"bbox_mm": bbox_mm, "method": "mesh_bounds"})
 
-    # 4) Surface/Volume depuis le mesh (uniforme; occt GProp variable selon wheels)
+    # 4) Surface/Volume depuis le mesh
     if _deadline_reached(t0):
         raise TimeoutError("deadline before volume_surface")
     area_mm2 = float(mesh.area)
     vol_mm3 = float(abs(mesh.volume)) if np.isfinite(mesh.volume) else 0.0
-    # Fallback convex hull si volume non fiable
     if vol_mm3 <= 0.0:
         try:
             vol_mm3 = float(abs(mesh.convex_hull.volume))
