@@ -465,122 +465,96 @@ def compute_and_cache_stats(
     t0 = time.monotonic()
     bump_stage("start", {"file_id": file_id, "axis": axis})
 
+    # Trace runtime (diagnostic)
     import sys
-    bump_stage("runtime_env", {"python": sys.executable, "cwd": os.getcwd(), "path0": sys.path[:5]})
+    bump_stage("runtime_env", {
+        "python": sys.executable,
+        "cwd": os.getcwd(),
+        "path0": sys.path[:5],
+    })
 
     axis = (axis or "Z").upper()
-    if axis not in AXES: axis = "Z"
+    if axis not in AXES:
+        axis = "Z"
 
-    # STEP local
+    # 0) Résoudre / rapatrier le STEP local si pas fourni
     if step_path and os.path.isfile(step_path):
         local = step_path
     else:
         local = _ensure_local_step(file_id, step_ext)
+
     if not local or not os.path.isfile(local):
         bump_stage("error_no_step", {"path": local or (step_path or f"/tmp/uploads/{file_id}.step")})
         raise FileNotFoundError(f"STEP introuvable pour {file_id}")
 
     step_path = local
     step_ext = pathlib.Path(step_path).suffix.lstrip(".")
-    scale_to_mm, unit_detected = _detect_step_unit_scale(step_path)
-    bump_stage("step_ready", {"step_path": step_path, "step_ext": step_ext, "unit_detected": unit_detected, "scale_to_mm": scale_to_mm})
+    bump_stage("step_ready", {"step_path": step_path, "step_ext": step_ext})
 
-    # OCCT
+    # OCCT lib (OCP/OCC) minimale (STEP + tessellation)
     lib = occt_lib_name()
     bump_stage("occt_lib", {"lib": lib})
     if lib is None:
-        _ = _occt()
+        _ = _occt()  # lève un ImportError détaillé
 
-    # Read STEP
-    if _deadline_reached(t0): raise TimeoutError("deadline before read")
+    # 1) Read STEP
+    if _deadline_reached(t0):
+        raise TimeoutError("deadline before read")
     bump_stage("read_step", {"step_path": step_path})
     shape = _read_step_shape(step_path)
 
-    # Triangulation
-    if _deadline_reached(t0): raise TimeoutError("deadline before triangulate")
+    # 2) Triangulation → mesh (base de tous les calculs)
+    if _deadline_reached(t0):
+        raise TimeoutError("deadline before triangulate")
     bump_stage("triangulate_begin", {"tol_mm": TESSELLATION_TOL_MM, "ang_rad": TESSELLATION_ANG_RAD})
     mesh = _triangulate_shape_to_mesh(shape, TESSELLATION_TOL_MM, TESSELLATION_ANG_RAD)
+    try:
+        if not mesh.is_watertight:
+            mesh = mesh.fill_holes()
+    except Exception:
+        pass
+    bump_stage("triangulate_ok", {"faces": int(mesh.faces.shape[0])})
 
-    # Mise à l’échelle
-    if abs(scale_to_mm - 1.0) > 1e-12:
-        mesh.apply_scale(scale_to_mm)
-
-    # BBox
+    # 3) BBox depuis le mesh (robuste à tous bindings)
+    if _deadline_reached(t0):
+        raise TimeoutError("deadline before bbox")
     bx, by, bz = _bbox_from_mesh_mm(mesh)
     bbox_mm = [bx, by, bz]
-    bump_stage("bbox_ok", {"bbox_mm": bbox_mm, "faces_total": int(mesh.faces.shape[0]), "watertight": bool(mesh.is_watertight)})
+    bump_stage("bbox_ok", {"bbox_mm": bbox_mm, "method": "mesh_bounds"})
 
-    # Volume & surface robustes (somme composantes + fallbacks + voxels)
-def _robust_area_volume(m: trimesh.Trimesh) -> Tuple[float, float, float]:
-    total_area = 0.0
-    total_vol_mesh = 0.0
-    parts = m.split(only_watertight=False)
-    for p in parts:
+    # 4) Surface/Volume depuis le mesh
+    if _deadline_reached(t0):
+        raise TimeoutError("deadline before volume_surface")
+    area_mm2 = float(mesh.area)
+    vol_mm3 = float(abs(mesh.volume)) if np.isfinite(mesh.volume) else 0.0
+    if vol_mm3 <= 0.0:
         try:
-            total_area += float(p.area)
+            vol_mm3 = float(abs(mesh.convex_hull.volume))
+            bump_stage("volume_surface_fallback_convex_ok", {"volume_mm3": vol_mm3})
         except Exception:
-            pass
-        v = None
-        if p.is_watertight and np.isfinite(p.volume):
-            v = abs(float(p.volume))
-        else:
-            q = p.copy()
-            _mesh_repair_inplace(q)
-            if q.is_watertight and np.isfinite(q.volume) and q.volume != 0:
-                v = abs(float(q.volume))
-            else:
-                try:
-                    v = abs(float(q.convex_hull.volume))
-                except Exception:
-                    v = 0.0
-        total_vol_mesh += v
-    try:
-        hull_vol = float(m.convex_hull.volume)
-    except Exception:
-        hull_vol = max(total_vol_mesh, 0.0)
-    return total_area, total_vol_mesh, hull_vol
+            bump_stage("volume_surface_convex_fail", {})
+    bump_stage("volume_surface_ok", {"vol_mm3": vol_mm3, "surf_mm2": area_mm2, "method": "mesh"})
 
-area_mm2, vol_mesh_mm3, hull_mm3 = _robust_area_volume(mesh)
-
-# voxel fallback si pas étanche (prend le meilleur entre mesh et voxels, sans dépasser le hull)
-vol_vox_mm3 = 0.0
-if not mesh.is_watertight:
-    vol_vox_mm3 = _voxel_volume_mm3(mesh, VOXEL_PITCH_MM)
-
-vol_mm3 = max(vol_mesh_mm3, vol_vox_mm3)
-if hull_mm3 > 0:
-    vol_mm3 = min(vol_mm3, hull_mm3 * 1.01)  # garde une marge de 1%
-
-bump_stage("volume_surface_ok", {
-    "surf_mm2": area_mm2,
-    "vol_mm3": vol_mm3,
-    "method": "mesh_parts+voxels" if (not mesh.is_watertight) else "mesh_parts",
-    "watertight": bool(mesh.is_watertight),
-    "faces_total": int(mesh.faces.shape[0]),
-    "hull_mm3": hull_mm3,
-    "vox_pitch_mm": VOXEL_PITCH_MM,
-    "vol_vox_mm3": vol_vox_mm3
-})
-
-
-        # 5) Projected area
+    # 5) Aire projetée
     if _deadline_reached(t0):
         raise TimeoutError("deadline before projected_area")
     bump_stage("projected_area_begin", {"axis": axis})
     proj_cm2 = _projected_area_cm2(mesh, axis)
     bump_stage("projected_area_ok", {"projected_area_cm2": proj_cm2})
 
-
-    # Épaisseurs (optionnel)
+    # 6) Épaisseurs (optionnel)
     tmin = tmax = None
     if WORKER_COMPUTE_THICKNESS:
-        if _deadline_reached(t0): raise TimeoutError("deadline before thickness")
+        if _deadline_reached(t0):
+            raise TimeoutError("deadline before thickness")
         bump_stage("thickness_begin", {"samples": THICKNESS_SAMPLES})
         tmin, tmax = _estimate_thickness_mm(mesh, samples=THICKNESS_SAMPLES)
         bump_stage("thickness_ok", {"tmin": tmin, "tmax": tmax})
 
-    # Caches
-    if _deadline_reached(t0): raise TimeoutError("deadline before write_caches")
+    # 7) Caches
+    if _deadline_reached(t0):
+        raise TimeoutError("deadline before write_caches")
+    bump_stage("write_caches_begin")
     base_path, proj_path, thick_path = _cache_paths(file_id, axis)
 
     base_payload = {
@@ -590,8 +564,6 @@ bump_stage("volume_surface_ok", {
         "bbox_mm": bbox_mm,
         "thickness_min_mm": tmin,
         "thickness_max_mm": tmax,
-        "unit_detected": unit_detected,
-        "scale_to_mm": scale_to_mm,
     }
     proj_payload = {"projected_area_cm2": round(float(proj_cm2), 4), "axis": axis}
 
@@ -600,7 +572,7 @@ bump_stage("volume_surface_ok", {
     if tmin is not None and tmax is not None:
         _write_json(thick_path, {"tmin": tmin, "tmax": tmax, "method": "worker_ray"})
 
-    # S3 (optionnel)
+    # 8) S3 (optionnel)
     if _s3_enabled():
         try:
             _s3_put(base_path, f"{file_id}.stats.json", content_type="application/json")
@@ -610,7 +582,9 @@ bump_stage("volume_surface_ok", {
         except Exception:
             pass
 
-    # Redis publish
+    bump_stage("write_caches_ok")
+
+    # 9) Redis publish
     payload = {
         "volume_mm3": base_payload["volume_mm3"],
         "volume_cm3": base_payload["volume_cm3"],
@@ -620,9 +594,10 @@ bump_stage("volume_surface_ok", {
         "thickness_max_mm": tmax,
     }
     _publish_redis(file_id, axis, payload)
+    bump_stage("publish_redis_ok")
 
-    bump_stage("done", {"lib": occt_lib_name(), "method": "mesh_parts",
-                        "ang_rad": TESSELLATION_ANG_RAD, "tol_mm": TESSELLATION_TOL_MM})
+    # 10) Done
+    bump_stage("done", {"lib": occt_lib_name()})
     return payload
 
 def ping(payload: str = "ok"):
