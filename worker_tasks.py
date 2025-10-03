@@ -198,9 +198,30 @@ def _read_step_shape(step_path: str):
         raise RuntimeError("STEP transfer failed")
     return reader.OneShape()
 
+def _face_triangulation(face, loc, c):
+    """
+    Retourne la Poly_Triangulation d'une face, en gérant les variantes OCP :
+    - BRep_Tool.Triangulation(...)
+    - BRep_Tool.Triangulation_s(...)
+    """
+    BT = c["BRep_Tool"]
+    if hasattr(BT, "Triangulation"):
+        return BT.Triangulation(face, loc)
+    if hasattr(BT, "Triangulation_s"):
+        return BT.Triangulation_s(face, loc)
+    raise AttributeError("Aucune méthode Triangulation(_s) disponible sur BRep_Tool")
+
+
 def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.Trimesh:
     c = _occt()
-    c["BRepMesh_IncrementalMesh"](shape, tol_mm, False, ang_rad, True)
+
+    # Tesselation OCCT
+    try:
+        # signature (shape, linearDeflection, isRelative, angularDeflection, parallel)
+        c["BRepMesh_IncrementalMesh"](shape, tol_mm, False, ang_rad, True)
+    except TypeError:
+        # certaines builds n'acceptent pas le dernier booléen
+        c["BRepMesh_IncrementalMesh"](shape, tol_mm, False, ang_rad)
 
     verts: list[list[float]] = []
     faces: list[list[int]] = []
@@ -210,20 +231,56 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
     while exp.More():
         f = exp.Current()
         loc = f.Location()
-        tri = c["BRep_Tool"].Triangulation(f, loc)
-        if tri is not None:
+
+        tri = _face_triangulation(f, loc, c)
+        if tri is None:
+            exp.Next()
+            continue
+
+        # --- Extraction robuste des noeuds/triangles selon le binding ---
+        npts = ntri = 0
+
+        # Essai style "arrays" (Nodes/Triangles)
+        nodes = tris = None
+        get_node = get_tri = None
+        try:
             nodes = tri.Nodes()
             tris = tri.Triangles()
             npts = nodes.Size()
             ntri = tris.Size()
-            for i in range(1, npts + 1):
+            def get_node(i):
                 p = nodes.Value(i)
-                verts.append([float(p.X()), float(p.Y()), float(p.Z())])
-            for i in range(1, ntri + 1):
+                return (float(p.X()), float(p.Y()), float(p.Z()))
+            def get_tri(i):
                 t = tris.Value(i)
-                a, b, cidx = t.Get()
-                faces.append([v_off + a - 1, v_off + b - 1, v_off + cidx - 1])
-            v_off += npts
+                a, b, cidx = t.Get()  # 1-based
+                return (a, b, cidx)
+        except Exception:
+            # Essai style "direct" (NbNodes/Node, NbTriangles/Triangle)
+            npts = tri.NbNodes()
+            ntri = tri.NbTriangles()
+            def get_node(i):
+                p = tri.Node(i)
+                return (float(p.X()), float(p.Y()), float(p.Z()))
+            def get_tri(i):
+                t = tri.Triangle(i)
+                a, b, cidx = t.Get()  # 1-based
+                return (a, b, cidx)
+
+        if npts <= 0 or ntri <= 0:
+            exp.Next()
+            continue
+
+        # Empilement
+        for i in range(1, npts + 1):
+            x, y, z = get_node(i)
+            verts.append([x, y, z])
+
+        for i in range(1, ntri + 1):
+            a, b, cidx = get_tri(i)
+            faces.append([v_off + a - 1, v_off + b - 1, v_off + cidx - 1])
+
+        v_off += npts
         exp.Next()
 
     if not verts or not faces:
@@ -235,6 +292,7 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
         process=True,
     )
     return mesh
+
 
 def _bbox_from_mesh_mm(mesh: trimesh.Trimesh) -> Tuple[float, float, float]:
     # bounds shape (2,3) -> extents
