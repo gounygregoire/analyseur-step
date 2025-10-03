@@ -201,8 +201,8 @@ def _read_step_shape(step_path: str):
 def _face_triangulation(face, loc, c):
     """
     Retourne la Poly_Triangulation d'une face, en gérant les variantes OCP :
-    - BRep_Tool.Triangulation(...)
-    - BRep_Tool.Triangulation_s(...)
+    - BRep_Tool.Triangulation(face, loc)
+    - BRep_Tool.Triangulation_s(face, loc)
     """
     BT = c["BRep_Tool"]
     if hasattr(BT, "Triangulation"):
@@ -217,10 +217,10 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
 
     # Tesselation OCCT
     try:
-        # signature (shape, linearDeflection, isRelative, angularDeflection, parallel)
+        # (shape, linearDeflection, isRelative, angularDeflection, parallel)
         c["BRepMesh_IncrementalMesh"](shape, tol_mm, False, ang_rad, True)
     except TypeError:
-        # certaines builds n'acceptent pas le dernier booléen
+        # certaines builds n'acceptent pas le 5e paramètre
         c["BRepMesh_IncrementalMesh"](shape, tol_mm, False, ang_rad)
 
     verts: list[list[float]] = []
@@ -241,27 +241,30 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
         npts = ntri = 0
 
         # Essai style "arrays" (Nodes/Triangles)
-        nodes = tris = None
-        get_node = get_tri = None
         try:
             nodes = tri.Nodes()
             tris = tri.Triangles()
             npts = nodes.Size()
             ntri = tris.Size()
+
             def get_node(i):
                 p = nodes.Value(i)
                 return (float(p.X()), float(p.Y()), float(p.Z()))
+
             def get_tri(i):
                 t = tris.Value(i)
                 a, b, cidx = t.Get()  # 1-based
                 return (a, b, cidx)
+
         except Exception:
             # Essai style "direct" (NbNodes/Node, NbTriangles/Triangle)
             npts = tri.NbNodes()
             ntri = tri.NbTriangles()
+
             def get_node(i):
                 p = tri.Node(i)
                 return (float(p.X()), float(p.Y()), float(p.Z()))
+
             def get_tri(i):
                 t = tri.Triangle(i)
                 a, b, cidx = t.Get()  # 1-based
@@ -292,6 +295,7 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
         process=True,
     )
     return mesh
+
 
 
 def _bbox_from_mesh_mm(mesh: trimesh.Trimesh) -> Tuple[float, float, float]:
