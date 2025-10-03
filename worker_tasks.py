@@ -78,6 +78,7 @@ def _s3_get(key: str, dest_path: str) -> bool:
         return bool(ok and os.path.isfile(dest_path))
     except Exception:
         return False
+
 # ---------- RQ meta ----------
 def bump_stage(stage: str, extra: Dict[str, Any] = None):
     job = get_current_job()
@@ -124,7 +125,6 @@ def _ensure_local_step(file_id: str, step_ext_hint: Optional[str]) -> Optional[s
 
     bump_stage("pull_step_s3_miss")
     return None
-
 
 # ---------- OCCT shim (OCP d'abord, fallback OCC) ----------
 _OCCT = None   # cache du module choisi
@@ -377,48 +377,56 @@ def compute_and_cache_stats(file_id: str, axis: str = "Z",
     if axis not in AXES:
         axis = "Z"
 
-# Résoudre / rapatrier le STEP local si pas fourni
-local = None
-if step_path and os.path.isfile(step_path):
-    local = step_path
-else:
-    local = _ensure_local_step(file_id, step_ext)
+    # 0) Assurer la présence locale du fichier source (upload local ou pull depuis S3)
+    local = None
+    if step_path and os.path.isfile(step_path):
+        local = step_path
+    else:
+        local = _ensure_local_step(file_id, step_ext)
 
-if not local or not os.path.isfile(local):
-    bump_stage("error_no_step", {"path": local or (step_path or f"/tmp/uploads/{file_id}.step")})
-    raise FileNotFoundError(f"STEP introuvable pour {file_id}")
+    if not local or not os.path.isfile(local):
+        bump_stage("error_no_step", {"path": local or (step_path or f"{UPLOAD_FOLDER}/{file_id}.step")})
+        raise FileNotFoundError(f"STEP introuvable pour {file_id}")
 
-step_path = local
-step_ext = pathlib.Path(step_path).suffix.lstrip(".")
-bump_stage("step_ready", {"step_path": step_path, "step_ext": step_ext})
+    step_path = local
+    step_ext = pathlib.Path(step_path).suffix.lstrip(".")
+    bump_stage("step_ready", {"step_path": step_path, "step_ext": step_ext})
 
-    # OCCT lib (OCP/OCC)
-    lib = occt_lib_name()
-    bump_stage("occt_lib", {"lib": lib})
-    if lib is None:
-        raise ImportError("Aucune lib OCCT disponible (ni OCP ni OCC)")
+    # 1) Charger la lib OCCT (OCP en priorité, fallback OCC)
+    try:
+        lib = occt_lib_name()
+        bump_stage("occt_lib", {"lib": lib})
+        if lib is None:
+            raise ImportError("Aucune lib OCCT disponible (ni OCP ni OCC)")
+    except Exception as e:
+        bump_stage("occt_import_fail", {"occt_error": repr(e)})
+        raise
 
-    # 1) Read STEP
-    if _deadline_reached(t0): raise TimeoutError("deadline before read")
+    # 2) Lire le STEP -> shape
+    if _deadline_reached(t0):
+        raise TimeoutError("deadline before read")
     bump_stage("read_step", {"step_path": step_path})
     shape = _read_step_shape(step_path)
 
-    # 2) BBox
-    if _deadline_reached(t0): raise TimeoutError("deadline before bbox")
+    # 3) BBox (mm)
+    if _deadline_reached(t0):
+        raise TimeoutError("deadline before bbox")
     xmin, ymin, zmin, xmax, ymax, zmax = _shape_bbox_mm(shape)
     bbox_mm = [round(float(xmax - xmin), 4),
                round(float(ymax - ymin), 4),
                round(float(zmax - zmin), 4)]
     bump_stage("bbox_ok", {"bbox_mm": bbox_mm})
 
-    # 3) Volume / Surface
-    if _deadline_reached(t0): raise TimeoutError("deadline before volume_surface")
+    # 4) Volume / Surface (mm^3 / mm^2)
+    if _deadline_reached(t0):
+        raise TimeoutError("deadline before volume_surface")
     bump_stage("volume_surface_begin")
     vol_mm3, surf_mm2 = _shape_volume_surface_mm(shape)
     bump_stage("volume_surface_ok", {"vol_mm3": vol_mm3, "surf_mm2": surf_mm2})
 
-    # 4) Triangulation → mesh
-    if _deadline_reached(t0): raise TimeoutError("deadline before triangulate")
+    # 5) Triangulation -> mesh
+    if _deadline_reached(t0):
+        raise TimeoutError("deadline before triangulate")
     bump_stage("triangulate_begin")
     mesh = _triangulate_shape_to_mesh(shape, TESSELLATION_TOL_MM, TESSELLATION_ANG_RAD)
     try:
@@ -428,22 +436,25 @@ bump_stage("step_ready", {"step_path": step_path, "step_ext": step_ext})
         pass
     bump_stage("triangulate_ok", {"faces": int(mesh.faces.shape[0])})
 
-    # 5) Projected area
-    if _deadline_reached(t0): raise TimeoutError("deadline before projected_area")
+    # 6) Projected area (cm^2)
+    if _deadline_reached(t0):
+        raise TimeoutError("deadline before projected_area")
     bump_stage("projected_area_begin", {"axis": axis})
     proj_cm2 = _projected_area_cm2(mesh, axis)
     bump_stage("projected_area_ok", {"projected_area_cm2": proj_cm2})
 
-    # 6) Épaisseurs (optionnel)
+    # 7) Épaisseur (optionnel)
     tmin = tmax = None
     if WORKER_COMPUTE_THICKNESS:
-        if _deadline_reached(t0): raise TimeoutError("deadline before thickness")
+        if _deadline_reached(t0):
+            raise TimeoutError("deadline before thickness")
         bump_stage("thickness_begin", {"samples": THICKNESS_SAMPLES})
         tmin, tmax = _estimate_thickness_mm(mesh, samples=THICKNESS_SAMPLES)
         bump_stage("thickness_ok", {"tmin": tmin, "tmax": tmax})
 
-    # 7) Caches
-    if _deadline_reached(t0): raise TimeoutError("deadline before write_caches")
+    # 8) Caches fichiers
+    if _deadline_reached(t0):
+        raise TimeoutError("deadline before write_caches")
     bump_stage("write_caches_begin")
     base_path, proj_path, thick_path = _cache_paths(file_id, axis)
 
@@ -462,7 +473,7 @@ bump_stage("step_ready", {"step_path": step_path, "step_ext": step_ext})
     if tmin is not None and tmax is not None:
         _write_json(thick_path, {"tmin": tmin, "tmax": tmax, "method": "worker_ray"})
 
-    # 8) S3 (optionnel)
+    # 9) Upload S3 (optionnel)
     if _s3_enabled():
         try:
             _s3_put(base_path, f"{file_id}.stats.json", content_type="application/json")
@@ -474,7 +485,7 @@ bump_stage("step_ready", {"step_path": step_path, "step_ext": step_ext})
 
     bump_stage("write_caches_ok")
 
-    # 9) Redis publish
+    # 10) Publish Redis
     payload = {
         "volume_mm3": base_payload["volume_mm3"],
         "volume_cm3": base_payload["volume_cm3"],
@@ -486,7 +497,7 @@ bump_stage("step_ready", {"step_path": step_path, "step_ext": step_ext})
     _publish_redis(file_id, axis, payload)
     bump_stage("publish_redis_ok")
 
-    # 10) Done
+    # 11) Done
     bump_stage("done", {"lib": occt_lib_name()})
     return payload
 
