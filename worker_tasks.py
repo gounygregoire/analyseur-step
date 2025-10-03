@@ -133,99 +133,53 @@ def _ensure_local_step(file_id: str, step_ext_hint: Optional[str]) -> Optional[s
     bump_stage("pull_step_s3_miss")
     return None
 
-# --- helpers pour compat nommage OCCT/OCP ---
-def _resolve_brepbndlib_add(mod):
-    """
-    Trouve la bonne fonction 'Add' de BRepBndLib selon le binding:
-    - pythonocc:          brepbndlib_Add
-    - OCP (cadquery-ocp): Add  (ou parfois Add_s)
-    Retourne un callable ou None.
-    """
-    for name in ("brepbndlib_Add", "BRepBndLib_Add", "Add", "Add_s"):
-        f = getattr(mod, name, None)
-        if callable(f):
-            return f
-    return None
-
-def _safe_brepbndlib_add(add_fn, shape, box):
-    """
-    Appelle la fonction résolue avec la bonne signature.
-    Sur OCCT : Add(shape, box, useTriangulation=False)
-    On essaye (shape, box, False), puis (shape, box) si la 1ère lève TypeError.
-    """
-    if add_fn is None:
-        raise AttributeError("BRepBndLib.Add introuvable sur ce binding")
-    try:
-        return add_fn(shape, box, False)
-    except TypeError:
-        return add_fn(shape, box)
-
-# ---------- OCCT loader (OCP prioritaire, OCC fallback) ----------
+# ---------- OCCT loader (OCP puis OCC), sans dépendre de Bnd/GProp ----------
 _OCCT = None
 _OCCT_LIB = None
 
 def _occt():
     """
     Charge OCCT via OCP (cadquery-ocp) en priorité, fallback pythonocc-core.
-    Ne tente PAS d'importer brepgprop_* (certaines wheels OCP ne les exposent pas).
+    N'importe que les modules nécessaires à la lecture STEP + tessellation.
     """
     global _OCCT, _OCCT_LIB
     if _OCCT is not None:
         return _OCCT
 
     ocp_err = None
-    occ_err = None
-
-    # Tentative OCP
     try:
-        from OCC.Core import STEPControl, IFSelect, Bnd, BRepBndLib, TopAbs, TopExp, BRep, BRepMesh, GProp, BRepGProp  # noqa: F401
-brep_add = _resolve_brepbndlib_add(BRepBndLib)
-_OCCT_LIB = "OCC"
-_OCCT = {
-    "STEPControl_Reader": STEPControl.STEPControl_Reader,
-    "IFSelect_RetDone": IFSelect.IFSelect_RetDone,
-    "Bnd_Box": Bnd.Bnd_Box,
-    "brepbndlib_Add": brep_add,   # <—
-    "TopAbs_FACE": TopAbs.TopAbs_FACE,
-    "TopExp_Explorer": TopExp.TopExp_Explorer,
-    "BRep_Tool": BRep.BRep_Tool,
-    "BRepMesh_IncrementalMesh": BRepMesh.BRepMesh_IncrementalMesh,
-    "GProp": GProp,
-    "BRepGProp": BRepGProp,
-}
-return _OCCT
-
-    except Exception as e:
-        import traceback
-        ocp_err = f"{e.__class__.__name__}: {e}\n{traceback.format_exc()}"
-
-    # Fallback OCC
-    try:
-        from OCC.Core import STEPControl, IFSelect, Bnd, BRepBndLib, TopAbs, TopExp, BRep, BRepMesh, GProp, BRepGProp  # noqa: F401
-        _OCCT_LIB = "OCC"
+        from OCP import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh
+        _OCCT_LIB = "OCP"
         _OCCT = {
             "STEPControl_Reader": STEPControl.STEPControl_Reader,
             "IFSelect_RetDone": IFSelect.IFSelect_RetDone,
-            "Bnd_Box": Bnd.Bnd_Box,
-            "brepbndlib_Add": BRepBndLib.brepbndlib_Add,
             "TopAbs_FACE": TopAbs.TopAbs_FACE,
             "TopExp_Explorer": TopExp.TopExp_Explorer,
             "BRep_Tool": BRep.BRep_Tool,
             "BRepMesh_IncrementalMesh": BRepMesh.BRepMesh_IncrementalMesh,
-            "GProp": GProp,
-            "BRepGProp": BRepGProp,
+        }
+        return _OCCT
+    except Exception as e:
+        ocp_err = e  # pour message explicite
+
+    try:
+        from OCC.Core import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh
+        _OCCT_LIB = "OCC"
+        _OCCT = {
+            "STEPControl_Reader": STEPControl.STEPControl_Reader,
+            "IFSelect_RetDone": IFSelect.IFSelect_RetDone,
+            "TopAbs_FACE": TopAbs.TopAbs_FACE,
+            "TopExp_Explorer": TopExp.TopExp_Explorer,
+            "BRep_Tool": BRep.BRep_Tool,
+            "BRepMesh_IncrementalMesh": BRepMesh.BRepMesh_IncrementalMesh,
         }
         return _OCCT
     except Exception as e2:
-        import traceback
-        occ_err = f"{e2.__class__.__name__}: {e2}\n{traceback.format_exc()}"
-
-    msg = "OCCT introuvable: ni OCP (cadquery-ocp) ni OCC (pythonocc-core)."
-    if ocp_err:
-        msg += f"\n- OCP error: {ocp_err}"
-    if occ_err:
-        msg += f"\n- OCC error: {occ_err}"
-    raise ImportError(msg)
+        msg = "OCCT introuvable: ni OCP (cadquery-ocp) ni OCC (pythonocc-core)."
+        if ocp_err:
+            msg += f"\n- OCP error: {ocp_err.__class__.__name__}: {ocp_err}"
+        msg += f"\n- OCC error: {e2.__class__.__name__}: {e2}"
+        raise ImportError(msg) from e2
 
 def occt_lib_name() -> Optional[str]:
     try:
@@ -243,55 +197,6 @@ def _read_step_shape(step_path: str):
     if not reader.TransferRoots():
         raise RuntimeError("STEP transfer failed")
     return reader.OneShape()
-
-def _shape_bbox_mm(shape) -> Tuple[float, float, float, float, float, float]:
-    c = _occt()
-    box = c["Bnd_Box"]()
-    box.SetGap(0.0)
-    _safe_brepbndlib_add(c["brepbndlib_Add"], shape, box)  # <— remplace l’appel direct
-    xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
-    return float(xmin), float(ymin), float(zmin), float(xmax), float(ymax), float(zmax)
-
-def _shape_volume_surface_mm_via_brepgprop(shape) -> Tuple[Optional[float], Optional[float]]:
-    """
-    Essaie d'utiliser BRepGProp.* si disponible dans la wheel.
-    Certaines wheels OCP ne publient pas les fonctions brepgprop_* → retourne (None, None).
-    """
-    c = _occt()
-    BRepGProp = c.get("BRepGProp")
-    GProp = c.get("GProp")
-    if not (BRepGProp and GProp):
-        return None, None
-
-    # probe noms possibles
-    candidates_vol = [
-        "brepgprop_VolumeProperties",
-        "BRepGProp_VolumeProperties",
-    ]
-    candidates_surf = [
-        "brepgprop_SurfaceProperties",
-        "BRepGProp_SurfaceProperties",
-    ]
-    vol_fun = next((getattr(BRepGProp, n, None) for n in candidates_vol if hasattr(BRepGProp, n)), None)
-    surf_fun = next((getattr(BRepGProp, n, None) for n in candidates_surf if hasattr(BRepGProp, n)), None)
-    if not (vol_fun and surf_fun):
-        return None, None
-
-    g = GProp.GProp_GProps()
-    try:
-        vol_fun(shape, g)
-        vol = float(g.Mass())
-    except Exception:
-        vol = None
-
-    g2 = GProp.GProp_GProps()
-    try:
-        surf_fun(shape, g2)
-        area = float(g2.Mass())
-    except Exception:
-        area = None
-
-    return vol, area
 
 def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.Trimesh:
     c = _occt()
@@ -331,29 +236,14 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
     )
     return mesh
 
-# ---------- Volume/surface via mesh (fallback) ----------
-def _volume_area_from_mesh(mesh: trimesh.Trimesh) -> Tuple[float, float]:
-    """
-    Volume signé (mm^3) via somme sur triangles; aire (mm^2).
-    Suppose un mesh fermé; si non étanche, on fait au mieux.
-    """
-    tri = mesh.triangles  # (N,3,3)
-    v0 = tri[:, 0, :]
-    v1 = tri[:, 1, :]
-    v2 = tri[:, 2, :]
-
-    # Aire totale
-    area = 0.5 * np.linalg.norm(np.cross(v1 - v0, v2 - v0), axis=1).sum()
-
-    # Volume (divergence theorem)
-    vol = (np.einsum("ij,ij->i", np.cross(v0, v1), v2).sum()) / 6.0
-    vol = abs(vol)  # orientation inconnue → valeur absolue
-
-    return float(vol), float(area)
+def _bbox_from_mesh_mm(mesh: trimesh.Trimesh) -> Tuple[float, float, float]:
+    # bounds shape (2,3) -> extents
+    ex = mesh.bounds[1] - mesh.bounds[0]
+    return round(float(ex[0]), 4), round(float(ex[1]), 4), round(float(ex[2]), 4)
 
 # ---------- Projected area (cm^2) ----------
 def _projected_area_cm2(mesh: trimesh.Trimesh, axis: str) -> float:
-    axis = axis.upper()
+    axis = (axis or "Z").upper()
     if axis not in AXES:
         axis = "Z"
 
@@ -487,47 +377,23 @@ def compute_and_cache_stats(
     step_ext = pathlib.Path(step_path).suffix.lstrip(".")
     bump_stage("step_ready", {"step_path": step_path, "step_ext": step_ext})
 
-    # 1) Init OCCT (OCP/OCC)
-    try:
-        _ = _occt()  # force l'import; lève si problème
-        bump_stage("occt_lib", {"lib": occt_lib_name()})
-    except Exception as e:
-        bump_stage("occt_import_fail", {"occt_error": repr(e)})
-        raise
+    # OCCT lib (OCP/OCC) minimale (STEP + tessellation)
+    lib = occt_lib_name()
+    bump_stage("occt_lib", {"lib": lib})
+    if lib is None:
+        # force ImportError détaillé
+        _ = _occt()
 
-    # 2) Read STEP
+    # 1) Read STEP
     if _deadline_reached(t0):
         raise TimeoutError("deadline before read")
     bump_stage("read_step", {"step_path": step_path})
     shape = _read_step_shape(step_path)
 
-    # 3) BBox
-    if _deadline_reached(t0):
-        raise TimeoutError("deadline before bbox")
-    xmin, ymin, zmin, xmax, ymax, zmax = _shape_bbox_mm(shape)
-    bbox_mm = [
-        round(float(xmax - xmin), 4),
-        round(float(ymax - ymin), 4),
-        round(float(zmax - zmin), 4),
-    ]
-    bump_stage("bbox_ok", {"bbox_mm": bbox_mm})
-
-    # 4) Volume / Surface
-    vol_mm3 = None
-    surf_mm2 = None
-    bump_stage("volume_surface_begin")
-    try:
-        vol_mm3, surf_mm2 = _shape_volume_surface_mm_via_brepgprop(shape)
-        if vol_mm3 is not None and surf_mm2 is not None:
-            bump_stage("volume_surface_ok", {"vol_mm3": vol_mm3, "surf_mm2": surf_mm2, "method": "brepgprop"})
-    except Exception:
-        # on ignore et on passera en fallback mesh
-        pass
-
-    # 5) Triangulation → mesh
+    # 2) Triangulation → mesh (base de tous les calculs pour compat max)
     if _deadline_reached(t0):
         raise TimeoutError("deadline before triangulate")
-    bump_stage("triangulate_begin")
+    bump_stage("triangulate_begin", {"tol_mm": TESSELLATION_TOL_MM, "ang_rad": TESSELLATION_ANG_RAD})
     mesh = _triangulate_shape_to_mesh(shape, TESSELLATION_TOL_MM, TESSELLATION_ANG_RAD)
     try:
         if not mesh.is_watertight:
@@ -536,20 +402,35 @@ def compute_and_cache_stats(
         pass
     bump_stage("triangulate_ok", {"faces": int(mesh.faces.shape[0])})
 
-    # Si BRepGProp indisponible → calcule volume/surface sur le mesh
-    if vol_mm3 is None or surf_mm2 is None:
-        bump_stage("volume_surface_fallback_mesh_begin")
-        vol_mm3, surf_mm2 = _volume_area_from_mesh(mesh)
-        bump_stage("volume_surface_fallback_mesh_ok", {"vol_mm3": vol_mm3, "surf_mm2": surf_mm2})
+    # 3) BBox depuis le mesh (robuste à tous bindings)
+    if _deadline_reached(t0):
+        raise TimeoutError("deadline before bbox")
+    bx, by, bz = _bbox_from_mesh_mm(mesh)
+    bbox_mm = [bx, by, bz]
+    bump_stage("bbox_ok", {"bbox_mm": bbox_mm, "method": "mesh_bounds"})
 
-    # 6) Projected area
+    # 4) Surface/Volume depuis le mesh (uniforme; occt GProp variable selon wheels)
+    if _deadline_reached(t0):
+        raise TimeoutError("deadline before volume_surface")
+    area_mm2 = float(mesh.area)
+    vol_mm3 = float(abs(mesh.volume)) if np.isfinite(mesh.volume) else 0.0
+    # Fallback convex hull si volume non fiable
+    if vol_mm3 <= 0.0:
+        try:
+            vol_mm3 = float(abs(mesh.convex_hull.volume))
+            bump_stage("volume_surface_fallback_convex_ok", {"volume_mm3": vol_mm3})
+        except Exception:
+            bump_stage("volume_surface_convex_fail", {})
+    bump_stage("volume_surface_ok", {"vol_mm3": vol_mm3, "surf_mm2": area_mm2, "method": "mesh"})
+
+    # 5) Aire projetée
     if _deadline_reached(t0):
         raise TimeoutError("deadline before projected_area")
     bump_stage("projected_area_begin", {"axis": axis})
     proj_cm2 = _projected_area_cm2(mesh, axis)
     bump_stage("projected_area_ok", {"projected_area_cm2": proj_cm2})
 
-    # 7) Épaisseurs (optionnel)
+    # 6) Épaisseurs (optionnel)
     tmin = tmax = None
     if WORKER_COMPUTE_THICKNESS:
         if _deadline_reached(t0):
@@ -558,7 +439,7 @@ def compute_and_cache_stats(
         tmin, tmax = _estimate_thickness_mm(mesh, samples=THICKNESS_SAMPLES)
         bump_stage("thickness_ok", {"tmin": tmin, "tmax": tmax})
 
-    # 8) Caches
+    # 7) Caches
     if _deadline_reached(t0):
         raise TimeoutError("deadline before write_caches")
     bump_stage("write_caches_begin")
@@ -567,7 +448,7 @@ def compute_and_cache_stats(
     base_payload = {
         "volume_mm3": round(float(vol_mm3), 4),
         "volume_cm3": round(float(vol_mm3) / 1000.0, 4),
-        "surface_mm2": round(float(surf_mm2), 4),
+        "surface_mm2": round(float(area_mm2), 4),
         "bbox_mm": bbox_mm,
         "thickness_min_mm": tmin,
         "thickness_max_mm": tmax,
@@ -579,7 +460,7 @@ def compute_and_cache_stats(
     if tmin is not None and tmax is not None:
         _write_json(thick_path, {"tmin": tmin, "tmax": tmax, "method": "worker_ray"})
 
-    # 9) S3 (optionnel)
+    # 8) S3 (optionnel)
     if _s3_enabled():
         try:
             _s3_put(base_path, f"{file_id}.stats.json", content_type="application/json")
@@ -591,7 +472,7 @@ def compute_and_cache_stats(
 
     bump_stage("write_caches_ok")
 
-    # 10) Redis publish
+    # 9) Redis publish
     payload = {
         "volume_mm3": base_payload["volume_mm3"],
         "volume_cm3": base_payload["volume_cm3"],
@@ -603,7 +484,7 @@ def compute_and_cache_stats(
     _publish_redis(file_id, axis, payload)
     bump_stage("publish_redis_ok")
 
-    # 11) Done
+    # 10) Done
     bump_stage("done", {"lib": occt_lib_name()})
     return payload
 
