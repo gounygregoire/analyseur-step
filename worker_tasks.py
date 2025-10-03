@@ -140,7 +140,7 @@ _OCCT_LIB = None
 def _occt():
     """
     Charge OCCT via OCP (cadquery-ocp) en priorité, fallback pythonocc-core.
-    N'importe que les modules nécessaires à la lecture STEP + tessellation + casting Face.
+    On importe uniquement ce qu'il faut (STEP + tessellation + TopoDS cast).
     """
     global _OCCT, _OCCT_LIB
     if _OCCT is not None:
@@ -148,8 +148,13 @@ def _occt():
 
     ocp_err = None
     try:
-        from OCP import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh
-        from OCP.TopoDS import topods_Face, TopoDS_Face
+        from OCP import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh, TopoDS as TopoDS_mod
+        # TopoDS_Face est optionnel selon les wheels; on lira la classe si dispo
+        try:
+            from OCP.TopoDS import TopoDS_Face as TopoDS_Face_cls  # peut échouer
+        except Exception:
+            TopoDS_Face_cls = None
+
         _OCCT_LIB = "OCP"
         _OCCT = {
             "STEPControl_Reader": STEPControl.STEPControl_Reader,
@@ -158,16 +163,16 @@ def _occt():
             "TopExp_Explorer": TopExp.TopExp_Explorer,
             "BRep_Tool": BRep.BRep_Tool,
             "BRepMesh_IncrementalMesh": BRepMesh.BRepMesh_IncrementalMesh,
-            "topods_Face": topods_Face,
-            "TopoDS_Face": TopoDS_Face,
+            "TopoDS_module": TopoDS_mod,
+            "TopoDS_Face_cls": TopoDS_Face_cls,
         }
         return _OCCT
     except Exception as e:
-        ocp_err = e  # pour message explicite
+        ocp_err = e  # message explicite
 
     try:
-        from OCC.Core import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh
-        from OCC.Core.TopoDS import topods_Face, TopoDS_Face
+        from OCC.Core import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh, TopoDS as TopoDS_mod
+        from OCC.Core.TopoDS import TopoDS_Face as TopoDS_Face_cls
         _OCCT_LIB = "OCC"
         _OCCT = {
             "STEPControl_Reader": STEPControl.STEPControl_Reader,
@@ -176,8 +181,8 @@ def _occt():
             "TopExp_Explorer": TopExp.TopExp_Explorer,
             "BRep_Tool": BRep.BRep_Tool,
             "BRepMesh_IncrementalMesh": BRepMesh.BRepMesh_IncrementalMesh,
-            "topods_Face": topods_Face,
-            "TopoDS_Face": TopoDS_Face,
+            "TopoDS_module": TopoDS_mod,
+            "TopoDS_Face_cls": TopoDS_Face_cls,
         }
         return _OCCT
     except Exception as e2:
@@ -193,6 +198,39 @@ def occt_lib_name() -> Optional[str]:
         return _OCCT_LIB
     except Exception:
         return None
+
+# ---------- Helpers TopoDS ----------
+def _to_face(obj, c):
+    """
+    Convertit un TopoDS_Shape en TopoDS_Face.
+    Essaie plusieurs stratégies selon les bindings.
+    """
+    TDF = c.get("TopoDS_Face_cls")
+    TDm = c.get("TopoDS_module")
+
+    # 1) DownCast via classe (si dispo)
+    if TDF is not None and hasattr(TDF, "DownCast"):
+        face = TDF.DownCast(obj)
+        if face is not None:
+            return face
+
+    # 2) topods_Face (fonction utilitaire classique)
+    func = getattr(TDm, "topods_Face", None)
+    if callable(func):
+        try:
+            return func(obj)
+        except Exception:
+            pass
+
+    # 3) Méthode statique C++ exposée en *_s
+    TDclass = getattr(TDm, "TopoDS", None)
+    if TDclass is not None and hasattr(TDclass, "Face_s"):
+        try:
+            return TDclass.Face_s(obj)
+        except Exception:
+            pass
+
+    raise TypeError("Impossible de caster Shape->Face: helpers TopoDS indisponibles sur ce wheel")
 
 # ---------- STEP & géométrie ----------
 def _read_step_shape(step_path: str):
@@ -211,7 +249,7 @@ def _face_triangulation(face, loc, c):
     - Triangulation(face, loc) vs Triangulation_s(face, loc[, purpose])
     """
     BT = c["BRep_Tool"]
-    face = c["topods_Face"](face)  # cast obligatoire pour OCP 7.7.x
+    face = _to_face(face, c)
 
     if hasattr(BT, "Triangulation"):
         return BT.Triangulation(face, loc)
@@ -301,7 +339,6 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
         faces=np.asarray(faces, dtype=int),
         process=True,
     )
-    # Éventuelle fermeture de petits trous (in-place selon trimesh)
     try:
         if not mesh.is_watertight:
             mesh.fill_holes()
