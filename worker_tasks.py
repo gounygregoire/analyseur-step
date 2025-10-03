@@ -229,11 +229,9 @@ def _occt():
     raise ImportError(msg)
 
 def occt_lib_name() -> Optional[str]:
-    try:
-        _occt()
-        return _OCCT_LIB
-    except Exception:
-        return None
+    # Ne pas masquer l'exception : on veut voir l'erreur réelle si _occt() échoue.
+    _occt()
+    return _OCCT_LIB
 
 # ---------- STEP & géométrie ----------
 def _read_step_shape(step_path: str):
@@ -437,14 +435,17 @@ def compute_and_cache_stats(
     step_ext = pathlib.Path(step_path).suffix.lstrip(".")
     bump_stage("step_ready", {"step_path": step_path, "step_ext": step_ext})
 
-    # OCCT lib (OCP/OCC)
+    # OCCT lib (OCP/OCC) — log stack trace complète si échec
+    import traceback
     try:
-        lib = occt_lib_name()
+        _ = _occt()  # force l'import; lève avec message détaillé si problème
+        lib = occt_lib_name() or "?"
         bump_stage("occt_lib", {"lib": lib})
-        if lib is None:
-            raise ImportError("Aucune lib OCCT disponible (ni OCP ni OCC)")
     except Exception as e:
-        bump_stage("occt_import_fail", {"occt_error": repr(e)})
+        bump_stage("occt_import_fail", {
+            "occt_error": repr(e),
+            "trace": traceback.format_exc(),
+        })
         raise
 
     # 1) Read STEP
