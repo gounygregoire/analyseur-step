@@ -1,6 +1,12 @@
 # worker_tasks.py
-import os, json, time, uuid, math, pathlib
+import os
+import json
+import time
+import uuid
+import math
+import pathlib
 from typing import Optional, Tuple, Dict, Any
+
 import numpy as np
 import trimesh
 
@@ -46,11 +52,14 @@ def _redis_conn() -> redis.Redis:
     parsed = urlparse(REDIS_URL.strip().strip('"').strip("'"))
     use_ssl = (parsed.scheme or "").lower().startswith("rediss")
     return redis.Redis(
-        host=parsed.hostname, port=parsed.port or 6379,
+        host=parsed.hostname,
+        port=parsed.port or 6379,
         username=(parsed.username or "default"),
         password=unquote(parsed.password or ""),
         db=int((parsed.path or "/0").lstrip("/")),
-        ssl=use_ssl, ssl_cert_reqs=None, socket_timeout=5,
+        ssl=use_ssl,
+        ssl_cert_reqs=None,
+        socket_timeout=5,
     )
 
 # --- S3 helpers (download + upload) ---
@@ -62,7 +71,6 @@ def _s3_put(local_path: str, key: str, content_type: Optional[str] = None) -> bo
         return False
     try:
         from s3io import put_file
-        # on écrit sous converted/
         return bool(put_file(local_path, f"converted/{os.path.basename(key)}", content_type=content_type))
     except Exception:
         return False
@@ -102,6 +110,7 @@ def _ensure_local_step(file_id: str, step_ext_hint: Optional[str]) -> Optional[s
     Puis dans S3: uploads/<fid>.<ext>.
     """
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
     # 1) local direct
     for ext in (step_ext_hint, "step", "stp", "stl"):
         if not ext:
@@ -208,7 +217,6 @@ def _occt():
         occ_err = f"{e2.__class__.__name__}: {e2}"
         occ_tb = traceback.format_exc()
 
-    # Si on arrive ici, OCP et OCC ont échoué : on remonte TOUT
     msg = "OCCT introuvable: ni OCP (cadquery-ocp) ni OCC (pythonocc-core)."
     if ocp_err:
         msg += f"\n- OCP error: {ocp_err}"
@@ -226,7 +234,6 @@ def occt_lib_name() -> Optional[str]:
         return _OCCT_LIB
     except Exception:
         return None
-
 
 # ---------- STEP & géométrie ----------
 def _read_step_shape(step_path: str):
@@ -250,7 +257,7 @@ def _shape_volume_surface_mm(shape) -> Tuple[float, float]:
     c = _occt()
     g = c["GProp_GProps"]()
     c["brepgprop_VolumeProperties"](shape, g)
-    vol = float(g.Mass())  # mm^3 si units = mm
+    vol = float(g.Mass())  # mm^3
     g2 = c["GProp_GProps"]()
     c["brepgprop_SurfaceProperties"](shape, g2)
     area = float(g2.Mass())  # mm^2
@@ -287,9 +294,11 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
     if not verts or not faces:
         raise RuntimeError("Triangulation vide")
 
-    mesh = trimesh.Trimesh(vertices=np.asarray(verts, dtype=float),
-                           faces=np.asarray(faces, dtype=int),
-                           process=True)
+    mesh = trimesh.Trimesh(
+        vertices=np.asarray(verts, dtype=float),
+        faces=np.asarray(faces, dtype=int),
+        process=True,
+    )
     return mesh
 
 # ---------- Projected area (cm^2) ----------
@@ -309,9 +318,9 @@ def _projected_area_cm2(mesh: trimesh.Trimesh, axis: str) -> float:
     v1 = tri[:, 1, :]
     v2 = tri[:, 2, :]
     area2d = 0.5 * np.abs(
-        v0[:, 0]*(v1[:, 1]-v2[:, 1]) +
-        v1[:, 0]*(v2[:, 1]-v0[:, 1]) +
-        v2[:, 0]*(v0[:, 1]-v1[:, 1])
+        v0[:, 0] * (v1[:, 1] - v2[:, 1]) +
+        v1[:, 0] * (v2[:, 1] - v0[:, 1]) +
+        v2[:, 0] * (v0[:, 1] - v1[:, 1])
     )
     mm2 = float(area2d.sum())
     return mm2 / 100.0  # mm^2 -> cm^2
@@ -335,7 +344,7 @@ def _estimate_thickness_mm(mesh: trimesh.Trimesh, samples: int = 30000) -> Tuple
         origins_p = pts + n * eps
         origins_m = pts - n * eps
 
-        loc_p, ir_p, it_p = inter.intersects_location(origins_p,  n, multiple_hits=False)
+        loc_p, ir_p, it_p = inter.intersects_location(origins_p, n, multiple_hits=False)
         loc_m, ir_m, it_m = inter.intersects_location(origins_m, -n, multiple_hits=False)
 
         dist = np.full(len(pts), np.inf)
@@ -391,24 +400,29 @@ def _publish_redis(file_id: str, axis: str, payload: dict):
         return False
 
 # ---------- Entrypoint ----------
-def compute_and_cache_stats(file_id: str, axis: str = "Z",
-                            step_path: Optional[str] = None,
-                            step_ext: Optional[str] = None,
-                            cache_dir: Optional[str] = None):
+def compute_and_cache_stats(
+    file_id: str,
+    axis: str = "Z",
+    step_path: Optional[str] = None,
+    step_ext: Optional[str] = None,
+    cache_dir: Optional[str] = None,
+):
     t0 = time.monotonic()
     bump_stage("start", {"file_id": file_id, "axis": axis})
-    
-import sys, os
-bump_stage("runtime_env", {
-    "python": sys.executable,
-    "cwd": os.getcwd(),
-    "path0": sys.path[:5],
-})
+
+    # Trace runtime (diagnostic)
+    import sys
+    bump_stage("runtime_env", {
+        "python": sys.executable,
+        "cwd": os.getcwd(),
+        "path0": sys.path[:5],
+    })
+
     axis = (axis or "Z").upper()
     if axis not in AXES:
         axis = "Z"
 
-    # 0) Assurer la présence locale du fichier source (upload local ou pull depuis S3)
+    # 0) Résoudre / rapatrier le STEP local si pas fourni
     local = None
     if step_path and os.path.isfile(step_path):
         local = step_path
@@ -416,14 +430,14 @@ bump_stage("runtime_env", {
         local = _ensure_local_step(file_id, step_ext)
 
     if not local or not os.path.isfile(local):
-        bump_stage("error_no_step", {"path": local or (step_path or f"{UPLOAD_FOLDER}/{file_id}.step")})
+        bump_stage("error_no_step", {"path": local or (step_path or f"/tmp/uploads/{file_id}.step")})
         raise FileNotFoundError(f"STEP introuvable pour {file_id}")
 
     step_path = local
     step_ext = pathlib.Path(step_path).suffix.lstrip(".")
     bump_stage("step_ready", {"step_path": step_path, "step_ext": step_ext})
 
-    # 1) Charger la lib OCCT (OCP en priorité, fallback OCC)
+    # OCCT lib (OCP/OCC)
     try:
         lib = occt_lib_name()
         bump_stage("occt_lib", {"lib": lib})
@@ -433,29 +447,31 @@ bump_stage("runtime_env", {
         bump_stage("occt_import_fail", {"occt_error": repr(e)})
         raise
 
-    # 2) Lire le STEP -> shape
+    # 1) Read STEP
     if _deadline_reached(t0):
         raise TimeoutError("deadline before read")
     bump_stage("read_step", {"step_path": step_path})
     shape = _read_step_shape(step_path)
 
-    # 3) BBox (mm)
+    # 2) BBox
     if _deadline_reached(t0):
         raise TimeoutError("deadline before bbox")
     xmin, ymin, zmin, xmax, ymax, zmax = _shape_bbox_mm(shape)
-    bbox_mm = [round(float(xmax - xmin), 4),
-               round(float(ymax - ymin), 4),
-               round(float(zmax - zmin), 4)]
+    bbox_mm = [
+        round(float(xmax - xmin), 4),
+        round(float(ymax - ymin), 4),
+        round(float(zmax - zmin), 4),
+    ]
     bump_stage("bbox_ok", {"bbox_mm": bbox_mm})
 
-    # 4) Volume / Surface (mm^3 / mm^2)
+    # 3) Volume / Surface
     if _deadline_reached(t0):
         raise TimeoutError("deadline before volume_surface")
     bump_stage("volume_surface_begin")
     vol_mm3, surf_mm2 = _shape_volume_surface_mm(shape)
     bump_stage("volume_surface_ok", {"vol_mm3": vol_mm3, "surf_mm2": surf_mm2})
 
-    # 5) Triangulation -> mesh
+    # 4) Triangulation → mesh
     if _deadline_reached(t0):
         raise TimeoutError("deadline before triangulate")
     bump_stage("triangulate_begin")
@@ -467,14 +483,14 @@ bump_stage("runtime_env", {
         pass
     bump_stage("triangulate_ok", {"faces": int(mesh.faces.shape[0])})
 
-    # 6) Projected area (cm^2)
+    # 5) Projected area
     if _deadline_reached(t0):
         raise TimeoutError("deadline before projected_area")
     bump_stage("projected_area_begin", {"axis": axis})
     proj_cm2 = _projected_area_cm2(mesh, axis)
     bump_stage("projected_area_ok", {"projected_area_cm2": proj_cm2})
 
-    # 7) Épaisseur (optionnel)
+    # 6) Épaisseurs (optionnel)
     tmin = tmax = None
     if WORKER_COMPUTE_THICKNESS:
         if _deadline_reached(t0):
@@ -483,7 +499,7 @@ bump_stage("runtime_env", {
         tmin, tmax = _estimate_thickness_mm(mesh, samples=THICKNESS_SAMPLES)
         bump_stage("thickness_ok", {"tmin": tmin, "tmax": tmax})
 
-    # 8) Caches fichiers
+    # 7) Caches
     if _deadline_reached(t0):
         raise TimeoutError("deadline before write_caches")
     bump_stage("write_caches_begin")
@@ -504,7 +520,7 @@ bump_stage("runtime_env", {
     if tmin is not None and tmax is not None:
         _write_json(thick_path, {"tmin": tmin, "tmax": tmax, "method": "worker_ray"})
 
-    # 9) Upload S3 (optionnel)
+    # 8) S3 (optionnel)
     if _s3_enabled():
         try:
             _s3_put(base_path, f"{file_id}.stats.json", content_type="application/json")
@@ -516,7 +532,7 @@ bump_stage("runtime_env", {
 
     bump_stage("write_caches_ok")
 
-    # 10) Publish Redis
+    # 9) Redis publish
     payload = {
         "volume_mm3": base_payload["volume_mm3"],
         "volume_cm3": base_payload["volume_cm3"],
@@ -528,7 +544,7 @@ bump_stage("runtime_env", {
     _publish_redis(file_id, axis, payload)
     bump_stage("publish_redis_ok")
 
-    # 11) Done
+    # 10) Done
     bump_stage("done", {"lib": occt_lib_name()})
     return payload
 
