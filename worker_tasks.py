@@ -1,6 +1,6 @@
 # worker_tasks.py
 from __future__ import annotations
-import os, io, json, math, tempfile, pathlib, logging
+import os, io, json, math, tempfile, pathlib, logging, subprocess, sys, shlex
 from typing import Optional, Tuple, List, Dict
 from datetime import timedelta
 
@@ -80,7 +80,6 @@ def _publish_redis(file_id: str, axis: str, payload: dict, ttl_sec: int = 3600) 
         r = _redis_client()
         r.setex(f"shape_stats:{file_id}:{axis}", timedelta(seconds=ttl_sec), json.dumps(payload))
     except Exception as e:
-        # Non bloquant
         logger.info("Redis publish skipped: %s", e)
 
 # =========================
@@ -97,39 +96,64 @@ def _thickness_cache_path(file_id: str, base_dir: Optional[str] = None) -> str:
     return os.path.join(base_dir, f"{file_id}.thick.json")
 
 # =========================
+# STEP -> STL via SOUS-PROCESSUS (isolation OCC/CadQuery)
+# =========================
+def _export_step_to_stl_subprocess(step_path: str, stl_path: str, tol_mm: float, ang_rd: float, timeout_s: int) -> None:
+    """
+    Exécute CadQuery dans un sous-processus pour éviter qu’un segfault OCC
+    ne tue le worker. En cas d’échec, lève RuntimeError avec logs utiles.
+    """
+    code = r"""
+import sys
+try:
+    import cadquery as cq
+    p, out, tol, ang = sys.argv[1], sys.argv[2], float(sys.argv[3]), float(sys.argv[4])
+    wp = cq.importers.importStep(p)
+    cq.exporters.export(wp, out, exportType="STL", tolerance=tol, angularTolerance=ang)
+except Exception as e:
+    import traceback, sys
+    traceback.print_exc()
+    sys.exit(2)
+"""
+    cmd = [sys.executable, "-c", code, step_path, stl_path, str(tol_mm), str(ang_rd)]
+    logger.info("[step2stl] spawn subprocess: %s", " ".join(shlex.quote(x) for x in cmd))
+    try:
+        res = subprocess.run(
+            cmd, capture_output=True, text=True,
+            timeout=timeout_s, check=False
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"STEP->STL export timeout after {timeout_s}s")
+    rc = res.returncode
+    if rc != 0:
+        # 139 = segfault typique
+        hint = " (segfault/oom probable)" if rc in (134, 139) else ""
+        err = (res.stderr or "").strip()
+        out = (res.stdout or "").strip()
+        raise RuntimeError(f"STEP->STL export failed rc={rc}{hint}; stderr={err[:800]} stdout={out[:400]}")
+
+# =========================
 # Chargement / maillage
 # =========================
 def _mesh_from_step(step_path: str):
     """
-    Tessellation STEP via CadQuery -> export STL temporaire -> charge avec trimesh.
-    Unités supposées en mm (STEP cohérent).
+    Tessellation STEP via CadQuery en SOUS-PROCESSUS -> charge STL avec trimesh.
     """
-    import cadquery as cq
     import trimesh
-
     tol_mm = float(os.getenv("TESSELLATION_TOL_MM", "0.05"))
     ang_rd = float(os.getenv("TESSELLATION_ANG_RAD", "0.25"))
+    timeout_s = int(os.getenv("STEP_EXPORT_TIMEOUT_SEC", "300"))
 
-    logger.info("Import STEP with CadQuery: %s", step_path)
-    wp = cq.importers.importStep(step_path)  # Workplane/Compound
-
+    logger.info("Import STEP (subprocess) : %s", step_path)
     tmp = tempfile.NamedTemporaryFile(suffix=".stl", delete=False)
-    tmp_path = tmp.name
+    stl_path = tmp.name
     tmp.close()
-
     try:
-        # exportType="STL" sait traiter Workplane/Compound
-        cq.exporters.export(
-            wp,
-            tmp_path,
-            exportType="STL",
-            tolerance=tol_mm,
-            angularTolerance=ang_rd
-        )
-        m = trimesh.load_mesh(tmp_path, force="mesh")
+        _export_step_to_stl_subprocess(step_path, stl_path, tol_mm, ang_rd, timeout_s)
+        m = trimesh.load_mesh(stl_path, force="mesh")
     finally:
         try:
-            os.remove(tmp_path)
+            os.remove(stl_path)
         except Exception:
             pass
 
@@ -174,14 +198,12 @@ def _bbox_mm(mesh) -> List[float]:
     return [float(np.round(ext[0], 4)), float(np.round(ext[1], 4)), float(np.round(ext[2], 4))]
 
 def _volume_mm3(mesh) -> Optional[float]:
-    # volume direct (mm³) si watertight
     try:
         vol = float(mesh.volume)
         if vol > 0:
             return vol
     except Exception:
         pass
-    # fallback: somme des pièces étanches
     try:
         parts = mesh.split(only_watertight=True)
         s = sum(float(p.volume) for p in parts if getattr(p, "volume", 0) > 0)
@@ -190,12 +212,7 @@ def _volume_mm3(mesh) -> Optional[float]:
         return None
 
 def _projected_area_cm2(mesh, axis: str) -> float:
-    """
-    Aire projetée 'analytique' (Σ area_face * |n·d|), puis clamp à la face de la bbox.
-    mm² -> cm² (/100). Toujours bornée par la face de la bbox.
-    """
     import numpy as np
-
     axis = (axis or "Z").upper()
     if axis == "X":
         d = np.array([1.0, 0.0, 0.0])
@@ -204,216 +221,67 @@ def _projected_area_cm2(mesh, axis: str) -> float:
     else:
         d = np.array([0.0, 0.0, 1.0])
 
-    # brut (peut compter les recouvrements, mais on clippe ensuite)
     try:
         areas = mesh.area_faces
         normals = mesh.face_normals
         scale = np.abs((normals * d).sum(axis=1))
-        a_raw_mm2 = float((areas * scale).sum())
-        a_raw_cm2 = a_raw_mm2 / 100.0
+        a_mm2 = float((areas * scale).sum())
+        return round(a_mm2 / 100.0, 4)
     except Exception:
-        a_raw_cm2 = 0.0
-
-    # clamp à la face de la bbox (ombre 2D ne peut pas dépasser ça)
-    try:
-        x, y, z = [float(v) for v in mesh.extents.astype(float)]
-        bbox_face_cm2 = {
-            "X": (y * z) / 100.0,
-            "Y": (x * z) / 100.0,
-            "Z": (x * y) / 100.0,
-        }[axis]
-    except Exception:
-        bbox_face_cm2 = 0.0
-
-    if a_raw_cm2 < 0:
         return 0.0
-    if bbox_face_cm2 > 0:
-        return round(min(a_raw_cm2, bbox_face_cm2), 4)
-    return round(a_raw_cm2, 4)
-
 
 # =========================
 # Épaisseur via voxel + EDT + squelette (robuste)
 # =========================
-def _edt_subvoxel_min(edt) -> float:
-    """Affinage sub-voxel du minimum EDT par interpolation tri-linéaire autour du min discret."""
-    try:
-        import numpy as np
-        from scipy.ndimage import map_coordinates
-    except Exception:
-        # SciPy indisponible -> valeur discrète
-        return float(edt.min())
-
-    z, y, x = np.unravel_index(np.argmin(edt), edt.shape)
-    nz, ny, nx = edt.shape
-    z0, z1 = max(z - 1, 0), min(z + 1, nz - 1)
-    y0, y1 = max(y - 1, 0), min(y + 1, ny - 1)
-    x0, x1 = max(x - 1, 0), min(x + 1, nx - 1)
-
-    gz = 0.5 * (edt[z1, y, x] - edt[z0, y, x])
-    gy = 0.5 * (edt[z, y1, x] - edt[z, y0, x])
-    gx = 0.5 * (edt[z, y, x1] - edt[z, y, x0])
-    g = np.array([gz, gy, gx], dtype=float)
-    n = float(np.linalg.norm(g))
-    if n < 1e-8:
-        return float(edt[z, y, x])
-
-    # reculer d'un demi-voxel vers la décroissance du champ de distance
-    step = -0.5 * (g / n)
-    zz, yy, xx = z + step[0], y + step[1], x + step[2]
-    val = map_coordinates(edt, [[zz], [yy], [xx]], order=1, mode="nearest")
-    return float(val.ravel()[0])
-
 def _thickness_mm_voxel(
     mesh,
     pitch_mm: Optional[float] = None,
-    max_voxels: Optional[int] = None,
+    max_voxels: int = 80_000_000,
     dbg: dict | None = None
 ) -> tuple[float | None, float | None]:
-    """
-    Calcule tmin/tmax (mm) par voxelisation + EDT. Squelette 3D utilisé
-    seulement si la grille est raisonnable. Plusieurs passes de raffinement
-    tant qu'on ne dépasse pas max_voxels. Si la squelettisation dépasse
-    un petit budget temps, on bascule en EDT-only.
+    try:
+        import numpy as np
+        from scipy.ndimage import distance_transform_edt
+        from skimage.morphology import skeletonize_3d
+    except Exception as e:
+        logger.info("Thickness voxel disabled (missing deps?): %s", e)
+        return None, None
 
-    ENV:
-      VOXEL_PITCH_MM           (def 0.12)
-      VOXEL_MAX_VOXELS         (def 30000000)
-      VOXEL_REFINE_PASSES      (def 1)
-      VOXEL_REFINE_FACTOR      (def 0.65)
-      VOXEL_SKELETON_MAX_VOX   (def 8000000)    # au-delà => pas de squelette
-      THICKNESS_PASS_TIMEOUT_S (def 8)          # budget temps par passe squelette
-      DISABLE_SKELETONIZE      (def 0)          # 1 => force EDT-only
-    """
-    import numpy as np
-    from scipy.ndimage import distance_transform_edt
-    import time, signal
-
-    # options
     if pitch_mm is None:
         pitch_mm = float(os.getenv("VOXEL_PITCH_MM", "0.12"))
-    if max_voxels is None:
-        max_voxels = int(os.getenv("VOXEL_MAX_VOXELS", "30000000"))
-    refine_passes   = int(os.getenv("VOXEL_REFINE_PASSES", "1"))
-    refine_factor   = float(os.getenv("VOXEL_REFINE_FACTOR", "0.65"))
-    skel_max_vox    = int(os.getenv("VOXEL_SKELETON_MAX_VOX", "8000000"))
-    pass_timeout_s  = int(os.getenv("THICKNESS_PASS_TIMEOUT_S", "8"))
-    disable_skel    = os.getenv("DISABLE_SKELETONIZE", "0").strip().lower() in ("1","true","yes","on")
-
-    # essaie d'importer le squelette
-    have_skel = False
-    if not disable_skel:
-        try:
-            from skimage.morphology import skeletonize_3d
-            have_skel = True
-        except Exception:
-            have_skel = False
-
-    def _timeout_call(fn, seconds: int, *args, **kwargs):
-        def _handler(signum, frame):
-            raise TimeoutError("skeletonize timeout")
-        signal.signal(signal.SIGALRM, _handler)
-        signal.alarm(max(1, int(seconds)))
-        try:
-            return fn(*args, **kwargs)
-        finally:
-            signal.alarm(0)
 
     ext = mesh.extents.astype(float)
-    tmins: list[float] = []
-    tmaxs: list[float] = []
-    used_pitches: list[float] = []
-
-    cur_pitch = float(pitch_mm)
-    passes = max(1, refine_passes + 1)
-    for _ in range(passes):
-        dims = np.ceil(ext / cur_pitch).astype(int)
-        voxels_est = int(dims[0]) * int(dims[1]) * int(dims[2])
-        if voxels_est > max_voxels:
-            scale = (voxels_est / float(max_voxels)) ** (1.0/3.0)
-            cur_pitch *= scale
-            dims = np.ceil(ext / cur_pitch).astype(int)
-            voxels_est = int(dims[0]) * int(dims[1]) * int(dims[2])
-
-        used_pitches.append(float(cur_pitch))
+    dims = (ext / pitch_mm).clip(min=1.0)
+    voxels_est = int(math.ceil(dims[0])) * int(math.ceil(dims[1])) * int(math.ceil(dims[2]))
+    if voxels_est > max_voxels:
+        scale = (voxels_est / float(max_voxels)) ** (1.0 / 3.0)
+        pitch_mm *= scale
         if dbg is not None:
-            dbg.setdefault("passes", []).append({"pitch_mm": float(cur_pitch), "dims": [int(dims[0]), int(dims[1]), int(dims[2])], "vox_est": int(voxels_est)})
+            dbg["voxel_pitch_scaled_mm"] = float(pitch_mm)
 
-        vg = mesh.voxelized(cur_pitch).fill()
-        vol = vg.matrix.astype(bool)
-        if vol.size == 0 or not vol.any():
-            break
-
-        edt = distance_transform_edt(vol) * float(cur_pitch)
-
-        # squelette seulement si raisonnable
-        use_skel = have_skel and (voxels_est <= skel_max_vox)
-        vals = None
-        if use_skel:
-            try:
-                start = time.time()
-                vals = _timeout_call(lambda v: skeletonize_3d(v), pass_timeout_s, vol)
-                vals = edt[vals]
-                if vals.size == 0:
-                    vals = edt[vol]
-                if dbg is not None:
-                    dbg.setdefault("skeleton_used", True)
-                    dbg.setdefault("skeleton_time_s", []).append(round(time.time()-start,3))
-            except Exception as e:
-                # timeout ou erreur -> fallback EDT-only
-                if dbg is not None:
-                    dbg.setdefault("skeleton_fallback", []).append(str(e))
-                vals = edt[vol]
-        else:
-            vals = edt[vol]
-
-        if vals.size == 0:
-            break
-
-        tmins.append(float(2.0 * vals.min()))
-        tmaxs.append(float(2.0 * vals.max()))
-
-        # prépare un pas plus fin si on reste sous max_voxels
-        next_pitch = cur_pitch * refine_factor
-        ndims = np.ceil(ext / next_pitch).astype(int)
-        nvox = int(ndims[0]) * int(ndims[1]) * int(ndims[2])
-        if nvox > max_voxels:
-            break
-        cur_pitch = next_pitch
+    vg = mesh.voxelized(pitch_mm).fill()
+    vol = vg.matrix.astype(bool)
+    if vol.size == 0 or not vol.any():
+        return None, None
 
     if dbg is not None:
-        dbg["refine_pitches"] = used_pitches
+        dbg["voxel_shape"] = list(vol.shape)
+        dbg["voxel_pitch_mm"] = float(pitch_mm)
 
-    if not tmins or not tmaxs:
+    edt = distance_transform_edt(vol) * float(pitch_mm)
+    try:
+        skel = skeletonize_3d(vol)
+    except Exception:
+        v = edt[vol]
+        if v.size == 0:
+            return None, None
+        return float(2.0 * v.min()), float(2.0 * v.max())
+
+    vals = edt[skel]
+    if vals.size == 0:
         return None, None
-    return float(min(tmins)), float(max(tmaxs))
 
-
-# --------- Raffinage adaptatif (2–3 passes) ----------
-def _thickness_mm_adaptive(mesh, pitch_hint: float | None, dbg: dict | None):
-    VOX_MAX = int(os.getenv("VOXEL_MAX_VOXELS", "40000000"))
-    MIN_PITCH = 0.04  # borne basse sûre (mm)
-    passes = int(os.getenv("VOXEL_REFINE_PASSES", "3"))
-
-    pitch = float(os.getenv("VOXEL_PITCH_MM", "0.15")) if pitch_hint is None else float(pitch_hint)
-    tmin = tmax = None
-    if isinstance(dbg, dict):
-        dbg.setdefault("refine_pitches", [])
-
-    for _ in range(max(1, passes)):
-        tmin, tmax = _thickness_mm_voxel(mesh, pitch_mm=pitch, max_voxels=VOX_MAX, dbg=dbg)
-        if isinstance(dbg, dict):
-            dbg["refine_pitches"].append(float(pitch))
-        if tmin is None:
-            break
-        # Règle: pitch <= tmin/8 ; sinon on affine en divisant ~2.5
-        target = min(max(MIN_PITCH, tmin / 8.0), pitch / 2.5)
-        # si on ne gagne presque plus, stop
-        if target >= pitch * 0.95:
-            break
-        pitch = target
-
-    return tmin, tmax
+    return float(2.0 * vals.min()), float(2.0 * vals.max())
 
 # =========================
 # Validations "sanity check"
@@ -435,7 +303,7 @@ def _bbox_face_cm2(bbox_mm: List[float], axis: str) -> Optional[float]:
         area_mm2 = x * z
     else:
         area_mm2 = x * y
-    return area_mm2 / 100.0  # mm² -> cm²
+    return area_mm2 / 100.0
 
 def _validate_metrics(data: Dict, axis: str) -> Dict:
     bbox = data.get("bbox_mm") or [0, 0, 0]
@@ -448,19 +316,16 @@ def _validate_metrics(data: Dict, axis: str) -> Dict:
     bbox_min = min([b for b in bbox if isinstance(b, (int, float))] or [0.0])
     bbox_face = _bbox_face_cm2(bbox, axis) or 0.0
 
-    # Volume borné
     if isinstance(vol, (int, float)):
         if vol <= 0 or (bbox_prod > 0 and vol > 1.01 * bbox_prod):
             logger.warning("volume_mm3 invalid -> None (vol=%s, bbox_prod=%s)", vol, bbox_prod)
             data["volume_mm3"] = None
 
-    # Aire projetée bornée
     if isinstance(proj, (int, float)):
         if proj < 0 or (bbox_face > 0 and proj > 1.01 * bbox_face):
             logger.warning("projected_area_cm2 invalid -> 0 (proj=%s, bbox_face=%s)", proj, bbox_face)
             data["projected_area_cm2"] = 0.0
 
-    # Épaisseurs bornées
     if isinstance(tmin, (int, float)) and isinstance(tmax, (int, float)):
         if tmin < 0:
             tmin = 0.0
@@ -472,7 +337,6 @@ def _validate_metrics(data: Dict, axis: str) -> Dict:
         data["thickness_min_mm"] = round(float(tmin), 4)
         data["thickness_max_mm"] = round(float(tmax), 4)
     else:
-        # invalide -> None
         data["thickness_min_mm"] = None
         data["thickness_max_mm"] = None
 
@@ -482,11 +346,9 @@ def _validate_metrics(data: Dict, axis: str) -> Dict:
 # Résolution du fichier source (local / S3)
 # =========================
 def _resolve_source_path(file_id: str, step_path: Optional[str], step_ext: Optional[str]) -> str:
-    # 1) chemin direct fourni ?
     if step_path and os.path.isfile(step_path):
         return step_path
 
-    # 2) uploads locaux
     for ext in (step_ext, "step", "stp", "stl"):
         if not ext:
             continue
@@ -494,7 +356,6 @@ def _resolve_source_path(file_id: str, step_path: Optional[str], step_ext: Optio
         if os.path.isfile(p):
             return p
 
-    # 3) S3 (uploads/*)
     if _s3_enabled():
         for ext in (step_ext, "step", "stp", "stl"):
             if not ext:
@@ -509,6 +370,31 @@ def _resolve_source_path(file_id: str, step_path: Optional[str], step_ext: Optio
     )
 
 # =========================
+# Helpers: écrire caches vides si échec dur
+# =========================
+def _write_empty_caches(file_id: str, axis: str, out_dir: str, dbg: dict | None = None) -> None:
+    base_cache, proj_cache = _cache_paths(file_id, axis, base_dir=out_dir)
+    empty_stats = {
+        "volume_mm3": None,
+        "volume_cm3": None,
+        "bbox_mm": None,
+        "thickness_min_mm": None,
+        "thickness_max_mm": None,
+    }
+    with open(base_cache, "w", encoding="utf-8") as fh:
+        json.dump(empty_stats, fh)
+    with open(proj_cache, "w", encoding="utf-8") as fh:
+        json.dump({"projected_area_cm2": 0.0}, fh)
+    _publish_redis(file_id, axis, {
+        "volume_mm3": None,
+        "bbox_mm": None,
+        "thickness_min_mm": None,
+        "thickness_max_mm": None,
+        "projected_area_cm2": 0.0,
+        "debug": (dbg or {}),
+    }, ttl_sec=3600)
+
+# =========================
 # Job principal (appelé par RQ)
 # =========================
 def compute_and_cache_stats(
@@ -521,10 +407,10 @@ def compute_and_cache_stats(
 ) -> dict:
     """
     Écrit:
-      - {cache_dir}/{fid}.stats.json       (volume_mm3, bbox_mm, thickness_min_mm, thickness_max_mm, volume_cm3)
-      - {cache_dir}/{fid}.proj.{axis}.json (projected_area_cm2)
-      - {cache_dir}/{fid}.thick.json       (optionnel: tmin/tmax)
-    Pousse aussi vers S3 (converted/*) si configuré et publie une clé Redis pour fallback web.
+      - {cache_dir}/{fid}.stats.json
+      - {cache_dir}/{fid}.proj.{axis}.json
+      - {cache_dir}/{fid}.thick.json (si dispo)
+    En cas d’échec non récupérable, écrit des caches “vides” pour éviter l’UI bloquée.
     """
     axis = (axis or "Z").upper()
     if axis not in ("X", "Y", "Z"):
@@ -538,101 +424,111 @@ def compute_and_cache_stats(
 
     dbg: dict = {}
 
-    # 1) Résoudre la source
-    src_path = _resolve_source_path(file_id, step_path, step_ext)
-    logger.info("Source resolved: %s", src_path)
+    try:
+        # 1) Résoudre la source
+        src_path = _resolve_source_path(file_id, step_path, step_ext)
+        logger.info("Source resolved: %s", src_path)
 
-    # 2) Charger le mesh
-    mesh = _load_mesh(src_path)
+        # 2) Charger le mesh (STEP -> STL dans un sous-processus)
+        mesh = _load_mesh(src_path)
 
-    # 3) BBox & volume
-    bbox = _bbox_mm(mesh)
-    vol_mm3 = _volume_mm3(mesh)
-    vol_cm3 = round(vol_mm3 / 1000.0, 4) if vol_mm3 is not None else None
+        # 3) BBox & volume
+        bbox = _bbox_mm(mesh)
+        vol_mm3 = _volume_mm3(mesh)
+        vol_cm3 = round(vol_mm3 / 1000.0, 4) if vol_mm3 is not None else None
 
-    # 4) Aire projetée (uniquement l’axe demandé) — version ombre 2D
-    proj_cm2 = _projected_area_cm2(mesh, axis=axis)
+        # 4) Aire projetée (uniquement l’axe demandé)
+        proj_cm2 = _projected_area_cm2(mesh, axis=axis)
 
+        # 5) Épaisseur (voxel EDT)
+        pitch_env = os.getenv("VOXEL_PITCH_MM")
+        pitch = float(pitch_env) if pitch_env else None
+        tmin, tmax = _thickness_mm_voxel(mesh, pitch_mm=pitch, dbg=dbg)
 
-    # 5) Épaisseur (voxel EDT) avec raffinage adaptatif
-    pitch_env = os.getenv("VOXEL_PITCH_MM")
-    pitch_hint = float(pitch_env) if pitch_env else None
-    tmin, tmax = _thickness_mm_adaptive(mesh, pitch_hint=pitch_hint, dbg=dbg)
+        # 6) Écrire les caches
+        base_payload = {
+            "volume_mm3": float(vol_mm3) if vol_mm3 is not None else None,
+            "volume_cm3": vol_cm3,
+            "bbox_mm": bbox,
+            "thickness_min_mm": round(float(tmin), 4) if tmin is not None else None,
+            "thickness_max_mm": round(float(tmax), 4) if tmax is not None else None,
+        }
+        base_payload = _validate_metrics(base_payload, axis)
 
-    # 6) Écrire les caches (toujours stats + proj)
-    base_payload = {
-        "volume_mm3": float(vol_mm3) if vol_mm3 is not None else None,
-        "volume_cm3": vol_cm3,
-        "bbox_mm": bbox,
-        "thickness_min_mm": round(float(tmin), 4) if tmin is not None else None,
-        "thickness_max_mm": round(float(tmax), 4) if tmax is not None else None,
-    }
-    # validations bornées
-    base_payload = _validate_metrics(base_payload, axis)
+        with open(base_cache, "w", encoding="utf-8") as fh:
+            json.dump(base_payload, fh)
 
-    with open(base_cache, "w", encoding="utf-8") as fh:
-        json.dump(base_payload, fh)
+        proj_payload = {"projected_area_cm2": round(float(proj_cm2), 4)}
+        proj_payload["projected_area_cm2"] = _validate_metrics(
+            {"projected_area_cm2": proj_payload["projected_area_cm2"], "bbox_mm": bbox, "volume_mm3": base_payload["volume_mm3"]},
+            axis
+        )["projected_area_cm2"]
 
-    proj_payload = {"projected_area_cm2": round(float(proj_cm2), 4)}
-    # revalider l’aire aussi (au cas où bbox a été corrigée)
-    proj_payload["projected_area_cm2"] = _validate_metrics(
-        {"projected_area_cm2": proj_payload["projected_area_cm2"], "bbox_mm": bbox, "volume_mm3": base_payload["volume_mm3"]},
-        axis
-    )["projected_area_cm2"]
+        with open(proj_cache, "w", encoding="utf-8") as fh:
+            json.dump(proj_payload, fh)
 
-    with open(proj_cache, "w", encoding="utf-8") as fh:
-        json.dump(proj_payload, fh)
+        if base_payload["thickness_min_mm"] is not None and base_payload["thickness_max_mm"] is not None:
+            try:
+                with open(thick_cache, "w", encoding="utf-8") as fh:
+                    json.dump(
+                        {"tmin": base_payload["thickness_min_mm"], "tmax": base_payload["thickness_max_mm"], "method": "voxel_edt"},
+                        fh,
+                    )
+            except Exception as e:
+                logger.warning("Impossible d'écrire %s: %s", thick_cache, e)
 
-    if base_payload["thickness_min_mm"] is not None and base_payload["thickness_max_mm"] is not None:
+        # 7) Upload converted/* (optionnel)
+        _s3_put(base_cache, f"converted/{pathlib.Path(base_cache).name}")
+        _s3_put(proj_cache, f"converted/{pathlib.Path(proj_cache).name}")
+        if os.path.isfile(thick_cache):
+            _s3_put(thick_cache, f"converted/{pathlib.Path(thick_cache).name}")
+
+        # 8) Publier une clé Redis pour fallback immédiat côté web
+        merged_for_redis = {
+            "volume_mm3": base_payload["volume_mm3"],
+            "bbox_mm": base_payload["bbox_mm"],
+            "thickness_min_mm": base_payload["thickness_min_mm"],
+            "thickness_max_mm": base_payload["thickness_max_mm"],
+            "projected_area_cm2": proj_payload["projected_area_cm2"],
+            "debug": dbg,
+        }
+        _publish_redis(file_id, axis, merged_for_redis, ttl_sec=3600)
+
+        logger.info(
+            "Caches écrits file_id=%s axis=%s  bbox=%s  vol=%s cm3  t=(%s,%s) mm  proj=%s cm2  debug=%s",
+            file_id, axis, base_payload["bbox_mm"],
+            f"{base_payload['volume_cm3']:.4f}" if base_payload["volume_cm3"] is not None else "None",
+            base_payload["thickness_min_mm"], base_payload["thickness_max_mm"],
+            proj_payload["projected_area_cm2"], dbg,
+        )
+
+        return {
+            "ok": True,
+            "file_id": file_id,
+            "axis": axis,
+            "written": {
+                "stats": base_cache,
+                "proj": proj_cache,
+                "thick": (thick_cache if os.path.isfile(thick_cache) else None),
+            },
+            "debug": dbg,
+        }
+
+    except Exception as e:
+        # Fallback: on écrit des caches vides pour débloquer le front
+        logger.exception("compute_and_cache_stats failed for %s: %s", file_id, e)
         try:
-            with open(thick_cache, "w", encoding="utf-8") as fh:
-                json.dump(
-                    {
-                        "tmin": base_payload["thickness_min_mm"],
-                        "tmax": base_payload["thickness_max_mm"],
-                        "method": "voxel_edt_refine",
-                    },
-                    fh,
-                )
-        except Exception as e:
-            logger.warning("Impossible d'écrire %s: %s", thick_cache, e)
-
-    # 7) Upload converted/* (optionnel)
-    _s3_put(base_cache, f"converted/{pathlib.Path(base_cache).name}")
-    _s3_put(proj_cache, f"converted/{pathlib.Path(proj_cache).name}")
-    if os.path.isfile(thick_cache):
-        _s3_put(thick_cache, f"converted/{pathlib.Path(thick_cache).name}")
-
-    # 8) Publier une clé Redis pour fallback immédiat côté web
-    merged_for_redis = {
-        "volume_mm3": base_payload["volume_mm3"],
-        "bbox_mm": base_payload["bbox_mm"],
-        "thickness_min_mm": base_payload["thickness_min_mm"],
-        "thickness_max_mm": base_payload["thickness_max_mm"],
-        "projected_area_cm2": proj_payload["projected_area_cm2"],
-    }
-    _publish_redis(file_id, axis, merged_for_redis, ttl_sec=3600)
-
-    logger.info(
-        "Caches écrits file_id=%s axis=%s  bbox=%s  vol=%s cm3  t=(%s,%s) mm  proj=%s cm2  debug=%s",
-        file_id,
-        axis,
-        bbox,
-        f"{vol_cm3:.4f}" if vol_cm3 is not None else "None",
-        base_payload["thickness_min_mm"],
-        base_payload["thickness_max_mm"],
-        proj_payload["projected_area_cm2"],
-        dbg,
-    )
-
-    return {
-        "ok": True,
-        "file_id": file_id,
-        "axis": axis,
-        "written": {
-            "stats": base_cache,
-            "proj": proj_cache,
-            "thick": (thick_cache if os.path.isfile(thick_cache) else None),
-        },
-        "debug": dbg,
-    }
+            _write_empty_caches(file_id, axis, out_dir, dbg={"error": str(e)})
+        except Exception as ee:
+            logger.warning("write_empty_caches failed: %s", ee)
+        return {
+            "ok": False,
+            "file_id": file_id,
+            "axis": axis,
+            "written": {
+                "stats": os.path.join(out_dir, f"{file_id}.stats.json"),
+                "proj": os.path.join(out_dir, f"{file_id}.proj.{axis}.json"),
+                "thick": None,
+            },
+            "debug": {"error": str(e)},
+        }
