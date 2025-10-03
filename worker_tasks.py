@@ -20,9 +20,14 @@ AXES = ("X", "Y", "Z")
 STATS_SOFT_TIMEOUT_SEC = int(os.getenv("STATS_SOFT_TIMEOUT_SEC", "600"))  # 10 min
 TESSELLATION_TOL_MM = float(os.getenv("TESSELLATION_TOL_MM", "0.05"))
 TESSELLATION_ANG_RAD = float(os.getenv("TESSELLATION_ANG_RAD", "0.25"))
-# passes fines si besoin
+# passes fines supplémentaires et voxel fallback
 TESSELLATION_TOL_MM_FINE = float(os.getenv("TESSELLATION_TOL_MM_FINE", "0.02"))
-TESSELLATION_ANG_RAD_FINE = float(os.getenv("TESSELLATION_ANG_RAD_FINE", "0.1"))
+TESSELLATION_ANG_RAD_FINE = float(os.getenv("TESSELLATION_ANG_RAD_FINE", "0.10"))
+TESSELLATION_TOL_MM_ULTRA = float(os.getenv("TESSELLATION_TOL_MM_ULTRA", "0.008"))
+TESSELLATION_ANG_RAD_ULTRA = float(os.getenv("TESSELLATION_ANG_RAD_ULTRA", "0.07"))
+
+# voxelisation (dernière ligne de défense si le mesh n'est pas étanche)
+VOXEL_PITCH_MM = float(os.getenv("VOXEL_PITCH_MM", "0.05"))  # 50 µm par défaut
 
 WORKER_COMPUTE_THICKNESS = str(os.getenv("WORKER_COMPUTE_THICKNESS", "0")).lower() in ("1", "true", "yes", "on")
 THICKNESS_SAMPLES = int(os.getenv("THICKNESS_SAMPLES", "30000"))
@@ -264,20 +269,38 @@ def _mesh_repair_inplace(mesh: trimesh.Trimesh):
     except Exception:
         pass
 
+def _voxel_volume_mm3(mesh: trimesh.Trimesh, pitch_mm: float) -> float:
+    """
+    Estimation volumique robuste via voxélisation + remplissage.
+    Utile si le mesh n'est pas étanche (trous). Renvoie mm^3.
+    """
+    try:
+        vg = mesh.voxelized(pitch_mm)
+        vf = vg.fill()
+        # selon les versions de trimesh : .matrix (bool ndarray) ou .points
+        try:
+            n = int(np.sum(vf.matrix))
+        except Exception:
+            n = int(getattr(vf, "points", np.empty((0, 3))).shape[0])
+        return float(n) * (pitch_mm ** 3)
+    except Exception:
+        return 0.0
+
+
 def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.Trimesh:
     c = _occt()
-    # 1ère passe
-    try:
-        c["BRepMesh_IncrementalMesh"](shape, tol_mm, False, ang_rad, True)
-    except TypeError:
+
+    def _remesh(tol, ang):
         try:
-            c["BRepMesh_IncrementalMesh"](shape, tol_mm, False, ang_rad)
+            c["BRepMesh_IncrementalMesh"](shape, tol, False, ang, True)
         except TypeError:
-            c["BRepMesh_IncrementalMesh"](shape, tol_mm)
+            try:
+                c["BRepMesh_IncrementalMesh"](shape, tol, False, ang)
+            except TypeError:
+                c["BRepMesh_IncrementalMesh"](shape, tol)
 
     def _collect() -> trimesh.Trimesh:
-        verts: list[list[float]] = []
-        faces: list[list[int]] = []
+        verts, faces = [], []
         v_off = 0
         exp = c["TopExp_Explorer"](shape, c["TopAbs_FACE"])
         while exp.More():
@@ -316,18 +339,22 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
         _mesh_repair_inplace(m)
         return m
 
+    # passe 1
+    _remesh(tol_mm, ang_rad)
     mesh = _collect()
 
-    # Passe fine si non étanche ou peu de faces
+    # passe 2 (fine) si nécessaire
     if (not mesh.is_watertight) or (len(mesh.faces) < 2000):
         try:
-            try:
-                c["BRepMesh_IncrementalMesh"](shape, TESSELLATION_TOL_MM_FINE, False, TESSELLATION_ANG_RAD_FINE, True)
-            except TypeError:
-                try:
-                    c["BRepMesh_IncrementalMesh"](shape, TESSELLATION_TOL_MM_FINE, False, TESSELLATION_ANG_RAD_FINE)
-                except TypeError:
-                    c["BRepMesh_IncrementalMesh"](shape, TESSELLATION_TOL_MM_FINE)
+            _remesh(TESSELLATION_TOL_MM_FINE, TESSELLATION_ANG_RAD_FINE)
+            mesh = _collect()
+        except Exception:
+            pass
+
+    # passe 3 (ultra) si toujours pas étanche et nombre de faces faible
+    if (not mesh.is_watertight) or (len(mesh.faces) < 2000):
+        try:
+            _remesh(TESSELLATION_TOL_MM_ULTRA, TESSELLATION_ANG_RAD_ULTRA)
             mesh = _collect()
         except Exception:
             pass
@@ -483,42 +510,58 @@ def compute_and_cache_stats(
     bbox_mm = [bx, by, bz]
     bump_stage("bbox_ok", {"bbox_mm": bbox_mm, "faces_total": int(mesh.faces.shape[0]), "watertight": bool(mesh.is_watertight)})
 
-    # Volume & surface robustes (somme composantes + fallbacks)
-    def _robust_area_volume(m: trimesh.Trimesh) -> Tuple[float, float]:
-        total_area = 0.0
-        total_vol = 0.0
-        parts = m.split(only_watertight=False)
-        for p in parts:
-            try:
-                a = float(p.area)
-            except Exception:
-                a = 0.0
-            total_area += a
-            v = None
-            if p.is_watertight and np.isfinite(p.volume):
-                v = abs(float(p.volume))
+    # Volume & surface robustes (somme composantes + fallbacks + voxels)
+def _robust_area_volume(m: trimesh.Trimesh) -> Tuple[float, float, float]:
+    total_area = 0.0
+    total_vol_mesh = 0.0
+    parts = m.split(only_watertight=False)
+    for p in parts:
+        try:
+            total_area += float(p.area)
+        except Exception:
+            pass
+        v = None
+        if p.is_watertight and np.isfinite(p.volume):
+            v = abs(float(p.volume))
+        else:
+            q = p.copy()
+            _mesh_repair_inplace(q)
+            if q.is_watertight and np.isfinite(q.volume) and q.volume != 0:
+                v = abs(float(q.volume))
             else:
-                # tente de réparer et mesurer
-                q = p.copy()
-                _mesh_repair_inplace(q)
-                if q.is_watertight and np.isfinite(q.volume) and q.volume != 0:
-                    v = abs(float(q.volume))
-                else:
-                    # convex hull à défaut
-                    try:
-                        v = abs(float(q.convex_hull.volume))
-                    except Exception:
-                        v = 0.0
-            total_vol += v
-        return total_area, total_vol
+                try:
+                    v = abs(float(q.convex_hull.volume))
+                except Exception:
+                    v = 0.0
+        total_vol_mesh += v
+    try:
+        hull_vol = float(m.convex_hull.volume)
+    except Exception:
+        hull_vol = max(total_vol_mesh, 0.0)
+    return total_area, total_vol_mesh, hull_vol
 
-    if _deadline_reached(t0): raise TimeoutError("deadline before volume_surface")
-    area_mm2, vol_mm3 = _robust_area_volume(mesh)
-    bump_stage("volume_surface_ok", {
-        "surf_mm2": area_mm2,
-        "vol_mm3": vol_mm3,
-        "method": "mesh_parts",
-    })
+area_mm2, vol_mesh_mm3, hull_mm3 = _robust_area_volume(mesh)
+
+# voxel fallback si pas étanche (prend le meilleur entre mesh et voxels, sans dépasser le hull)
+vol_vox_mm3 = 0.0
+if not mesh.is_watertight:
+    vol_vox_mm3 = _voxel_volume_mm3(mesh, VOXEL_PITCH_MM)
+
+vol_mm3 = max(vol_mesh_mm3, vol_vox_mm3)
+if hull_mm3 > 0:
+    vol_mm3 = min(vol_mm3, hull_mm3 * 1.01)  # garde une marge de 1%
+
+bump_stage("volume_surface_ok", {
+    "surf_mm2": area_mm2,
+    "vol_mm3": vol_mm3,
+    "method": "mesh_parts+voxels" if (not mesh.is_watertight) else "mesh_parts",
+    "watertight": bool(mesh.is_watertight),
+    "faces_total": int(mesh.faces.shape[0]),
+    "hull_mm3": hull_mm3,
+    "vox_pitch_mm": VOXEL_PITCH_MM,
+    "vol_vox_mm3": vol_vox_mm3
+})
+
 
     # Aire projetée
     if _deadline_reached(t0): raise TimeoutError("deadline before projected_area")
