@@ -2,8 +2,6 @@
 import os
 import json
 import time
-import uuid
-import math
 import pathlib
 from typing import Optional, Tuple, Dict, Any
 
@@ -142,6 +140,7 @@ _OCCT_LIB = None
 def _occt():
     """
     Charge OCCT via OCP (cadquery-ocp) en priorité, fallback pythonocc-core.
+    Supporte les variantes de noms des méthodes statiques: ...Properties ou ...Properties_s.
     En cas d'échec, lève ImportError avec les VRAIES raisons (OCP puis OCC).
     """
     global _OCCT, _OCCT_LIB
@@ -153,30 +152,31 @@ def _occt():
 
     # Tentative OCP (cadquery-ocp)
     try:
-        from OCP.STEPControl import STEPControl_Reader
-        from OCP.IFSelect import IFSelect_RetDone
-        from OCP.BRepGProp import brepgprop_VolumeProperties, brepgprop_SurfaceProperties
-        from OCP.GProp import GProp_GProps
-        from OCP.Bnd import Bnd_Box
-        from OCP.BRepBndLib import brepbndlib_Add
-        from OCP.TopAbs import TopAbs_FACE
-        from OCP.TopExp import TopExp_Explorer
-        from OCP.BRep import BRep_Tool
-        from OCP.BRepMesh import BRepMesh_IncrementalMesh
+        # Import module-level namespaces puis résout les symboles
+        from OCP import STEPControl, IFSelect, BRepGProp, GProp, Bnd, BRepBndLib, TopAbs, TopExp, BRep, BRepMesh
+
+        # Résolution tolérante des fonctions statiques
+        vol_fn = getattr(BRepGProp, "brepgprop_VolumeProperties", None) or getattr(BRepGProp, "brepgprop_VolumeProperties_s", None)
+        surf_fn = getattr(BRepGProp, "brepgprop_SurfaceProperties", None) or getattr(BRepGProp, "brepgprop_SurfaceProperties_s", None)
+        if vol_fn is None or surf_fn is None:
+            raise ImportError(
+                "BRepGProp.*Properties introuvables. Dispo: "
+                + ", ".join([n for n in dir(BRepGProp) if "Properties" in n])
+            )
 
         _OCCT_LIB = "OCP"
         _OCCT = {
-            "STEPControl_Reader": STEPControl_Reader,
-            "IFSelect_RetDone": IFSelect_RetDone,
-            "brepgprop_VolumeProperties": brepgprop_VolumeProperties,
-            "brepgprop_SurfaceProperties": brepgprop_SurfaceProperties,
-            "GProp_GProps": GProp_GProps,
-            "Bnd_Box": Bnd_Box,
-            "brepbndlib_Add": brepbndlib_Add,
-            "TopAbs_FACE": TopAbs_FACE,
-            "TopExp_Explorer": TopExp_Explorer,
-            "BRep_Tool": BRep_Tool,
-            "BRepMesh_IncrementalMesh": BRepMesh_IncrementalMesh,
+            "STEPControl_Reader": STEPControl.STEPControl_Reader,
+            "IFSelect_RetDone": IFSelect.IFSelect_RetDone,
+            "brepgprop_VolumeProperties": vol_fn,
+            "brepgprop_SurfaceProperties": surf_fn,
+            "GProp_GProps": GProp.GProp_GProps,
+            "Bnd_Box": Bnd.Bnd_Box,
+            "brepbndlib_Add": BRepBndLib.brepbndlib_Add,
+            "TopAbs_FACE": TopAbs.TopAbs_FACE,
+            "TopExp_Explorer": TopExp.TopExp_Explorer,
+            "BRep_Tool": BRep.BRep_Tool,
+            "BRepMesh_IncrementalMesh": BRepMesh.BRepMesh_IncrementalMesh,
         }
         return _OCCT
     except Exception as e:
@@ -186,30 +186,29 @@ def _occt():
 
     # Tentative OCC (pythonocc-core)
     try:
-        from OCC.Core.STEPControl import STEPControl_Reader
-        from OCC.Core.IFSelect import IFSelect_RetDone
-        from OCC.Core.BRepGProp import brepgprop_VolumeProperties, brepgprop_SurfaceProperties
-        from OCC.Core.GProp import GProp_GProps
-        from OCC.Core.Bnd import Bnd_Box
-        from OCC.Core.BRepBndLib import brepbndlib_Add
-        from OCC.Core.TopAbs import TopAbs_FACE
-        from OCC.Core.TopExp import TopExp_Explorer
-        from OCC.Core.BRep import BRep_Tool
-        from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
+        from OCC.Core import STEPControl, IFSelect, BRepGProp, GProp, Bnd, BRepBndLib, TopAbs, TopExp, BRep, BRepMesh
+
+        vol_fn = getattr(BRepGProp, "brepgprop_VolumeProperties", None) or getattr(BRepGProp, "brepgprop_VolumeProperties_s", None)
+        surf_fn = getattr(BRepGProp, "brepgprop_SurfaceProperties", None) or getattr(BRepGProp, "brepgprop_SurfaceProperties_s", None)
+        if vol_fn is None or surf_fn is None:
+            raise ImportError(
+                "OCC BRepGProp.*Properties introuvables. Dispo: "
+                + ", ".join([n for n in dir(BRepGProp) if "Properties" in n])
+            )
 
         _OCCT_LIB = "OCC"
         _OCCT = {
-            "STEPControl_Reader": STEPControl_Reader,
-            "IFSelect_RetDone": IFSelect_RetDone,
-            "brepgprop_VolumeProperties": brepgprop_VolumeProperties,
-            "brepgprop_SurfaceProperties": brepgprop_SurfaceProperties,
-            "GProp_GProps": GProp_GProps,
-            "Bnd_Box": Bnd_Box,
-            "brepbndlib_Add": brepbndlib_Add,
-            "TopAbs_FACE": TopAbs_FACE,
-            "TopExp_Explorer": TopExp_Explorer,
-            "BRep_Tool": BRep_Tool,
-            "BRepMesh_IncrementalMesh": BRepMesh_IncrementalMesh,
+            "STEPControl_Reader": STEPControl.STEPControl_Reader,
+            "IFSelect_RetDone": IFSelect.IFSelect_RetDone,
+            "brepgprop_VolumeProperties": vol_fn,
+            "brepgprop_SurfaceProperties": surf_fn,
+            "GProp_GProps": GProp.GProp_GProps,
+            "Bnd_Box": Bnd.Bnd_Box,
+            "brepbndlib_Add": BRepBndLib.brepbndlib_Add,
+            "TopAbs_FACE": TopAbs.TopAbs_FACE,
+            "TopExp_Explorer": TopExp.TopExp_Explorer,
+            "BRep_Tool": BRep.BRep_Tool,
+            "BRepMesh_IncrementalMesh": BRepMesh.BRepMesh_IncrementalMesh,
         }
         return _OCCT
     except Exception as e2:
@@ -229,7 +228,6 @@ def _occt():
     raise ImportError(msg)
 
 def occt_lib_name() -> Optional[str]:
-    # Ne pas masquer l'exception : on veut voir l'erreur réelle si _occt() échoue.
     _occt()
     return _OCCT_LIB
 
@@ -409,7 +407,7 @@ def compute_and_cache_stats(
     bump_stage("start", {"file_id": file_id, "axis": axis})
 
     # Trace runtime (diagnostic)
-    import sys
+    import sys, traceback
     bump_stage("runtime_env", {
         "python": sys.executable,
         "cwd": os.getcwd(),
@@ -436,7 +434,6 @@ def compute_and_cache_stats(
     bump_stage("step_ready", {"step_path": step_path, "step_ext": step_ext})
 
     # OCCT lib (OCP/OCC) — log stack trace complète si échec
-    import traceback
     try:
         _ = _occt()  # force l'import; lève avec message détaillé si problème
         lib = occt_lib_name() or "?"
