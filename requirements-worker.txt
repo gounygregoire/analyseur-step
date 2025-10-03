@@ -4,24 +4,21 @@ rq==1.15.1
 boto3==1.35.0
 requests==2.32.4
 
-# --- NumPy stack (reste en 1.x) ---
-numpy>=1.24
-scipy==1.10.1
+# --- NumPy stack compatible ---
+numpy>=1.24,<2.0
+scipy>=1.11,<1.12
 scikit-image==0.21.0
 
 # --- Géométrie / meshes ---
-trimesh>=4.4
+trimesh>=4.8
 networkx==3.4.2
 Rtree==1.2.0
 ezdxf==1.4.2
 
-# --- CadQuery / OCP (inclut vtk via wheels) ---
-cadquery==2.4.0
+# --- OCCT (bindings) via CadQuery OCP wheels ---
 cadquery-ocp==7.7.2.2b2
-vtk==9.2.6
-OCP==7.7.2
 
-# --- IMPORTANT : ne pas installer ces libs dans le worker ---
-# nlopt      # -> déclenche numpy>=2, conflit avec scipy 1.10
-# casadi     # lourd, inutile ici
-# pyembree   # force trimesh<4 ; inutile pour la voie voxel/EDT
+# À ne PAS installer:
+# OCP
+# vtk
+# cadquery
