@@ -133,6 +133,33 @@ def _ensure_local_step(file_id: str, step_ext_hint: Optional[str]) -> Optional[s
     bump_stage("pull_step_s3_miss")
     return None
 
+# --- helpers pour compat nommage OCCT/OCP ---
+def _resolve_brepbndlib_add(mod):
+    """
+    Trouve la bonne fonction 'Add' de BRepBndLib selon le binding:
+    - pythonocc:          brepbndlib_Add
+    - OCP (cadquery-ocp): Add  (ou parfois Add_s)
+    Retourne un callable ou None.
+    """
+    for name in ("brepbndlib_Add", "BRepBndLib_Add", "Add", "Add_s"):
+        f = getattr(mod, name, None)
+        if callable(f):
+            return f
+    return None
+
+def _safe_brepbndlib_add(add_fn, shape, box):
+    """
+    Appelle la fonction résolue avec la bonne signature.
+    Sur OCCT : Add(shape, box, useTriangulation=False)
+    On essaye (shape, box, False), puis (shape, box) si la 1ère lève TypeError.
+    """
+    if add_fn is None:
+        raise AttributeError("BRepBndLib.Add introuvable sur ce binding")
+    try:
+        return add_fn(shape, box, False)
+    except TypeError:
+        return add_fn(shape, box)
+
 # ---------- OCCT loader (OCP prioritaire, OCC fallback) ----------
 _OCCT = None
 _OCCT_LIB = None
@@ -151,22 +178,23 @@ def _occt():
 
     # Tentative OCP
     try:
-        from OCP import STEPControl, IFSelect, Bnd, BRepBndLib, TopAbs, TopExp, BRep, BRepMesh, GProp, BRepGProp  # noqa: F401
-        _OCCT_LIB = "OCP"
-        _OCCT = {
-            "STEPControl_Reader": STEPControl.STEPControl_Reader,
-            "IFSelect_RetDone": IFSelect.IFSelect_RetDone,
-            "Bnd_Box": Bnd.Bnd_Box,
-            "brepbndlib_Add": BRepBndLib.brepbndlib_Add,
-            "TopAbs_FACE": TopAbs.TopAbs_FACE,
-            "TopExp_Explorer": TopExp.TopExp_Explorer,
-            "BRep_Tool": BRep.BRep_Tool,
-            "BRepMesh_IncrementalMesh": BRepMesh.BRepMesh_IncrementalMesh,
-            # on expose les modules utiles pour introspection/évolutions
-            "GProp": GProp,
-            "BRepGProp": BRepGProp,
-        }
-        return _OCCT
+        from OCC.Core import STEPControl, IFSelect, Bnd, BRepBndLib, TopAbs, TopExp, BRep, BRepMesh, GProp, BRepGProp  # noqa: F401
+brep_add = _resolve_brepbndlib_add(BRepBndLib)
+_OCCT_LIB = "OCC"
+_OCCT = {
+    "STEPControl_Reader": STEPControl.STEPControl_Reader,
+    "IFSelect_RetDone": IFSelect.IFSelect_RetDone,
+    "Bnd_Box": Bnd.Bnd_Box,
+    "brepbndlib_Add": brep_add,   # <—
+    "TopAbs_FACE": TopAbs.TopAbs_FACE,
+    "TopExp_Explorer": TopExp.TopExp_Explorer,
+    "BRep_Tool": BRep.BRep_Tool,
+    "BRepMesh_IncrementalMesh": BRepMesh.BRepMesh_IncrementalMesh,
+    "GProp": GProp,
+    "BRepGProp": BRepGProp,
+}
+return _OCCT
+
     except Exception as e:
         import traceback
         ocp_err = f"{e.__class__.__name__}: {e}\n{traceback.format_exc()}"
@@ -220,7 +248,7 @@ def _shape_bbox_mm(shape) -> Tuple[float, float, float, float, float, float]:
     c = _occt()
     box = c["Bnd_Box"]()
     box.SetGap(0.0)
-    c["brepbndlib_Add"](shape, box, False)
+    _safe_brepbndlib_add(c["brepbndlib_Add"], shape, box)  # <— remplace l’appel direct
     xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
     return float(xmin), float(ymin), float(zmin), float(xmax), float(ymax), float(zmax)
 
