@@ -563,10 +563,13 @@ bump_stage("volume_surface_ok", {
 })
 
 
-    # Aire projetée
-    if _deadline_reached(t0): raise TimeoutError("deadline before projected_area")
+        # 5) Projected area
+    if _deadline_reached(t0):
+        raise TimeoutError("deadline before projected_area")
+    bump_stage("projected_area_begin", {"axis": axis})
     proj_cm2 = _projected_area_cm2(mesh, axis)
     bump_stage("projected_area_ok", {"projected_area_cm2": proj_cm2})
+
 
     # Épaisseurs (optionnel)
     tmin = tmax = None
