@@ -146,7 +146,7 @@ def _occt():
         return _OCCT
     ocp_err = None
     try:
-        from OCP import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh, TopoDS
+        from OCP import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh, TopoDS, TopLoc
         _OCCT_LIB = "OCP"
         _OCCT = {
             "STEPControl_Reader": STEPControl.STEPControl_Reader,
@@ -158,12 +158,13 @@ def _occt():
             "TopoDS": TopoDS,
             "TopoDS_Face": getattr(TopoDS, "TopoDS_Face", None),
             "topods_Face": getattr(TopoDS, "topods_Face", None),
+            "TopLoc_Location": TopLoc.TopLoc_Location,
         }
         return _OCCT
     except Exception as e:
         ocp_err = e
     try:
-        from OCC.Core import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh, TopoDS
+        from OCC.Core import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh, TopoDS, TopLoc
         _OCCT_LIB = "OCC"
         _OCCT = {
             "STEPControl_Reader": STEPControl.STEPControl_Reader,
@@ -175,6 +176,7 @@ def _occt():
             "TopoDS": TopoDS,
             "TopoDS_Face": getattr(TopoDS, "TopoDS_Face", None),
             "topods_Face": getattr(TopoDS, "topods_Face", None),
+            "TopLoc_Location": TopLoc.TopLoc_Location,
         }
         return _OCCT
     except Exception as e2:
@@ -202,21 +204,17 @@ def _read_step_shape(step_path: str):
     return reader.OneShape()
 
 def _as_face(s, c):
-    """Essaye de caster s -> TopoDS_Face, sinon None."""
     TD = c.get("TopoDS")
     TDF = c.get("TopoDS_Face")
     tf = c.get("topods_Face")
-    # 1) topods_Face
     if tf is not None:
         try:
             f = tf(s)
-            # valider (objet non nul)
             if hasattr(f, "IsNull") and f.IsNull():
                 return None
             return f
         except Exception:
             pass
-    # 2) DownCast
     if TDF is not None and hasattr(TDF, "DownCast"):
         try:
             f = TDF.DownCast(s)
@@ -229,17 +227,16 @@ def _as_face(s, c):
 
 def _try_mesh(shape, tol_mm: float, ang_rad: float, c):
     try:
-        # on essaye d'abord avec isRelative=True (certaines wheels mesurent mieux)
-        c["BRepMesh_IncrementalMesh"](shape, tol_mm, True, ang_rad, True)
+        c["BRepMesh_IncrementalMesh"](shape, tol_mm, False, ang_rad, True)
     except TypeError:
         try:
-            c["BRepMesh_IncrementalMesh"](shape, tol_mm, True, ang_rad)
-        except TypeError:
-            # dernier essai en absolu
             c["BRepMesh_IncrementalMesh"](shape, tol_mm, False, ang_rad)
+        except TypeError:
+            c["BRepMesh_IncrementalMesh"](shape, tol_mm)
 
-def _tri_from(BT, obj, loc):
-    """Essaie Triangulation/ Triangulation_s (avec ou sans purpose)."""
+def _tri_from(BT, obj, c):
+    """Essaie Triangulation / Triangulation_s avec un TopLoc_Location() vierge (sortie)."""
+    loc = c["TopLoc_Location"]()
     tri = None
     try:
         if hasattr(BT, "Triangulation"):
@@ -261,21 +258,16 @@ def _collect_tris(shape, c) -> Tuple[list, list]:
     faces: list[list[int]] = []
     v_off = 0
     exp = c["TopExp_Explorer"](shape, c["TopAbs_FACE"])
+    BT = c["BRep_Tool"]
     while exp.More():
         s = exp.Current()
         exp.Next()
         f = _as_face(s, c)
-        # location: on prend celui de l'objet qu'on va passer
-        loc_f = f.Location() if (f is not None and hasattr(f, "Location")) else None
-        loc_s = s.Location() if hasattr(s, "Location") else None
-
-        BT = c["BRep_Tool"]
         tri = None
         if f is not None:
-            tri = _tri_from(BT, f, loc_f)
+            tri = _tri_from(BT, f, c)
         if tri is None:
-            # fallback: certaines wheels acceptent le Shape directement
-            tri = _tri_from(BT, s, loc_s)
+            tri = _tri_from(BT, s, c)  # fallback: certaines wheels acceptent le Shape
 
         if tri is None:
             continue
@@ -325,9 +317,8 @@ def _collect_tris(shape, c) -> Tuple[list, list]:
 
 def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.Trimesh:
     c = _occt()
-    tol_candidates = [tol_mm, max(tol_mm * 2.0, 0.05), 0.2]
-    last_err = None
-    for tol in tol_candidates:
+    # on garde la tolérance demandée en premier, puis un fallback plus lâche
+    for tol in (tol_mm, max(tol_mm * 2.0, 0.05), 0.2):
         try:
             _try_mesh(shape, tol, ang_rad, c)
             verts, faces = _collect_tris(shape, c)
@@ -337,11 +328,8 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
                     faces=np.asarray(faces, dtype=int),
                     process=True,
                 )
-        except Exception as e:
-            last_err = e
+        except Exception:
             continue
-    if last_err:
-        raise RuntimeError(f"Triangulation vide après fallback (dernier: {last_err})")
     raise RuntimeError("Triangulation vide")
 
 def _bbox_from_mesh_mm(mesh: trimesh.Trimesh) -> Tuple[float, float, float]:
@@ -473,8 +461,7 @@ def _cache_paths(file_id: str, axis: str):
     return base, proj, thick
 
 def _write_json(path: str, data: dict):
-    os.makedirs(os.path.dirname(path), exist_ok=True
-    )
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(data, fh)
 
