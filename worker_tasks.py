@@ -224,7 +224,7 @@ def _read_step_shape(step_path: str):
 def _as_face(s, c):
     """
     Convertit un TopoDS_Shape en TopoDS_Face.
-    On reste PRUDENT : on ne rejette rien juste parce qu'une validation échoue.
+    Si le cast échoue → retourne None (on skip la face).
     """
     TD = c.get("TopoDS")
     TDF = c.get("TopoDS_Face")
@@ -233,19 +233,21 @@ def _as_face(s, c):
     # 1) topods_Face si dispo
     if tf is not None:
         try:
-            return tf(s)
+            f = tf(s)
+            return f
         except Exception:
             pass
 
     # 2) DownCast si dispo
     if TDF is not None and hasattr(TDF, "DownCast"):
         try:
-            return TDF.DownCast(s)
+            f = TDF.DownCast(s)
+            return f
         except Exception:
             pass
 
-    # 3) Fallback : beaucoup de wheels restent tolérantes et acceptent s comme Face
-    return s
+    # 3) échec → on skip
+    return None
 
 def _try_mesh(shape, tol_mm: float, ang_rad: float, c):
     """Applique la tesselation OCCT (avec compat de signature)."""
@@ -266,6 +268,9 @@ def _collect_tris(shape, c) -> Tuple[list, list]:
         exp.Next()
 
         f = _as_face(s, c)
+        if f is None:
+            continue
+
         loc = f.Location() if hasattr(f, "Location") else None
 
         BT = c["BRep_Tool"]
@@ -356,7 +361,6 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
             last_err = e
             continue
 
-    # Si vraiment rien, on échoue explicitement
     if last_err:
         raise RuntimeError(f"Triangulation vide après fallback (dernier: {last_err})")
     raise RuntimeError("Triangulation vide")
