@@ -239,35 +239,63 @@ def _as_face(s, c):
 
 def _face_triangulation(face, c):
     """
-    Utilise BRep_Tool.Triangulation_s(face, face.Location())
-    (ta wheel n’expose pas Triangulation).
+    Récupère une Poly_Triangulation pour 'face'.
+    Essaie Triangulation_s(face, loc[, purpose]) avec plusieurs purposes.
+    Retourne l'objet tri si présent (même si la taille sera testée ensuite).
     """
     BT = c["BRep_Tool"]
     loc = face.Location()
+
+    # Wheels OCP récentes: Triangulation_s(face, loc, purpose:int=0)
     if hasattr(BT, "Triangulation_s"):
+        # ordre d'essai: sans purpose (si signature ancienne), puis 0,1,2
+        tries = [
+            (face, loc),
+            (face, loc, 0),
+            (face, loc, 1),
+            (face, loc, 2),
+        ]
+        for args in tries:
+            try:
+                tri = BT.Triangulation_s(*args)
+                if tri is not None:
+                    # certaines wheels renvoient un handle "non-null" mais vide ;
+                    # on laissera la fonction appelante vérifier la taille.
+                    return tri
+            except TypeError:
+                # signature inadaptée pour cet essai, on continue
+                continue
+            except Exception:
+                continue
+        return None
+
+    # Très vieux bindings: Triangulation(face, loc)
+    if hasattr(BT, "Triangulation"):
         try:
-            return BT.Triangulation_s(face, loc)
-        except TypeError:
-            return BT.Triangulation_s(face, loc, 0)
+            return BT.Triangulation(face, loc)
+        except Exception:
+            return None
+
     return None
 
 def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.Trimesh:
     c = _occt()
 
-    # Maillage global
-    ok_mesh = False
+    # Maillage global du shape (certaines wheels suffisent, d'autres non)
+    meshed = False
     try:
         c["BRepMesh_IncrementalMesh"](shape, tol_mm, False, ang_rad, True)
-        ok_mesh = True
+        meshed = True
     except TypeError:
         pass
-    if not ok_mesh:
+    if not meshed:
         try:
             c["BRepMesh_IncrementalMesh"](shape, tol_mm, False, ang_rad)
-            ok_mesh = True
+            meshed = True
         except TypeError:
             pass
-    if not ok_mesh:
+    if not meshed:
+        # dernier recours
         c["BRepMesh_IncrementalMesh"](shape, tol_mm)
 
     verts: list[list[float]] = []
@@ -276,49 +304,68 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
 
     exp = c["TopExp_Explorer"](shape, c["TopAbs_FACE"])
     while exp.More():
-        s = exp.Current()   # TopoDS_Shape représentant une face
+        s = exp.Current()
         exp.Next()
 
         f = _as_face(s, c)
         if f is None:
             continue
 
+        # 1) première tentative: lire la triangulation existante
         tri = _face_triangulation(f, c)
-        if tri is None:
-            continue
 
-        # Extraction (2 familles d’API selon wheels)
+        # 2) si absente ou vide, on re-maillage la face elle-même puis on ré-essaye
+        def _tri_sizes(_tri):
+            if _tri is None:
+                return 0, 0
+            try:
+                return _tri.Nodes().Size(), _tri.Triangles().Size()
+            except Exception:
+                try:
+                    return _tri.NbNodes(), _tri.NbTriangles()
+                except Exception:
+                    return 0, 0
+
+        npts, ntri = _tri_sizes(tri)
+        if npts == 0 or ntri == 0:
+            # re-mesh de la face (certaines wheels n'attachent pas le tri via le maillage global)
+            try:
+                try:
+                    c["BRepMesh_IncrementalMesh"](f, tol_mm, False, ang_rad, True)
+                except TypeError:
+                    try:
+                        c["BRepMesh_IncrementalMesh"](f, tol_mm, False, ang_rad)
+                    except TypeError:
+                        c["BRepMesh_IncrementalMesh"](f, tol_mm)
+            except Exception:
+                pass
+            tri = _face_triangulation(f, c)
+            npts, ntri = _tri_sizes(tri)
+
+        if npts == 0 or ntri == 0:
+            continue  # pas de triangles utilisables sur cette face
+
+        # Extraction des points/triangles (deux familles d'API selon wheels)
         try:
             nodes = tri.Nodes()
             tris = tri.Triangles()
-            npts, ntri = nodes.Size(), tris.Size()
-
             def get_node(i):
                 p = nodes.Value(i)
                 return (float(p.X()), float(p.Y()), float(p.Z()))
-
             def get_tri(i):
                 t = tris.Value(i)
-                a, b, cidx = t.Get()
+                a, b, cidx = t.Get()  # 1-based
                 return (a, b, cidx)
         except Exception:
-            try:
-                npts, ntri = tri.NbNodes(), tri.NbTriangles()
-            except Exception:
-                continue
-
             def get_node(i):
                 p = tri.Node(i)
                 return (float(p.X()), float(p.Y()), float(p.Z()))
-
             def get_tri(i):
                 t = tri.Triangle(i)
                 a, b, cidx = t.Get()
                 return (a, b, cidx)
 
-        if npts <= 0 or ntri <= 0:
-            continue
-
+        # empilement
         for i in range(1, npts + 1):
             x, y, z = get_node(i)
             verts.append([x, y, z])
