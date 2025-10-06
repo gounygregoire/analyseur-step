@@ -33,7 +33,7 @@ UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "/tmp/uploads")
 OUTPUT_FOLDER = os.getenv("OUTPUT_FOLDER", "/tmp/converted")
 AXES = ("X", "Y", "Z")
 
-STATS_SOFT_TIMEOUT_SEC = int(os.getenv("STATS_SOFT_TIMEOUT_SEC", "600"))  # 10 min
+STATS_SOFT_TIMEOUT_SEC = int(os.getenv("STATS_SOFT_TIMEOUT_SEC", "600"))
 TESSELLATION_TOL_MM = float(os.getenv("TESSELLATION_TOL_MM", "0.05"))
 TESSELLATION_ANG_RAD = float(os.getenv("TESSELLATION_ANG_RAD", "0.25"))
 
@@ -158,7 +158,7 @@ def _occt():
 
     ocp_err = None
     try:
-        from OCP import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh
+        from OCP import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh, TopoDS
         _OCCT_LIB = "OCP"
         _OCCT = {
             "STEPControl_Reader": STEPControl.STEPControl_Reader,
@@ -167,6 +167,10 @@ def _occt():
             "TopExp_Explorer": TopExp.TopExp_Explorer,
             "BRep_Tool": BRep.BRep_Tool,
             "BRepMesh_IncrementalMesh": BRepMesh.BRepMesh_IncrementalMesh,
+            # pour caster les faces
+            "TopoDS": TopoDS,
+            "TopoDS_Face": getattr(TopoDS, "TopoDS_Face", None),
+            "topods_Face": getattr(TopoDS, "topods_Face", None),
         }
         return _OCCT
     except Exception as e:
@@ -208,50 +212,62 @@ def _read_step_shape(step_path: str):
         raise RuntimeError("STEP transfer failed")
     return reader.OneShape()
 
-def _face_triangulation(face, c):
+def _as_face(s, c):
     """
-    Version qui a fonctionné chez toi :
-    - on passe la Location() de la face à Triangulation / Triangulation_s
-    - on gère la variante à 3 arguments (purpose=0) si besoin
+    Convertit un TopoDS_Shape en TopoDS_Face de manière robuste (OCP 7.7.x).
+    Essaye topods_Face, puis TopoDS_Face.DownCast. Retourne None si impossible.
     """
-    BT = c["BRep_Tool"]
-    loc = face.Location()  # on réutilise la location de la face, comme avant
-
-    if hasattr(BT, "Triangulation"):
+    tf = c.get("topods_Face")
+    if tf is not None:
         try:
-            return BT.Triangulation(face, loc)
+            f = tf(s)
+            _ = f.Location()
+            return f
         except Exception:
             pass
 
+    TDF = c.get("TopoDS_Face")
+    if TDF is not None and hasattr(TDF, "DownCast"):
+        try:
+            f = TDF.DownCast(s)
+            _ = f.Location()
+            return f
+        except Exception:
+            pass
+
+    return None
+
+def _face_triangulation(face, c):
+    """
+    Utilise BRep_Tool.Triangulation_s(face, face.Location())
+    (ta wheel n’expose pas Triangulation).
+    """
+    BT = c["BRep_Tool"]
+    loc = face.Location()
     if hasattr(BT, "Triangulation_s"):
         try:
             return BT.Triangulation_s(face, loc)
         except TypeError:
-            # certaines wheels demandent un 3e paramètre (purpose)
-            try:
-                return BT.Triangulation_s(face, loc, 0)
-            except Exception:
-                pass
-
+            return BT.Triangulation_s(face, loc, 0)
     return None
 
 def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.Trimesh:
     c = _occt()
 
-    # Maillage global (signatures possibles selon wheels)
-    tried = False
+    # Maillage global
+    ok_mesh = False
     try:
         c["BRepMesh_IncrementalMesh"](shape, tol_mm, False, ang_rad, True)
-        tried = True
+        ok_mesh = True
     except TypeError:
         pass
-    if not tried:
+    if not ok_mesh:
         try:
             c["BRepMesh_IncrementalMesh"](shape, tol_mm, False, ang_rad)
-            tried = True
+            ok_mesh = True
         except TypeError:
             pass
-    if not tried:
+    if not ok_mesh:
         c["BRepMesh_IncrementalMesh"](shape, tol_mm)
 
     verts: list[list[float]] = []
@@ -260,14 +276,18 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
 
     exp = c["TopExp_Explorer"](shape, c["TopAbs_FACE"])
     while exp.More():
-        f = exp.Current()            # Explorer est configuré sur FACE → c’est une face
+        s = exp.Current()   # TopoDS_Shape représentant une face
         exp.Next()
+
+        f = _as_face(s, c)
+        if f is None:
+            continue
 
         tri = _face_triangulation(f, c)
         if tri is None:
             continue
 
-        # Extraction robuste (deux familles d’API suivant les wheels)
+        # Extraction (2 familles d’API selon wheels)
         try:
             nodes = tri.Nodes()
             tris = tri.Triangles()
@@ -279,7 +299,7 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
 
             def get_tri(i):
                 t = tris.Value(i)
-                a, b, cidx = t.Get()  # 1-based
+                a, b, cidx = t.Get()
                 return (a, b, cidx)
         except Exception:
             try:
@@ -327,7 +347,7 @@ def _bbox_from_mesh_mm(mesh: trimesh.Trimesh) -> Tuple[float, float, float]:
 def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, str]:
     """
     Aire de la silhouette (union des projections orthographiques) en cm^2.
-    Retourne (aire_cm2, methode), où methode est 'shapely' ou 'raster_fallback'.
+    Retourne (aire_cm2, methode), où methode ∈ {'shapely','raster_fallback','empty','unavailable'}.
     """
     axis = (axis or "Z").upper()
     if axis not in AXES:
@@ -341,7 +361,7 @@ def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, 
     else:
         tri2 = tri3[:, :, [1, 2]]      # YZ
 
-    # Filtrer triangles dégénérés après projection
+    # Filtre triangles dégénérés après projection
     v0 = tri2[:, 0, :]
     v1 = tri2[:, 1, :]
     v2 = tri2[:, 2, :]
