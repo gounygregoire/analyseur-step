@@ -262,36 +262,33 @@ def _try_mesh(c, target, tol_mm: float, ang_rad: float) -> bool:
         try:
             mesher = c["BRepMesh_IncrementalMesh"](target, float(lin), bool(rel), float(ang), bool(par))
             tried = True
-            # certaines wheels exposent Perform()
             try:
-                _ = getattr(mesher, "Perform", None)
-                if callable(_):
-                    _()
+                perf = getattr(mesher, "Perform", None)
+                if callable(perf):
+                    perf()
             except Exception:
                 pass
         except TypeError:
-            # versions à signature courte
             try:
                 mesher = c["BRepMesh_IncrementalMesh"](target, float(lin), bool(rel), float(ang))
                 tried = True
                 try:
-                    _ = getattr(mesher, "Perform", None)
-                    if callable(_):
-                        _()
+                    perf = getattr(mesher, "Perform", None)
+                    if callable(perf):
+                        perf()
                 except Exception:
                     pass
             except Exception:
                 continue
         except Exception:
             continue
-    # dernier essai minimaliste
     if not tried:
         try:
             mesher = c["BRepMesh_IncrementalMesh"](target, tol_mm)
             try:
-                _ = getattr(mesher, "Perform", None)
-                if callable(_):
-                    _()
+                perf = getattr(mesher, "Perform", None)
+                if callable(perf):
+                    perf()
             except Exception:
                 pass
             tried = True
@@ -309,7 +306,7 @@ def _face_triangulation(face, c):
     """
     BT = c["BRep_Tool"]
 
-    # 1) signature officielle by-ref (meilleure compat)
+    # 1) signature by-ref
     if hasattr(BT, "Triangulation_s") and "TopLoc_Location" in c:
         holder = c["TopLoc_Location"]()
         for args in ((face, holder), (face, holder, 0), (face, holder, 1), (face, holder, 2)):
@@ -322,7 +319,7 @@ def _face_triangulation(face, c):
             except Exception:
                 continue
 
-    # 2) variante qui marchait chez toi (face.Location())
+    # 2) variante face.Location()
     if hasattr(BT, "Triangulation_s"):
         loc_face = face.Location()
         for args in ((face, loc_face), (face, loc_face, 0), (face, loc_face, 1), (face, loc_face, 2)):
@@ -372,7 +369,7 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
         if f is None:
             continue
 
-        # 1) tenter de lire la triangulation
+        # 1) lire la triangulation
         tri = _face_triangulation(f, c)
         npts, ntri = _tri_counts(tri)
 
@@ -414,7 +411,6 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
         # dernier filet : remaillage global plus permissif puis second passage
         if any_face and not any_tri:
             _try_mesh(c, shape, tol_mm * 10.0, max(ang_rad * 1.5, 0.1))
-            # deuxième passe
             exp = c["TopExp_Explorer"](shape, c["TopAbs_FACE"])
             while exp.More():
                 s = exp.Current(); exp.Next()
@@ -603,7 +599,7 @@ def _cache_paths(file_id: str, axis: str):
 
 def _write_json(path: str, data: dict):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as fh):
+    with open(path, "w", encoding="utf-8") as fh:
         json.dump(data, fh)
 
 def _publish_redis(file_id: str, axis: str, payload: dict):
