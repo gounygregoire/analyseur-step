@@ -159,7 +159,7 @@ def _occt():
     ocp_err = None
     try:
         from OCP import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh, TopoDS
-        from OCP.TopLoc import TopLoc_Location  # dispo si on veut tester cette variante
+        from OCP.TopLoc import TopLoc_Location
         _OCCT_LIB = "OCP"
         _OCCT = {
             "STEPControl_Reader": STEPControl.STEPControl_Reader,
@@ -222,21 +222,15 @@ def _as_face(s, c):
     tf = c.get("topods_Face")
     if tf is not None:
         try:
-            f = tf(s)
-            _ = f.Location()
-            return f
+            f = tf(s); _ = f.Location(); return f
         except Exception:
             pass
-
     TDF = c.get("TopoDS_Face")
     if TDF is not None and hasattr(TDF, "DownCast"):
         try:
-            f = TDF.DownCast(s)
-            _ = f.Location()
-            return f
+            f = TDF.DownCast(s); _ = f.Location(); return f
         except Exception:
             pass
-
     return None
 
 def _tri_counts(tri) -> Tuple[int, int]:
@@ -250,18 +244,87 @@ def _tri_counts(tri) -> Tuple[int, int]:
         except Exception:
             return 0, 0
 
+def _try_mesh(c, target, tol_mm: float, ang_rad: float) -> bool:
+    """
+    Essaie plusieurs signatures de BRepMesh_IncrementalMesh + Perform().
+    Retourne True si au moins un appel n'a pas levé d'exception.
+    """
+    tried = False
+    combos = [
+        (tol_mm, True,  ang_rad, True),
+        (tol_mm, False, ang_rad, True),
+        (tol_mm, True,  ang_rad, False),
+        (tol_mm, False, ang_rad, False),
+        (tol_mm, True,  0.0,     True),
+        (tol_mm, False, 0.0,     False),
+    ]
+    for lin, rel, ang, par in combos:
+        try:
+            mesher = c["BRepMesh_IncrementalMesh"](target, float(lin), bool(rel), float(ang), bool(par))
+            tried = True
+            # certaines wheels exposent Perform()
+            try:
+                _ = getattr(mesher, "Perform", None)
+                if callable(_):
+                    _()
+            except Exception:
+                pass
+        except TypeError:
+            # versions à signature courte
+            try:
+                mesher = c["BRepMesh_IncrementalMesh"](target, float(lin), bool(rel), float(ang))
+                tried = True
+                try:
+                    _ = getattr(mesher, "Perform", None)
+                    if callable(_):
+                        _()
+                except Exception:
+                    pass
+            except Exception:
+                continue
+        except Exception:
+            continue
+    # dernier essai minimaliste
+    if not tried:
+        try:
+            mesher = c["BRepMesh_IncrementalMesh"](target, tol_mm)
+            try:
+                _ = getattr(mesher, "Perform", None)
+                if callable(_):
+                    _()
+            except Exception:
+                pass
+            tried = True
+        except Exception:
+            pass
+    return tried
+
 def _face_triangulation(face, c):
     """
-    Récupère une Poly_Triangulation pour 'face' en essayant
-    d'abord EXACTEMENT comme quand ça marchait chez toi (face.Location()),
-    puis les variantes TopLoc_Location() et les purposes 0/1/2.
+    Récupère une Poly_Triangulation pour 'face'.
+    1) Essai signature by-ref (holder TopLoc_Location())
+    2) Essai avec face.Location()
+    3) Ancienne Triangulation(face, loc) si dispo
+    On accepte la première triangulation non vide.
     """
     BT = c["BRep_Tool"]
 
-    # 1) priorité à l'ancien comportement (qui fonctionnait chez toi)
-    loc_face = face.Location()
+    # 1) signature officielle by-ref (meilleure compat)
+    if hasattr(BT, "Triangulation_s") and "TopLoc_Location" in c:
+        holder = c["TopLoc_Location"]()
+        for args in ((face, holder), (face, holder, 0), (face, holder, 1), (face, holder, 2)):
+            try:
+                tri = BT.Triangulation_s(*args)
+                if _tri_counts(tri)[0] > 0:
+                    return tri
+            except TypeError:
+                continue
+            except Exception:
+                continue
+
+    # 2) variante qui marchait chez toi (face.Location())
     if hasattr(BT, "Triangulation_s"):
-        # sans purpose puis 0/1/2
+        loc_face = face.Location()
         for args in ((face, loc_face), (face, loc_face, 0), (face, loc_face, 1), (face, loc_face, 2)):
             try:
                 tri = BT.Triangulation_s(*args)
@@ -272,22 +335,9 @@ def _face_triangulation(face, c):
             except Exception:
                 continue
 
-    # 2) variante avec holder TopLoc_Location() (bindings récents)
-    if "TopLoc_Location" in c and hasattr(BT, "Triangulation_s"):
-        loc_holder = c["TopLoc_Location"]()
-        for args in ((face, loc_holder), (face, loc_holder, 0), (face, loc_holder, 1), (face, loc_holder, 2)):
-            try:
-                tri = BT.Triangulation_s(*args)
-                if _tri_counts(tri)[0] > 0:
-                    return tri
-            except TypeError:
-                continue
-            except Exception:
-                continue
-
-    # 3) Très vieux bindings: Triangulation(face, loc)
+    # 3) très vieux bindings
     if hasattr(BT, "Triangulation"):
-        for loc_any in (loc_face, c.get("TopLoc_Location", lambda: None)() if "TopLoc_Location" in c else None):
+        for loc_any in (face.Location(), c.get("TopLoc_Location", lambda: None)() if "TopLoc_Location" in c else None):
             if loc_any is None:
                 continue
             try:
@@ -302,61 +352,44 @@ def _face_triangulation(face, c):
 def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.Trimesh:
     c = _occt()
 
-    # Maillage global du shape (comme avant)
-    meshed = False
-    try:
-        c["BRepMesh_IncrementalMesh"](shape, tol_mm, False, ang_rad, True)
-        meshed = True
-    except TypeError:
-        pass
-    if not meshed:
-        try:
-            c["BRepMesh_IncrementalMesh"](shape, tol_mm, False, ang_rad)
-            meshed = True
-        except TypeError:
-            pass
-    if not meshed:
-        c["BRepMesh_IncrementalMesh"](shape, tol_mm)
+    # Maillage global (renforcé)
+    _try_mesh(c, shape, tol_mm, ang_rad)
 
     verts: list[list[float]] = []
     faces: list[list[int]] = []
     v_off = 0
 
     exp = c["TopExp_Explorer"](shape, c["TopAbs_FACE"])
+    any_face = False
+    any_tri  = False
+
     while exp.More():
         s = exp.Current()
         exp.Next()
+        any_face = True
 
         f = _as_face(s, c)
         if f is None:
             continue
 
-        # 1) lire la triangulation existante
+        # 1) tenter de lire la triangulation
         tri = _face_triangulation(f, c)
         npts, ntri = _tri_counts(tri)
 
-        # 2) si vide, remesher localement la face et réessayer (comme avant)
+        # 2) si vide, remailler la face puis relire
         if npts == 0 or ntri == 0:
-            try:
-                try:
-                    c["BRepMesh_IncrementalMesh"](f, tol_mm, False, ang_rad, True)
-                except TypeError:
-                    try:
-                        c["BRepMesh_IncrementalMesh"](f, tol_mm, False, ang_rad)
-                    except TypeError:
-                        c["BRepMesh_IncrementalMesh"](f, tol_mm)
-            except Exception:
-                pass
+            _try_mesh(c, f, tol_mm, ang_rad)
             tri = _face_triangulation(f, c)
             npts, ntri = _tri_counts(tri)
 
         if npts == 0 or ntri == 0:
-            continue  # pas de triangles utilisables sur cette face
+            continue
 
-        # Extraction des points/triangles
+        any_tri = True
+
+        # Extraction
         try:
-            nodes = tri.Nodes()
-            tris = tri.Triangles()
+            nodes = tri.Nodes(); tris = tri.Triangles()
             def get_node(i):
                 p = nodes.Value(i); return (float(p.X()), float(p.Y()), float(p.Z()))
             def get_tri(i):
@@ -376,6 +409,44 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
             faces.append([v_off + a - 1, v_off + b - 1, v_off + cidx - 1])
 
         v_off += npts
+
+    if not verts or not faces:
+        # dernier filet : remaillage global plus permissif puis second passage
+        if any_face and not any_tri:
+            _try_mesh(c, shape, tol_mm * 10.0, max(ang_rad * 1.5, 0.1))
+            # deuxième passe
+            exp = c["TopExp_Explorer"](shape, c["TopAbs_FACE"])
+            while exp.More():
+                s = exp.Current(); exp.Next()
+                f = _as_face(s, c)
+                if f is None:
+                    continue
+                tri = _face_triangulation(f, c)
+                npts, ntri = _tri_counts(tri)
+                if npts == 0 or ntri == 0:
+                    _try_mesh(c, f, tol_mm * 10.0, max(ang_rad * 1.5, 0.1))
+                    tri = _face_triangulation(f, c)
+                    npts, ntri = _tri_counts(tri)
+                if npts == 0 or ntri == 0:
+                    continue
+                try:
+                    nodes = tri.Nodes(); tris = tri.Triangles()
+                    def get_node(i):
+                        p = nodes.Value(i); return (float(p.X()), float(p.Y()), float(p.Z()))
+                    def get_tri(i):
+                        t = tris.Value(i); a,b,cidx = t.Get(); return (a,b,cidx)
+                except Exception:
+                    def get_node(i):
+                        p = tri.Node(i); return (float(p.X()), float(p.Y()), float(p.Z()))
+                    def get_tri(i):
+                        t = tri.Triangle(i); a,b,cidx = t.Get(); return (a,b,cidx)
+                for i in range(1, npts + 1):
+                    x, y, z = get_node(i)
+                    verts.append([x, y, z])
+                for i in range(1, ntri + 1):
+                    a, b, cidx = get_tri(i)
+                    faces.append([v_off + a - 1, v_off + b - 1, v_off + cidx - 1])
+                v_off += npts
 
     if not verts or not faces:
         raise RuntimeError("Triangulation vide")
@@ -532,7 +603,7 @@ def _cache_paths(file_id: str, axis: str):
 
 def _write_json(path: str, data: dict):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as fh:
+    with open(path, "w", encoding="utf-8") as fh):
         json.dump(data, fh)
 
 def _publish_redis(file_id: str, axis: str, payload: dict):
@@ -580,7 +651,7 @@ def compute_and_cache_stats(
     lib = occt_lib_name()
     bump_stage("occt_lib", {"lib": lib})
     if lib is None:
-        _ = _occt()  # force ImportError détaillé
+        _ = _occt()
 
     # 1) Read STEP
     if _deadline_reached(t0):
