@@ -160,6 +160,16 @@ def _occt():
     try:
         from OCP import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh, TopoDS
         from OCP.TopLoc import TopLoc_Location
+        # optionnels mais utiles
+        try:
+            from OCP.IMeshTools import IMeshTools_Parameters
+        except Exception:
+            IMeshTools_Parameters = None
+        try:
+            from OCP.BRepTools import BRepTools
+        except Exception:
+            BRepTools = None
+
         _OCCT_LIB = "OCP"
         _OCCT = {
             "STEPControl_Reader": STEPControl.STEPControl_Reader,
@@ -172,6 +182,8 @@ def _occt():
             "TopoDS_Face": getattr(TopoDS, "TopoDS_Face", None),
             "topods_Face": getattr(TopoDS, "topods_Face", None),
             "TopLoc_Location": TopLoc_Location,
+            "IMeshTools_Parameters": IMeshTools_Parameters,
+            "BRepTools": BRepTools,
         }
         return _OCCT
     except Exception as e:
@@ -246,55 +258,87 @@ def _tri_counts(tri) -> Tuple[int, int]:
 
 def _try_mesh(c, target, tol_mm: float, ang_rad: float) -> bool:
     """
-    Essaie plusieurs signatures de BRepMesh_IncrementalMesh + Perform().
-    Retourne True si au moins un appel n'a pas levé d'exception.
+    Essaie d'abord le meshing paramétré (OCCT 7.6/7.7+), puis les anciennes signatures,
+    en appelant Perform() si dispo. Retourne True si au moins un essai s'est déroulé.
     """
     tried = False
+
+    # (A) Chemin moderne : IMeshTools_Parameters
+    P = c.get("IMeshTools_Parameters")
+    if P is not None:
+        try:
+            params = P()
+            # Paramètres robustes pour obtenir *effectivement* une triangulation
+            params.Deflection = float(max(tol_mm, 1e-4))
+            params.Angle = float(max(ang_rad, 0.05))
+            params.Relative = False
+            params.InParallel = True
+            # options qui aident certaines wheels :
+            if hasattr(params, "MinSize"): params.MinSize = 0.0
+            if hasattr(params, "ControlSurfaceDeflection"): params.ControlSurfaceDeflection = True
+            if hasattr(params, "InternalVerticesMode"): params.InternalVerticesMode = True
+            if hasattr(params, "AdaptiveMinMax"): params.AdaptiveMinMax = True
+            if hasattr(params, "NbThreads"): params.NbThreads = 0  # auto
+
+            mesher = c["BRepMesh_IncrementalMesh"](target, params, True)
+            tried = True
+            perf = getattr(mesher, "Perform", None)
+            if callable(perf):
+                perf()
+        except Exception:
+            pass
+
+    # (B) Anciennes signatures (constructor déclencheur)
     combos = [
-        (tol_mm, True,  ang_rad, True),
         (tol_mm, False, ang_rad, True),
-        (tol_mm, True,  ang_rad, False),
         (tol_mm, False, ang_rad, False),
-        (tol_mm, True,  0.0,     True),
-        (tol_mm, False, 0.0,     False),
+        (tol_mm, True,  ang_rad, True),
+        (tol_mm, True,  ang_rad, False),
     ]
     for lin, rel, ang, par in combos:
         try:
             mesher = c["BRepMesh_IncrementalMesh"](target, float(lin), bool(rel), float(ang), bool(par))
             tried = True
-            try:
-                perf = getattr(mesher, "Perform", None)
-                if callable(perf):
-                    perf()
-            except Exception:
-                pass
+            perf = getattr(mesher, "Perform", None)
+            if callable(perf):
+                perf()
         except TypeError:
             try:
                 mesher = c["BRepMesh_IncrementalMesh"](target, float(lin), bool(rel), float(ang))
                 tried = True
-                try:
-                    perf = getattr(mesher, "Perform", None)
-                    if callable(perf):
-                        perf()
-                except Exception:
-                    pass
-            except Exception:
-                continue
-        except Exception:
-            continue
-    if not tried:
-        try:
-            mesher = c["BRepMesh_IncrementalMesh"](target, tol_mm)
-            try:
                 perf = getattr(mesher, "Perform", None)
                 if callable(perf):
                     perf()
             except Exception:
-                pass
+                continue
+        except Exception:
+            continue
+
+    # (C) Ultime secours
+    if not tried:
+        try:
+            mesher = c["BRepMesh_IncrementalMesh"](target, tol_mm)
+            perf = getattr(mesher, "Perform", None)
+            if callable(perf):
+                perf()
             tried = True
         except Exception:
             pass
+
+    # (D) Nettoyage/Update (certaines wheels n’attachent pas sans ça)
+    BTs = c.get("BRepTools")
+    if BTs is not None:
+        try:
+            BTs.Clean(target)
+        except Exception:
+            pass
+        try:
+            BTs.Update(target)
+        except Exception:
+            pass
+
     return tried
+
 
 def _face_triangulation(face, c):
     """
