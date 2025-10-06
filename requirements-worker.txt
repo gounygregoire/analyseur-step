@@ -19,6 +19,7 @@ ezdxf==1.4.2
 cadquery-ocp==7.7.2
 cadquery==2.4.0
 vtk==9.2.6
+shapely==2.0.4
 
 # À ne PAS installer:
 # OCP
