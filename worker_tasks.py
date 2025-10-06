@@ -15,7 +15,7 @@ from urllib.parse import urlparse, urlunparse, unquote
 # --- Optional geometry backends for 2D union ---
 HAS_SHAPELY = False
 try:
-    from shapely.geometry import Polygon, MultiPolygon, GeometryCollection
+    from shapely.geometry import Polygon
     from shapely.ops import unary_union
     HAS_SHAPELY = True
 except Exception:
@@ -155,13 +155,16 @@ _OCCT = None
 _OCCT_LIB = None
 
 def _occt():
+    """
+    Charge OCCT via OCP (cadquery-ocp) en priorité, fallback OCC (pythonocc-core).
+    Expose les symboles nécessaires + TopoDS pour caster les faces.
+    """
     global _OCCT, _OCCT_LIB
     if _OCCT is not None:
         return _OCCT
 
     ocp_err = None
     try:
-        # + TopoDS ajouté ici
         from OCP import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh, TopoDS
         _OCCT_LIB = "OCP"
         _OCCT = {
@@ -171,7 +174,6 @@ def _occt():
             "TopExp_Explorer": TopExp.TopExp_Explorer,
             "BRep_Tool": BRep.BRep_Tool,
             "BRepMesh_IncrementalMesh": BRepMesh.BRepMesh_IncrementalMesh,
-            # exposer ce qu'il faut pour caster les faces:
             "TopoDS": TopoDS,
             "TopoDS_Face": getattr(TopoDS, "TopoDS_Face", None),
             "topods_Face": getattr(TopoDS, "topods_Face", None),
@@ -179,10 +181,9 @@ def _occt():
         return _OCCT
     except Exception as e:
         ocp_err = e
-    ...
 
     try:
-        from OCC.Core import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh
+        from OCC.Core import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh, TopoDS
         _OCCT_LIB = "OCC"
         _OCCT = {
             "STEPControl_Reader": STEPControl.STEPControl_Reader,
@@ -191,6 +192,9 @@ def _occt():
             "TopExp_Explorer": TopExp.TopExp_Explorer,
             "BRep_Tool": BRep.BRep_Tool,
             "BRepMesh_IncrementalMesh": BRepMesh.BRepMesh_IncrementalMesh,
+            "TopoDS": TopoDS,
+            "TopoDS_Face": getattr(TopoDS, "TopoDS_Face", None),
+            "topods_Face": getattr(TopoDS, "topods_Face", None),
         }
         return _OCCT
     except Exception as e2:
@@ -219,33 +223,27 @@ def _read_step_shape(step_path: str):
 
 def _as_face(s, c):
     """
-    Convertit robustement un TopoDS_Shape en TopoDS_Face, selon ce que fournit la wheel OCP.
-    Essaye dans l'ordre: topods_Face, DownCast, puis constructeur TopoDS().Face_.
-    Retourne None si rien ne marche.
+    Convertit robustement un TopoDS_Shape en TopoDS_Face, selon ce que fournit la wheel OCP/OCC.
+    Essaye: topods_Face, DownCast, puis TopoDS().Face_ (rare).
     """
     TD = c.get("TopoDS")
     TDF = c.get("TopoDS_Face")
     tf = c.get("topods_Face")
 
-    # 1) Fonction utilitaire standard si dispo
     if tf is not None:
         try:
-            f = tf(s)
-            return f
+            return tf(s)
         except Exception:
             pass
 
-    # 2) DownCast via la classe TopoDS_Face
     if TDF is not None and hasattr(TDF, "DownCast"):
         try:
             f = TDF.DownCast(s)
-            # si le downcast échoue, beaucoup de wheels renvoient un objet "vide" -> on vérifie sa Location
-            _ = f.Location()  # provoque si invalide
+            _ = f.Location()  # lève si invalide
             return f
         except Exception:
             pass
 
-    # 3) Fallback rare: constructeur TopoDS().Face_
     try:
         if TD is not None and hasattr(TD, "TopoDS"):
             builder = TD.TopoDS()
@@ -262,17 +260,16 @@ def _face_triangulation(face, loc, c):
     """
     Retourne la Poly_Triangulation d'une face, en gérant les variantes OCP :
     - BRep_Tool.Triangulation(face, loc)
-    - BRep_Tool.Triangulation_s(face, loc)
+    - BRep_Tool.Triangulation_s(face, loc[, purpose=0])
     """
     BT = c["BRep_Tool"]
     if hasattr(BT, "Triangulation"):
         return BT.Triangulation(face, loc)
     if hasattr(BT, "Triangulation_s"):
-        # signature récente: (face, loc, purpose:int=0)
         try:
-            return BT.Triangulation_s(face, loc)
+            return BT.Triangulation_s(face, loc)       # signature ancienne
         except TypeError:
-            return BT.Triangulation_s(face, loc, 0)
+            return BT.Triangulation_s(face, loc, 0)    # signature récente
     raise AttributeError("Aucune méthode Triangulation(_s) disponible sur BRep_Tool")
 
 def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.Trimesh:
@@ -288,59 +285,72 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
     faces: list[list[int]] = []
     v_off = 0
 
-exp = c["TopExp_Explorer"](shape, c["TopAbs_FACE"])
-while exp.More():
-    s = exp.Current()          # <- TopoDS_Shape
-    f = _as_face(s, c)         # <- on caste en TopoDS_Face
-    exp.Next()
-    if f is None:
-        continue
-
-    loc = f.Location()
-
-    # Triangulation robuste: on essaye Triangulation(), puis Triangulation_s(face,loc), puis Triangulation_s(face,loc,0)
-    tri = None
-    BT = c["BRep_Tool"]
-    try:
-        if hasattr(BT, "Triangulation"):
-            tri = BT.Triangulation(f, loc)
-    except Exception:
-        tri = None
-    if tri is None and hasattr(BT, "Triangulation_s"):
-        try:
-            tri = BT.Triangulation_s(f, loc)
-        except TypeError:
-            tri = BT.Triangulation_s(f, loc, 0)
-
-    if tri is None:
-        continue
-
-    # --- Extraction des noeuds/triangles (deux styles possibles selon wheels)
-    try:
-        nodes = tri.Nodes(); tris = tri.Triangles()
-        npts, ntri = nodes.Size(), tris.Size()
-        def get_node(i):
-            p = nodes.Value(i); return (float(p.X()), float(p.Y()), float(p.Z()))
-        def get_tri(i):
-            t = tris.Value(i); a,b,cidx = t.Get(); return (a,b,cidx)
-    except Exception:
-        npts, ntri = tri.NbNodes(), tri.NbTriangles()
-        def get_node(i):
-            p = tri.Node(i); return (float(p.X()), float(p.Y()), float(p.Z()))
-        def get_tri(i):
-            t = tri.Triangle(i); a,b,cidx = t.Get(); return (a,b,cidx)
-
-    if npts <= 0 or ntri <= 0:
-        continue
-
-    for i in range(1, npts + 1):
-        x,y,z = get_node(i); verts.append([x,y,z])
-    for i in range(1, ntri + 1):
-        a,b,cidx = get_tri(i)
-        faces.append([v_off + a - 1, v_off + b - 1, v_off + cidx - 1])
-
-    v_off += npts
+    exp = c["TopExp_Explorer"](shape, c["TopAbs_FACE"])
+    while exp.More():
+        s = exp.Current()          # <- TopoDS_Shape
         exp.Next()
+        f = _as_face(s, c)         # <- cast en TopoDS_Face
+        if f is None:
+            continue
+
+        loc = f.Location()
+
+        # Triangulation robuste
+        tri = None
+        BT = c["BRep_Tool"]
+        try:
+            if hasattr(BT, "Triangulation"):
+                tri = BT.Triangulation(f, loc)
+        except Exception:
+            tri = None
+        if tri is None and hasattr(BT, "Triangulation_s"):
+            try:
+                tri = BT.Triangulation_s(f, loc)
+            except TypeError:
+                tri = BT.Triangulation_s(f, loc, 0)
+
+        if tri is None:
+            continue
+
+        # --- Extraction des noeuds/triangles (deux styles possibles selon wheels)
+        try:
+            nodes = tri.Nodes()
+            tris = tri.Triangles()
+            npts, ntri = nodes.Size(), tris.Size()
+
+            def get_node(i):
+                p = nodes.Value(i)
+                return (float(p.X()), float(p.Y()), float(p.Z()))
+
+            def get_tri(i):
+                t = tris.Value(i)
+                a, b, cidx = t.Get()
+                return (a, b, cidx)
+
+        except Exception:
+            npts, ntri = tri.NbNodes(), tri.NbTriangles()
+
+            def get_node(i):
+                p = tri.Node(i)
+                return (float(p.X()), float(p.Y()), float(p.Z()))
+
+            def get_tri(i):
+                t = tri.Triangle(i)
+                a, b, cidx = t.Get()
+                return (a, b, cidx)
+
+        if npts <= 0 or ntri <= 0:
+            continue
+
+        for i in range(1, npts + 1):
+            x, y, z = get_node(i)
+            verts.append([x, y, z])
+
+        for i in range(1, ntri + 1):
+            a, b, cidx = get_tri(i)
+            faces.append([v_off + a - 1, v_off + b - 1, v_off + cidx - 1])
+
+        v_off += npts
 
     if not verts or not faces:
         raise RuntimeError("Triangulation vide")
@@ -392,16 +402,15 @@ def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, 
 
     # Chemin principal : union exacte via Shapely
     if HAS_SHAPELY:
-        # chunk pour limiter la mémoire
         CHUNK = 20000
         parts = []
         for i in range(0, tri2.shape[0], CHUNK):
-            batch = tri2[i:i+CHUNK]
-            # Construire des Polygons (triangles) valides
+            batch = tri2[i:i + CHUNK]
             polys = []
             for t in batch:
-                # éviter les duplications de points → triangles quasi-colinéaires
-                p0, p1, p2 = (t[0, 0], t[0, 1]), (t[1, 0], t[1, 1]), (t[2, 0], t[2, 1])
+                p0 = (t[0, 0], t[0, 1])
+                p1 = (t[1, 0], t[1, 1])
+                p2 = (t[2, 0], t[2, 1])
                 if (p0 == p1) or (p1 == p2) or (p2 == p0):
                     continue
                 poly = Polygon([p0, p1, p2])
@@ -414,26 +423,24 @@ def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, 
             return 0.0, "shapely"
 
         uni = unary_union(parts)
-        # GeometryCollection possible si tout est vide (par prudence)
-        area_mm2 = float(uni.area if hasattr(uni, "area") else 0.0)
+        area_mm2 = float(getattr(uni, "area", 0.0))
         return round(area_mm2 / 100.0, 6), "shapely"  # mm^2 → cm^2
 
     # Fallback raster (approx) si Shapely absent
     if not HAS_SKIMAGE:
-        # ni shapely ni skimage → on ne peut pas estimer proprement
         return 0.0, "unavailable"
 
     # Rasterisation : résolution guidée par la taille et la tolérance
     bb_min = tri2.reshape(-1, 2).min(axis=0)
     bb_max = tri2.reshape(-1, 2).max(axis=0)
     span = (bb_max - bb_min)
-    # pas en mm/pixel : on essaie proche de la précision de tessellation, borné
+
     px_mm = max(TESSELLATION_TOL_MM, float(span.max()) / 4000.0)
     px_mm = float(np.clip(px_mm, 0.02, 0.5))  # entre 20µm et 0.5mm par pixel
     H = int(np.ceil(span[1] / px_mm)) + 2
     W = int(np.ceil(span[0] / px_mm)) + 2
-    # garde-fous mémoire
-    MAX_PIX = 9000  # 9k x 9k max
+
+    MAX_PIX = 9000
     if H > MAX_PIX or W > MAX_PIX:
         scale = max(H / MAX_PIX, W / MAX_PIX)
         px_mm *= scale
@@ -441,7 +448,6 @@ def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, 
         W = int(np.ceil(span[0] / px_mm)) + 2
 
     mask = np.zeros((H, W), dtype=bool)
-    # dessiner chaque triangle
     for t in tri2:
         pts = (t - bb_min[None, :]) / px_mm
         rr, cc = _ski_polygon(pts[:, 1], pts[:, 0], shape=mask.shape)
