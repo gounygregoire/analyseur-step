@@ -155,17 +155,14 @@ _OCCT = None
 _OCCT_LIB = None
 
 def _occt():
-    """
-    Charge OCCT via OCP (cadquery-ocp) en priorité, fallback pythonocc-core.
-    N'importe que les modules nécessaires à la lecture STEP + tessellation.
-    """
     global _OCCT, _OCCT_LIB
     if _OCCT is not None:
         return _OCCT
 
     ocp_err = None
     try:
-        from OCP import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh
+        # + TopoDS ajouté ici
+        from OCP import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh, TopoDS
         _OCCT_LIB = "OCP"
         _OCCT = {
             "STEPControl_Reader": STEPControl.STEPControl_Reader,
@@ -174,10 +171,15 @@ def _occt():
             "TopExp_Explorer": TopExp.TopExp_Explorer,
             "BRep_Tool": BRep.BRep_Tool,
             "BRepMesh_IncrementalMesh": BRepMesh.BRepMesh_IncrementalMesh,
+            # exposer ce qu'il faut pour caster les faces:
+            "TopoDS": TopoDS,
+            "TopoDS_Face": getattr(TopoDS, "TopoDS_Face", None),
+            "topods_Face": getattr(TopoDS, "topods_Face", None),
         }
         return _OCCT
     except Exception as e:
-        ocp_err = e  # pour message explicite
+        ocp_err = e
+    ...
 
     try:
         from OCC.Core import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh
@@ -215,6 +217,47 @@ def _read_step_shape(step_path: str):
         raise RuntimeError("STEP transfer failed")
     return reader.OneShape()
 
+def _as_face(s, c):
+    """
+    Convertit robustement un TopoDS_Shape en TopoDS_Face, selon ce que fournit la wheel OCP.
+    Essaye dans l'ordre: topods_Face, DownCast, puis constructeur TopoDS().Face_.
+    Retourne None si rien ne marche.
+    """
+    TD = c.get("TopoDS")
+    TDF = c.get("TopoDS_Face")
+    tf = c.get("topods_Face")
+
+    # 1) Fonction utilitaire standard si dispo
+    if tf is not None:
+        try:
+            f = tf(s)
+            return f
+        except Exception:
+            pass
+
+    # 2) DownCast via la classe TopoDS_Face
+    if TDF is not None and hasattr(TDF, "DownCast"):
+        try:
+            f = TDF.DownCast(s)
+            # si le downcast échoue, beaucoup de wheels renvoient un objet "vide" -> on vérifie sa Location
+            _ = f.Location()  # provoque si invalide
+            return f
+        except Exception:
+            pass
+
+    # 3) Fallback rare: constructeur TopoDS().Face_
+    try:
+        if TD is not None and hasattr(TD, "TopoDS"):
+            builder = TD.TopoDS()
+            if hasattr(builder, "Face_"):
+                f = builder.Face_(s)
+                _ = f.Location()
+                return f
+    except Exception:
+        pass
+
+    return None
+
 def _face_triangulation(face, loc, c):
     """
     Retourne la Poly_Triangulation d'une face, en gérant les variantes OCP :
@@ -245,58 +288,58 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
     faces: list[list[int]] = []
     v_off = 0
 
-    exp = c["TopExp_Explorer"](shape, c["TopAbs_FACE"])
-    while exp.More():
-        f = exp.Current()
-        loc = f.Location()
+exp = c["TopExp_Explorer"](shape, c["TopAbs_FACE"])
+while exp.More():
+    s = exp.Current()          # <- TopoDS_Shape
+    f = _as_face(s, c)         # <- on caste en TopoDS_Face
+    exp.Next()
+    if f is None:
+        continue
 
-        tri = _face_triangulation(f, loc, c)
-        if tri is None:
-            exp.Next()
-            continue
+    loc = f.Location()
 
-        # --- Extraction robuste des noeuds/triangles selon le binding ---
+    # Triangulation robuste: on essaye Triangulation(), puis Triangulation_s(face,loc), puis Triangulation_s(face,loc,0)
+    tri = None
+    BT = c["BRep_Tool"]
+    try:
+        if hasattr(BT, "Triangulation"):
+            tri = BT.Triangulation(f, loc)
+    except Exception:
+        tri = None
+    if tri is None and hasattr(BT, "Triangulation_s"):
         try:
-            nodes = tri.Nodes()
-            tris = tri.Triangles()
-            npts = nodes.Size()
-            ntri = tris.Size()
+            tri = BT.Triangulation_s(f, loc)
+        except TypeError:
+            tri = BT.Triangulation_s(f, loc, 0)
 
-            def get_node(i):
-                p = nodes.Value(i)
-                return (float(p.X()), float(p.Y()), float(p.Z()))
+    if tri is None:
+        continue
 
-            def get_tri(i):
-                t = tris.Value(i)
-                a, b, cidx = t.Get()  # 1-based
-                return (a, b, cidx)
+    # --- Extraction des noeuds/triangles (deux styles possibles selon wheels)
+    try:
+        nodes = tri.Nodes(); tris = tri.Triangles()
+        npts, ntri = nodes.Size(), tris.Size()
+        def get_node(i):
+            p = nodes.Value(i); return (float(p.X()), float(p.Y()), float(p.Z()))
+        def get_tri(i):
+            t = tris.Value(i); a,b,cidx = t.Get(); return (a,b,cidx)
+    except Exception:
+        npts, ntri = tri.NbNodes(), tri.NbTriangles()
+        def get_node(i):
+            p = tri.Node(i); return (float(p.X()), float(p.Y()), float(p.Z()))
+        def get_tri(i):
+            t = tri.Triangle(i); a,b,cidx = t.Get(); return (a,b,cidx)
 
-        except Exception:
-            npts = tri.NbNodes()
-            ntri = tri.NbTriangles()
+    if npts <= 0 or ntri <= 0:
+        continue
 
-            def get_node(i):
-                p = tri.Node(i)
-                return (float(p.X()), float(p.Y()), float(p.Z()))
+    for i in range(1, npts + 1):
+        x,y,z = get_node(i); verts.append([x,y,z])
+    for i in range(1, ntri + 1):
+        a,b,cidx = get_tri(i)
+        faces.append([v_off + a - 1, v_off + b - 1, v_off + cidx - 1])
 
-            def get_tri(i):
-                t = tri.Triangle(i)
-                a, b, cidx = t.Get()
-                return (a, b, cidx)
-
-        if npts <= 0 or ntri <= 0:
-            exp.Next()
-            continue
-
-        for i in range(1, npts + 1):
-            x, y, z = get_node(i)
-            verts.append([x, y, z])
-
-        for i in range(1, ntri + 1):
-            a, b, cidx = get_tri(i)
-            faces.append([v_off + a - 1, v_off + b - 1, v_off + cidx - 1])
-
-        v_off += npts
+    v_off += npts
         exp.Next()
 
     if not verts or not faces:
