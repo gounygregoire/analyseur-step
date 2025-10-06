@@ -159,7 +159,7 @@ def _occt():
     ocp_err = None
     try:
         from OCP import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh, TopoDS
-        from OCP.TopLoc import TopLoc_Location  # important: holder pour Triangulation_s
+        from OCP.TopLoc import TopLoc_Location  # dispo si on veut tester cette variante
         _OCCT_LIB = "OCP"
         _OCCT = {
             "STEPControl_Reader": STEPControl.STEPControl_Reader,
@@ -168,11 +168,9 @@ def _occt():
             "TopExp_Explorer": TopExp.TopExp_Explorer,
             "BRep_Tool": BRep.BRep_Tool,
             "BRepMesh_IncrementalMesh": BRepMesh.BRepMesh_IncrementalMesh,
-            # pour caster les faces
             "TopoDS": TopoDS,
             "TopoDS_Face": getattr(TopoDS, "TopoDS_Face", None),
             "topods_Face": getattr(TopoDS, "topods_Face", None),
-            # holder loc
             "TopLoc_Location": TopLoc_Location,
         }
         return _OCCT
@@ -218,7 +216,7 @@ def _read_step_shape(step_path: str):
 
 def _as_face(s, c):
     """
-    Convertit un TopoDS_Shape en TopoDS_Face de manière robuste (OCP 7.7.x).
+    Convertit un TopoDS_Shape en TopoDS_Face de manière robuste.
     Essaye topods_Face, puis TopoDS_Face.DownCast. Retourne None si impossible.
     """
     tf = c.get("topods_Face")
@@ -242,7 +240,6 @@ def _as_face(s, c):
     return None
 
 def _tri_counts(tri) -> Tuple[int, int]:
-    """Retourne (nb_nodes, nb_tris) pour les deux variantes d’API OCP."""
     if tri is None:
         return 0, 0
     try:
@@ -255,40 +252,57 @@ def _tri_counts(tri) -> Tuple[int, int]:
 
 def _face_triangulation(face, c):
     """
-    Récupère une Poly_Triangulation pour 'face'.
-    IMPORTANT: avec OCP 7.7.x, le paramètre location est un OUT param → utiliser TopLoc_Location().
+    Récupère une Poly_Triangulation pour 'face' en essayant
+    d'abord EXACTEMENT comme quand ça marchait chez toi (face.Location()),
+    puis les variantes TopLoc_Location() et les purposes 0/1/2.
     """
     BT = c["BRep_Tool"]
-    loc_holder = c["TopLoc_Location"]()
 
-    tri = None
-    # Signatures modernes (Triangulation_s)
+    # 1) priorité à l'ancien comportement (qui fonctionnait chez toi)
+    loc_face = face.Location()
     if hasattr(BT, "Triangulation_s"):
-        # on tente sans 'purpose' (si binding ancien), sinon avec 0,1,2
-        for args in ((face, loc_holder), (face, loc_holder, 0), (face, loc_holder, 1), (face, loc_holder, 2)):
+        # sans purpose puis 0/1/2
+        for args in ((face, loc_face), (face, loc_face, 0), (face, loc_face, 1), (face, loc_face, 2)):
             try:
                 tri = BT.Triangulation_s(*args)
-                if tri is not None:
+                if _tri_counts(tri)[0] > 0:
                     return tri
             except TypeError:
-                # essai incompatible → on continue
                 continue
             except Exception:
                 continue
 
-    # Très vieux bindings: Triangulation(face, loc)
+    # 2) variante avec holder TopLoc_Location() (bindings récents)
+    if "TopLoc_Location" in c and hasattr(BT, "Triangulation_s"):
+        loc_holder = c["TopLoc_Location"]()
+        for args in ((face, loc_holder), (face, loc_holder, 0), (face, loc_holder, 1), (face, loc_holder, 2)):
+            try:
+                tri = BT.Triangulation_s(*args)
+                if _tri_counts(tri)[0] > 0:
+                    return tri
+            except TypeError:
+                continue
+            except Exception:
+                continue
+
+    # 3) Très vieux bindings: Triangulation(face, loc)
     if hasattr(BT, "Triangulation"):
-        try:
-            return BT.Triangulation(face, loc_holder)
-        except Exception:
-            pass
+        for loc_any in (loc_face, c.get("TopLoc_Location", lambda: None)() if "TopLoc_Location" in c else None):
+            if loc_any is None:
+                continue
+            try:
+                tri = BT.Triangulation(face, loc_any)
+                if _tri_counts(tri)[0] > 0:
+                    return tri
+            except Exception:
+                continue
 
     return None
 
 def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.Trimesh:
     c = _occt()
 
-    # Maillage global du shape
+    # Maillage global du shape (comme avant)
     meshed = False
     try:
         c["BRepMesh_IncrementalMesh"](shape, tol_mm, False, ang_rad, True)
@@ -302,7 +316,6 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
         except TypeError:
             pass
     if not meshed:
-        # dernier recours
         c["BRepMesh_IncrementalMesh"](shape, tol_mm)
 
     verts: list[list[float]] = []
@@ -322,7 +335,7 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
         tri = _face_triangulation(f, c)
         npts, ntri = _tri_counts(tri)
 
-        # 2) si vide, remesher localement la face et réessayer
+        # 2) si vide, remesher localement la face et réessayer (comme avant)
         if npts == 0 or ntri == 0:
             try:
                 try:
@@ -340,30 +353,20 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
         if npts == 0 or ntri == 0:
             continue  # pas de triangles utilisables sur cette face
 
-        # Extraction des points/triangles (deux familles d'API selon wheels)
+        # Extraction des points/triangles
         try:
             nodes = tri.Nodes()
             tris = tri.Triangles()
-
             def get_node(i):
-                p = nodes.Value(i)
-                return (float(p.X()), float(p.Y()), float(p.Z()))
-
+                p = nodes.Value(i); return (float(p.X()), float(p.Y()), float(p.Z()))
             def get_tri(i):
-                t = tris.Value(i)
-                a, b, cidx = t.Get()  # 1-based
-                return (a, b, cidx)
+                t = tris.Value(i); a,b,cidx = t.Get(); return (a,b,cidx)
         except Exception:
             def get_node(i):
-                p = tri.Node(i)
-                return (float(p.X()), float(p.Y()), float(p.Z()))
-
+                p = tri.Node(i); return (float(p.X()), float(p.Y()), float(p.Z()))
             def get_tri(i):
-                t = tri.Triangle(i)
-                a, b, cidx = t.Get()
-                return (a, b, cidx)
+                t = tri.Triangle(i); a,b,cidx = t.Get(); return (a,b,cidx)
 
-        # empilement
         for i in range(1, npts + 1):
             x, y, z = get_node(i)
             verts.append([x, y, z])
@@ -392,19 +395,18 @@ def _bbox_from_mesh_mm(mesh: trimesh.Trimesh) -> Tuple[float, float, float]:
 def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, str]:
     """
     Aire de la silhouette (union des projections orthographiques) en cm^2.
-    Retourne (aire_cm2, methode), où methode ∈ {'shapely','raster_fallback','empty','unavailable'}.
     """
     axis = (axis or "Z").upper()
     if axis not in AXES:
         axis = "Z"
 
-    tri3 = mesh.triangles  # (N,3,3) en mm
+    tri3 = mesh.triangles
     if axis == "Z":
-        tri2 = tri3[:, :, :2]          # XY
+        tri2 = tri3[:, :, :2]
     elif axis == "Y":
-        tri2 = tri3[:, :, [0, 2]]      # XZ
+        tri2 = tri3[:, :, [0, 2]]
     else:
-        tri2 = tri3[:, :, [1, 2]]      # YZ
+        tri2 = tri3[:, :, [1, 2]]
 
     # Filtre triangles dégénérés après projection
     v0 = tri2[:, 0, :]
@@ -421,7 +423,6 @@ def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, 
     if tri2.shape[0] == 0:
         return 0.0, "empty"
 
-    # Chemin principal : union exacte via Shapely
     if HAS_SHAPELY:
         CHUNK = 20000
         parts = []
@@ -441,9 +442,8 @@ def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, 
             return 0.0, "shapely"
         uni = unary_union(parts)
         area_mm2 = float(getattr(uni, "area", 0.0))
-        return round(area_mm2 / 100.0, 6), "shapely"  # mm^2 -> cm^2
+        return round(area_mm2 / 100.0, 6), "shapely"
 
-    # Fallback raster (approx) si Shapely absent
     if not HAS_SKIMAGE:
         return 0.0, "unavailable"
 
@@ -451,7 +451,7 @@ def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, 
     bb_max = tri2.reshape(-1, 2).max(axis=0)
     span = (bb_max - bb_min)
     px_mm = max(TESSELLATION_TOL_MM, float(span.max()) / 4000.0)
-    px_mm = float(np.clip(px_mm, 0.02, 0.5))  # entre 20µm et 0.5mm par pixel
+    px_mm = float(np.clip(px_mm, 0.02, 0.5))
     H = int(np.ceil(span[1] / px_mm)) + 2
     W = int(np.ceil(span[0] / px_mm)) + 2
     MAX_PIX = 9000
