@@ -33,7 +33,7 @@ UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "/tmp/uploads")
 OUTPUT_FOLDER = os.getenv("OUTPUT_FOLDER", "/tmp/converted")
 AXES = ("X", "Y", "Z")
 
-STATS_SOFT_TIMEOUT_SEC = int(os.getenv("STATS_SOFT_TIMEOUT_SEC", "600"))
+STATS_SOFT_TIMEOUT_SEC = int(os.getenv("STATS_SOFT_TIMEOUT_SEC", "600"))  # 10 min
 TESSELLATION_TOL_MM = float(os.getenv("TESSELLATION_TOL_MM", "0.05"))
 TESSELLATION_ANG_RAD = float(os.getenv("TESSELLATION_ANG_RAD", "0.25"))
 
@@ -75,7 +75,7 @@ def _redis_conn() -> redis.Redis:
         socket_timeout=5,
     )
 
-# --- S3 helpers ---
+# --- S3 helpers (download + upload) ---
 def _s3_enabled() -> bool:
     return all(os.environ.get(k) for k in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "S3_BUCKET"))
 
@@ -116,7 +116,14 @@ def _deadline_reached(start_ts: float) -> bool:
     return (time.monotonic() - start_ts) > STATS_SOFT_TIMEOUT_SEC
 
 def _ensure_local_step(file_id: str, step_ext_hint: Optional[str]) -> Optional[str]:
+    """
+    Retourne un chemin local vers le STEP/STL, en le téléchargeant depuis S3 si besoin.
+    Cherche dans UPLOAD_FOLDER: <fid>.step | .stp | .stl
+    Puis dans S3: uploads/<fid>.<ext>.
+    """
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+    # 1) local direct
     for ext in (step_ext_hint, "step", "stp", "stl"):
         if not ext:
             continue
@@ -124,8 +131,11 @@ def _ensure_local_step(file_id: str, step_ext_hint: Optional[str]) -> Optional[s
         p = os.path.join(UPLOAD_FOLDER, f"{file_id}{e}")
         if os.path.isfile(p):
             return p
+
+    # 2) S3 pull si activé
     if not (_s3_enabled() and PULL_UPLOADS_FROM_S3):
         return None
+
     bump_stage("pull_step_s3_begin")
     for ext in ("step", "stp", "stl"):
         key = f"uploads/{file_id}.{ext}"
@@ -133,10 +143,11 @@ def _ensure_local_step(file_id: str, step_ext_hint: Optional[str]) -> Optional[s
         if _s3_get(key, dest):
             bump_stage("pull_step_s3_ok", {"ext": ext, "key": key})
             return dest
+
     bump_stage("pull_step_s3_miss")
     return None
 
-# ---------- OCCT loader ----------
+# ---------- OCCT loader (OCP puis OCC), minimal (STEP + tessellation) ----------
 _OCCT = None
 _OCCT_LIB = None
 
@@ -144,9 +155,10 @@ def _occt():
     global _OCCT, _OCCT_LIB
     if _OCCT is not None:
         return _OCCT
+
     ocp_err = None
     try:
-        from OCP import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh, TopoDS, TopLoc
+        from OCP import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh
         _OCCT_LIB = "OCP"
         _OCCT = {
             "STEPControl_Reader": STEPControl.STEPControl_Reader,
@@ -155,16 +167,13 @@ def _occt():
             "TopExp_Explorer": TopExp.TopExp_Explorer,
             "BRep_Tool": BRep.BRep_Tool,
             "BRepMesh_IncrementalMesh": BRepMesh.BRepMesh_IncrementalMesh,
-            "TopoDS": TopoDS,
-            "TopoDS_Face": getattr(TopoDS, "TopoDS_Face", None),
-            "topods_Face": getattr(TopoDS, "topods_Face", None),
-            "TopLoc_Location": TopLoc.TopLoc_Location,
         }
         return _OCCT
     except Exception as e:
         ocp_err = e
+
     try:
-        from OCC.Core import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh, TopoDS, TopLoc
+        from OCC.Core import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh
         _OCCT_LIB = "OCC"
         _OCCT = {
             "STEPControl_Reader": STEPControl.STEPControl_Reader,
@@ -173,10 +182,6 @@ def _occt():
             "TopExp_Explorer": TopExp.TopExp_Explorer,
             "BRep_Tool": BRep.BRep_Tool,
             "BRepMesh_IncrementalMesh": BRepMesh.BRepMesh_IncrementalMesh,
-            "TopoDS": TopoDS,
-            "TopoDS_Face": getattr(TopoDS, "TopoDS_Face", None),
-            "topods_Face": getattr(TopoDS, "topods_Face", None),
-            "TopLoc_Location": TopLoc.TopLoc_Location,
         }
         return _OCCT
     except Exception as e2:
@@ -203,76 +208,66 @@ def _read_step_shape(step_path: str):
         raise RuntimeError("STEP transfer failed")
     return reader.OneShape()
 
-def _as_face(s, c):
-    TD = c.get("TopoDS")
-    TDF = c.get("TopoDS_Face")
-    tf = c.get("topods_Face")
-    if tf is not None:
+def _face_triangulation(face, c):
+    """
+    Version qui a fonctionné chez toi :
+    - on passe la Location() de la face à Triangulation / Triangulation_s
+    - on gère la variante à 3 arguments (purpose=0) si besoin
+    """
+    BT = c["BRep_Tool"]
+    loc = face.Location()  # on réutilise la location de la face, comme avant
+
+    if hasattr(BT, "Triangulation"):
         try:
-            f = tf(s)
-            if hasattr(f, "IsNull") and f.IsNull():
-                return None
-            return f
+            return BT.Triangulation(face, loc)
         except Exception:
             pass
-    if TDF is not None and hasattr(TDF, "DownCast"):
+
+    if hasattr(BT, "Triangulation_s"):
         try:
-            f = TDF.DownCast(s)
-            if hasattr(f, "IsNull") and f.IsNull():
-                return None
-            return f
-        except Exception:
-            pass
+            return BT.Triangulation_s(face, loc)
+        except TypeError:
+            # certaines wheels demandent un 3e paramètre (purpose)
+            try:
+                return BT.Triangulation_s(face, loc, 0)
+            except Exception:
+                pass
+
     return None
 
-def _try_mesh(shape, tol_mm: float, ang_rad: float, c):
+def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.Trimesh:
+    c = _occt()
+
+    # Maillage global (signatures possibles selon wheels)
+    tried = False
     try:
         c["BRepMesh_IncrementalMesh"](shape, tol_mm, False, ang_rad, True)
+        tried = True
     except TypeError:
+        pass
+    if not tried:
         try:
             c["BRepMesh_IncrementalMesh"](shape, tol_mm, False, ang_rad)
+            tried = True
         except TypeError:
-            c["BRepMesh_IncrementalMesh"](shape, tol_mm)
+            pass
+    if not tried:
+        c["BRepMesh_IncrementalMesh"](shape, tol_mm)
 
-def _tri_from(BT, obj, c):
-    """Essaie Triangulation / Triangulation_s avec un TopLoc_Location() vierge (sortie)."""
-    loc = c["TopLoc_Location"]()
-    tri = None
-    try:
-        if hasattr(BT, "Triangulation"):
-            tri = BT.Triangulation(obj, loc)
-    except Exception:
-        tri = None
-    if tri is None and hasattr(BT, "Triangulation_s"):
-        try:
-            tri = BT.Triangulation_s(obj, loc)
-        except TypeError:
-            try:
-                tri = BT.Triangulation_s(obj, loc, 0)
-            except Exception:
-                tri = None
-    return tri
-
-def _collect_tris(shape, c) -> Tuple[list, list]:
     verts: list[list[float]] = []
     faces: list[list[int]] = []
     v_off = 0
-    exp = c["TopExp_Explorer"](shape, c["TopAbs_FACE"])
-    BT = c["BRep_Tool"]
-    while exp.More():
-        s = exp.Current()
-        exp.Next()
-        f = _as_face(s, c)
-        tri = None
-        if f is not None:
-            tri = _tri_from(BT, f, c)
-        if tri is None:
-            tri = _tri_from(BT, s, c)  # fallback: certaines wheels acceptent le Shape
 
+    exp = c["TopExp_Explorer"](shape, c["TopAbs_FACE"])
+    while exp.More():
+        f = exp.Current()            # Explorer est configuré sur FACE → c’est une face
+        exp.Next()
+
+        tri = _face_triangulation(f, c)
         if tri is None:
             continue
 
-        # extraction compat
+        # Extraction robuste (deux familles d’API suivant les wheels)
         try:
             nodes = tri.Nodes()
             tris = tri.Triangles()
@@ -284,7 +279,7 @@ def _collect_tris(shape, c) -> Tuple[list, list]:
 
             def get_tri(i):
                 t = tris.Value(i)
-                a, b, cidx = t.Get()
+                a, b, cidx = t.Get()  # 1-based
                 return (a, b, cidx)
         except Exception:
             try:
@@ -313,49 +308,47 @@ def _collect_tris(shape, c) -> Tuple[list, list]:
             faces.append([v_off + a - 1, v_off + b - 1, v_off + cidx - 1])
 
         v_off += npts
-    return verts, faces
 
-def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.Trimesh:
-    c = _occt()
-    # on garde la tolérance demandée en premier, puis un fallback plus lâche
-    for tol in (tol_mm, max(tol_mm * 2.0, 0.05), 0.2):
-        try:
-            _try_mesh(shape, tol, ang_rad, c)
-            verts, faces = _collect_tris(shape, c)
-            if verts and faces:
-                return trimesh.Trimesh(
-                    vertices=np.asarray(verts, dtype=float),
-                    faces=np.asarray(faces, dtype=int),
-                    process=True,
-                )
-        except Exception:
-            continue
-    raise RuntimeError("Triangulation vide")
+    if not verts or not faces:
+        raise RuntimeError("Triangulation vide")
+
+    mesh = trimesh.Trimesh(
+        vertices=np.asarray(verts, dtype=float),
+        faces=np.asarray(faces, dtype=int),
+        process=True,
+    )
+    return mesh
 
 def _bbox_from_mesh_mm(mesh: trimesh.Trimesh) -> Tuple[float, float, float]:
     ex = mesh.bounds[1] - mesh.bounds[0]
     return round(float(ex[0]), 4), round(float(ex[1]), 4), round(float(ex[2]), 4)
 
-# ---------- Projected area (union 2D) ----------
+# ---------- Projected area (Définition 1 : union 2D) ----------
 def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, str]:
+    """
+    Aire de la silhouette (union des projections orthographiques) en cm^2.
+    Retourne (aire_cm2, methode), où methode est 'shapely' ou 'raster_fallback'.
+    """
     axis = (axis or "Z").upper()
     if axis not in AXES:
         axis = "Z"
-    tri3 = mesh.triangles
-    if axis == "Z":
-        tri2 = tri3[:, :, :2]
-    elif axis == "Y":
-        tri2 = tri3[:, :, [0, 2]]
-    else:
-        tri2 = tri3[:, :, [1, 2]]
 
+    tri3 = mesh.triangles  # (N,3,3) en mm
+    if axis == "Z":
+        tri2 = tri3[:, :, :2]          # XY
+    elif axis == "Y":
+        tri2 = tri3[:, :, [0, 2]]      # XZ
+    else:
+        tri2 = tri3[:, :, [1, 2]]      # YZ
+
+    # Filtrer triangles dégénérés après projection
     v0 = tri2[:, 0, :]
     v1 = tri2[:, 1, :]
     v2 = tri2[:, 2, :]
     area2d = 0.5 * np.abs(
-        v0[:, 0] * (v1[:, 1] - v2[:, 1])
-        + v1[:, 0] * (v2[:, 1] - v0[:, 1])
-        + v2[:, 0] * (v0[:, 1] - v1[:, 1])
+        v0[:, 0] * (v1[:, 1] - v2[:, 1]) +
+        v1[:, 0] * (v2[:, 1] - v0[:, 1]) +
+        v2[:, 0] * (v0[:, 1] - v1[:, 1])
     )
     eps = max(float(np.linalg.norm(mesh.extents)) * 1e-12, 1e-12)
     keep = area2d > eps
@@ -363,15 +356,15 @@ def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, 
     if tri2.shape[0] == 0:
         return 0.0, "empty"
 
+    # Chemin principal : union exacte via Shapely
     if HAS_SHAPELY:
         CHUNK = 20000
         parts = []
         for i in range(0, tri2.shape[0], CHUNK):
+            batch = tri2[i:i+CHUNK]
             polys = []
-            for t in tri2[i:i + CHUNK]:
-                p0 = (t[0, 0], t[0, 1])
-                p1 = (t[1, 0], t[1, 1])
-                p2 = (t[2, 0], t[2, 1])
+            for t in batch:
+                p0, p1, p2 = (t[0, 0], t[0, 1]), (t[1, 0], t[1, 1]), (t[2, 0], t[2, 1])
                 if (p0 == p1) or (p1 == p2) or (p2 == p0):
                     continue
                 poly = Polygon([p0, p1, p2])
@@ -379,12 +372,15 @@ def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, 
                     polys.append(poly)
             if polys:
                 parts.append(unary_union(polys))
+
         if not parts:
             return 0.0, "shapely"
+
         uni = unary_union(parts)
         area_mm2 = float(getattr(uni, "area", 0.0))
-        return round(area_mm2 / 100.0, 6), "shapely"
+        return round(area_mm2 / 100.0, 6), "shapely"  # mm^2 -> cm^2
 
+    # Fallback raster (approx) si Shapely absent
     if not HAS_SKIMAGE:
         return 0.0, "unavailable"
 
@@ -392,7 +388,7 @@ def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, 
     bb_max = tri2.reshape(-1, 2).max(axis=0)
     span = (bb_max - bb_min)
     px_mm = max(TESSELLATION_TOL_MM, float(span.max()) / 4000.0)
-    px_mm = float(np.clip(px_mm, 0.02, 0.5))
+    px_mm = float(np.clip(px_mm, 0.02, 0.5))  # entre 20µm et 0.5mm par pixel
     H = int(np.ceil(span[1] / px_mm)) + 2
     W = int(np.ceil(span[0] / px_mm)) + 2
     MAX_PIX = 9000
@@ -401,15 +397,17 @@ def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, 
         px_mm *= scale
         H = int(np.ceil(span[1] / px_mm)) + 2
         W = int(np.ceil(span[0] / px_mm)) + 2
+
     mask = np.zeros((H, W), dtype=bool)
     for t in tri2:
         pts = (t - bb_min[None, :]) / px_mm
         rr, cc = _ski_polygon(pts[:, 1], pts[:, 0], shape=mask.shape)
         mask[rr, cc] = True
+
     area_mm2 = float(mask.sum()) * (px_mm ** 2)
     return round(area_mm2 / 100.0, 6), "raster_fallback"
 
-# ---------- Thickness ----------
+# ---------- Thickness (optionnel) ----------
 def _estimate_thickness_mm(mesh: trimesh.Trimesh, samples: int = 30000) -> Tuple[Optional[float], Optional[float]]:
     try:
         try:
@@ -418,35 +416,44 @@ def _estimate_thickness_mm(mesh: trimesh.Trimesh, samples: int = 30000) -> Tuple
         except Exception:
             from trimesh.ray.ray_triangle import RayMeshIntersector
             inter = RayMeshIntersector(mesh)
+
         pts, f_idx = trimesh.sample.sample_surface_even(mesh, samples)
         n = mesh.face_normals[f_idx]
+
         bb = mesh.bounds
         diag = float(np.linalg.norm(bb[1] - bb[0]))
         eps = max(diag * 1e-5, 1e-6)
         origins_p = pts + n * eps
         origins_m = pts - n * eps
+
         loc_p, ir_p, it_p = inter.intersects_location(origins_p, n, multiple_hits=False)
         loc_m, ir_m, it_m = inter.intersects_location(origins_m, -n, multiple_hits=False)
+
         dist = np.full(len(pts), np.inf)
+
         if len(ir_p):
             d = np.linalg.norm(loc_p - origins_p[ir_p], axis=1)
             nf = mesh.face_normals[it_p]
             good = (np.einsum("ij,ij->i", nf, n[ir_p]) < -0.3)
             d[~good] = np.inf
             dist[ir_p] = np.minimum(dist[ir_p], d)
+
         if len(ir_m):
             d = np.linalg.norm(loc_m - origins_m[ir_m], axis=1)
             nf = mesh.face_normals[it_m]
             good = (np.einsum("ij,ij->i", nf, -n[ir_m]) < -0.3)
             d[~good] = np.inf
             dist[ir_m] = np.minimum(dist[ir_m], d)
+
         d = dist[np.isfinite(dist)]
         d = d[d > eps * 10]
         if d.size == 0:
             return None, None
+
         lo = np.percentile(d, 0.1)
         hi = np.percentile(d, 99.9)
         d = d[(d >= lo) & (d <= hi)]
+
         tmin = float(d.min())
         tmax = float(min(np.percentile(d, 99.9), float(min(mesh.extents))))
         return round(tmin, 4), round(tmax, 4)
@@ -496,6 +503,7 @@ def compute_and_cache_stats(
     if axis not in AXES:
         axis = "Z"
 
+    # 0) STEP local
     local = step_path if (step_path and os.path.isfile(step_path)) else _ensure_local_step(file_id, step_ext)
     if not local or not os.path.isfile(local):
         bump_stage("error_no_step", {"path": local or (step_path or f"/tmp/uploads/{file_id}.step")})
@@ -505,16 +513,19 @@ def compute_and_cache_stats(
     step_ext = pathlib.Path(step_path).suffix.lstrip(".")
     bump_stage("step_ready", {"step_path": step_path, "step_ext": step_ext})
 
+    # OCCT lib
     lib = occt_lib_name()
     bump_stage("occt_lib", {"lib": lib})
     if lib is None:
-        _ = _occt()
+        _ = _occt()  # force ImportError détaillé
 
+    # 1) Read STEP
     if _deadline_reached(t0):
         raise TimeoutError("deadline before read")
     bump_stage("read_step", {"step_path": step_path})
     shape = _read_step_shape(step_path)
 
+    # 2) Triangulation → mesh
     if _deadline_reached(t0):
         raise TimeoutError("deadline before triangulate")
     bump_stage("triangulate_begin", {"tol_mm": TESSELLATION_TOL_MM, "ang_rad": TESSELLATION_ANG_RAD})
@@ -526,12 +537,14 @@ def compute_and_cache_stats(
         pass
     bump_stage("triangulate_ok", {"faces": int(mesh.faces.shape[0])})
 
+    # 3) BBox
     if _deadline_reached(t0):
         raise TimeoutError("deadline before bbox")
     bx, by, bz = _bbox_from_mesh_mm(mesh)
     bbox_mm = [bx, by, bz]
     bump_stage("bbox_ok", {"bbox_mm": bbox_mm, "method": "mesh_bounds"})
 
+    # 4) Surface/Volume
     if _deadline_reached(t0):
         raise TimeoutError("deadline before volume_surface")
     area_mm2 = float(mesh.area)
@@ -544,12 +557,14 @@ def compute_and_cache_stats(
             bump_stage("volume_surface_convex_fail", {})
     bump_stage("volume_surface_ok", {"vol_mm3": vol_mm3, "surf_mm2": area_mm2, "method": "mesh"})
 
+    # 5) Aire projetée (silhouette / union 2D)
     if _deadline_reached(t0):
         raise TimeoutError("deadline before projected_area")
     bump_stage("projected_area_begin", {"axis": axis})
     proj_cm2, pa_method = _projected_area_union_cm2(mesh, axis)
     bump_stage("projected_area_ok", {"projected_area_cm2": proj_cm2, "pa_method": pa_method})
 
+    # 6) Épaisseurs (optionnel)
     tmin = tmax = None
     if WORKER_COMPUTE_THICKNESS:
         if _deadline_reached(t0):
@@ -558,6 +573,7 @@ def compute_and_cache_stats(
         tmin, tmax = _estimate_thickness_mm(mesh, samples=THICKNESS_SAMPLES)
         bump_stage("thickness_ok", {"tmin": tmin, "tmax": tmax})
 
+    # 7) Caches
     if _deadline_reached(t0):
         raise TimeoutError("deadline before write_caches")
     bump_stage("write_caches_begin")
@@ -578,6 +594,7 @@ def compute_and_cache_stats(
     if tmin is not None and tmax is not None:
         _write_json(thick_path, {"tmin": tmin, "tmax": tmax, "method": "worker_ray"})
 
+    # 8) S3 (optionnel)
     if _s3_enabled():
         try:
             _s3_put(base_path, f"{file_id}.stats.json", content_type="application/json")
@@ -589,6 +606,7 @@ def compute_and_cache_stats(
 
     bump_stage("write_caches_ok")
 
+    # 9) Redis publish
     payload = {
         "volume_mm3": base_payload["volume_mm3"],
         "volume_cm3": base_payload["volume_cm3"],
@@ -600,6 +618,7 @@ def compute_and_cache_stats(
     _publish_redis(file_id, axis, payload)
     bump_stage("publish_redis_ok")
 
+    # 10) Done
     bump_stage("done", {"lib": occt_lib_name()})
     return payload
 
