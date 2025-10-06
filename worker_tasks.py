@@ -223,86 +223,60 @@ def _read_step_shape(step_path: str):
 
 def _as_face(s, c):
     """
-    Convertit robustement un TopoDS_Shape en TopoDS_Face, selon ce que fournit la wheel OCP/OCC.
-    Essaye: topods_Face, DownCast, puis TopoDS().Face_ (rare).
+    Convertit un TopoDS_Shape en TopoDS_Face.
+    On reste PRUDENT : on ne rejette rien juste parce qu'une validation échoue.
     """
     TD = c.get("TopoDS")
     TDF = c.get("TopoDS_Face")
     tf = c.get("topods_Face")
 
+    # 1) topods_Face si dispo
     if tf is not None:
         try:
             return tf(s)
         except Exception:
             pass
 
+    # 2) DownCast si dispo
     if TDF is not None and hasattr(TDF, "DownCast"):
         try:
-            f = TDF.DownCast(s)
-            _ = f.Location()  # lève si invalide
-            return f
+            return TDF.DownCast(s)
         except Exception:
             pass
 
+    # 3) Fallback : beaucoup de wheels restent tolérantes et acceptent s comme Face
+    return s
+
+def _try_mesh(shape, tol_mm: float, ang_rad: float, c):
+    """Applique la tesselation OCCT (avec compat de signature)."""
     try:
-        if TD is not None and hasattr(TD, "TopoDS"):
-            builder = TD.TopoDS()
-            if hasattr(builder, "Face_"):
-                f = builder.Face_(s)
-                _ = f.Location()
-                return f
-    except Exception:
-        pass
-
-    return None
-
-def _face_triangulation(face, loc, c):
-    """
-    Retourne la Poly_Triangulation d'une face, en gérant les variantes OCP :
-    - BRep_Tool.Triangulation(face, loc)
-    - BRep_Tool.Triangulation_s(face, loc[, purpose=0])
-    """
-    BT = c["BRep_Tool"]
-    if hasattr(BT, "Triangulation"):
-        return BT.Triangulation(face, loc)
-    if hasattr(BT, "Triangulation_s"):
-        try:
-            return BT.Triangulation_s(face, loc)       # signature ancienne
-        except TypeError:
-            return BT.Triangulation_s(face, loc, 0)    # signature récente
-    raise AttributeError("Aucune méthode Triangulation(_s) disponible sur BRep_Tool")
-
-def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.Trimesh:
-    c = _occt()
-    # Tesselation OCCT
-    try:
-        # (shape, linearDeflection, isRelative, angularDeflection, parallel)
         c["BRepMesh_IncrementalMesh"](shape, tol_mm, False, ang_rad, True)
     except TypeError:
         c["BRepMesh_IncrementalMesh"](shape, tol_mm, False, ang_rad)
 
+def _collect_tris(shape, c) -> Tuple[list, list]:
+    """Parcourt les faces et collecte vertices/faces. Retourne (verts, faces)."""
     verts: list[list[float]] = []
     faces: list[list[int]] = []
     v_off = 0
 
     exp = c["TopExp_Explorer"](shape, c["TopAbs_FACE"])
     while exp.More():
-        s = exp.Current()          # <- TopoDS_Shape
+        s = exp.Current()
         exp.Next()
-        f = _as_face(s, c)         # <- cast en TopoDS_Face
-        if f is None:
-            continue
 
-        loc = f.Location()
+        f = _as_face(s, c)
+        loc = f.Location() if hasattr(f, "Location") else None
 
-        # Triangulation robuste
-        tri = None
         BT = c["BRep_Tool"]
+        tri = None
+        # Triangulation()
         try:
             if hasattr(BT, "Triangulation"):
                 tri = BT.Triangulation(f, loc)
         except Exception:
             tri = None
+        # Triangulation_s(...)
         if tri is None and hasattr(BT, "Triangulation_s"):
             try:
                 tri = BT.Triangulation_s(f, loc)
@@ -312,7 +286,7 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
         if tri is None:
             continue
 
-        # --- Extraction des noeuds/triangles (deux styles possibles selon wheels)
+        # Extraction des noeuds/triangles selon le style de la wheel
         try:
             nodes = tri.Nodes()
             tris = tri.Triangles()
@@ -324,11 +298,13 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
 
             def get_tri(i):
                 t = tris.Value(i)
-                a, b, cidx = t.Get()
+                a, b, cidx = t.Get()  # 1-based
                 return (a, b, cidx)
-
         except Exception:
-            npts, ntri = tri.NbNodes(), tri.NbTriangles()
+            try:
+                npts, ntri = tri.NbNodes(), tri.NbTriangles()
+            except Exception:
+                continue
 
             def get_node(i):
                 p = tri.Node(i)
@@ -352,15 +328,38 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
 
         v_off += npts
 
-    if not verts or not faces:
-        raise RuntimeError("Triangulation vide")
+    return verts, faces
 
-    mesh = trimesh.Trimesh(
-        vertices=np.asarray(verts, dtype=float),
-        faces=np.asarray(faces, dtype=int),
-        process=True,
-    )
-    return mesh
+def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.Trimesh:
+    """
+    Essaie la tesselation avec (tol_mm, ang_rad). Si aucune triangulation n'est produite,
+    on retente avec une tolérance plus large (x2 puis 0.2 mm) pour éviter le 'Triangulation vide'.
+    """
+    c = _occt()
+
+    # Essais progressifs de tesselation (coarse fallback)
+    tol_candidates = [tol_mm, max(tol_mm * 2.0, 0.05), 0.2]
+    last_err = None
+
+    for tol in tol_candidates:
+        try:
+            _try_mesh(shape, tol, ang_rad, c)
+            verts, faces = _collect_tris(shape, c)
+            if verts and faces:
+                mesh = trimesh.Trimesh(
+                    vertices=np.asarray(verts, dtype=float),
+                    faces=np.asarray(faces, dtype=int),
+                    process=True,
+                )
+                return mesh
+        except Exception as e:
+            last_err = e
+            continue
+
+    # Si vraiment rien, on échoue explicitement
+    if last_err:
+        raise RuntimeError(f"Triangulation vide après fallback (dernier: {last_err})")
+    raise RuntimeError("Triangulation vide")
 
 def _bbox_from_mesh_mm(mesh: trimesh.Trimesh) -> Tuple[float, float, float]:
     ex = mesh.bounds[1] - mesh.bounds[0]
