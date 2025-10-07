@@ -563,80 +563,150 @@ def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, 
 # ---------- Thickness (optionnel) ----------
 def _estimate_thickness_mm(mesh: trimesh.Trimesh, samples: int = 30000) -> Tuple[Optional[float], Optional[float]]:
     """
-    Épaisseur locale estimée par tir de rayons double-face :
-    - pour chaque point surfacique, on tire un rayon dans +n et un dans -n
-    - si les deux intersectent, on somme les deux distances (épaisseur traversée)
-    - si un seul intersecte (bord/ouverture), on garde cette distance
-    Pas de filtrage par orientation des faces -> robuste aux normales incohérentes.
+    Estimation robuste de l'épaisseur locale.
+    Étapes :
+      1) échantillonne des points sur la surface + normales face_normals
+      2) décale un peu les points de part et d'autre de la surface (±delta)
+      3) garde les origines qui sont *dans* la matière via mesh.contains
+      4) depuis chaque origine intérieure, tire des rayons dans ±n et
+         prend la distance *la plus grande* (vers la paroi opposée)
+      5) combine les deux côtés, corrige le biais de delta, filtre les outliers
+    Fallback automatique si mesh.contains indisponible : double tir de rayons (ancienne logique).
     """
     try:
+        # intersector rapide si dispo
         try:
-            from trimesh.ray.ray_pyembree import RayMeshIntersector   # rapide si dispo
+            from trimesh.ray.ray_pyembree import RayMeshIntersector
             inter = RayMeshIntersector(mesh)
         except Exception:
-            from trimesh.ray.ray_triangle import RayMeshIntersector   # fallback pur numpy
+            from trimesh.ray.ray_triangle import RayMeshIntersector
             inter = RayMeshIntersector(mesh)
 
-        # Échantillons surfaciques quasi-uniformes
+        # 1) échantillons surfaciques + normales correspondantes
         pts, f_idx = trimesh.sample.sample_surface_even(mesh, samples)
         n = mesh.face_normals[f_idx]
 
-        # Petits décalages pour éviter l’auto-intersection
-        bb = mesh.bounds
-        diag = float(np.linalg.norm(bb[1] - bb[0]))
-        eps = max(diag * 1e-6, 1e-6)
+        # 2) petit décalage géométrique
+        ext_min = float(mesh.extents.min())
+        diag = float(np.linalg.norm(mesh.bounds[1] - mesh.bounds[0]))
+        # delta ~ 0.1% de la plus petite dimension (borné)
+        delta = max(ext_min * 1e-3, 5e-4)     # en mm
+        eps   = max(diag * 1e-6, 1e-6)
+        cap   = ext_min * 2.0                 # garde-fou physique
 
-        # Garde-fou : une épaisseur ne peut pas dépasser ~1.5× la plus petite dimension
-        cap = float(mesh.extents.min()) * 1.5
+        ori_a = pts - n * delta   # côté "−n"
+        ori_b = pts + n * delta   # côté "+n"
 
-        # Deux jeux de rayons (origines légèrement décalées)
-        ori_a = pts - n * eps;  dir_a =  n
-        ori_b = pts + n * eps;  dir_b = -n
+        # 3) garde les origines *intérieures* uniquement
+        use_contains = True
+        inside_a = inside_b = None
+        try:
+            inside_a = mesh.contains(ori_a)
+            inside_b = mesh.contains(ori_b)
+        except Exception:
+            use_contains = False
 
-        loc_a, ia, _ = inter.intersects_location(ori_a, dir_a, multiple_hits=False)
-        loc_b, ib, _ = inter.intersects_location(ori_b, dir_b, multiple_hits=False)
+        # petit helper pour tirer 2 rayons et garder la distance max (vers paroi opposée)
+        def shot_max(origin, normal):
+            # 2 tirs opposés
+            loc1, i1, _ = inter.intersects_location(origin,  normal, multiple_hits=False)
+            loc2, i2, _ = inter.intersects_location(origin, -normal, multiple_hits=False)
 
-        # Distances côté +n
-        dist_a = np.full(len(pts), np.nan)
-        if len(ia):
-            da = np.linalg.norm(loc_a - ori_a[ia], axis=1)
-            dist_a[ia] = da
+            d = np.full(len(origin), np.nan)
 
-        # Distances côté -n
-        dist_b = np.full(len(pts), np.nan)
-        if len(ib):
-            db = np.linalg.norm(loc_b - ori_b[ib], axis=1)
-            dist_b[ib] = db
+            if len(i1):
+                d1 = np.linalg.norm(loc1 - origin[i1], axis=1)
+                # élimine les auto-touches (~delta) et les distances trop petites
+                d1[d1 < (delta * 0.5)] = np.nan
+            else:
+                d1 = np.array([])
 
-        # Combine : somme si deux côtés, sinon le côté disponible
-        thickness = np.zeros(len(pts), dtype=float)
-        has_a = np.isfinite(dist_a); has_b = np.isfinite(dist_b)
-        both  = has_a & has_b
-        only_a = has_a & ~has_b
-        only_b = has_b & ~has_a
+            if len(i2):
+                d2 = np.linalg.norm(loc2 - origin[i2], axis=1)
+                d2[d2 < (delta * 0.5)] = np.nan
+            else:
+                d2 = np.array([])
 
-        thickness[both]   = dist_a[both] + dist_b[both]
-        thickness[only_a] = dist_a[only_a]
-        thickness[only_b] = dist_b[only_b]
+            if len(i1):
+                d[i1] = d1
+            if len(i2):
+                if np.issubdtype(d.dtype, np.floating):
+                    # combine par max entre les deux directions quand les deux existent
+                    if len(i1):
+                        # indices communs
+                        # construit deux tableaux pleins puis prend le nanmax
+                        tmp = np.full(len(origin), np.nan)
+                        tmp[i2] = d2
+                        d = np.nanmax(np.vstack([d, tmp]), axis=0)
+                    else:
+                        d[i2] = d2
+                else:
+                    d[i2] = d2
 
-        # Nettoyage : distances non triviales, bornées
-        good = (thickness > eps * 5) & np.isfinite(thickness) & (thickness < cap)
-        thickness = thickness[good]
-        if thickness.size == 0:
+            return d  # distances (peuvent contenir NaN)
+
+        if use_contains:
+            # 4) tirs seulement depuis l'intérieur
+            idx_a = np.where(inside_a)[0]
+            idx_b = np.where(inside_b)[0]
+
+            dA = shot_max(ori_a[idx_a], n[idx_a]) if idx_a.size else np.array([])
+            dB = shot_max(ori_b[idx_b], n[idx_b]) if idx_b.size else np.array([])
+
+            # reconstruit un vecteur épaisseurs par échantillon (NaN ailleurs)
+            thick = np.full(len(pts), np.nan)
+            if idx_a.size:
+                thick[idx_a] = dA
+            if idx_b.size:
+                # quand on a deux estimations, on garde la plus grande (plus proche de t - delta)
+                if idx_a.size:
+                    comb = np.full(len(pts), np.nan)
+                    comb[idx_b] = dB
+                    thick = np.nanmax(np.vstack([thick, comb]), axis=0)
+                else:
+                    thick[idx_b] = dB
+
+            # corrige le biais du décalage (~ t - delta) -> +delta
+            if np.any(np.isfinite(thick)):
+                thick = thick + delta
+        else:
+            # Fallback : ancienne logique "double face" simplifiée (pas de contains)
+            ori_p = pts + n * eps
+            ori_m = pts - n * eps
+            loc_p, ip, _ = inter.intersects_location(ori_p,  n, multiple_hits=False)
+            loc_m, im, _ = inter.intersects_location(ori_m, -n, multiple_hits=False)
+
+            thick = np.full(len(pts), np.nan)
+            if len(ip):
+                d = np.linalg.norm(loc_p - ori_p[ip], axis=1)
+                thick[ip] = d
+            if len(im):
+                dm = np.linalg.norm(loc_m - ori_m[im], axis=1)
+                if len(ip):
+                    tmp = np.full(len(pts), np.nan); tmp[im] = dm
+                    thick = np.nanmax(np.vstack([thick, tmp]), axis=0)
+                else:
+                    thick[im] = dm
+
+        # 5) nettoyage + stats robustes
+        good = np.isfinite(thick) & (thick > eps) & (thick < cap)
+        thick = thick[good]
+        if thick.size == 0:
             return None, None
 
-        # Bornes robustes (réduction d’outliers)
-        lo_q = float(np.percentile(thickness, 0.5))
-        hi_q = float(np.percentile(thickness, 99.5))
-        sel = thickness[(thickness >= lo_q) & (thickness <= hi_q)]
+        # coupe les outliers agressifs
+        lo, hi = np.percentile(thick, [0.5, 99.5])
+        sel = thick[(thick >= lo) & (thick <= hi)]
         if sel.size == 0:
-            sel = thickness
+            sel = thick
 
         tmin = float(sel.min())
-        tmax = float(min(sel.max(), float(mesh.extents.min())))
+        tmax = float(min(sel.max(), ext_min))
         return round(tmin, 4), round(tmax, 4)
+
     except Exception:
         return None, None
+
 
 # ---------- Caches & Redis ----------
 def _cache_paths(file_id: str, axis: str):
