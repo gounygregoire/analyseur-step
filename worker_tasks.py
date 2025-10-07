@@ -34,8 +34,8 @@ OUTPUT_FOLDER = os.getenv("OUTPUT_FOLDER", "/tmp/converted")
 AXES = ("X", "Y", "Z")
 
 STATS_SOFT_TIMEOUT_SEC = int(os.getenv("STATS_SOFT_TIMEOUT_SEC", "600"))
-TESSELLATION_TOL_MM = float(os.getenv("TESSELLATION_TOL_MM", "0.05"))
-TESSELLATION_ANG_RAD = float(os.getenv("TESSELLATION_ANG_RAD", "0.25"))
+TESSELLATION_TOL_MM = float(os.getenv("TESSELLATION_TOL_MM", "0.15"))
+TESSELLATION_ANG_RAD = float(os.getenv("TESSELLATION_ANG_RAD", "0.35"))
 
 WORKER_COMPUTE_THICKNESS = str(os.getenv("WORKER_COMPUTE_THICKNESS", "0")).lower() in ("1", "true", "yes", "on")
 THICKNESS_SAMPLES = int(os.getenv("THICKNESS_SAMPLES", "30000"))
@@ -160,11 +160,7 @@ def _occt():
     try:
         from OCP import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh, TopoDS
         from OCP.TopLoc import TopLoc_Location
-        # optionnels mais utiles
-        try:
-            from OCP.IMeshTools import IMeshTools_Parameters
-        except Exception:
-            IMeshTools_Parameters = None
+        # Optionnels utiles
         try:
             from OCP.BRepTools import BRepTools
         except Exception:
@@ -182,7 +178,6 @@ def _occt():
             "TopoDS_Face": getattr(TopoDS, "TopoDS_Face", None),
             "topods_Face": getattr(TopoDS, "topods_Face", None),
             "TopLoc_Location": TopLoc_Location,
-            "IMeshTools_Parameters": IMeshTools_Parameters,
             "BRepTools": BRepTools,
         }
         return _OCCT
@@ -190,7 +185,7 @@ def _occt():
         ocp_err = e
 
     try:
-        from OCC.Core import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh, TopLoc
+        from OCC.Core import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh
         _OCCT_LIB = "OCC"
         _OCCT = {
             "STEPControl_Reader": STEPControl.STEPControl_Reader,
@@ -199,7 +194,6 @@ def _occt():
             "TopExp_Explorer": TopExp.TopExp_Explorer,
             "BRep_Tool": BRep.BRep_Tool,
             "BRepMesh_IncrementalMesh": BRepMesh.BRepMesh_IncrementalMesh,
-            "TopLoc_Location": TopLoc.TopLoc_Location,
         }
         return _OCCT
     except Exception as e2:
@@ -228,104 +222,60 @@ def _read_step_shape(step_path: str):
 
 def _as_face(s, c):
     """
-    Convertit un TopoDS_Shape en TopoDS_Face de manière robuste.
-    Essaye topods_Face, puis TopoDS_Face.DownCast. Retourne None si impossible.
+    Convertit un TopoDS_Shape en TopoDS_Face (robuste).
     """
     tf = c.get("topods_Face")
     if tf is not None:
         try:
-            f = tf(s); _ = f.Location(); return f
+            f = tf(s)
+            _ = f.Location()
+            return f
         except Exception:
             pass
+
     TDF = c.get("TopoDS_Face")
     if TDF is not None and hasattr(TDF, "DownCast"):
         try:
-            f = TDF.DownCast(s); _ = f.Location(); return f
+            f = TDF.DownCast(s)
+            _ = f.Location()
+            return f
         except Exception:
             pass
+
     return None
 
-def _tri_counts(tri) -> Tuple[int, int]:
-    if tri is None:
-        return 0, 0
-    try:
-        return tri.Nodes().Size(), tri.Triangles().Size()
-    except Exception:
-        try:
-            return tri.NbNodes(), tri.NbTriangles()
-        except Exception:
-            return 0, 0
-
-def _try_mesh(c, target, tol_mm: float, ang_rad: float) -> bool:
+def _face_triangulation(face, c):
     """
-    Essaie d'abord le meshing paramétré (OCCT 7.6/7.7+), puis les anciennes signatures,
-    en appelant Perform() si dispo. Retourne True si au moins un essai s'est déroulé.
+    Récupère Poly_Triangulation pour 'face' via Triangulation_s(face, face.Location(), purpose).
     """
-    tried = False
-
-    # (A) Chemin moderne : IMeshTools_Parameters
-    P = c.get("IMeshTools_Parameters")
-    if P is not None:
-        try:
-            params = P()
-            # Paramètres robustes pour obtenir *effectivement* une triangulation
-            params.Deflection = float(max(tol_mm, 1e-4))
-            params.Angle = float(max(ang_rad, 0.05))
-            params.Relative = False
-            params.InParallel = True
-            # options qui aident certaines wheels :
-            if hasattr(params, "MinSize"): params.MinSize = 0.0
-            if hasattr(params, "ControlSurfaceDeflection"): params.ControlSurfaceDeflection = True
-            if hasattr(params, "InternalVerticesMode"): params.InternalVerticesMode = True
-            if hasattr(params, "AdaptiveMinMax"): params.AdaptiveMinMax = True
-            if hasattr(params, "NbThreads"): params.NbThreads = 0  # auto
-
-            mesher = c["BRepMesh_IncrementalMesh"](target, params, True)
-            tried = True
-            perf = getattr(mesher, "Perform", None)
-            if callable(perf):
-                perf()
-        except Exception:
-            pass
-
-    # (B) Anciennes signatures (constructor déclencheur)
-    combos = [
-        (tol_mm, False, ang_rad, True),
-        (tol_mm, False, ang_rad, False),
-        (tol_mm, True,  ang_rad, True),
-        (tol_mm, True,  ang_rad, False),
-    ]
-    for lin, rel, ang, par in combos:
-        try:
-            mesher = c["BRepMesh_IncrementalMesh"](target, float(lin), bool(rel), float(ang), bool(par))
-            tried = True
-            perf = getattr(mesher, "Perform", None)
-            if callable(perf):
-                perf()
-        except TypeError:
+    BT = c["BRep_Tool"]
+    loc = face.Location()
+    if hasattr(BT, "Triangulation_s"):
+        tries = [
+            (face, loc),
+            (face, loc, 0),
+            (face, loc, 1),
+            (face, loc, 2),
+        ]
+        for args in tries:
             try:
-                mesher = c["BRepMesh_IncrementalMesh"](target, float(lin), bool(rel), float(ang))
-                tried = True
-                perf = getattr(mesher, "Perform", None)
-                if callable(perf):
-                    perf()
+                tri = BT.Triangulation_s(*args)
+                if tri is not None:
+                    return tri
+            except TypeError:
+                continue
             except Exception:
                 continue
-        except Exception:
-            continue
 
-    # (C) Ultime secours
-    if not tried:
+    if hasattr(BT, "Triangulation"):
         try:
-            mesher = c["BRepMesh_IncrementalMesh"](target, tol_mm)
-            perf = getattr(mesher, "Perform", None)
-            if callable(perf):
-                perf()
-            tried = True
+            return BT.Triangulation(face, loc)
         except Exception:
-            pass
+            return None
 
-    # (D) Nettoyage/Update (certaines wheels n’attachent pas sans ça)
+    return None
+
+def _brep_tools_refresh(c, target):
     BTs = c.get("BRepTools")
     if BTs is not None:
         try:
@@ -337,63 +287,50 @@ def _try_mesh(c, target, tol_mm: float, ang_rad: float) -> bool:
         except Exception:
             pass
 
-    return tried
-
-
-def _face_triangulation(face, c):
+def _try_mesh(c, target, tol_mm: float, ang_rad: float) -> None:
     """
-    Récupère une Poly_Triangulation pour 'face'.
-    1) Essai signature by-ref (holder TopLoc_Location())
-    2) Essai avec face.Location()
-    3) Ancienne Triangulation(face, loc) si dispo
-    On accepte la première triangulation non vide.
+    Meshing robuste pour wheels OCP 7.7.x : on tente plusieurs signatures et on force
+    Clean/Update pour attacher la triangulation aux faces.
     """
-    BT = c["BRep_Tool"]
-
-    # 1) signature by-ref
-    if hasattr(BT, "Triangulation_s") and "TopLoc_Location" in c:
-        holder = c["TopLoc_Location"]()
-        for args in ((face, holder), (face, holder, 0), (face, holder, 1), (face, holder, 2)):
+    # ancienne signature (5 args)
+    for rel in (False, True):
+        for par in (True, False):
             try:
-                tri = BT.Triangulation_s(*args)
-                if _tri_counts(tri)[0] > 0:
-                    return tri
+                mesher = c["BRepMesh_IncrementalMesh"](target, float(tol_mm), bool(rel), float(ang_rad), bool(par))
+                perf = getattr(mesher, "Perform", None)
+                if callable(perf):
+                    perf()
+                _brep_tools_refresh(c, target)
+                return
             except TypeError:
-                continue
+                pass
             except Exception:
-                continue
-
-    # 2) variante face.Location()
-    if hasattr(BT, "Triangulation_s"):
-        loc_face = face.Location()
-        for args in ((face, loc_face), (face, loc_face, 0), (face, loc_face, 1), (face, loc_face, 2)):
-            try:
-                tri = BT.Triangulation_s(*args)
-                if _tri_counts(tri)[0] > 0:
-                    return tri
-            except TypeError:
-                continue
-            except Exception:
-                continue
-
-    # 3) très vieux bindings
-    if hasattr(BT, "Triangulation"):
-        for loc_any in (face.Location(), c.get("TopLoc_Location", lambda: None)() if "TopLoc_Location" in c else None):
-            if loc_any is None:
-                continue
-            try:
-                tri = BT.Triangulation(face, loc_any)
-                if _tri_counts(tri)[0] > 0:
-                    return tri
-            except Exception:
-                continue
-
-    return None
+                pass
+    # 4 args
+    for rel in (False, True):
+        try:
+            mesher = c["BRepMesh_IncrementalMesh"](target, float(tol_mm), bool(rel), float(ang_rad))
+            perf = getattr(mesher, "Perform", None)
+            if callable(perf):
+                perf()
+            _brep_tools_refresh(c, target)
+            return
+        except Exception:
+            pass
+    # minimal
+    try:
+        mesher = c["BRepMesh_IncrementalMesh"](target, float(tol_mm))
+        perf = getattr(mesher, "Perform", None)
+        if callable(perf):
+            perf()
+        _brep_tools_refresh(c, target)
+    except Exception:
+        pass
 
 def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.Trimesh:
     c = _occt()
 
-    # Maillage global (renforcé)
+    # Maillage global du shape
     _try_mesh(c, shape, tol_mm, ang_rad)
 
     verts: list[list[float]] = []
@@ -401,45 +338,59 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
     v_off = 0
 
     exp = c["TopExp_Explorer"](shape, c["TopAbs_FACE"])
-    any_face = False
-    any_tri  = False
-
     while exp.More():
         s = exp.Current()
         exp.Next()
-        any_face = True
 
         f = _as_face(s, c)
         if f is None:
             continue
 
-        # 1) lire la triangulation
         tri = _face_triangulation(f, c)
-        npts, ntri = _tri_counts(tri)
 
-        # 2) si vide, remailler la face puis relire
+        def _tri_sizes(_tri):
+            if _tri is None:
+                return 0, 0
+            try:
+                return _tri.Nodes().Size(), _tri.Triangles().Size()
+            except Exception:
+                try:
+                    return _tri.NbNodes(), _tri.NbTriangles()
+                except Exception:
+                    return 0, 0
+
+        npts, ntri = _tri_sizes(tri)
         if npts == 0 or ntri == 0:
-            _try_mesh(c, f, tol_mm, ang_rad)
+            # re-mesh *cette* face puis re-essai
+            _try_mesh(c, f, max(tol_mm * 0.5, 1e-3), ang_rad)
             tri = _face_triangulation(f, c)
-            npts, ntri = _tri_counts(tri)
+            npts, ntri = _tri_sizes(tri)
 
         if npts == 0 or ntri == 0:
             continue
 
-        any_tri = True
-
-        # Extraction
+        # Extraction nodes/triangles (deux familles d'API)
         try:
-            nodes = tri.Nodes(); tris = tri.Triangles()
+            nodes = tri.Nodes()
+            tris = tri.Triangles()
+
             def get_node(i):
-                p = nodes.Value(i); return (float(p.X()), float(p.Y()), float(p.Z()))
+                p = nodes.Value(i)
+                return (float(p.X()), float(p.Y()), float(p.Z()))
+
             def get_tri(i):
-                t = tris.Value(i); a,b,cidx = t.Get(); return (a,b,cidx)
+                t = tris.Value(i)
+                a, b, cidx = t.Get()  # 1-based
+                return (a, b, cidx)
         except Exception:
             def get_node(i):
-                p = tri.Node(i); return (float(p.X()), float(p.Y()), float(p.Z()))
+                p = tri.Node(i)
+                return (float(p.X()), float(p.Y()), float(p.Z()))
+
             def get_tri(i):
-                t = tri.Triangle(i); a,b,cidx = t.Get(); return (a,b,cidx)
+                t = tri.Triangle(i)
+                a, b, cidx = t.Get()
+                return (a, b, cidx)
 
         for i in range(1, npts + 1):
             x, y, z = get_node(i)
@@ -450,43 +401,6 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
             faces.append([v_off + a - 1, v_off + b - 1, v_off + cidx - 1])
 
         v_off += npts
-
-    if not verts or not faces:
-        # dernier filet : remaillage global plus permissif puis second passage
-        if any_face and not any_tri:
-            _try_mesh(c, shape, tol_mm * 10.0, max(ang_rad * 1.5, 0.1))
-            exp = c["TopExp_Explorer"](shape, c["TopAbs_FACE"])
-            while exp.More():
-                s = exp.Current(); exp.Next()
-                f = _as_face(s, c)
-                if f is None:
-                    continue
-                tri = _face_triangulation(f, c)
-                npts, ntri = _tri_counts(tri)
-                if npts == 0 or ntri == 0:
-                    _try_mesh(c, f, tol_mm * 10.0, max(ang_rad * 1.5, 0.1))
-                    tri = _face_triangulation(f, c)
-                    npts, ntri = _tri_counts(tri)
-                if npts == 0 or ntri == 0:
-                    continue
-                try:
-                    nodes = tri.Nodes(); tris = tri.Triangles()
-                    def get_node(i):
-                        p = nodes.Value(i); return (float(p.X()), float(p.Y()), float(p.Z()))
-                    def get_tri(i):
-                        t = tris.Value(i); a,b,cidx = t.Get(); return (a,b,cidx)
-                except Exception:
-                    def get_node(i):
-                        p = tri.Node(i); return (float(p.X()), float(p.Y()), float(p.Z()))
-                    def get_tri(i):
-                        t = tri.Triangle(i); a,b,cidx = t.Get(); return (a,b,cidx)
-                for i in range(1, npts + 1):
-                    x, y, z = get_node(i)
-                    verts.append([x, y, z])
-                for i in range(1, ntri + 1):
-                    a, b, cidx = get_tri(i)
-                    faces.append([v_off + a - 1, v_off + b - 1, v_off + cidx - 1])
-                v_off += npts
 
     if not verts or not faces:
         raise RuntimeError("Triangulation vide")
@@ -506,18 +420,19 @@ def _bbox_from_mesh_mm(mesh: trimesh.Trimesh) -> Tuple[float, float, float]:
 def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, str]:
     """
     Aire de la silhouette (union des projections orthographiques) en cm^2.
+    Retourne (aire_cm2, methode), où methode ∈ {'shapely','raster_fallback','empty','unavailable'}.
     """
     axis = (axis or "Z").upper()
     if axis not in AXES:
         axis = "Z"
 
-    tri3 = mesh.triangles
+    tri3 = mesh.triangles  # (N,3,3) en mm
     if axis == "Z":
-        tri2 = tri3[:, :, :2]
+        tri2 = tri3[:, :, :2]          # XY
     elif axis == "Y":
-        tri2 = tri3[:, :, [0, 2]]
+        tri2 = tri3[:, :, [0, 2]]      # XZ
     else:
-        tri2 = tri3[:, :, [1, 2]]
+        tri2 = tri3[:, :, [1, 2]]      # YZ
 
     # Filtre triangles dégénérés après projection
     v0 = tri2[:, 0, :]
@@ -534,6 +449,7 @@ def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, 
     if tri2.shape[0] == 0:
         return 0.0, "empty"
 
+    # Chemin principal : union exacte via Shapely
     if HAS_SHAPELY:
         CHUNK = 20000
         parts = []
@@ -549,12 +465,15 @@ def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, 
                     polys.append(poly)
             if polys:
                 parts.append(unary_union(polys))
+
         if not parts:
             return 0.0, "shapely"
+
         uni = unary_union(parts)
         area_mm2 = float(getattr(uni, "area", 0.0))
-        return round(area_mm2 / 100.0, 6), "shapely"
+        return round(area_mm2 / 100.0, 6), "shapely"  # mm^2 -> cm^2
 
+    # Fallback raster (approx) si Shapely absent
     if not HAS_SKIMAGE:
         return 0.0, "unavailable"
 
@@ -562,7 +481,7 @@ def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, 
     bb_max = tri2.reshape(-1, 2).max(axis=0)
     span = (bb_max - bb_min)
     px_mm = max(TESSELLATION_TOL_MM, float(span.max()) / 4000.0)
-    px_mm = float(np.clip(px_mm, 0.02, 0.5))
+    px_mm = float(np.clip(px_mm, 0.02, 0.5))  # 20µm .. 0.5mm / px
     H = int(np.ceil(span[1] / px_mm)) + 2
     W = int(np.ceil(span[0] / px_mm)) + 2
     MAX_PIX = 9000
@@ -691,7 +610,7 @@ def compute_and_cache_stats(
     lib = occt_lib_name()
     bump_stage("occt_lib", {"lib": lib})
     if lib is None:
-        _ = _occt()
+        _ = _occt()  # force ImportError détaillé
 
     # 1) Read STEP
     if _deadline_reached(t0):
