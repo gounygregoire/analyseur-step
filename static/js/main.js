@@ -183,14 +183,14 @@ const setSome=(ids,prop,val)=> ids.forEach(id=>{const o=viewer.scene.objects[id]
 const setAll=(prop,val)=> allIds().forEach(id=>{const o=viewer.scene.objects[id]; if(o) o[prop]=val;});
 const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); if (propsPanel) propsPanel.innerHTML=""; };
 
-/* ---------- Mesures (affichage "mm" SANS conversion) ---------- */
+/* ---------- Mesures (affichage "mm" sans séparateur de milliers) ---------- */
 const prettyNumber = (v) => {
   const abs = Math.abs(v);
-  if (abs < 10)   return v.toFixed(2);
-  if (abs < 100)  return v.toFixed(1);
-  return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  const d = abs < 10 ? 2 : abs < 100 ? 1 : 0;
+  // pas de groupement, décimales fixes
+  return (Math.round(v * (10 ** d)) / (10 ** d)).toFixed(d);
 };
-// Xeokit fournit des mètres. On garde la valeur et on affiche "mm".
+// Xeokit fournit des mètres → on convertit en mm et on formate
 const formatMM = (meters) => `${prettyNumber(meters * 1000)} mm`;
 
 const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
@@ -209,12 +209,11 @@ if ("snapping" in distanceCtrl) {
   window.addEventListener("keyup",   (e)=>{ if (!e.altKey) distanceCtrl.snapping = true;  }, {passive:true});
 }
 
-/* ---- Forçage des labels : remplacer "m" par "mm" (sans *1000) ---- */
+/* ---- Forçage des labels : remplacer "m" par "mm" (sans *1000 si déjà "mm") ---- */
 function textMetersToMM(txt) {
   return txt.replace(/(~?\s*)(-?\d+(?:[.,]\d+)?)\s*m(?!m)/gi, (_all, pre, num) => {
     const val = parseFloat(String(num).replace(',', '.'));
     if (isNaN(val)) return _all;
-    const pretty = prettyNumber(val); // même valeur, juste formatée
     const mm = val * 1000;
     const prettyMM = prettyNumber(mm);
     return `${pre}${prettyMM} mm`;
@@ -693,19 +692,23 @@ btnShot?.addEventListener("click",()=>{
 });
 
 /* ==================== ANALYSE : fetch & rendu ==================== */
+function f3(v){ return (v==null || !isFinite(+v)) ? "—" : (+v).toFixed(3); }
+
 function renderStats(json){
   if (!json || typeof json !== "object") return;
-  if (volVal)  volVal.textContent  = (json.volume_cm3 ?? "—");
-  if (projVal) projVal.textContent = (json.projected_area_cm2 ?? "—");
-  if (tminVal) tminVal.textContent = (json.thickness_min_mm ?? "—");
-  if (tmaxVal) tmaxVal.textContent = (json.thickness_max_mm ?? "—");
+
+  // valeurs “propres” côté UI (aucune locale/groupement)
+  if (volVal)  volVal.textContent  = f3(json.volume_cm3);
+  if (projVal) projVal.textContent = f3(json.projected_area_cm2);
+  if (tminVal) tminVal.textContent = f3(json.thickness_min_mm);
+  if (tmaxVal) tmaxVal.textContent = f3(json.thickness_max_mm);
 
   // fallback éventuel si tu utilises des spans data-metric=...
   const d = (sel, v) => { const el = document.querySelector(sel); if (el) el.textContent = v; };
-  if (typeof json.volume_cm3 !== "undefined")        d('[data-metric="volume"]',         Number(json.volume_cm3).toFixed(3));
-  if (typeof json.thickness_min_mm !== "undefined")  d('[data-metric="tmin"]',           Number(json.thickness_min_mm).toFixed(3));
-  if (typeof json.thickness_max_mm !== "undefined")  d('[data-metric="tmax"]',           Number(json.thickness_max_mm).toFixed(3));
-  if (typeof json.projected_area_cm2 !== "undefined")d('[data-metric="projected_area"]', Number(json.projected_area_cm2).toFixed(3));
+  if (typeof json.volume_cm3 !== "undefined")        d('[data-metric="volume"]',         f3(json.volume_cm3));
+  if (typeof json.thickness_min_mm !== "undefined")  d('[data-metric="tmin"]',           f3(json.thickness_min_mm));
+  if (typeof json.thickness_max_mm !== "undefined")  d('[data-metric="tmax"]',           f3(json.thickness_max_mm));
+  if (typeof json.projected_area_cm2 !== "undefined")d('[data-metric="projected_area"]', f3(json.projected_area_cm2));
 }
 function clearStatsUI(){
   renderStats({ volume_cm3:"—", projected_area_cm2:"—", thickness_min_mm:"—", thickness_max_mm:"—" });

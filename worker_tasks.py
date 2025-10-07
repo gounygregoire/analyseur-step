@@ -489,8 +489,17 @@ def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, 
 
 # ---------- Thickness (optionnel) ----------
 def _estimate_thickness_mm(mesh: trimesh.Trimesh, samples: int = 30000) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Épaisseur min/max robuste :
+      - Pass 1 : rayons bilatéraux le long des normales de faces échantillonnées (relax angle)
+      - Pass 2 : fallback multi-axes (±X, ±Y, ±Z) depuis un léger "inside"
+    Renvoie (tmin, tmax) en mm.
+    """
     try:
-        samples = int(np.clip(int(samples), 4000, 100000))
+        # bornes sûres
+        samples = int(np.clip(int(samples), 6000, 80000))
+
+        # Intersecteur
         try:
             from trimesh.ray.ray_pyembree import RayMeshIntersector
             inter = RayMeshIntersector(mesh)
@@ -498,47 +507,77 @@ def _estimate_thickness_mm(mesh: trimesh.Trimesh, samples: int = 30000) -> Tuple
             from trimesh.ray.ray_triangle import RayMeshIntersector
             inter = RayMeshIntersector(mesh)
 
+        # Échantillons surfaciques (uniformes)
         pts, f_idx = trimesh.sample.sample_surface_even(mesh, samples)
         if len(pts) == 0:
             return None, None
         n = mesh.face_normals[f_idx]
 
+        # Échelle & epsilon
         bb = mesh.bounds
         diag = float(np.linalg.norm(bb[1] - bb[0]))
         eps = max(diag * 1e-5, 1e-6)
+
+        # PASS 1 : rayons le long des normales (bilatéral, filtre d'angle relaxé)
         origins_p = pts + n * eps
         origins_m = pts - n * eps
 
-        loc_p, ir_p, it_p = inter.intersects_location(origins_p, n, multiple_hits=False)
-        loc_m, ir_m, it_m = inter.intersects_location(origins_m, -n, multiple_hits=False)
-
         dist = np.full(len(pts), np.inf)
 
+        # +n
+        loc_p, ir_p, it_p = inter.intersects_location(origins_p, n, multiple_hits=False)
         if len(ir_p):
             d = np.linalg.norm(loc_p - origins_p[ir_p], axis=1)
             nf = mesh.face_normals[it_p]
-            good = (np.einsum("ij,ij->i", nf, n[ir_p]) < -0.1)
+            # Filtre relaxé : autorise des parois pas parfaitement "face à face"
+            good = (np.einsum("ij,ij->i", nf, n[ir_p]) < -0.01)
             d[~good] = np.inf
             dist[ir_p] = np.minimum(dist[ir_p], d)
 
+        # -n
+        loc_m, ir_m, it_m = inter.intersects_location(origins_m, -n, multiple_hits=False)
         if len(ir_m):
             d = np.linalg.norm(loc_m - origins_m[ir_m], axis=1)
             nf = mesh.face_normals[it_m]
-            good = (np.einsum("ij,ij->i", nf, -n[ir_m]) < -0.1)
+            good = (np.einsum("ij,ij->i", nf, -n[ir_m]) < -0.01)
             d[~good] = np.inf
             dist[ir_m] = np.minimum(dist[ir_m], d)
 
+        # PASS 2 : fallback multi-axes (±X, ±Y, ±Z) — robuste aux normales foireuses
+        dirs = np.array([[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]], dtype=float)
+        inside = pts - n * (2.0 * eps)   # point un peu "dans" la pièce
+        BLOCK = 20000                    # bornage mémoire
+
+        for b0 in range(0, len(inside), BLOCK):
+            b1 = min(len(inside), b0 + BLOCK)
+            o = inside[b0:b1]
+            # 6 directions par origine (répétitions vectorisées)
+            o6 = np.repeat(o, 6, axis=0)
+            d6 = np.tile(dirs, (len(o), 1))
+            loc, ir, it = inter.intersects_location(o6, d6, multiple_hits=False)
+            if len(ir):
+                # index d'origine = ir // 6
+                oi = (ir // 6) + b0
+                dd = np.linalg.norm(loc - o6[ir], axis=1)
+                dist[oi] = np.minimum(dist[oi], dd)
+
+        # Nettoyage & stats
         d = dist[np.isfinite(dist)]
-        d = d[d > eps * 5]
+        d = d[d > eps * 5]   # écarte les artefacts
         if d.size == 0:
             return None, None
 
+        # Couper les outliers extrêmes pour une valeur "ingé"
         lo = np.percentile(d, 0.5)
         hi = np.percentile(d, 99.5)
         d = d[(d >= lo) & (d <= hi)]
-        return round(float(np.min(d)), 4), round(float(np.percentile(d, 99.0)), 4)
+
+        tmin = float(np.min(d))
+        tmax = float(np.percentile(d, 99.0))
+        return round(tmin, 4), round(tmax, 4)
     except Exception:
         return None, None
+
 
 # ---------- Caches & Redis ----------
 def _cache_paths(file_id: str, axis: str):
