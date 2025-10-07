@@ -187,25 +187,41 @@ const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); select
 // mm par unité monde (WU). Si le modèle est en mètres: ≈1000 ; en mm: ≈1
 let MM_PER_WU = 1000;
 
-// format FR sans groupement (virgule décimale)
-const frFixed = (v, d) =>
-  (Math.round(v * 10 ** d) / 10 ** d).toFixed(d).replace(".", ",");
-
-// décimales “propres”: petites valeurs → plus de précision
-const prettyNumber = (v) => {
-  const a = Math.abs(v);
-  const d = a < 1 ? 3 : a < 10 ? 2 : a < 100 ? 1 : 0;
-  return frFixed(v, d);
+// formateur FR avec groupement (espace fines) et décimales adaptatives
+const frFormat = (val) => {
+  const a = Math.abs(val);
+  const decimals =
+    a >= 1000 ? 0 :
+    a >= 100  ? 1 :
+    a >= 10   ? 2 : 3;
+  return new Intl.NumberFormat('fr-FR', {
+    useGrouping: true,
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals
+  }).format(val);
 };
 
 // label “mm” basé sur MM_PER_WU
-const formatMM = (worldUnits) => `${prettyNumber(worldUnits * MM_PER_WU)} mm`;
+const formatMM = (worldUnits) => `${frFormat(worldUnits * MM_PER_WU)} mm`;
 
-// pousse le formatter dans le plugin (selon version)
+// pousse le formatter dans le plugin (selon version xeokit)
 function setLabelFormatter() {
-  const f = (wu) => `${prettyNumber(wu * MM_PER_WU)} mm`;
+  const f = (wu) => `${frFormat(wu * MM_PER_WU)} mm`;
   try { distancePlugin.cfg = { ...(distancePlugin.cfg || {}), labelFormat: f }; } catch {}
   try { distancePlugin.labelFormat = f; } catch {}
+  // force un refresh visuel des mesures déjà posées
+  try {
+    const list =
+      distancePlugin.measurements ||
+      distancePlugin._measurements ||
+      distancePlugin._state?.measurements ||
+      [];
+    list.forEach(m => { try { m.needsUpdate = true; } catch {} });
+    // petit toggle pour forcer le re-render des étiquettes
+    const shown = !!distancePlugin.labelsShown;
+    distancePlugin.labelsShown = !shown;
+    distancePlugin.labelsShown = shown;
+  } catch {}
 }
 
 // instanciation plugin mesures
@@ -224,25 +240,23 @@ if ("snapping" in distanceCtrl) {
   window.addEventListener("keyup",   (e)=>{ if (!e.altKey) distanceCtrl.snapping = true;  }, {passive:true});
 }
 
+
 // Déduit MM_PER_WU à partir du bbox_mm serveur et de l'AABB xeokit
 function updateUnitsFromBBox(bboxMM) {
   try {
     const a = viewer.scene?.aabb;
     if (!a || !Array.isArray(bboxMM) || bboxMM.length !== 3) return;
-    const extWU = [a[3]-a[0], a[4]-a[1], a[5]-a[2]];           // unités monde (WU)
-    const extMM = bboxMM.map((v)=> +v || 0);                   // mm
+    const extWU = [a[3]-a[0], a[4]-a[1], a[5]-a[2]];
+    const extMM = bboxMM.map((v)=> +v || 0);
     const ratios = [0,1,2]
       .map(i => (extWU[i] > 1e-9 ? extMM[i] / extWU[i] : NaN))
       .filter(x => isFinite(x) && x > 0);
     if (!ratios.length) return;
-
-    // médiane + clamp de sécurité
     ratios.sort((x,y)=>x-y);
-    const med = ratios[Math.floor(ratios.length/2)];
-    MM_PER_WU = Math.max(1, Math.min(2000, med));
+    MM_PER_WU = Math.max(1, Math.min(2000, ratios[Math.floor(ratios.length/2)]));
     setLabelFormatter();
     console.log("[units] mm per world unit =", MM_PER_WU.toFixed(3));
-  } catch (e) { /* ignore */ }
+  } catch {}
 }
 
 
@@ -735,10 +749,10 @@ function renderStats(json){
   if (!json || typeof json !== "object") return;
 
   // mémorise le bbox mm du serveur et met à jour l’unité
-  if (Array.isArray(json.bbox_mm)) {
-    window.__bbox_mm = json.bbox_mm;
-    updateUnitsFromBBox(window.__bbox_mm);
-  }
+if (Array.isArray(json.bbox_mm)) {
+  window.__bbox_mm = json.bbox_mm;
+  updateUnitsFromBBox(window.__bbox_mm);
+}
 
   // valeurs “propres” côté UI (FR, sans séparateur de milliers)
   if (volVal)  volVal.textContent  = f3(json.volume_cm3);
