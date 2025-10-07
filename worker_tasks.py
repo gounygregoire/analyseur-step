@@ -387,6 +387,14 @@ def _shape_to_trimesh_via_stl(shape, tol_mm: float, ang_rad: float) -> Optional[
             pass
 
 def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.Trimesh:
+    # --- FORCE le fallback STL si demandé par une variable d'env ---
+    if str(os.getenv("FORCE_STL_FALLBACK", "0")).lower() in ("1", "true", "yes", "on"):
+        bump_stage("triangulate_forced_fallback_stl")
+        m = _shape_to_trimesh_via_stl(shape, tol_mm, ang_rad)
+        if m is None or m.faces is None or m.faces.shape[0] == 0:
+            raise RuntimeError("Fallback STL a échoué")
+        return m
+    # --- (le code existant continue ici) ---
     """
     1) tente la triangulation “native” OCCT par faces (si la wheel l’expose),
     2) si vide → fallback STL (export puis lecture trimesh).
