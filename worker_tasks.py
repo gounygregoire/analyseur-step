@@ -16,7 +16,7 @@ from urllib.parse import urlparse, urlunparse, unquote
 # --- Optional geometry backends for 2D union ---
 HAS_SHAPELY = False
 try:
-    from shapely.geometry import Polygon
+    from shapely.geometry import Polygon, MultiPolygon
     from shapely.ops import unary_union
     HAS_SHAPELY = True
 except Exception:
@@ -33,18 +33,21 @@ except Exception:
 UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "/tmp/uploads")
 OUTPUT_FOLDER = os.getenv("OUTPUT_FOLDER", "/tmp/converted")
 AXES = ("X", "Y", "Z")
-PROJECTED_AREA_ENGINE = os.getenv("PROJECTED_AREA_ENGINE", "auto").lower()  # 'auto' | 'raster' | 'shapely'
-PA_MAX_TRI_SHAPELY   = int(os.getenv("PA_MAX_TRI_SHAPELY", "120000"))        # seuil sécurité
-PA_BATCH              = int(os.getenv("PA_BATCH", "20000"))                  # taille des lots shapely
-# ----- Projected area config -----
-PA_BACKEND = os.getenv("PA_BACKEND", "auto").lower()  # 'auto' | 'raster' | 'shapely'
-PA_SHAPELY_TRI_MAX = int(os.getenv("PA_SHAPELY_TRI_MAX", "120000"))  # au-delà, on force raster
-# ----- Mesh & Projected-Area safe config -----
-MESH_DEFL_MM = float(os.getenv("MESH_DEFL_MM", "0.20"))   # deflection pour STL
-MESH_ANG_RAD = float(os.getenv("MESH_ANG_RAD", "0.50"))   # angle pour STL
 
-# On force un backend raster borné pour l'aire projetée (pas de Shapely)
-PA_RASTER_MAX_PIX = int(os.getenv("PA_RASTER_MAX_PIX", "4096"))  # dimension max
+# Aire projetée (précision vs robustesse)
+PA_BACKEND = os.getenv("PA_BACKEND", "auto").lower()  # 'auto' | 'raster' | 'shapely'
+PA_SHAPELY_TRI_MAX = int(os.getenv("PA_SHAPELY_TRI_MAX", "120000"))  # bascule en raster au-delà
+PA_BATCH = int(os.getenv("PA_BATCH", "20000"))  # lot shapely
+# Mesh (STL) – précision
+MESH_DEFL_MM = float(os.getenv("MESH_DEFL_MM", "0.20"))          # plancher absolu
+MESH_ANG_RAD = float(os.getenv("MESH_ANG_RAD", "0.50"))
+MESH_REL_DEFLECT = float(os.getenv("MESH_REL_DEFLECT", "0.0005"))  # 0.05% du diag par défaut
+MESH_DEFL_MIN = float(os.getenv("MESH_DEFL_MIN", "0.02"))
+MESH_DEFL_MAX = float(os.getenv("MESH_DEFL_MAX", "0.50"))
+MESH_MAX_TRIS = int(os.getenv("MESH_MAX_TRIS", "500000"))          # simplification si > 0 et dépasse
+
+# Raster borné (si pas Shapely)
+PA_RASTER_MAX_PIX = int(os.getenv("PA_RASTER_MAX_PIX", "4096"))
 PA_RASTER_PX_MM_MIN = float(os.getenv("PA_RASTER_PX_MM_MIN", "0.03"))
 PA_RASTER_PX_MM_MAX = float(os.getenv("PA_RASTER_PX_MM_MAX", "0.60"))
 
@@ -174,7 +177,6 @@ def _occt():
     ocp_err = None
     try:
         from OCP import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh, TopoDS
-        # modules optionnels
         try:
             from OCP.StlAPI import StlAPI_Writer
         except Exception:
@@ -269,29 +271,6 @@ def _as_face(s, c):
             pass
     return None
 
-def _face_triangulation(face, c):
-    """
-    Retourne la Poly_Triangulation si accrochée à la face (multi-API).
-    """
-    BT = c["BRep_Tool"]
-    loc = face.Location()
-    if hasattr(BT, "Triangulation_s"):
-        for args in ((face, loc), (face, loc, 0), (face, loc, 1), (face, loc, 2)):
-            try:
-                tri = BT.Triangulation_s(*args)
-                if tri is not None:
-                    return tri
-            except TypeError:
-                continue
-            except Exception:
-                continue
-    if hasattr(BT, "Triangulation"):
-        try:
-            return BT.Triangulation(face, loc)
-        except Exception:
-            return None
-    return None
-
 def _triangulation_sizes(tri) -> Tuple[int, int]:
     if tri is None:
         return 0, 0
@@ -325,7 +304,6 @@ def _heal_shape(shape, c):
     return shape
 
 def _mesh_any(target, c, tol_mm: float, ang_rad: float):
-    # Essaye plusieurs signatures de BRepMesh_IncrementalMesh
     ok = False
     try:
         c["BRepMesh_IncrementalMesh"](target, tol_mm, False, ang_rad, True)
@@ -346,14 +324,8 @@ def _mesh_any(target, c, tol_mm: float, ang_rad: float):
             pass
     return ok
 
-def _shape_to_trimesh_via_stl(shape, tol_mm: float, ang_rad: float) -> Optional[trimesh.Trimesh]:
-    """
-    Fallback robuste : maillage OCCT + export STL + chargement via trimesh.
-    """
-    c = _occt()
-    shape = _heal_shape(shape, c)
-
-    # déflection auto (borne 0.02..0.5 mm) ~ 0.1% du diag
+def _adaptive_deflection_mm(shape, c, tol_hint: float) -> float:
+    # déflection relative au diag, bornée
     try:
         from OCP.Bnd import Bnd_Box
         from OCP.BRepBndLib import BRepBndLib
@@ -362,9 +334,17 @@ def _shape_to_trimesh_via_stl(shape, tol_mm: float, ang_rad: float) -> Optional[
         diag = float(((xmax-xmin)**2 + (ymax-ymin)**2 + (zmax-zmin)**2) ** 0.5)
     except Exception:
         diag = 10.0
-    defl = max(0.0005 * diag, tol_mm)
-    defl = float(np.clip(defl, 0.02, 0.5))
+    d = max(tol_hint, MESH_REL_DEFLECT * diag)
+    return float(np.clip(d, MESH_DEFL_MIN, MESH_DEFL_MAX))
 
+def _shape_to_trimesh_via_stl(shape, tol_mm: float, ang_rad: float) -> Optional[trimesh.Trimesh]:
+    """
+    Maillage OCCT + export STL + chargement via trimesh.
+    Déflection adaptative pour précision, nettoyage doux, simplification optionnelle.
+    """
+    c = _occt()
+    shape = _heal_shape(shape, c)
+    defl = _adaptive_deflection_mm(shape, c, tol_mm)
     _mesh_any(shape, c, defl, max(ang_rad, TESSELLATION_ANG_RAD))
 
     writer = c.get("StlAPI_Writer")
@@ -382,55 +362,20 @@ def _shape_to_trimesh_via_stl(shape, tol_mm: float, ang_rad: float) -> Optional[
         if not ok:
             return None
 
-        m = trimesh.load(stl_path, file_type="stl", force="mesh")
+        m = trimesh.load(stl_path, file_type="stl", force="mesh", skip_materials=True)
         if isinstance(m, trimesh.Scene):
             m = trimesh.util.concatenate(m.dump())
         if m is None or m.faces is None or m.faces.shape[0] == 0:
             return None
-        # nettoyage doux
-        try:
-            if not m.is_watertight:
-                m = m.fill_holes()
-        except Exception:
-            pass
-        return m
-    finally:
-        try:
-            os.remove(stl_path)
-        except Exception:
-            pass
-
-def _shape_to_mesh_via_stl(shape, defl_mm: float, ang_rad: float) -> trimesh.Trimesh:
-    # Maillage OCCT (souple) puis export STL -> chargement Trimesh
-    c = _occt()
-    try:
-        try:
-            c["BRepMesh_IncrementalMesh"](shape, defl_mm, False, ang_rad, True)
-        except TypeError:
-            c["BRepMesh_IncrementalMesh"](shape, defl_mm, False, ang_rad)
-    except Exception:
-        pass
-
-    from tempfile import NamedTemporaryFile
-    from OCP.StlAPI import StlAPI_Writer
-
-    tmp = NamedTemporaryFile(suffix=".stl", delete=False)
-    tmp.close()
-    try:
-        w = StlAPI_Writer()
-        try:
-            w.SetASCIIMode(False)  # binaire
-        except Exception:
-            pass
-        ok = w.Write(shape, tmp.name)
-        if not ok:
-            raise RuntimeError("STL write failed")
-
-        m = trimesh.load(tmp.name, file_type="stl", force="mesh", skip_materials=True)
-        if m is None or m.faces is None or len(m.faces) == 0:
-            raise RuntimeError("STL load empty")
 
         m.remove_unreferenced_vertices()
+        # Simplification si trop dense (contrôle RAM, garde la précision raisonnable)
+        if MESH_MAX_TRIS > 0 and m.faces.shape[0] > MESH_MAX_TRIS:
+            try:
+                m = m.simplify_quadratic_decimation(MESH_MAX_TRIS)
+            except Exception:
+                pass
+
         if not m.is_watertight:
             try:
                 m = m.fill_holes()
@@ -439,33 +384,32 @@ def _shape_to_mesh_via_stl(shape, defl_mm: float, ang_rad: float) -> trimesh.Tri
         return m
     finally:
         try:
-            os.remove(tmp.name)
+            os.remove(stl_path)
         except Exception:
             pass
 
-
 def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.Trimesh:
-    # On passe par STL pour une compatibilité OCCT maximale et un mesh cohérent
-    defl = max(tol_mm, MESH_DEFL_MM)
-    ang = max(ang_rad, MESH_ANG_RAD)
-    return _shape_to_mesh_via_stl(shape, defl, ang)
-
+    m = _shape_to_trimesh_via_stl(shape, max(tol_mm, MESH_DEFL_MM), max(ang_rad, MESH_ANG_RAD))
+    if m is None:
+        raise RuntimeError("Triangulation vide (fallback STL indisponible)")
+    return m
 
 def _bbox_from_mesh_mm(mesh: trimesh.Trimesh) -> Tuple[float, float, float]:
     ex = mesh.bounds[1] - mesh.bounds[0]
     return round(float(ex[0]), 4), round(float(ex[1]), 4), round(float(ex[2]), 4)
 
-# ---------- Projected area (Définition 1 : union 2D) ----------
+# ---------- Projected area (Union 2D) ----------
 def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, str]:
     """
-    Aire de silhouette en cm^2 par rasterisation 2D bornée en mémoire.
-    (Aucun appel à Shapely.)
+    Aire de silhouette en cm^2 :
+      - Shapely (si dispo & taille raisonnable) pour précision max,
+      - sinon raster borné mémoire (skimage si dispo), sinon bbox triangles.
     """
     axis = (axis or "Z").upper()
     if axis not in AXES:
         axis = "Z"
 
-    tri3 = mesh.triangles  # (N,3,3) en mm
+    tri3 = mesh.triangles  # (N,3,3) mm
     if axis == "Z":
         tri2 = tri3[:, :, :2]          # XY
     elif axis == "Y":
@@ -483,14 +427,35 @@ def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, 
     eps = max(float(np.linalg.norm(mesh.extents)) * 1e-12, 1e-12)
     tri2 = tri2[area2d > eps]
     if tri2.shape[0] == 0:
-        return 0.0, "raster_empty"
+        return 0.0, "empty"
 
-    # Raster borné
+    # --- Chemin Shapely (précis) ---
+    if (PA_BACKEND in ("auto", "shapely")) and HAS_SHAPELY and tri2.shape[0] <= PA_SHAPELY_TRI_MAX:
+        parts = []
+        for i in range(0, tri2.shape[0], PA_BATCH):
+            batch = tri2[i:i + PA_BATCH]
+            polys = []
+            for t in batch:
+                p0, p1, p2 = (t[0, 0], t[0, 1]), (t[1, 0], t[1, 1]), (t[2, 0], t[2, 1])
+                if (p0 == p1) or (p1 == p2) or (p2 == p0):
+                    continue
+                poly = Polygon([p0, p1, p2])
+                if not poly.is_empty and poly.is_valid and poly.area > 0.0:
+                    polys.append(poly)
+            if polys:
+                parts.append(unary_union(polys))
+        if parts:
+            uni = unary_union(parts)
+            if isinstance(uni, (Polygon, MultiPolygon)):
+                area_mm2 = float(uni.area)
+                return round(area_mm2 / 100.0, 6), "shapely"
+        # sinon on enchaîne sur raster
+
+    # --- Raster borné (robuste) ---
     bb_min = tri2.reshape(-1, 2).min(axis=0)
     bb_max = tri2.reshape(-1, 2).max(axis=0)
     span = (bb_max - bb_min)
 
-    # Pas en mm/pixel
     px_mm = max(TESSELLATION_TOL_MM, float(span.max()) / 2048.0)
     px_mm = float(np.clip(px_mm, PA_RASTER_PX_MM_MIN, PA_RASTER_PX_MM_MAX))
 
@@ -510,23 +475,22 @@ def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, 
             rr, cc = _ski_polygon(pts[:, 1], pts[:, 0], shape=mask.shape)
             mask[rr, cc] = 1
     else:
-        # Fallback super-robuste: on peint le bbox du triangle (moins précis, mais borné)
+        # Fallback ultra-robuste : remplir le bbox du triangle (un peu moins précis)
         gx = np.clip(((tri2[:, :, 0] - bb_min[0]) / px_mm).astype(np.int32), 0, W - 1)
         gy = np.clip(((tri2[:, :, 1] - bb_min[1]) / px_mm).astype(np.int32), 0, H - 1)
         for i in range(tri2.shape[0]):
             ys = gy[i]; xs = gx[i]
-            r0, r1 = min(ys), max(ys)
-            c0, c1 = min(xs), max(xs)
+            r0, r1 = int(min(ys)), int(max(ys))
+            c0, c1 = int(min(xs)), int(max(xs))
             mask[r0:r1 + 1, c0:c1 + 1] = 1
 
     area_mm2 = float(mask.sum()) * (px_mm ** 2)
     return round(area_mm2 / 100.0, 6), "raster"
 
-
 # ---------- Thickness (optionnel) ----------
 def _estimate_thickness_mm(mesh: trimesh.Trimesh, samples: int = 30000) -> Tuple[Optional[float], Optional[float]]:
     try:
-        samples = int(np.clip(int(samples), 2000, 50000))
+        samples = int(np.clip(int(samples), 4000, 100000))
         try:
             from trimesh.ray.ray_pyembree import RayMeshIntersector
             inter = RayMeshIntersector(mesh)
@@ -575,8 +539,6 @@ def _estimate_thickness_mm(mesh: trimesh.Trimesh, samples: int = 30000) -> Tuple
         return round(float(np.min(d)), 4), round(float(np.percentile(d, 99.0)), 4)
     except Exception:
         return None, None
-
-
 
 # ---------- Caches & Redis ----------
 def _cache_paths(file_id: str, axis: str):
@@ -675,18 +637,17 @@ def compute_and_cache_stats(
             bump_stage("volume_surface_convex_fail", {})
     bump_stage("volume_surface_ok", {"vol_mm3": vol_mm3, "surf_mm2": area_mm2, "method": "mesh"})
 
-    # 5) Aire projetée (silhouette / union 2D)
+    # 5) Aire projetée
     if _deadline_reached(t0):
-    raise TimeoutError("deadline before projected_area")
-bump_stage("projected_area_begin", {"axis": axis})
-try:
-    proj_cm2, pa_method = _projected_area_union_cm2(mesh, axis)
-except MemoryError:
-    proj_cm2, pa_method = 0.0, "raster_oom"
-except Exception:
-    proj_cm2, pa_method = 0.0, "raster_error"
-bump_stage("projected_area_ok", {"projected_area_cm2": proj_cm2, "pa_method": pa_method})
-
+        raise TimeoutError("deadline before projected_area")
+    bump_stage("projected_area_begin", {"axis": axis})
+    try:
+        proj_cm2, pa_method = _projected_area_union_cm2(mesh, axis)
+    except MemoryError:
+        proj_cm2, pa_method = 0.0, "raster_oom"
+    except Exception:
+        proj_cm2, pa_method = 0.0, "raster_error"
+    bump_stage("projected_area_ok", {"projected_area_cm2": proj_cm2, "pa_method": pa_method})
 
     # 6) Épaisseurs (optionnel)
     tmin = tmax = None
@@ -697,7 +658,7 @@ bump_stage("projected_area_ok", {"projected_area_cm2": proj_cm2, "pa_method": pa
         tmin, tmax = _estimate_thickness_mm(mesh, samples=THICKNESS_SAMPLES)
         bump_stage("thickness_ok", {"tmin": tmin, "tmax": tmax})
 
-        # 7) Caches
+    # 7) Caches
     if _deadline_reached(t0):
         raise TimeoutError("deadline before write_caches")
     bump_stage("write_caches_begin")
