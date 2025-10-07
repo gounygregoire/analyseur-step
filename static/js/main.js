@@ -170,8 +170,8 @@ const setAll=(prop,val)=> allIds().forEach(id=>{const o=viewer.scene.objects[id]
 const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); if (propsPanel) propsPanel.innerHTML=""; };
 
 /* ---------- Mesures (format FR + auto-units) ---------- */
-// mm par unité monde (WU). Si le modèle est en mètres: ≈1000 ; en mm: ≈1
-let MM_PER_WU = 1000;
+// mm par unité monde (WU). Valeur par défaut neutre (1 WU ≈ 1 mm)
+let MM_PER_WU = 1;
 
 // formateur FR avec groupement et décimales adaptatives
 const frFormat = (val) => {
@@ -208,6 +208,26 @@ function setLabelFormatter() {
   } catch {}
 }
 
+// Heuristique quand on n’a PAS encore bbox_mm du serveur
+function updateUnitsFromAABB(aabbLike) {
+  try {
+    const a = aabbLike || viewer.scene?.aabb;
+    if (!a) return;
+    const sx = a[3]-a[0], sy = a[4]-a[1], sz = a[5]-a[2];
+    const max = Math.max(sx, sy, sz);
+    // règle simple :
+    // objets “très grands” en WU => modèle probablement en µm (ex: 60 000 WU pour 60 mm) → 0.001 mm/WU
+    // objets “très petits” en WU   => modèle probablement en mètres      → 1000 mm/WU
+    // sinon on considère le WU ≈ mm → 1 mm/WU
+    let next = 1;
+    if (max > 10000) next = 0.001;    // µm → mm
+    else if (max < 1) next = 1000;    // m → mm
+    MM_PER_WU = next;
+    setLabelFormatter();
+    console.log("[units] mm per world unit =", MM_PER_WU.toFixed(3), "(AABB heuristic)");
+  } catch {}
+}
+
 // instanciation plugin mesures
 const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
   container: overlayHost,
@@ -224,7 +244,7 @@ if ("snapping" in distanceCtrl) {
   window.addEventListener("keyup",   (e)=>{ if (!e.altKey) distanceCtrl.snapping = true;  }, {passive:true});
 }
 
-// Déduit MM_PER_WU à partir du bbox_mm serveur et de l'AABB xeokit
+// Déduit MM_PER_WU à partir du bbox_mm serveur et de l'AABB xeokit (plus précis quand dispo)
 function updateUnitsFromBBox(bboxMM) {
   try {
     const a = viewer.scene?.aabb;
@@ -236,9 +256,9 @@ function updateUnitsFromBBox(bboxMM) {
       .filter(x => isFinite(x) && x > 0);
     if (!ratios.length) return;
     ratios.sort((x,y)=>x-y);
-    MM_PER_WU = Math.max(1, Math.min(2000, ratios[Math.floor(ratios.length/2)]));
+    MM_PER_WU = Math.max(0.000001, Math.min(1000000, ratios[Math.floor(ratios.length/2)]));
     setLabelFormatter();
-    console.log("[units] mm per world unit =", MM_PER_WU.toFixed(3));
+    console.log("[units] mm per world unit =", MM_PER_WU.toFixed(6), "(bbox_mm)");
   } catch {}
 }
 
@@ -362,6 +382,9 @@ async function loadXKT(url, nameHint){
     viewer.cameraFlight.flyTo(model);
     models.set(id,{model,name:nameHint||id,src:url}); lastModelId=id;
     if (chkEdges?.checked) viewer.scene.edgeMaterial.edgesEnabled=true;
+
+    // Heuristique d’unités immédiate (corrige 6500 → 6,5 mm si WU=µm)
+    updateUnitsFromAABB(model?.aabb || viewer.scene?.aabb);
 
     try {
       currentAxis = getSelectedAxis(); // Z par défaut
@@ -726,7 +749,7 @@ function renderStats(json){
 
   if (Array.isArray(json.bbox_mm)) {
     window.__bbox_mm = json.bbox_mm;
-    updateUnitsFromBBox(window.__bbox_mm);
+    updateUnitsFromBBox(window.__bbox_mm); // plus précis si dispo
   }
 
   if (volVal)  volVal.textContent  = f3(json.volume_cm3);
