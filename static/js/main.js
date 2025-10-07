@@ -183,22 +183,37 @@ const setSome=(ids,prop,val)=> ids.forEach(id=>{const o=viewer.scene.objects[id]
 const setAll=(prop,val)=> allIds().forEach(id=>{const o=viewer.scene.objects[id]; if(o) o[prop]=val;});
 const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); if (propsPanel) propsPanel.innerHTML=""; };
 
-/* ---------- Mesures (affichage "mm" sans séparateur de milliers) ---------- */
-const prettyNumber = (v) => {
-  const abs = Math.abs(v);
-  const d = abs < 10 ? 2 : abs < 100 ? 1 : 0;
-  // pas de groupement, décimales fixes
-  return (Math.round(v * (10 ** d)) / (10 ** d)).toFixed(d);
-};
-// Xeokit fournit des mètres → on convertit en mm et on formate
-const formatMM = (meters) => `${prettyNumber(meters * 1000)} mm`;
+/* ---------- Mesures (format FR + auto-units) ---------- */
+// mm par unité monde (WU). Si le modèle est en mètres: ≈1000 ; en mm: ≈1
+let MM_PER_WU = 1000;
 
+// format FR sans groupement (virgule décimale)
+const frFixed = (v, d) =>
+  (Math.round(v * 10 ** d) / 10 ** d).toFixed(d).replace(".", ",");
+
+// décimales “propres”: petites valeurs → plus de précision
+const prettyNumber = (v) => {
+  const a = Math.abs(v);
+  const d = a < 1 ? 3 : a < 10 ? 2 : a < 100 ? 1 : 0;
+  return frFixed(v, d);
+};
+
+// label “mm” basé sur MM_PER_WU
+const formatMM = (worldUnits) => `${prettyNumber(worldUnits * MM_PER_WU)} mm`;
+
+// pousse le formatter dans le plugin (selon version)
+function setLabelFormatter() {
+  const f = (wu) => `${prettyNumber(wu * MM_PER_WU)} mm`;
+  try { distancePlugin.cfg = { ...(distancePlugin.cfg || {}), labelFormat: f }; } catch {}
+  try { distancePlugin.labelFormat = f; } catch {}
+}
+
+// instanciation plugin mesures
 const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
   container: overlayHost,
   labelsShown: true,
   labelFormat: formatMM
 });
-
 const distanceCtrl = new DistanceMeasurementsMouseControl(distancePlugin, { snapping: true });
 if ("snapDistance" in distanceCtrl) distanceCtrl.snapDistance = 0.001;
 if ("snapRadius"   in distanceCtrl) distanceCtrl.snapRadius   = 3;
@@ -208,6 +223,28 @@ if ("snapping" in distanceCtrl) {
   window.addEventListener("keydown", (e)=>{ if (e.altKey) distanceCtrl.snapping = false; }, {passive:true});
   window.addEventListener("keyup",   (e)=>{ if (!e.altKey) distanceCtrl.snapping = true;  }, {passive:true});
 }
+
+// Déduit MM_PER_WU à partir du bbox_mm serveur et de l'AABB xeokit
+function updateUnitsFromBBox(bboxMM) {
+  try {
+    const a = viewer.scene?.aabb;
+    if (!a || !Array.isArray(bboxMM) || bboxMM.length !== 3) return;
+    const extWU = [a[3]-a[0], a[4]-a[1], a[5]-a[2]];           // unités monde (WU)
+    const extMM = bboxMM.map((v)=> +v || 0);                   // mm
+    const ratios = [0,1,2]
+      .map(i => (extWU[i] > 1e-9 ? extMM[i] / extWU[i] : NaN))
+      .filter(x => isFinite(x) && x > 0);
+    if (!ratios.length) return;
+
+    // médiane + clamp de sécurité
+    ratios.sort((x,y)=>x-y);
+    const med = ratios[Math.floor(ratios.length/2)];
+    MM_PER_WU = Math.max(1, Math.min(2000, med));
+    setLabelFormatter();
+    console.log("[units] mm per world unit =", MM_PER_WU.toFixed(3));
+  } catch (e) { /* ignore */ }
+}
+
 
 /* ---- Forçage des labels : remplacer "m" par "mm" (sans *1000 si déjà "mm") ---- */
 function textMetersToMM(txt) {
@@ -692,27 +729,30 @@ btnShot?.addEventListener("click",()=>{
 });
 
 /* ==================== ANALYSE : fetch & rendu ==================== */
-function f3(v){ return (v==null || !isFinite(+v)) ? "—" : (+v).toFixed(3); }
+function f3(v){ return (v==null || !isFinite(+v)) ? "—" : (+v).toFixed(3).replace(".", ","); }
 
 function renderStats(json){
   if (!json || typeof json !== "object") return;
 
-  // valeurs “propres” côté UI (aucune locale/groupement)
+  // mémorise le bbox mm du serveur et met à jour l’unité
+  if (Array.isArray(json.bbox_mm)) {
+    window.__bbox_mm = json.bbox_mm;
+    updateUnitsFromBBox(window.__bbox_mm);
+  }
+
+  // valeurs “propres” côté UI (FR, sans séparateur de milliers)
   if (volVal)  volVal.textContent  = f3(json.volume_cm3);
   if (projVal) projVal.textContent = f3(json.projected_area_cm2);
   if (tminVal) tminVal.textContent = f3(json.thickness_min_mm);
   if (tmaxVal) tmaxVal.textContent = f3(json.thickness_max_mm);
 
-  // fallback éventuel si tu utilises des spans data-metric=...
   const d = (sel, v) => { const el = document.querySelector(sel); if (el) el.textContent = v; };
-  if (typeof json.volume_cm3 !== "undefined")        d('[data-metric="volume"]',         f3(json.volume_cm3));
-  if (typeof json.thickness_min_mm !== "undefined")  d('[data-metric="tmin"]',           f3(json.thickness_min_mm));
-  if (typeof json.thickness_max_mm !== "undefined")  d('[data-metric="tmax"]',           f3(json.thickness_max_mm));
-  if (typeof json.projected_area_cm2 !== "undefined")d('[data-metric="projected_area"]', f3(json.projected_area_cm2));
+  if (typeof json.volume_cm3 !== "undefined")         d('[data-metric="volume"]',         f3(json.volume_cm3));
+  if (typeof json.thickness_min_mm !== "undefined")   d('[data-metric="tmin"]',           f3(json.thickness_min_mm));
+  if (typeof json.thickness_max_mm !== "undefined")   d('[data-metric="tmax"]',           f3(json.thickness_max_mm));
+  if (typeof json.projected_area_cm2 !== "undefined") d('[data-metric="projected_area"]', f3(json.projected_area_cm2));
 }
-function clearStatsUI(){
-  renderStats({ volume_cm3:"—", projected_area_cm2:"—", thickness_min_mm:"—", thickness_max_mm:"—" });
-}
+
 
 /** Récupère les stats serveur pour un file_id donné + axe. */
 async function fetchStats(fileId, axis = 'Z') {
