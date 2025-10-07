@@ -869,7 +869,7 @@ def compute_and_cache_stats(
         tmin, tmax = _estimate_thickness_mm(mesh, samples=THICKNESS_SAMPLES)
         bump_stage("thickness_ok", {"tmin": tmin, "tmax": tmax})
 
-    # 7) Caches
+        # 7) Caches
     if _deadline_reached(t0):
         raise TimeoutError("deadline before write_caches")
     bump_stage("write_caches_begin")
@@ -883,10 +883,11 @@ def compute_and_cache_stats(
         "thickness_min_mm": tmin,
         "thickness_max_mm": tmax,
     }
-proj_cm2 = float(proj_cm2)
-if not np.isfinite(proj_cm2):
-    proj_cm2 = 0.0
-proj_payload = {"projected_area_cm2": round(proj_cm2, 4), "axis": axis, "method": pa_method}
+    proj_payload = {
+        "projected_area_cm2": round(float(proj_cm2), 4),
+        "axis": axis,
+        "method": pa_method,
+    }
 
     _write_json(base_path, base_payload)
     _write_json(proj_path, proj_payload)
