@@ -36,7 +36,12 @@ AXES = ("X", "Y", "Z")
 PROJECTED_AREA_ENGINE = os.getenv("PROJECTED_AREA_ENGINE", "auto").lower()  # 'auto' | 'raster' | 'shapely'
 PA_MAX_TRI_SHAPELY   = int(os.getenv("PA_MAX_TRI_SHAPELY", "120000"))        # seuil sécurité
 PA_BATCH              = int(os.getenv("PA_BATCH", "20000"))                  # taille des lots shapely
-
+# ----- Projected area config -----
+PA_BACKEND = os.getenv("PA_BACKEND", "auto").lower()  # 'auto' | 'raster' | 'shapely'
+PA_SHAPELY_TRI_MAX = int(os.getenv("PA_SHAPELY_TRI_MAX", "120000"))  # au-delà, on force raster
+PA_RASTER_MAX_PIX = int(os.getenv("PA_RASTER_MAX_PIX", "6000"))      # taille max par dimension
+PA_RASTER_PX_MM_MIN = float(os.getenv("PA_RASTER_PX_MM_MIN", "0.02"))
+PA_RASTER_PX_MM_MAX = float(os.getenv("PA_RASTER_PX_MM_MAX", "0.5"))
 
 STATS_SOFT_TIMEOUT_SEC = int(os.getenv("STATS_SOFT_TIMEOUT_SEC", "600"))
 TESSELLATION_TOL_MM = float(os.getenv("TESSELLATION_TOL_MM", "0.05"))
@@ -483,19 +488,18 @@ def _bbox_from_mesh_mm(mesh: trimesh.Trimesh) -> Tuple[float, float, float]:
 # ---------- Projected area (Définition 1 : union 2D) ----------
 def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, str]:
     """
-    Aire projetée en cm^2 (silhouette) robuste :
-      - si Shapely est autorisé et taille raisonnable -> union par lots + buffer(0)
-      - sinon ou en cas d'erreur -> fallback raster (skimage)
-    Retourne (area_cm2, "shapely" | "raster_fallback" | "empty" | "unavailable")
+    Aire de la silhouette (union des projections orthographiques) en cm^2.
+    Stratégie:
+      - si PA_BACKEND='raster' => raster direct
+      - si PA_BACKEND='shapely' => shapely direct (si présent)
+      - sinon 'auto' => shapely seulement si peu de triangles projetés, sinon raster
+      - en cas d'erreur/MemoryError => raster de secours
     """
     axis = (axis or "Z").upper()
     if axis not in AXES:
         axis = "Z"
 
     tri3 = mesh.triangles  # (N,3,3) mm
-    if tri3.size == 0:
-        return 0.0, "empty"
-
     if axis == "Z":
         tri2 = tri3[:, :, :2]          # XY
     elif axis == "Y":
@@ -503,110 +507,93 @@ def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, 
     else:
         tri2 = tri3[:, :, [1, 2]]      # YZ
 
-    # filtre triangles dégénérés
+    # Filtre triangles quasi dégénérés après projection
     v0, v1, v2 = tri2[:, 0, :], tri2[:, 1, :], tri2[:, 2, :]
     area2d = 0.5 * np.abs(
-        v0[:, 0] * (v1[:, 1] - v2[:, 1]) +
-        v1[:, 0] * (v2[:, 1] - v0[:, 1]) +
-        v2[:, 0] * (v0[:, 1] - v1[:, 1])
+        v0[:, 0]*(v1[:, 1]-v2[:, 1]) + v1[:, 0]*(v2[:, 1]-v0[:, 1]) + v2[:, 0]*(v0[:, 1]-v1[:, 1])
     )
     eps = max(float(np.linalg.norm(mesh.extents)) * 1e-12, 1e-12)
-    keep = area2d > eps
-    tri2 = tri2[keep]
+    tri2 = tri2[area2d > eps]
     if tri2.shape[0] == 0:
         return 0.0, "empty"
 
-    # ====== chemin SHAPELY (si permis) ======
-    use_shapely = (
+    # --- petit helper raster (mémoire bornée) ---
+    def raster_area_mm2(t2: np.ndarray) -> float:
+        bb_min = t2.reshape(-1, 2).min(axis=0)
+        bb_max = t2.reshape(-1, 2).max(axis=0)
+        span = (bb_max - bb_min)
+        # pas en mm/px basé sur la tessellation, borné
+        px_mm = max(TESSELLATION_TOL_MM, float(span.max()) / float(PA_RASTER_MAX_PIX - 2))
+        px_mm = float(np.clip(px_mm, PA_RASTER_PX_MM_MIN, PA_RASTER_PX_MM_MAX))
+        H = int(np.ceil(span[1] / px_mm)) + 2
+        W = int(np.ceil(span[0] / px_mm)) + 2
+        # re-cap si besoin
+        if H > PA_RASTER_MAX_PIX or W > PA_RASTER_MAX_PIX:
+            scale = max(H / PA_RASTER_MAX_PIX, W / PA_RASTER_MAX_PIX)
+            px_mm *= scale
+            H = int(np.ceil(span[1] / px_mm)) + 2
+            W = int(np.ceil(span[0] / px_mm)) + 2
+
+        if not HAS_SKIMAGE:
+            # fallback minimal si skimage absent
+            return 0.0
+
+        mask = np.zeros((H, W), dtype=bool)
+        for t in t2:
+            pts = (t - bb_min[None, :]) / px_mm
+            rr, cc = _ski_polygon(pts[:, 1], pts[:, 0], shape=mask.shape)
+            mask[rr, cc] = True
+        return float(mask.sum()) * (px_mm ** 2)
+
+    # Choix du backend
+    want_shapely = (
         HAS_SHAPELY
-        and PROJECTED_AREA_ENGINE != "raster"
-        and tri2.shape[0] <= PA_MAX_TRI_SHAPELY
+        and PA_BACKEND != "raster"
+        and (PA_BACKEND == "shapely" or tri2.shape[0] <= PA_SHAPELY_TRI_MAX)
     )
 
-    if use_shapely:
+    if want_shapely:
         try:
+            # union incrémentale pour limiter le pic mémoire
             from shapely.geometry import Polygon
             from shapely.ops import unary_union
-
-            # construction par lots + nettoyage buffer(0)
-            parts = []
-            B = PA_BATCH
-            for i in range(0, tri2.shape[0], B):
-                batch = tri2[i:i+B]
+            CHUNK = 20000
+            acc = None
+            for i in range(0, tri2.shape[0], CHUNK):
+                batch = tri2[i:i+CHUNK]
                 polys = []
-                # triangles -> Polygons valides, avec buffer(0) pour nettoyer
                 for t in batch:
-                    p0 = (t[0, 0], t[0, 1])
-                    p1 = (t[1, 0], t[1, 1])
-                    p2 = (t[2, 0], t[2, 1])
+                    p0, p1, p2 = (t[0, 0], t[0, 1]), (t[1, 0], t[1, 1]), (t[2, 0], t[2, 1])
                     if (p0 == p1) or (p1 == p2) or (p2 == p0):
                         continue
                     poly = Polygon([p0, p1, p2])
                     if not poly.is_empty and poly.is_valid and poly.area > 0.0:
-                        try:
-                            poly = poly.buffer(0.0)  # sécurise GEOS
-                        except Exception:
-                            pass
-                        if not poly.is_empty and poly.area > 0.0:
-                            polys.append(poly)
-                if polys:
-                    try:
-                        parts.append(unary_union(polys))
-                    except Exception:
-                        # union par sous-lots plus petits si nécessaire
-                        step = max(2000, min(len(polys), 8000))
-                        acc = None
-                        for j in range(0, len(polys), step):
-                            sub = unary_union(polys[j:j+step])
-                            acc = sub if acc is None else acc.union(sub)
-                        parts.append(acc)
-
-            if parts:
+                        polys.append(poly)
+                if not polys:
+                    continue
+                u = unary_union(polys)
+                acc = u if acc is None else acc.union(u)
+                # nettoie un peu entre les chunks
                 try:
-                    uni = unary_union(parts)
-                    area_mm2 = float(getattr(uni, "area", 0.0))
-                    if not np.isfinite(area_mm2):
-                        raise ValueError("non-finite area")
-                    return round(area_mm2 / 100.0, 6), "shapely"  # mm^2 -> cm^2
+                    import gc
+                    del polys, u
+                    gc.collect()
                 except Exception:
-                    # chute vers raster si l’union finale trébuche
                     pass
-            else:
-                # rien d’utile construit → on tente raster
-                pass
+
+            area_mm2 = float(getattr(acc, "area", 0.0)) if acc is not None else 0.0
+            return round(area_mm2 / 100.0, 6), "shapely"
+        except MemoryError:
+            # on repasse en raster si GEOS explose en mémoire
+            pass
         except Exception:
-            # Shapely a levé / GEOS pas content → on tente raster
+            # autre erreur shapely -> raster
             pass
 
-    # ====== Fallback RASTER ======
-    if not HAS_SKIMAGE:
-        return 0.0, "unavailable"
-
-    bb_min = tri2.reshape(-1, 2).min(axis=0)
-    bb_max = tri2.reshape(-1, 2).max(axis=0)
-    span = (bb_max - bb_min)
-
-    # pas pixel ~ tolérance de tessellation, borné
-    px_mm = max(TESSELLATION_TOL_MM, float(span.max()) / 4000.0)
-    px_mm = float(np.clip(px_mm, 0.02, 0.5))  # 20 µm .. 0.5 mm
-    H = int(np.ceil(span[1] / px_mm)) + 2
-    W = int(np.ceil(span[0] / px_mm)) + 2
-
-    MAX_PIX = 9000
-    if H > MAX_PIX or W > MAX_PIX:
-        scale = max(H / MAX_PIX, W / MAX_PIX)
-        px_mm *= scale
-        H = int(np.ceil(span[1] / px_mm)) + 2
-        W = int(np.ceil(span[0] / px_mm)) + 2
-
-    mask = np.zeros((H, W), dtype=bool)
-    for t in tri2:
-        pts = (t - bb_min[None, :]) / px_mm
-        rr, cc = _ski_polygon(pts[:, 1], pts[:, 0], shape=mask.shape)
-        mask[rr, cc] = True
-
-    area_mm2 = float(mask.sum()) * (px_mm ** 2)
+    # Raster (sécurisé)
+    area_mm2 = raster_area_mm2(tri2)
     return round(area_mm2 / 100.0, 6), "raster_fallback"
+
 
 # ---------- Thickness (optionnel) ----------
 def _estimate_thickness_mm(mesh: trimesh.Trimesh, samples: int = 30000) -> Tuple[Optional[float], Optional[float]]:
