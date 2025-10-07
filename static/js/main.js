@@ -170,10 +170,10 @@ const setAll=(prop,val)=> allIds().forEach(id=>{const o=viewer.scene.objects[id]
 const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); if (propsPanel) propsPanel.innerHTML=""; };
 
 /* ---------- Mesures (format FR + unités robustes) ---------- */
-// mm par World Unit (WU). On force µm->mm au démarrage puis on ajuste.
-let MM_PER_WU = 0.001;
+// FACTEUR maître : millimètres par World Unit (WU)
+let MM_PER_WU = 0.001; // on part du principe que beaucoup de STEP arrivent en µm → mm
 
-// format FR
+// formateur FR
 const frFormat = (val) => {
   const a = Math.abs(val);
   const decimals = a >= 1000 ? 0 : a >= 100 ? 1 : a >= 10 ? 2 : 3;
@@ -185,6 +185,20 @@ const frFormat = (val) => {
 };
 const mmFromWU = (wu) => wu * MM_PER_WU;
 
+/** pousse le formatter au plugin (si supporté) + rafraîchit les libellés */
+function pushLabelFormatterToPlugin() {
+  const fmt = (wu) => `${frFormat(mmFromWU(wu))} mm`;
+  try { distancePlugin.cfg = { ...(distancePlugin.cfg||{}), labelFormat: fmt }; } catch {}
+  try { distancePlugin.labelFormat = fmt; } catch {}
+  // petit flip pour forcer refresh interne de l’affichage
+  try {
+    const shown = !!distancePlugin.labelsShown;
+    distancePlugin.labelsShown = !shown;
+    distancePlugin.labelsShown = shown;
+  } catch {}
+}
+function onUnitsChanged(){ pushLabelFormatterToPlugin(); patchAllMeasureTexts(); }
+
 // Heuristique via AABB si bbox serveur pas encore là
 function updateUnitsFromAABB(aabbLike) {
   try {
@@ -193,13 +207,14 @@ function updateUnitsFromAABB(aabbLike) {
     const sx = a[3]-a[0], sy = a[4]-a[1], sz = a[5]-a[2];
     const maxWU = Math.max(sx, sy, sz);
     let next = MM_PER_WU;
-    if (maxWU > 1500)      next = 0.001; // µm -> mm
-    else if (maxWU < 0.5)  next = 1000;  // m  -> mm
-    else                   next = 1;     // mm -> mm
+    if (maxWU > 1500)      next = 0.001; // WU ~ µm → mm
+    else if (maxWU < 0.5)  next = 1000;  // WU ~ m  → mm
+    else                   next = 1;     // WU ~ mm → mm
     if (Math.abs(next - MM_PER_WU) > 1e-9) {
       MM_PER_WU = next;
+      console.log("[units] mm per WU =", MM_PER_WU);
+      onUnitsChanged();
     }
-    console.log("[units] mm per WU =", MM_PER_WU);
   } catch {}
 }
 
@@ -218,15 +233,18 @@ function updateUnitsFromBBox(bboxMM) {
     const next = ratios[Math.floor(ratios.length/2)];
     if (next > 1e-9 && Math.abs(next - MM_PER_WU) > 1e-9) {
       MM_PER_WU = next;
+      console.log("[units] mm per WU (bbox) =", MM_PER_WU);
+      onUnitsChanged();
     }
-    console.log("[units] mm per WU (bbox) =", MM_PER_WU);
   } catch {}
 }
 
 /* ---- Distance plugin ---- */
 const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
   container: overlayHost,
-  labelsShown: true
+  labelsShown: true,
+  // certaines versions acceptent "units" ou "labelFormat" — on pousse aussi manuellement ci-dessous
+  units: "mm"
 });
 const distanceCtrl = new DistanceMeasurementsMouseControl(distancePlugin, { snapping: true });
 if ("snapDistance" in distanceCtrl) distanceCtrl.snapDistance = 0.001;
@@ -238,32 +256,46 @@ if ("snapping" in distanceCtrl) {
   window.addEventListener("keyup",   (e)=>{ if (!e.altKey) distanceCtrl.snapping = true;  }, {passive:true});
 }
 
-/* --- Réécriture DOM des labels du plugin en mm --- */
-const LABEL_SEL = '.xeokit-distanceMeasurements-label, .xeokit-distanceMeasurement-label, .xeokit-distance-label';
-function rewriteLabelNodeToMM(el) {
-  if (!el || !el.textContent) return;
-  // capture le nombre (Ex: "~ 6.70m" | "~6,7 m" | "6.7 m")
-  const m = el.textContent.match(/(~?\s*)?(-?\d+(?:[.,]\d+)?)/);
-  if (!m) return;
-  const numWU = parseFloat(m[2].replace(',', '.'));
-  if (!isFinite(numWU)) return;
-  const mm = mmFromWU(numWU);
-  const approx = el.textContent.includes("~") || el.textContent.includes("≈") ? "≈ " : "";
-  el.textContent = `${approx}${frFormat(mm)} mm`;
-  el.dataset.mmPatched = "1";
+/* --- Conversion GENERIQUE de tout texte "…m" → "… mm" en tenant compte de MM_PER_WU --- */
+// On patche *tout* le texte de overlayHost (pas seulement des classes) pour être 100% robustes.
+function toFR(n){
+  const a = Math.abs(n);
+  const d = a >= 1000 ? 0 : a >= 100 ? 1 : a >= 10 ? 2 : 3;
+  return new Intl.NumberFormat('fr-FR', { minimumFractionDigits: d, maximumFractionDigits: d }).format(n);
 }
-function patchAllMeasureLabels(){
-  try {
-    overlayHost?.querySelectorAll(LABEL_SEL)?.forEach(rewriteLabelNodeToMM);
-  } catch {}
+function textMetersToMMWithScale(s) {
+  if (!s) return s;
+  // remplace <nombre>m (ou "m" précédé d’un espace) par <nombre_en_mm> mm.
+  return s
+    .replace(/(-?\d{1,3}(?:[ \u00A0.,]\d{3})*(?:[.,]\d+)?|\d+(?:[.,]\d+)?)(\s*)m\b/gi, (full, num) => {
+      const valWU = parseFloat(String(num).replace(/\s|\u00A0/g, '').replace(',', '.'));
+      if (!isFinite(valWU)) return full;
+      const mm = valWU * MM_PER_WU;
+      return `${toFR(mm)} mm`;
+    })
+    .replace(/[≈~]\s*/g, '≈ '); // homogénéise le signe d’approximation
 }
+function patchNodeTextDeep(root) {
+  if (!root) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+  const edits = [];
+  while (walker.nextNode()) edits.push(walker.currentNode);
+  for (const t of edits) {
+    const before = t.nodeValue;
+    const after  = textMetersToMMWithScale(before);
+    if (after !== before) t.nodeValue = after;
+  }
+}
+function patchAllMeasureTexts(){ try { patchNodeTextDeep(overlayHost); } catch {} }
 // observe le DOM des overlays
 if (overlayHost) {
-  const mo = new MutationObserver(() => patchAllMeasureLabels());
+  const mo = new MutationObserver(() => patchAllMeasureTexts());
   mo.observe(overlayHost, { childList: true, subtree: true, characterData: true });
 }
-// recoller à chaque frame (au cas où le plugin réécrit ensuite)
-viewer.scene.on("tick", patchAllMeasureLabels);
+// recoller à chaque frame (si le plugin réécrit ses labels après nous)
+viewer.scene.on("tick", patchAllMeasureTexts);
+// pousser le formatter SDK aussi
+pushLabelFormatterToPlugin();
 
 /* ====== Panneau "Mesures" ====== */
 const leftCard = document.querySelector(".grid > .card:first-child")
@@ -351,9 +383,10 @@ async function loadXKT(url, nameHint){
     models.set(id,{model,name:nameHint||id,src:url}); lastModelId=id;
     if (chkEdges?.checked) viewer.scene.edgeMaterial.edgesEnabled=true;
 
-    // Force µm->mm tout de suite, puis ajuste via AABB
+    // 1) valeur de départ sûre, 2) ajustement par AABB sur quelques frames
     MM_PER_WU = 0.001;
-    console.log("[units] init forced to µm->mm");
+    console.log("[units] init forced to µm→mm");
+    onUnitsChanged();
     let tries = 0;
     const iv = setInterval(()=>{
       updateUnitsFromAABB(model?.aabb || viewer.scene?.aabb);
@@ -415,7 +448,7 @@ async function uploadAndShow(file) {
       models.clear(); selectedIds.clear();
     }
 
-    console.log("[viewer] loading XKT:", xktUrl);
+    console.log("[viewer] loading XKT]:", xktUrl);
     await loadXKT(xktUrl, f.name);
   } catch (e) {
     console.error(e);
