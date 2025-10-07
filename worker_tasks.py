@@ -562,53 +562,78 @@ def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, 
 
 # ---------- Thickness (optionnel) ----------
 def _estimate_thickness_mm(mesh: trimesh.Trimesh, samples: int = 30000) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Épaisseur locale estimée par tir de rayons double-face :
+    - pour chaque point surfacique, on tire un rayon dans +n et un dans -n
+    - si les deux intersectent, on somme les deux distances (épaisseur traversée)
+    - si un seul intersecte (bord/ouverture), on garde cette distance
+    Pas de filtrage par orientation des faces -> robuste aux normales incohérentes.
+    """
     try:
         try:
-            from trimesh.ray.ray_pyembree import RayMeshIntersector
+            from trimesh.ray.ray_pyembree import RayMeshIntersector   # rapide si dispo
             inter = RayMeshIntersector(mesh)
         except Exception:
-            from trimesh.ray.ray_triangle import RayMeshIntersector
+            from trimesh.ray.ray_triangle import RayMeshIntersector   # fallback pur numpy
             inter = RayMeshIntersector(mesh)
 
+        # Échantillons surfaciques quasi-uniformes
         pts, f_idx = trimesh.sample.sample_surface_even(mesh, samples)
         n = mesh.face_normals[f_idx]
 
+        # Petits décalages pour éviter l’auto-intersection
         bb = mesh.bounds
         diag = float(np.linalg.norm(bb[1] - bb[0]))
-        eps = max(diag * 1e-5, 1e-6)
-        origins_p = pts + n * eps
-        origins_m = pts - n * eps
+        eps = max(diag * 1e-6, 1e-6)
 
-        loc_p, ir_p, it_p = inter.intersects_location(origins_p, n, multiple_hits=False)
-        loc_m, ir_m, it_m = inter.intersects_location(origins_m, -n, multiple_hits=False)
+        # Garde-fou : une épaisseur ne peut pas dépasser ~1.5× la plus petite dimension
+        cap = float(mesh.extents.min()) * 1.5
 
-        dist = np.full(len(pts), np.inf)
+        # Deux jeux de rayons (origines légèrement décalées)
+        ori_a = pts - n * eps;  dir_a =  n
+        ori_b = pts + n * eps;  dir_b = -n
 
-        if len(ir_p):
-            d = np.linalg.norm(loc_p - origins_p[ir_p], axis=1)
-            nf = mesh.face_normals[it_p]
-            good = (np.einsum("ij,ij->i", nf, n[ir_p]) < -0.3)
-            d[~good] = np.inf
-            dist[ir_p] = np.minimum(dist[ir_p], d)
+        loc_a, ia, _ = inter.intersects_location(ori_a, dir_a, multiple_hits=False)
+        loc_b, ib, _ = inter.intersects_location(ori_b, dir_b, multiple_hits=False)
 
-        if len(ir_m):
-            d = np.linalg.norm(loc_m - origins_m[ir_m], axis=1)
-            nf = mesh.face_normals[it_m]
-            good = (np.einsum("ij,ij->i", nf, -n[ir_m]) < -0.3)
-            d[~good] = np.inf
-            dist[ir_m] = np.minimum(dist[ir_m], d)
+        # Distances côté +n
+        dist_a = np.full(len(pts), np.nan)
+        if len(ia):
+            da = np.linalg.norm(loc_a - ori_a[ia], axis=1)
+            dist_a[ia] = da
 
-        d = dist[np.isfinite(dist)]
-        d = d[d > eps * 10]
-        if d.size == 0:
+        # Distances côté -n
+        dist_b = np.full(len(pts), np.nan)
+        if len(ib):
+            db = np.linalg.norm(loc_b - ori_b[ib], axis=1)
+            dist_b[ib] = db
+
+        # Combine : somme si deux côtés, sinon le côté disponible
+        thickness = np.zeros(len(pts), dtype=float)
+        has_a = np.isfinite(dist_a); has_b = np.isfinite(dist_b)
+        both  = has_a & has_b
+        only_a = has_a & ~has_b
+        only_b = has_b & ~has_a
+
+        thickness[both]   = dist_a[both] + dist_b[both]
+        thickness[only_a] = dist_a[only_a]
+        thickness[only_b] = dist_b[only_b]
+
+        # Nettoyage : distances non triviales, bornées
+        good = (thickness > eps * 5) & np.isfinite(thickness) & (thickness < cap)
+        thickness = thickness[good]
+        if thickness.size == 0:
             return None, None
 
-        lo = np.percentile(d, 0.1)
-        hi = np.percentile(d, 99.9)
-        d = d[(d >= lo) & (d <= hi)]
+        # Bornes robustes (réduction d’outliers)
+        lo_q = float(np.percentile(thickness, 0.5))
+        hi_q = float(np.percentile(thickness, 99.5))
+        sel = thickness[(thickness >= lo_q) & (thickness <= hi_q)]
+        if sel.size == 0:
+            sel = thickness
 
-        tmin = float(d.min())
-        tmax = float(min(np.percentile(d, 99.9), float(min(mesh.extents))))
+        tmin = float(sel.min())
+        tmax = float(min(sel.max(), float(mesh.extents.min())))
         return round(tmin, 4), round(tmax, 4)
     except Exception:
         return None, None
