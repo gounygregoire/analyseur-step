@@ -34,8 +34,8 @@ OUTPUT_FOLDER = os.getenv("OUTPUT_FOLDER", "/tmp/converted")
 AXES = ("X", "Y", "Z")
 
 STATS_SOFT_TIMEOUT_SEC = int(os.getenv("STATS_SOFT_TIMEOUT_SEC", "600"))
-TESSELLATION_TOL_MM = float(os.getenv("TESSELLATION_TOL_MM", "0.15"))
-TESSELLATION_ANG_RAD = float(os.getenv("TESSELLATION_ANG_RAD", "0.35"))
+TESSELLATION_TOL_MM = float(os.getenv("TESSELLATION_TOL_MM", "0.05"))
+TESSELLATION_ANG_RAD = float(os.getenv("TESSELLATION_ANG_RAD", "0.25"))
 
 WORKER_COMPUTE_THICKNESS = str(os.getenv("WORKER_COMPUTE_THICKNESS", "0")).lower() in ("1", "true", "yes", "on")
 THICKNESS_SAMPLES = int(os.getenv("THICKNESS_SAMPLES", "30000"))
@@ -147,7 +147,7 @@ def _ensure_local_step(file_id: str, step_ext_hint: Optional[str]) -> Optional[s
     bump_stage("pull_step_s3_miss")
     return None
 
-# ---------- OCCT loader (OCP puis OCC), minimal (STEP + tessellation) ----------
+# ---------- OCCT loader (STEP + tessellation) ----------
 _OCCT = None
 _OCCT_LIB = None
 
@@ -159,18 +159,10 @@ def _occt():
     ocp_err = None
     try:
         from OCP import STEPControl, IFSelect, TopAbs, TopExp, BRep, BRepMesh, TopoDS
-        from OCP.TopLoc import TopLoc_Location
         from OCP.BRepTools import BRepTools
         from OCP.StlAPI import StlAPI_Writer
         from OCP.Bnd import Bnd_Box
         from OCP.BRepBndLib import BRepBndLib
-
-        # Optionnels utiles
-        try:
-            from OCP.BRepTools import BRepTools
-        except Exception:
-            BRepTools = None
-
         _OCCT_LIB = "OCP"
         _OCCT = {
             "STEPControl_Reader": STEPControl.STEPControl_Reader,
@@ -182,12 +174,10 @@ def _occt():
             "TopoDS": TopoDS,
             "TopoDS_Face": getattr(TopoDS, "TopoDS_Face", None),
             "topods_Face": getattr(TopoDS, "topods_Face", None),
-            "TopLoc_Location": TopLoc_Location,
             "BRepTools": BRepTools,
             "StlAPI_Writer": StlAPI_Writer,
             "Bnd_Box": Bnd_Box,
             "BRepBndLib_Add": BRepBndLib.Add,
-
         }
         return _OCCT
     except Exception as e:
@@ -219,6 +209,56 @@ def occt_lib_name() -> Optional[str]:
     except Exception:
         return None
 
+# ---------- Helpers OCCT ----------
+def _shape_bbox_diag_mm(shape) -> float:
+    c = _occt()
+    box = c["Bnd_Box"]()
+    try:
+        c["BRepBndLib_Add"](shape, box, True)
+    except Exception:
+        c["BRepBndLib_Add"](shape, box, False)
+    xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
+    dx, dy, dz = (xmax - xmin), (ymax - ymin), (zmax - zmin)
+    return float((dx*dx + dy*dy + dz*dz) ** 0.5)
+
+def _defl_for_shape(shape, tol_mm: float) -> float:
+    diag = _shape_bbox_diag_mm(shape)
+    auto = max(diag * 0.001, 0.02)  # 0.1% du diag ; >= 0.02 mm
+    return float(max(tol_mm, auto))
+
+def _brep_tools_refresh(c, target):
+    try:
+        c["BRepTools"].Clean(target)
+    except Exception:
+        pass
+    try:
+        c["BRepTools"].Update(target)
+    except Exception:
+        pass
+
+def _mesh_via_stl_writer(shape, tol_mm: float, ang_rad: float) -> Optional[trimesh.Trimesh]:
+    import tempfile
+    c = _occt()
+    stl = c["StlAPI_Writer"]()
+    # On écrit simplement : la déflection a déjà été appliquée sur le shape si possible.
+    with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as tf:
+        path = tf.name
+    try:
+        ok = stl.Write(shape, path)
+        if not ok:
+            return None
+        m = trimesh.load(path, force="mesh", process=True)
+        if m is None or m.faces.shape[0] == 0:
+            return None
+        return m
+    except Exception:
+        return None
+    finally:
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+
 # ---------- STEP & géométrie ----------
 def _read_step_shape(step_path: str):
     c = _occt()
@@ -230,9 +270,6 @@ def _read_step_shape(step_path: str):
     return reader.OneShape()
 
 def _as_face(s, c):
-    """
-    Convertit un TopoDS_Shape en TopoDS_Face (robuste).
-    """
     tf = c.get("topods_Face")
     if tf is not None:
         try:
@@ -241,7 +278,6 @@ def _as_face(s, c):
             return f
         except Exception:
             pass
-
     TDF = c.get("TopoDS_Face")
     if TDF is not None and hasattr(TDF, "DownCast"):
         try:
@@ -250,24 +286,23 @@ def _as_face(s, c):
             return f
         except Exception:
             pass
-
     return None
 
 def _face_triangulation(face, c, tol_mm: float):
     BT = c["BRep_Tool"]
     loc = face.Location()
-    # 1) Triangulation_s (différentes signatures)
+    # Triangulation_s : différentes signatures
     if hasattr(BT, "Triangulation_s"):
         for args in ((face, loc), (face, loc, 0), (face, loc, 1), (face, loc, 2)):
             try:
                 tri = BT.Triangulation_s(*args)
-                if tri:  # handle non-null
+                if tri:
                     return tri
             except TypeError:
                 continue
             except Exception:
                 continue
-    # 2) Triangulation (ancienne)
+    # Ancienne API
     if hasattr(BT, "Triangulation"):
         try:
             tri = BT.Triangulation(face, loc)
@@ -275,7 +310,7 @@ def _face_triangulation(face, c, tol_mm: float):
                 return tri
         except Exception:
             pass
-    # 3) Fallback qui calcule la tri si absente
+    # Fallback qui calcule la tri si absente (critique pour certaines wheels)
     BTs = c.get("BRepTools")
     if BTs is not None and hasattr(BTs, "Triangulation"):
         try:
@@ -285,19 +320,6 @@ def _face_triangulation(face, c, tol_mm: float):
         except Exception:
             pass
     return None
-
-
-def _brep_tools_refresh(c, target):
-    BTs = c.get("BRepTools")
-    if BTs is not None:
-        try:
-            BTs.Clean(target)
-        except Exception:
-            pass
-        try:
-            BTs.Update(target)
-        except Exception:
-            pass
 
 def _try_mesh(c, target, tol_mm: float, ang_rad: float) -> None:
     defl = _defl_for_shape(target, tol_mm)
@@ -330,54 +352,10 @@ def _try_mesh(c, target, tol_mm: float, ang_rad: float) -> None:
     except Exception:
         pass
 
-
-def _shape_bbox_diag_mm(shape) -> float:
-    """Diag du bbox (OCCT) pour calibrer la déflection."""
-    c = _occt()
-    box = c["Bnd_Box"]()
-    try:
-        c["BRepBndLib_Add"](shape, box, True)
-    except Exception:
-        c["BRepBndLib_Add"](shape, box, False)
-    xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
-    dx, dy, dz = (xmax - xmin), (ymax - ymin), (zmax - zmin)
-    return float((dx*dx + dy*dy + dz*dz) ** 0.5)
-
-def _defl_for_shape(shape, tol_mm: float) -> float:
-    diag = _shape_bbox_diag_mm(shape)
-    auto = max(diag * 0.001, 0.02)  # 0.1% du diag, borné par 20µm mini
-    return float(max(tol_mm, auto))
-
-def _mesh_via_stl_writer(shape, tol_mm: float, ang_rad: float) -> Optional[trimesh.Trimesh]:
-    """Filet de sécurité : export STL, puis load via trimesh."""
-    import tempfile
-    c = _occt()
-    stl = c["StlAPI_Writer"]()
-    # Les bindings récents passent la deflection via BRepMesh en amont ; on l’a déjà fait.
-    # Ici on écrit juste.
-    with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as tf:
-        path = tf.name
-    try:
-        ok = stl.Write(shape, path)
-        if not ok:
-            return None
-        m = trimesh.load(path, force="mesh", process=True)
-        if m is None or m.faces.shape[0] == 0:
-            return None
-        return m
-    except Exception:
-        return None
-    finally:
-        try:
-            os.remove(path)
-        except Exception:
-            pass
-
-
 def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.Trimesh:
     c = _occt()
 
-    # Maillage global du shape
+    # Maillage global (peut ne pas "coller" les tris aux faces selon wheels)
     _try_mesh(c, shape, tol_mm, ang_rad)
 
     verts: list[list[float]] = []
@@ -394,46 +372,42 @@ def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.
             continue
 
         tri = _face_triangulation(f, c, tol_mm)
-# tailles :
-def _tri_sizes(_tri):
-    if _tri is None:
-        return 0, 0
-    try:
-        return _tri.Nodes().Size(), _tri.Triangles().Size()
-    except Exception:
-        try:
-            return _tri.NbNodes(), _tri.NbTriangles()
-        except Exception:
-            return 0, 0
 
-npts, ntri = _tri_sizes(tri)
-if npts == 0 or ntri == 0:
-    # re-mesh uniquement la face (plus fin) puis re-essai avec BRepTools
-    _try_mesh(c, f, max(tol_mm * 0.5, 1e-3), ang_rad)
-    tri = _face_triangulation(f, c, tol_mm)
-    npts, ntri = _tri_sizes(tri)
-if npts == 0 or ntri == 0:
-    continue
+        def _tri_sizes(_tri):
+            if _tri is None:
+                return 0, 0
+            try:
+                return _tri.Nodes().Size(), _tri.Triangles().Size()
+            except Exception:
+                try:
+                    return _tri.NbNodes(), _tri.NbTriangles()
+                except Exception:
+                    return 0, 0
 
+        npts, ntri = _tri_sizes(tri)
+        if npts == 0 or ntri == 0:
+            # maillage ponctuel de la face et re-essai
+            _try_mesh(c, f, max(tol_mm * 0.5, 0.02), ang_rad)
+            tri = _face_triangulation(f, c, tol_mm)
+            npts, ntri = _tri_sizes(tri)
 
-        # Extraction nodes/triangles (deux familles d'API)
+        if npts == 0 or ntri == 0:
+            continue
+
         try:
             nodes = tri.Nodes()
             tris = tri.Triangles()
-
             def get_node(i):
                 p = nodes.Value(i)
                 return (float(p.X()), float(p.Y()), float(p.Z()))
-
             def get_tri(i):
                 t = tris.Value(i)
-                a, b, cidx = t.Get()  # 1-based
+                a, b, cidx = t.Get()
                 return (a, b, cidx)
         except Exception:
             def get_node(i):
                 p = tri.Node(i)
                 return (float(p.X()), float(p.Y()), float(p.Z()))
-
             def get_tri(i):
                 t = tri.Triangle(i)
                 a, b, cidx = t.Get()
@@ -449,12 +423,12 @@ if npts == 0 or ntri == 0:
 
         v_off += npts
 
-if not verts or not faces:
-    # Dernière chance : export STL + lecture trimesh
-    m = _mesh_via_stl_writer(shape, tol_mm, ang_rad)
-    if m is None or m.faces.shape[0] == 0:
-        raise RuntimeError("Triangulation vide (après BRepTool/BRepTools et fallback STL)")
-    return m
+    if not verts or not faces:
+        # Dernière chance : STL → trimesh (indépendant des tris par face)
+        m = _mesh_via_stl_writer(shape, tol_mm, ang_rad)
+        if m is None or m.faces.shape[0] == 0:
+            raise RuntimeError("Triangulation vide (après BRepTool/BRepTools et fallback STL)")
+        return m
 
     mesh = trimesh.Trimesh(
         vertices=np.asarray(verts, dtype=float),
@@ -532,7 +506,7 @@ def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, 
     bb_max = tri2.reshape(-1, 2).max(axis=0)
     span = (bb_max - bb_min)
     px_mm = max(TESSELLATION_TOL_MM, float(span.max()) / 4000.0)
-    px_mm = float(np.clip(px_mm, 0.02, 0.5))  # 20µm .. 0.5mm / px
+    px_mm = float(np.clip(px_mm, 0.02, 0.5))  # entre 20µm et 0.5mm par pixel
     H = int(np.ceil(span[1] / px_mm)) + 2
     W = int(np.ceil(span[0] / px_mm)) + 2
     MAX_PIX = 9000
