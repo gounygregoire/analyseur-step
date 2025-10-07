@@ -170,10 +170,10 @@ const setAll=(prop,val)=> allIds().forEach(id=>{const o=viewer.scene.objects[id]
 const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); if (propsPanel) propsPanel.innerHTML=""; };
 
 /* ---------- Mesures (format FR + unités robustes) ---------- */
-// 1 WU = combien de mm ? (par défaut on force µm -> mm)
-let MM_PER_WU = 0.001; // 1 µm = 0.001 mm
+// mm par World Unit (WU). On force µm->mm au démarrage puis on ajuste.
+let MM_PER_WU = 0.001;
 
-// formateur FR
+// format FR
 const frFormat = (val) => {
   const a = Math.abs(val);
   const decimals = a >= 1000 ? 0 : a >= 100 ? 1 : a >= 10 ? 2 : 3;
@@ -184,9 +184,8 @@ const frFormat = (val) => {
   }).format(val);
 };
 const mmFromWU = (wu) => wu * MM_PER_WU;
-const fmtMM    = (wu) => `${frFormat(mmFromWU(wu))} mm`;
 
-// Heuristique si besoin (corrige m/mm/µm automatiquement)
+// Heuristique via AABB si bbox serveur pas encore là
 function updateUnitsFromAABB(aabbLike) {
   try {
     const a = aabbLike || viewer.scene?.aabb;
@@ -194,18 +193,17 @@ function updateUnitsFromAABB(aabbLike) {
     const sx = a[3]-a[0], sy = a[4]-a[1], sz = a[5]-a[2];
     const maxWU = Math.max(sx, sy, sz);
     let next = MM_PER_WU;
-    if (maxWU > 1500)      next = 0.001; // µm -> mm (ex: 60 mm ≈ 60000 WU)
-    else if (maxWU < 0.5)  next = 1000;  // m -> mm
+    if (maxWU > 1500)      next = 0.001; // µm -> mm
+    else if (maxWU < 0.5)  next = 1000;  // m  -> mm
     else                   next = 1;     // mm -> mm
     if (Math.abs(next - MM_PER_WU) > 1e-9) {
       MM_PER_WU = next;
-      refreshAllMeasureLabels();
     }
     console.log("[units] mm per WU =", MM_PER_WU);
   } catch {}
 }
 
-// Raffinage avec bbox_mm du serveur (le plus fiable)
+// Ajustement précis avec bbox_mm du serveur
 function updateUnitsFromBBox(bboxMM) {
   try {
     const a = viewer.scene?.aabb;
@@ -220,45 +218,8 @@ function updateUnitsFromBBox(bboxMM) {
     const next = ratios[Math.floor(ratios.length/2)];
     if (next > 1e-9 && Math.abs(next - MM_PER_WU) > 1e-9) {
       MM_PER_WU = next;
-      refreshAllMeasureLabels();
-      console.log("[units] mm per WU (bbox) =", MM_PER_WU);
     }
-  } catch {}
-}
-
-// Forcer le texte des labels même si le plugin n'applique pas labelFormat
-function relabelMeasurement(m) {
-  const labelText = fmtMM(m.distance || 0);
-  try { m.label = labelText; } catch {}
-  try { m._labelText && (m._labelText.textContent = labelText); } catch {}
-  try {
-    const nodes = overlayHost?.querySelectorAll('.xeokit-distanceMeasurements-label, .xeokit-distanceMeasurement-label');
-    const el = nodes && nodes[nodes.length - 1];
-    if (el) el.textContent = labelText;
-  } catch {}
-}
-
-function wireMeasurement(m){
-  relabelMeasurement(m);
-  if (m.on) {
-    m.on("updated", ()=> relabelMeasurement(m));
-  } else {
-    let last = -1;
-    const iv = setInterval(()=>{
-      if (!m || typeof m.distance !== "number") return;
-      if (m.distance !== last) { last = m.distance; relabelMeasurement(m); }
-    }, 120);
-    m.__iv = iv;
-  }
-}
-
-function refreshAllMeasureLabels(){
-  try {
-    const list =
-      distancePlugin.measurements ||
-      distancePlugin._measurements ||
-      distancePlugin._state?.measurements || [];
-    list.forEach((m)=> relabelMeasurement(m));
+    console.log("[units] mm per WU (bbox) =", MM_PER_WU);
   } catch {}
 }
 
@@ -277,14 +238,32 @@ if ("snapping" in distanceCtrl) {
   window.addEventListener("keyup",   (e)=>{ if (!e.altKey) distanceCtrl.snapping = true;  }, {passive:true});
 }
 
-/* Brancher les événements mesure */
-["measurementCreated","newMeasurement","measurementAdded"].forEach(evt=>{
-  distancePlugin.on?.(evt, (ev)=> wireMeasurement(ev.measurement || ev));
-});
-distancePlugin.on?.("measurementDestroyed", (ev)=>{
-  const m = ev.measurement || ev;
-  if (m?.__iv) { clearInterval(m.__iv); m.__iv = null; }
-});
+/* --- Réécriture DOM des labels du plugin en mm --- */
+const LABEL_SEL = '.xeokit-distanceMeasurements-label, .xeokit-distanceMeasurement-label, .xeokit-distance-label';
+function rewriteLabelNodeToMM(el) {
+  if (!el || !el.textContent) return;
+  // capture le nombre (Ex: "~ 6.70m" | "~6,7 m" | "6.7 m")
+  const m = el.textContent.match(/(~?\s*)?(-?\d+(?:[.,]\d+)?)/);
+  if (!m) return;
+  const numWU = parseFloat(m[2].replace(',', '.'));
+  if (!isFinite(numWU)) return;
+  const mm = mmFromWU(numWU);
+  const approx = el.textContent.includes("~") || el.textContent.includes("≈") ? "≈ " : "";
+  el.textContent = `${approx}${frFormat(mm)} mm`;
+  el.dataset.mmPatched = "1";
+}
+function patchAllMeasureLabels(){
+  try {
+    overlayHost?.querySelectorAll(LABEL_SEL)?.forEach(rewriteLabelNodeToMM);
+  } catch {}
+}
+// observe le DOM des overlays
+if (overlayHost) {
+  const mo = new MutationObserver(() => patchAllMeasureLabels());
+  mo.observe(overlayHost, { childList: true, subtree: true, characterData: true });
+}
+// recoller à chaque frame (au cas où le plugin réécrit ensuite)
+viewer.scene.on("tick", patchAllMeasureLabels);
 
 /* ====== Panneau "Mesures" ====== */
 const leftCard = document.querySelector(".grid > .card:first-child")
@@ -372,12 +351,9 @@ async function loadXKT(url, nameHint){
     models.set(id,{model,name:nameHint||id,src:url}); lastModelId=id;
     if (chkEdges?.checked) viewer.scene.edgeMaterial.edgesEnabled=true;
 
-    // 1) on force d’emblée l’hypothèse µm → mm (instantané)
+    // Force µm->mm tout de suite, puis ajuste via AABB
     MM_PER_WU = 0.001;
-    refreshAllMeasureLabels();
     console.log("[units] init forced to µm->mm");
-
-    // 2) puis on raffine via AABB sur quelques frames
     let tries = 0;
     const iv = setInterval(()=>{
       updateUnitsFromAABB(model?.aabb || viewer.scene?.aabb);
@@ -385,7 +361,7 @@ async function loadXKT(url, nameHint){
     }, 80);
 
     try {
-      currentAxis = getSelectedAxis(); // Z par défaut
+      currentAxis = getSelectedAxis();
       if (currentFileId) { fetchStats(currentFileId, currentAxis); }
     } catch (e) { console.warn("[analyse] fetch initial ignoré:", e); }
   });
@@ -427,7 +403,7 @@ async function uploadAndShow(file) {
     }
 
     if (j.s3_uploaded === false) {
-      console.warn("[upload] S3 non disponible -> l’analyse asynchrone ne partira pas tant que S3 n’est pas corrigé.");
+      console.warn("[upload] S3 non disponible -> l’analyse asynchrone ne partira pas tant que S3 n’est pas corrigé).");
     }
 
     currentFileId = j.file_id || null;
