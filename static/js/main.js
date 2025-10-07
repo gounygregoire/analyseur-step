@@ -1,4 +1,4 @@
-// /static/js/main.js  — UTF-8 (NO BOM). Teste: tu dois voir ce log en console.
+// /static/js/main.js — UTF-8 (NO BOM)
 console.log("main.js loaded ✅");
 
 import {
@@ -104,14 +104,13 @@ new ResizeObserver(resizeCanvasAndOverlay).observe(viewerContainer);
 addEventListener("resize", resizeCanvasAndOverlay, { passive: true });
 resizeCanvasAndOverlay();
 
+/* ---------- petit trièdre 2D ---------- */
 function drawAxes(selected='Z'){
   const canvas = document.getElementById('axisCanvas');
   if(!canvas) return;
   const ctx = canvas.getContext('2d');
   const W=canvas.width, H=canvas.height, cx=W/2, cy=H/2, L=26;
-
   ctx.clearRect(0,0,W,H);
-
   function arrow(x1,y1,x2,y2,label,color){
     ctx.strokeStyle=color; ctx.lineWidth=2;
     ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
@@ -124,32 +123,19 @@ function drawAxes(selected='Z'){
     ctx.font='12px Inter, system-ui, sans-serif'; ctx.fillStyle=color;
     ctx.fillText(label, x2+4, y2+4);
   }
-
   const dim = '#9aa3af', sel = '#111827';
   const cX = (selected==='X') ? sel : dim;
   const cY = (selected==='Y') ? sel : dim;
   const cZ = (selected==='Z') ? sel : dim;
-
-  // X vers la droite, Y vers le haut, Z en pseudo 3D vers bas-gauche
   arrow(cx,cy, cx+L,cy,      'X', cX);
   arrow(cx,cy, cx,cy-L,      'Y', cY);
   arrow(cx,cy, cx-0.7*L,cy+0.7*L, 'Z', cZ);
 }
-
-// 1) Dessiner au chargement
 drawAxes('Z');
-
-// 2) Quand l’utilisateur change d’axe (adapte le sélecteur à tes radios)
 document.addEventListener('change', (ev)=>{
   const tgt = ev.target;
-  if (tgt && tgt.name === 'axis') {        // <input type="radio" name="axis" value="X|Y|Z">
-    drawAxes(tgt.value);
-  }
+  if (tgt && tgt.name === 'axis') drawAxes(tgt.value);
 });
-
-// 3) Quand ton code change d’axe côté JS (ex: boutons X/Y/Z)
-//    appelle simplement drawAxes('X'|'Y'|'Z') au même moment où tu relances la requête /api/shape/stats
-
 
 /* ---------- NavCube ---------- */
 (()=>{
@@ -187,7 +173,7 @@ const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); select
 // mm par unité monde (WU). Si le modèle est en mètres: ≈1000 ; en mm: ≈1
 let MM_PER_WU = 1000;
 
-// formateur FR avec groupement (espace fines) et décimales adaptatives
+// formateur FR avec groupement et décimales adaptatives
 const frFormat = (val) => {
   const a = Math.abs(val);
   const decimals =
@@ -204,12 +190,11 @@ const frFormat = (val) => {
 // label “mm” basé sur MM_PER_WU
 const formatMM = (worldUnits) => `${frFormat(worldUnits * MM_PER_WU)} mm`;
 
-// pousse le formatter dans le plugin (selon version xeokit)
+// pousse le formatter dans le plugin et force un refresh
 function setLabelFormatter() {
   const f = (wu) => `${frFormat(wu * MM_PER_WU)} mm`;
   try { distancePlugin.cfg = { ...(distancePlugin.cfg || {}), labelFormat: f }; } catch {}
   try { distancePlugin.labelFormat = f; } catch {}
-  // force un refresh visuel des mesures déjà posées
   try {
     const list =
       distancePlugin.measurements ||
@@ -217,7 +202,6 @@ function setLabelFormatter() {
       distancePlugin._state?.measurements ||
       [];
     list.forEach(m => { try { m.needsUpdate = true; } catch {} });
-    // petit toggle pour forcer le re-render des étiquettes
     const shown = !!distancePlugin.labelsShown;
     distancePlugin.labelsShown = !shown;
     distancePlugin.labelsShown = shown;
@@ -240,7 +224,6 @@ if ("snapping" in distanceCtrl) {
   window.addEventListener("keyup",   (e)=>{ if (!e.altKey) distanceCtrl.snapping = true;  }, {passive:true});
 }
 
-
 // Déduit MM_PER_WU à partir du bbox_mm serveur et de l'AABB xeokit
 function updateUnitsFromBBox(bboxMM) {
   try {
@@ -259,15 +242,13 @@ function updateUnitsFromBBox(bboxMM) {
   } catch {}
 }
 
-
-/* ---- Forçage des labels : remplacer "m" par "mm" (sans *1000 si déjà "mm") ---- */
+/* ---- Fallback : si le SDK sort des 'm', remplace par des 'mm' et formate en FR ---- */
 function textMetersToMM(txt) {
-  return txt.replace(/(~?\s*)(-?\d+(?:[.,]\d+)?)\s*m(?!m)/gi, (_all, pre, num) => {
-    const val = parseFloat(String(num).replace(',', '.'));
-    if (isNaN(val)) return _all;
-    const mm = val * 1000;
-    const prettyMM = prettyNumber(mm);
-    return `${pre}${prettyMM} mm`;
+  return String(txt).replace(/(~?\s*)(-?\d+(?:[.,]\d+)?)\s*m(?!m)/gi, (_all, pre, num) => {
+    const valM = parseFloat(String(num).replace(',', '.'));
+    if (isNaN(valM)) return _all;
+    const mm = valM * 1000;
+    return `${pre}${frFormat(mm)} mm`;
   });
 }
 function convertNodeTextToMM(root) {
@@ -280,15 +261,17 @@ function convertNodeTextToMM(root) {
     if (newText !== t.nodeValue) t.nodeValue = newText;
   }
 }
-const mmObserver = new MutationObserver((mutations) => {
-  for (const m of mutations) {
-    m.addedNodes?.forEach((n) => { if (n.nodeType === 1) convertNodeTextToMM(n); });
-    if (m.type === "characterData" && m.target?.parentElement) convertNodeTextToMM(m.target.parentElement);
-  }
-});
-mmObserver.observe(overlayHost, { childList: true, subtree: true, characterData: true });
-convertNodeTextToMM(overlayHost);
-viewer.scene.on("tick", ()=> convertNodeTextToMM(overlayHost));
+if (overlayHost) {
+  const mmObserver = new MutationObserver((mutations) => {
+    for (const m of mutations) {
+      m.addedNodes?.forEach((n) => { if (n.nodeType === 1) convertNodeTextToMM(n); });
+      if (m.type === "characterData" && m.target?.parentElement) convertNodeTextToMM(m.target.parentElement);
+    }
+  });
+  mmObserver.observe(overlayHost, { childList: true, subtree: true, characterData: true });
+  convertNodeTextToMM(overlayHost);
+  viewer.scene.on("tick", ()=> convertNodeTextToMM(overlayHost));
+}
 
 /* ====== Panneau "Mesures" ====== */
 const leftCard = document.querySelector(".grid > .card:first-child")
@@ -389,7 +372,6 @@ async function loadXKT(url, nameHint){
   return id;
 }
 
-// Remplace TOUTE la fonction uploadAndShow par ceci (avec un LOG en plus)
 async function uploadAndShow(file) {
   const f = file || fileInput?.files?.[0];
   if (!f) { alert("Choisis un fichier .step/.stp/.stl (ou .xkt)"); return; }
@@ -399,7 +381,6 @@ async function uploadAndShow(file) {
   setProgress(12);
 
   try {
-    // Cas XKT local : pas d'appel API d'analyse
     if (/\.(xkt)$/i.test(f.name)) {
       currentFileId = null;
       const fileURL = URL.createObjectURL(f);
@@ -412,13 +393,12 @@ async function uploadAndShow(file) {
       return;
     }
 
-    // Upload & conversion serveur
     const fd = new FormData();
     fd.append("file", f);
 
     const res = await fetch("/upload", { method: "POST", body: fd });
     let j = null;
-    try { j = await res.json(); } catch { /* ignore */ }
+    try { j = await res.json(); } catch {}
 
     if (!res.ok || !j || !j.xkt_url) {
       console.error("[upload] bad response", res.status, j);
@@ -438,8 +418,8 @@ async function uploadAndShow(file) {
       models.clear(); selectedIds.clear();
     }
 
-    console.log("[viewer] loading XKT:", xktUrl); // <= AJOUT
-    await loadXKT(xktUrl, f.name); // loadXKT déclenchera fetchStats si currentFileId est défini
+    console.log("[viewer] loading XKT:", xktUrl);
+    await loadXKT(xktUrl, f.name);
   } catch (e) {
     console.error(e);
     alert("Erreur conversion/chargement (voir Console).");
@@ -448,7 +428,6 @@ async function uploadAndShow(file) {
     setProgress(0);
   }
 }
-
 
 /* ---------- FICHIERS UI (fiabilisé) ---------- */
 function openFileChooser(){
@@ -719,14 +698,11 @@ viewer.scene.on("tick", ()=>{
     viewer.scene.edgeMaterial.edgesEnabled = true;
   }
   updateCutPlaneVisual();
-
-  // <<< fait tourner le trièdre avec la caméra
   if (window.__drawAxesFromView) {
-    window.__lastViewMatrix = viewer.camera.viewMatrix; // garde la dernière pour le repaint lors du changement d'axe
+    window.__lastViewMatrix = viewer.camera.viewMatrix;
     window.__drawAxesFromView(viewer.camera.viewMatrix);
   }
 });
-
 
 /* ---------- Switchs d’affichage ---------- */
 chkXray ?.addEventListener("change",()=>{ setAll("xrayed", !!chkXray.checked);  setSome([...selectedIds],"xrayed",false); });
@@ -748,13 +724,11 @@ function f3(v){ return (v==null || !isFinite(+v)) ? "—" : (+v).toFixed(3).repl
 function renderStats(json){
   if (!json || typeof json !== "object") return;
 
-  // mémorise le bbox mm du serveur et met à jour l’unité
-if (Array.isArray(json.bbox_mm)) {
-  window.__bbox_mm = json.bbox_mm;
-  updateUnitsFromBBox(window.__bbox_mm);
-}
+  if (Array.isArray(json.bbox_mm)) {
+    window.__bbox_mm = json.bbox_mm;
+    updateUnitsFromBBox(window.__bbox_mm);
+  }
 
-  // valeurs “propres” côté UI (FR, sans séparateur de milliers)
   if (volVal)  volVal.textContent  = f3(json.volume_cm3);
   if (projVal) projVal.textContent = f3(json.projected_area_cm2);
   if (tminVal) tminVal.textContent = f3(json.thickness_min_mm);
@@ -767,6 +741,9 @@ if (Array.isArray(json.bbox_mm)) {
   if (typeof json.projected_area_cm2 !== "undefined") d('[data-metric="projected_area"]', f3(json.projected_area_cm2));
 }
 
+function clearStatsUI(){
+  renderStats({ volume_cm3: null, projected_area_cm2: null, thickness_min_mm: null, thickness_max_mm: null, bbox_mm: window.__bbox_mm });
+}
 
 /** Récupère les stats serveur pour un file_id donné + axe. */
 async function fetchStats(fileId, axis = 'Z') {
@@ -794,7 +771,7 @@ async function fetchStats(fileId, axis = 'Z') {
   }
 }
 
-/* Radios X/Y/Z → recalcul de la surface projetée (et renvoie file_id + axe corrects) */
+/* Radios X/Y/Z → recalcul de la surface projetée */
 projAxisRadios.forEach(r => r?.addEventListener("change", ()=>{
   currentAxis = getSelectedAxis();
   if (currentFileId) fetchStats(currentFileId, currentAxis);
