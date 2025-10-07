@@ -39,9 +39,14 @@ PA_BATCH              = int(os.getenv("PA_BATCH", "20000"))                  # t
 # ----- Projected area config -----
 PA_BACKEND = os.getenv("PA_BACKEND", "auto").lower()  # 'auto' | 'raster' | 'shapely'
 PA_SHAPELY_TRI_MAX = int(os.getenv("PA_SHAPELY_TRI_MAX", "120000"))  # au-delà, on force raster
-PA_RASTER_MAX_PIX = int(os.getenv("PA_RASTER_MAX_PIX", "6000"))      # taille max par dimension
-PA_RASTER_PX_MM_MIN = float(os.getenv("PA_RASTER_PX_MM_MIN", "0.02"))
-PA_RASTER_PX_MM_MAX = float(os.getenv("PA_RASTER_PX_MM_MAX", "0.5"))
+# ----- Mesh & Projected-Area safe config -----
+MESH_DEFL_MM = float(os.getenv("MESH_DEFL_MM", "0.20"))   # deflection pour STL
+MESH_ANG_RAD = float(os.getenv("MESH_ANG_RAD", "0.50"))   # angle pour STL
+
+# On force un backend raster borné pour l'aire projetée (pas de Shapely)
+PA_RASTER_MAX_PIX = int(os.getenv("PA_RASTER_MAX_PIX", "4096"))  # dimension max
+PA_RASTER_PX_MM_MIN = float(os.getenv("PA_RASTER_PX_MM_MIN", "0.03"))
+PA_RASTER_PX_MM_MAX = float(os.getenv("PA_RASTER_PX_MM_MAX", "0.60"))
 
 STATS_SOFT_TIMEOUT_SEC = int(os.getenv("STATS_SOFT_TIMEOUT_SEC", "600"))
 TESSELLATION_TOL_MM = float(os.getenv("TESSELLATION_TOL_MM", "0.05"))
@@ -395,91 +400,56 @@ def _shape_to_trimesh_via_stl(shape, tol_mm: float, ang_rad: float) -> Optional[
         except Exception:
             pass
 
-def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.Trimesh:
-    # --- FORCE le fallback STL si demandé par une variable d'env ---
-    if str(os.getenv("FORCE_STL_FALLBACK", "0")).lower() in ("1", "true", "yes", "on"):
-        bump_stage("triangulate_forced_fallback_stl")
-        m = _shape_to_trimesh_via_stl(shape, tol_mm, ang_rad)
-        if m is None or m.faces is None or m.faces.shape[0] == 0:
-            raise RuntimeError("Fallback STL a échoué")
-        return m
-    # --- (le code existant continue ici) ---
-    """
-    1) tente la triangulation “native” OCCT par faces (si la wheel l’expose),
-    2) si vide → fallback STL (export puis lecture trimesh).
-    """
+def _shape_to_mesh_via_stl(shape, defl_mm: float, ang_rad: float) -> trimesh.Trimesh:
+    # Maillage OCCT (souple) puis export STL -> chargement Trimesh
     c = _occt()
-    shape = _heal_shape(shape, c)
-
-    # Maillage global (au cas où) – certaines wheels n’attachent pas le tri aux faces
-    _mesh_any(shape, c, tol_mm, ang_rad)
-
-    verts: list[list[float]] = []
-    faces: list[list[int]] = []
-    v_off = 0
-
-    exp = c["TopExp_Explorer"](shape, c["TopAbs_FACE"])
-    while exp.More():
-        s = exp.Current()
-        exp.Next()
-
-        f = _as_face(s, c)
-        if f is None:
-            continue
-
-        tri = _face_triangulation(f, c)
-        npts, ntri = _triangulation_sizes(tri)
-        if npts == 0 or ntri == 0:
-            # tente re-mesh local de la face
-            try:
-                _mesh_any(f, c, tol_mm, ang_rad)
-                tri = _face_triangulation(f, c)
-                npts, ntri = _triangulation_sizes(tri)
-            except Exception:
-                tri = None
-                npts = ntri = 0
-
-        if npts == 0 or ntri == 0:
-            continue
-
-        # extraction (2 API possibles)
+    try:
         try:
-            nodes = tri.Nodes()
-            tris = tri.Triangles()
-            def get_node(i):
-                p = nodes.Value(i); return (float(p.X()), float(p.Y()), float(p.Z()))
-            def get_tri(i):
-                t = tris.Value(i); a, b, cidx = t.Get(); return (a, b, cidx)
+            c["BRepMesh_IncrementalMesh"](shape, defl_mm, False, ang_rad, True)
+        except TypeError:
+            c["BRepMesh_IncrementalMesh"](shape, defl_mm, False, ang_rad)
+    except Exception:
+        pass
+
+    from tempfile import NamedTemporaryFile
+    from OCP.StlAPI import StlAPI_Writer
+
+    tmp = NamedTemporaryFile(suffix=".stl", delete=False)
+    tmp.close()
+    try:
+        w = StlAPI_Writer()
+        try:
+            w.SetASCIIMode(False)  # binaire
         except Exception:
-            def get_node(i):
-                p = tri.Node(i); return (float(p.X()), float(p.Y()), float(p.Z()))
-            def get_tri(i):
-                t = tri.Triangle(i); a, b, cidx = t.Get(); return (a, b, cidx)
+            pass
+        ok = w.Write(shape, tmp.name)
+        if not ok:
+            raise RuntimeError("STL write failed")
 
-        for i in range(1, npts + 1):
-            x, y, z = get_node(i)
-            verts.append([x, y, z])
+        m = trimesh.load(tmp.name, file_type="stl", force="mesh", skip_materials=True)
+        if m is None or m.faces is None or len(m.faces) == 0:
+            raise RuntimeError("STL load empty")
 
-        for i in range(1, ntri + 1):
-            a, b, cidx = get_tri(i)
-            faces.append([v_off + a - 1, v_off + b - 1, v_off + cidx - 1])
-
-        v_off += npts
-
-    if not verts or not faces:
-        bump_stage("triangulate_native_empty")
-        m = _shape_to_trimesh_via_stl(shape, tol_mm, ang_rad)
-        if m is None or m.faces is None or m.faces.shape[0] == 0:
-            raise RuntimeError("Triangulation vide (native + STL fallback)")
-        bump_stage("triangulate_fallback_stl_ok", {"faces": int(m.faces.shape[0])})
+        m.remove_unreferenced_vertices()
+        if not m.is_watertight:
+            try:
+                m = m.fill_holes()
+            except Exception:
+                pass
         return m
+    finally:
+        try:
+            os.remove(tmp.name)
+        except Exception:
+            pass
 
-    mesh = trimesh.Trimesh(
-        vertices=np.asarray(verts, dtype=float),
-        faces=np.asarray(faces, dtype=int),
-        process=True,
-    )
-    return mesh
+
+def _triangulate_shape_to_mesh(shape, tol_mm: float, ang_rad: float) -> trimesh.Trimesh:
+    # On passe par STL pour une compatibilité OCCT maximale et un mesh cohérent
+    defl = max(tol_mm, MESH_DEFL_MM)
+    ang = max(ang_rad, MESH_ANG_RAD)
+    return _shape_to_mesh_via_stl(shape, defl, ang)
+
 
 def _bbox_from_mesh_mm(mesh: trimesh.Trimesh) -> Tuple[float, float, float]:
     ex = mesh.bounds[1] - mesh.bounds[0]
@@ -488,18 +458,14 @@ def _bbox_from_mesh_mm(mesh: trimesh.Trimesh) -> Tuple[float, float, float]:
 # ---------- Projected area (Définition 1 : union 2D) ----------
 def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, str]:
     """
-    Aire de la silhouette (union des projections orthographiques) en cm^2.
-    Stratégie:
-      - si PA_BACKEND='raster' => raster direct
-      - si PA_BACKEND='shapely' => shapely direct (si présent)
-      - sinon 'auto' => shapely seulement si peu de triangles projetés, sinon raster
-      - en cas d'erreur/MemoryError => raster de secours
+    Aire de silhouette en cm^2 par rasterisation 2D bornée en mémoire.
+    (Aucun appel à Shapely.)
     """
     axis = (axis or "Z").upper()
     if axis not in AXES:
         axis = "Z"
 
-    tri3 = mesh.triangles  # (N,3,3) mm
+    tri3 = mesh.triangles  # (N,3,3) en mm
     if axis == "Z":
         tri2 = tri3[:, :, :2]          # XY
     elif axis == "Y":
@@ -507,109 +473,60 @@ def _projected_area_union_cm2(mesh: trimesh.Trimesh, axis: str) -> Tuple[float, 
     else:
         tri2 = tri3[:, :, [1, 2]]      # YZ
 
-    # Filtre triangles quasi dégénérés après projection
+    # Filtre triangles quasi dégénérés
     v0, v1, v2 = tri2[:, 0, :], tri2[:, 1, :], tri2[:, 2, :]
     area2d = 0.5 * np.abs(
-        v0[:, 0]*(v1[:, 1]-v2[:, 1]) + v1[:, 0]*(v2[:, 1]-v0[:, 1]) + v2[:, 0]*(v0[:, 1]-v1[:, 1])
+        v0[:, 0] * (v1[:, 1] - v2[:, 1]) +
+        v1[:, 0] * (v2[:, 1] - v0[:, 1]) +
+        v2[:, 0] * (v0[:, 1] - v1[:, 1])
     )
     eps = max(float(np.linalg.norm(mesh.extents)) * 1e-12, 1e-12)
     tri2 = tri2[area2d > eps]
     if tri2.shape[0] == 0:
-        return 0.0, "empty"
+        return 0.0, "raster_empty"
 
-    # --- petit helper raster (mémoire bornée) ---
-    def raster_area_mm2(t2: np.ndarray) -> float:
-        bb_min = t2.reshape(-1, 2).min(axis=0)
-        bb_max = t2.reshape(-1, 2).max(axis=0)
-        span = (bb_max - bb_min)
-        # pas en mm/px basé sur la tessellation, borné
-        px_mm = max(TESSELLATION_TOL_MM, float(span.max()) / float(PA_RASTER_MAX_PIX - 2))
-        px_mm = float(np.clip(px_mm, PA_RASTER_PX_MM_MIN, PA_RASTER_PX_MM_MAX))
+    # Raster borné
+    bb_min = tri2.reshape(-1, 2).min(axis=0)
+    bb_max = tri2.reshape(-1, 2).max(axis=0)
+    span = (bb_max - bb_min)
+
+    # Pas en mm/pixel
+    px_mm = max(TESSELLATION_TOL_MM, float(span.max()) / 2048.0)
+    px_mm = float(np.clip(px_mm, PA_RASTER_PX_MM_MIN, PA_RASTER_PX_MM_MAX))
+
+    H = int(np.ceil(span[1] / px_mm)) + 2
+    W = int(np.ceil(span[0] / px_mm)) + 2
+    if H > PA_RASTER_MAX_PIX or W > PA_RASTER_MAX_PIX:
+        scale = max(H / PA_RASTER_MAX_PIX, W / PA_RASTER_MAX_PIX)
+        px_mm *= scale
         H = int(np.ceil(span[1] / px_mm)) + 2
         W = int(np.ceil(span[0] / px_mm)) + 2
-        # re-cap si besoin
-        if H > PA_RASTER_MAX_PIX or W > PA_RASTER_MAX_PIX:
-            scale = max(H / PA_RASTER_MAX_PIX, W / PA_RASTER_MAX_PIX)
-            px_mm *= scale
-            H = int(np.ceil(span[1] / px_mm)) + 2
-            W = int(np.ceil(span[0] / px_mm)) + 2
 
-        if not HAS_SKIMAGE:
-            # fallback minimal si skimage absent
-            return 0.0
+    mask = np.zeros((H, W), dtype=np.uint8)
 
-        mask = np.zeros((H, W), dtype=bool)
-        for t in t2:
+    if HAS_SKIMAGE:
+        for t in tri2:
             pts = (t - bb_min[None, :]) / px_mm
             rr, cc = _ski_polygon(pts[:, 1], pts[:, 0], shape=mask.shape)
-            mask[rr, cc] = True
-        return float(mask.sum()) * (px_mm ** 2)
+            mask[rr, cc] = 1
+    else:
+        # Fallback super-robuste: on peint le bbox du triangle (moins précis, mais borné)
+        gx = np.clip(((tri2[:, :, 0] - bb_min[0]) / px_mm).astype(np.int32), 0, W - 1)
+        gy = np.clip(((tri2[:, :, 1] - bb_min[1]) / px_mm).astype(np.int32), 0, H - 1)
+        for i in range(tri2.shape[0]):
+            ys = gy[i]; xs = gx[i]
+            r0, r1 = min(ys), max(ys)
+            c0, c1 = min(xs), max(xs)
+            mask[r0:r1 + 1, c0:c1 + 1] = 1
 
-    # Choix du backend
-    want_shapely = (
-        HAS_SHAPELY
-        and PA_BACKEND != "raster"
-        and (PA_BACKEND == "shapely" or tri2.shape[0] <= PA_SHAPELY_TRI_MAX)
-    )
-
-    if want_shapely:
-        try:
-            # union incrémentale pour limiter le pic mémoire
-            from shapely.geometry import Polygon
-            from shapely.ops import unary_union
-            CHUNK = 20000
-            acc = None
-            for i in range(0, tri2.shape[0], CHUNK):
-                batch = tri2[i:i+CHUNK]
-                polys = []
-                for t in batch:
-                    p0, p1, p2 = (t[0, 0], t[0, 1]), (t[1, 0], t[1, 1]), (t[2, 0], t[2, 1])
-                    if (p0 == p1) or (p1 == p2) or (p2 == p0):
-                        continue
-                    poly = Polygon([p0, p1, p2])
-                    if not poly.is_empty and poly.is_valid and poly.area > 0.0:
-                        polys.append(poly)
-                if not polys:
-                    continue
-                u = unary_union(polys)
-                acc = u if acc is None else acc.union(u)
-                # nettoie un peu entre les chunks
-                try:
-                    import gc
-                    del polys, u
-                    gc.collect()
-                except Exception:
-                    pass
-
-            area_mm2 = float(getattr(acc, "area", 0.0)) if acc is not None else 0.0
-            return round(area_mm2 / 100.0, 6), "shapely"
-        except MemoryError:
-            # on repasse en raster si GEOS explose en mémoire
-            pass
-        except Exception:
-            # autre erreur shapely -> raster
-            pass
-
-    # Raster (sécurisé)
-    area_mm2 = raster_area_mm2(tri2)
-    return round(area_mm2 / 100.0, 6), "raster_fallback"
+    area_mm2 = float(mask.sum()) * (px_mm ** 2)
+    return round(area_mm2 / 100.0, 6), "raster"
 
 
 # ---------- Thickness (optionnel) ----------
 def _estimate_thickness_mm(mesh: trimesh.Trimesh, samples: int = 30000) -> Tuple[Optional[float], Optional[float]]:
-    """
-    Estimation robuste de l'épaisseur locale.
-    Étapes :
-      1) échantillonne des points sur la surface + normales face_normals
-      2) décale un peu les points de part et d'autre de la surface (±delta)
-      3) garde les origines qui sont *dans* la matière via mesh.contains
-      4) depuis chaque origine intérieure, tire des rayons dans ±n et
-         prend la distance *la plus grande* (vers la paroi opposée)
-      5) combine les deux côtés, corrige le biais de delta, filtre les outliers
-    Fallback automatique si mesh.contains indisponible : double tir de rayons (ancienne logique).
-    """
     try:
-        # intersector rapide si dispo
+        samples = int(np.clip(int(samples), 2000, 50000))
         try:
             from trimesh.ray.ray_pyembree import RayMeshIntersector
             inter = RayMeshIntersector(mesh)
@@ -617,130 +534,48 @@ def _estimate_thickness_mm(mesh: trimesh.Trimesh, samples: int = 30000) -> Tuple
             from trimesh.ray.ray_triangle import RayMeshIntersector
             inter = RayMeshIntersector(mesh)
 
-        # 1) échantillons surfaciques + normales correspondantes
         pts, f_idx = trimesh.sample.sample_surface_even(mesh, samples)
+        if len(pts) == 0:
+            return None, None
         n = mesh.face_normals[f_idx]
 
-        # 2) petit décalage géométrique
-        ext_min = float(mesh.extents.min())
-        diag = float(np.linalg.norm(mesh.bounds[1] - mesh.bounds[0]))
-        # delta ~ 0.1% de la plus petite dimension (borné)
-        delta = max(ext_min * 1e-3, 5e-4)     # en mm
-        eps   = max(diag * 1e-6, 1e-6)
-        cap   = ext_min * 2.0                 # garde-fou physique
+        bb = mesh.bounds
+        diag = float(np.linalg.norm(bb[1] - bb[0]))
+        eps = max(diag * 1e-5, 1e-6)
+        origins_p = pts + n * eps
+        origins_m = pts - n * eps
 
-        ori_a = pts - n * delta   # côté "−n"
-        ori_b = pts + n * delta   # côté "+n"
+        loc_p, ir_p, it_p = inter.intersects_location(origins_p, n, multiple_hits=False)
+        loc_m, ir_m, it_m = inter.intersects_location(origins_m, -n, multiple_hits=False)
 
-        # 3) garde les origines *intérieures* uniquement
-        use_contains = True
-        inside_a = inside_b = None
-        try:
-            inside_a = mesh.contains(ori_a)
-            inside_b = mesh.contains(ori_b)
-        except Exception:
-            use_contains = False
+        dist = np.full(len(pts), np.inf)
 
-        # petit helper pour tirer 2 rayons et garder la distance max (vers paroi opposée)
-        def shot_max(origin, normal):
-            # 2 tirs opposés
-            loc1, i1, _ = inter.intersects_location(origin,  normal, multiple_hits=False)
-            loc2, i2, _ = inter.intersects_location(origin, -normal, multiple_hits=False)
+        if len(ir_p):
+            d = np.linalg.norm(loc_p - origins_p[ir_p], axis=1)
+            nf = mesh.face_normals[it_p]
+            good = (np.einsum("ij,ij->i", nf, n[ir_p]) < -0.1)
+            d[~good] = np.inf
+            dist[ir_p] = np.minimum(dist[ir_p], d)
 
-            d = np.full(len(origin), np.nan)
+        if len(ir_m):
+            d = np.linalg.norm(loc_m - origins_m[ir_m], axis=1)
+            nf = mesh.face_normals[it_m]
+            good = (np.einsum("ij,ij->i", nf, -n[ir_m]) < -0.1)
+            d[~good] = np.inf
+            dist[ir_m] = np.minimum(dist[ir_m], d)
 
-            if len(i1):
-                d1 = np.linalg.norm(loc1 - origin[i1], axis=1)
-                # élimine les auto-touches (~delta) et les distances trop petites
-                d1[d1 < (delta * 0.5)] = np.nan
-            else:
-                d1 = np.array([])
-
-            if len(i2):
-                d2 = np.linalg.norm(loc2 - origin[i2], axis=1)
-                d2[d2 < (delta * 0.5)] = np.nan
-            else:
-                d2 = np.array([])
-
-            if len(i1):
-                d[i1] = d1
-            if len(i2):
-                if np.issubdtype(d.dtype, np.floating):
-                    # combine par max entre les deux directions quand les deux existent
-                    if len(i1):
-                        # indices communs
-                        # construit deux tableaux pleins puis prend le nanmax
-                        tmp = np.full(len(origin), np.nan)
-                        tmp[i2] = d2
-                        d = np.nanmax(np.vstack([d, tmp]), axis=0)
-                    else:
-                        d[i2] = d2
-                else:
-                    d[i2] = d2
-
-            return d  # distances (peuvent contenir NaN)
-
-        if use_contains:
-            # 4) tirs seulement depuis l'intérieur
-            idx_a = np.where(inside_a)[0]
-            idx_b = np.where(inside_b)[0]
-
-            dA = shot_max(ori_a[idx_a], n[idx_a]) if idx_a.size else np.array([])
-            dB = shot_max(ori_b[idx_b], n[idx_b]) if idx_b.size else np.array([])
-
-            # reconstruit un vecteur épaisseurs par échantillon (NaN ailleurs)
-            thick = np.full(len(pts), np.nan)
-            if idx_a.size:
-                thick[idx_a] = dA
-            if idx_b.size:
-                # quand on a deux estimations, on garde la plus grande (plus proche de t - delta)
-                if idx_a.size:
-                    comb = np.full(len(pts), np.nan)
-                    comb[idx_b] = dB
-                    thick = np.nanmax(np.vstack([thick, comb]), axis=0)
-                else:
-                    thick[idx_b] = dB
-
-            # corrige le biais du décalage (~ t - delta) -> +delta
-            if np.any(np.isfinite(thick)):
-                thick = thick + delta
-        else:
-            # Fallback : ancienne logique "double face" simplifiée (pas de contains)
-            ori_p = pts + n * eps
-            ori_m = pts - n * eps
-            loc_p, ip, _ = inter.intersects_location(ori_p,  n, multiple_hits=False)
-            loc_m, im, _ = inter.intersects_location(ori_m, -n, multiple_hits=False)
-
-            thick = np.full(len(pts), np.nan)
-            if len(ip):
-                d = np.linalg.norm(loc_p - ori_p[ip], axis=1)
-                thick[ip] = d
-            if len(im):
-                dm = np.linalg.norm(loc_m - ori_m[im], axis=1)
-                if len(ip):
-                    tmp = np.full(len(pts), np.nan); tmp[im] = dm
-                    thick = np.nanmax(np.vstack([thick, tmp]), axis=0)
-                else:
-                    thick[im] = dm
-
-        # 5) nettoyage + stats robustes
-        good = np.isfinite(thick) & (thick > eps) & (thick < cap)
-        thick = thick[good]
-        if thick.size == 0:
+        d = dist[np.isfinite(dist)]
+        d = d[d > eps * 5]
+        if d.size == 0:
             return None, None
 
-        # coupe les outliers agressifs
-        lo, hi = np.percentile(thick, [0.5, 99.5])
-        sel = thick[(thick >= lo) & (thick <= hi)]
-        if sel.size == 0:
-            sel = thick
-
-        tmin = float(sel.min())
-        tmax = float(min(sel.max(), ext_min))
-        return round(tmin, 4), round(tmax, 4)
-
+        lo = np.percentile(d, 0.5)
+        hi = np.percentile(d, 99.5)
+        d = d[(d >= lo) & (d <= hi)]
+        return round(float(np.min(d)), 4), round(float(np.percentile(d, 99.0)), 4)
     except Exception:
         return None, None
+
 
 
 # ---------- Caches & Redis ----------
@@ -842,10 +677,16 @@ def compute_and_cache_stats(
 
     # 5) Aire projetée (silhouette / union 2D)
     if _deadline_reached(t0):
-        raise TimeoutError("deadline before projected_area")
-    bump_stage("projected_area_begin", {"axis": axis})
+    raise TimeoutError("deadline before projected_area")
+bump_stage("projected_area_begin", {"axis": axis})
+try:
     proj_cm2, pa_method = _projected_area_union_cm2(mesh, axis)
-    bump_stage("projected_area_ok", {"projected_area_cm2": proj_cm2, "pa_method": pa_method})
+except MemoryError:
+    proj_cm2, pa_method = 0.0, "raster_oom"
+except Exception:
+    proj_cm2, pa_method = 0.0, "raster_error"
+bump_stage("projected_area_ok", {"projected_area_cm2": proj_cm2, "pa_method": pa_method})
+
 
     # 6) Épaisseurs (optionnel)
     tmin = tmax = None
