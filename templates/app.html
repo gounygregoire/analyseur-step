@@ -1,418 +1,403 @@
-<!doctype html>
-<html lang="fr">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Analyse & Visualisation 3D — xeokit</title>
+<!-- ===================== MODALE MATIÈRE (Bootstrap) ===================== -->
+<div id="materialModal" class="modal fade" tabindex="-1" aria-hidden="true" data-role="material" data-bs-backdrop="static" aria-labelledby="materialModalTitle">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable">
+    <div class="modal-content">
 
-  <!-- Style global -->
-  <link rel="stylesheet" href="/static/css/style.css" />
+      <!-- Header -->
+      <div class="modal-header">
+        <div class="d-flex align-items-center gap-3">
+          <h5 id="materialModalTitle" class="modal-title mb-0">Critères matière</h5>
 
-  <!-- Bootstrap CSS (obligatoire pour la modale overlay) -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
-
-  <!-- Icônes Bootstrap (pour <i class="bi ..."> dans le bouton) -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
-
-  <!-- Style léger pour le trièdre d'axes -->
-  <style>
-    .axis-overlay{
-      position:absolute; left:18px; top:90px;
-      width:84px; height:84px; z-index:6;
-      pointer-events:none; opacity:.9;
-      border-radius:12px; backdrop-filter: blur(2px);
-    }
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <h2>Analyse & Visualisation 3D <small style="opacity:.6">xeokit + XKT</small></h2>
-
-    <div class="grid">
-      <!-- Panneau gauche -->
-      <div class="card">
-        <div class="pane">
-          <h4 style="margin:6px 0 10px">Fichiers</h4>
-          <div class="row mini">
-            <button id="btnChoose" class="btn mini">CHOISIR</button>
-            <button id="btnVisualiser" class="btn mini">VISUALISER</button>
-            <label class="row mini" style="margin-left:auto">
-              <input id="chkAdditive" type="checkbox" />
-              <span>Ajouter (multi-modèles)</span>
-            </label>
-          </div>
-          <input id="fileInput" type="file" style="display:none" accept=".stp,.step,.stl,.xkt" />
-          <div id="fileName" style="font-size:12px;color:#777;margin-top:6px"></div>
-        </div>
-
-        <div class="pane">
-          <h4 style="margin:6px 0 10px">Navigation</h4>
-          <div class="row mini">
-            <button id="btnFit" class="btn mini">FIT</button>
-            <button id="btnProj" class="btn mini">PERSPECTIVE</button>
-          </div>
-          <div class="row mini" style="margin-top:6px">
-            <label><input id="chkEdges" type="checkbox" checked /> Arêtes</label>
-            <label><input id="chkXray" type="checkbox" /> X-ray</label>
-            <label><input id="chkGhost" type="checkbox" /> Ghost</label>
-          </div>
-          <div class="row mini">
-            <label><input id="chkTheme" type="checkbox" /> Thème sombre</label>
+          <!-- Presets (accélérateurs) -->
+          <div class="input-group input-group-sm" style="width:auto;">
+            <span class="input-group-text">Preset</span>
+            <select id="materialPreset" class="form-select form-select-sm">
+              <option value="">— choisir —</option>
+              <option value="outdoor_uv">Capot extérieur (UV/Intempéries)</option>
+              <option value="clip_flexible">Pièce clipsée / flexion</option>
+              <option value="medical_sterile">Médical stérilisable</option>
+              <option value="charniere_film">Charnière film</option>
+              <option value="optique_transparente">Transparence optique</option>
+              <option value="electrique_cti">Électrique CTI élevé</option>
+            </select>
           </div>
         </div>
 
-        <div class="pane">
-          <h4 style="margin:6px 0 10px">Sélection</h4>
-          <div class="row mini">
-            <button id="btnIsolate" class="btn mini">ISOLER</button>
-            <button id="btnHide" class="btn mini">CACHER</button>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
+      </div>
+
+      <!-- Body -->
+      <div class="modal-body">
+        <form id="materialQuestionnaireForm" class="pb-2">
+
+          <!-- Résumé dynamique -->
+          <div id="criteriaSummary" class="small text-muted mb-3">
+            <span class="me-3"><span class="badge bg-success-subtle border text-success" id="critOK">Validés: 0</span></span>
+            <span class="me-3"><span class="badge bg-warning-subtle border text-warning" id="critWARN">Avertissements: 0</span></span>
+            <span><span class="badge bg-danger-subtle border text-danger" id="critBLOCK">Bloquants: 0</span></span>
           </div>
-          <div class="row mini">
-            <button id="btnShowOnly" class="btn mini">MONTRER SEUL</button>
-            <button id="btnClearSel" class="btn mini">TOUT MONTRER</button>
-          </div>
-          <div class="row mini" style="margin-top:8px">
-            <label>Opacité</label>
-            <input id="opacityRange" type="range" min="0.05" max="1" step="0.05" value="1" />
-          </div>
+
+          <!-- ===== Contexte d’usage (nouveau) ===== -->
+          <fieldset class="mb-4">
+            <legend class="fs-6 mb-2">Contexte d’usage</legend>
+
+            <div class="row g-3">
+              <!-- Température service -->
+              <div class="col-12 col-md-6">
+                <label for="tempServiceMax" class="form-label mb-1">Température service max (°C)</label>
+                <div class="d-flex align-items-center gap-2">
+                  <input type="range" class="form-range" id="tempServiceMax" min="20" max="200" step="5" value="60">
+                  <span class="badge bg-light border text-muted" id="tempServiceMaxVal">60°C</span>
+                </div>
+              </div>
+
+              <!-- Exposition UV -->
+              <div class="col-6 col-md-3">
+                <div class="form-check form-switch mt-4">
+                  <input class="form-check-input" type="checkbox" id="expoUV">
+                  <label class="form-check-label" for="expoUV">Exposition UV / extérieur</label>
+                </div>
+              </div>
+
+              <!-- Immersion/Humidité -->
+              <div class="col-6 col-md-3">
+                <div class="form-check form-switch mt-4">
+                  <input class="form-check-input" type="checkbox" id="expoHumidite">
+                  <label class="form-check-label" for="expoHumidite">Humidité / immersion</label>
+                </div>
+              </div>
+
+              <!-- Chimie -->
+              <div class="col-12">
+                <label class="form-label mb-1">Exposition chimique</label>
+                <div class="d-flex flex-wrap gap-2" id="chimieTags">
+                  <!-- tags clicables (HTML pur, la logique peut être dans criteria-modal.js) -->
+                  <input type="checkbox" class="btn-check" id="chem_huiles" autocomplete="off">
+                  <label class="btn btn-sm btn-outline-secondary" for="chem_huiles">Huiles</label>
+
+                  <input type="checkbox" class="btn-check" id="chem_solvents" autocomplete="off">
+                  <label class="btn btn-sm btn-outline-secondary" for="chem_solvents">Solvants</label>
+
+                  <input type="checkbox" class="btn-check" id="chem_alcool" autocomplete="off">
+                  <label class="btn btn-sm btn-outline-secondary" for="chem_alcool">Alcool</label>
+
+                  <input type="checkbox" class="btn-check" id="chem_detergents" autocomplete="off">
+                  <label class="btn btn-sm btn-outline-secondary" for="chem_detergents">Détergents</label>
+
+                  <input type="checkbox" class="btn-check" id="chem_eausalee" autocomplete="off">
+                  <label class="btn btn-sm btn-outline-secondary" for="chem_eausalee">Eau salée</label>
+                </div>
+              </div>
+            </div>
+          </fieldset>
+
+          <!-- ===== Réglementaire & coût (nouveau) ===== -->
+          <fieldset class="mb-4">
+            <legend class="fs-6 mb-2">Réglementaire & coût</legend>
+            <div class="row g-3">
+              <div class="col-12 col-md-4">
+                <label for="ul94" class="form-label mb-1">UL94 (inflammabilité)</label>
+                <select id="ul94" class="form-select form-select-sm">
+                  <option value="">Indifférent</option>
+                  <option value="HB">HB</option>
+                  <option value="V-2">V-2</option>
+                  <option value="V-1">V-1</option>
+                  <option value="V-0">V-0</option>
+                </select>
+              </div>
+
+              <div class="col-12 col-md-4">
+                <label for="prixCible" class="form-label mb-1">Prix cible (€/kg)</label>
+                <div class="d-flex align-items-center gap-2">
+                  <input type="range" class="form-range" id="prixCible" min="2" max="60" step="1" value="8">
+                  <span class="badge bg-light border text-muted" id="prixCibleVal">8 €/kg</span>
+                </div>
+              </div>
+
+              <div class="col-12 col-md-4">
+                <label for="regionConformite" class="form-label mb-1">Zone / Conformité</label>
+                <select id="regionConformite" class="form-select form-select-sm">
+                  <option value="">Indifférent</option>
+                  <option value="UE">UE (REACH/ROHS, EU 10/2011)</option>
+                  <option value="US">US (FDA, UL, Prop65)</option>
+                </select>
+              </div>
+            </div>
+          </fieldset>
+
+          <!-- ===== Process & pièce (nouveau) ===== -->
+          <fieldset class="mb-4">
+            <legend class="fs-6 mb-2">Process & pièce</legend>
+            <div class="row g-3">
+              <div class="col-12 col-md-4">
+                <label for="process" class="form-label mb-1">Process envisagé</label>
+                <select id="process" class="form-select form-select-sm">
+                  <option value="injection">Injection plastique</option>
+                  <option value="usinage">Usinage</option>
+                  <option value="impression3d">Impression 3D</option>
+                </select>
+              </div>
+              <div class="col-12 col-md-4">
+                <label for="epMin" class="form-label mb-1">Épaisseur pièce (min, mm)</label>
+                <input id="epMin" type="number" step="0.1" min="0" class="form-control form-control-sm" placeholder="ex. 0.8">
+              </div>
+              <div class="col-12 col-md-4">
+                <label for="features" class="form-label mb-1">Spécificités</label>
+                <select id="features" class="form-select form-select-sm" multiple>
+                  <option value="snapfits">Encliquetages</option>
+                  <option value="hinge">Charnière film</option>
+                  <option value="overmold">Surmoulage</option>
+                  <option value="transparent">Zone transparente</option>
+                  <option value="inserts">Inserts laiton</option>
+                </select>
+              </div>
+            </div>
+          </fieldset>
+
+          <!-- ===== Critères mécaniques / esthétiques (avec priorité) ===== -->
+          <fieldset class="mb-3">
+            <legend class="fs-6 mb-2">Contraintes mécaniques</legend>
+
+            <!-- Utility: un item = checkbox + select priorité -->
+            <div class="row g-2 align-items-center mb-1">
+              <div class="col">
+                <div class="form-check">
+                  <input class="form-check-input criterion" type="checkbox" id="rigidite_elevee" data-section="meca">
+                  <label class="form-check-label" for="rigidite_elevee">Rigidité élevée</label>
+                </div>
+              </div>
+              <div class="col-auto">
+                <select class="form-select form-select-sm priority" data-for="rigidite_elevee">
+                  <option value="should">Should</option>
+                  <option value="must">Must</option>
+                  <option value="nice">Nice</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="row g-2 align-items-center mb-1">
+              <div class="col">
+                <div class="form-check">
+                  <input class="form-check-input criterion" type="checkbox" id="flexibilite" data-section="meca">
+                  <label class="form-check-label" for="flexibilite">Flexibilité</label>
+                </div>
+              </div>
+              <div class="col-auto">
+                <select class="form-select form-select-sm priority" data-for="flexibilite">
+                  <option value="should">Should</option>
+                  <option value="must">Must</option>
+                  <option value="nice">Nice</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="row g-2 align-items-center mb-1">
+              <div class="col">
+                <div class="form-check">
+                  <input class="form-check-input criterion" type="checkbox" id="resistance_chocs" data-section="meca">
+                  <label class="form-check-label" for="resistance_chocs">Résistance aux chocs</label>
+                </div>
+              </div>
+              <div class="col-auto">
+                <select class="form-select form-select-sm priority" data-for="resistance_chocs">
+                  <option value="should">Should</option>
+                  <option value="must">Must</option>
+                  <option value="nice">Nice</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="row g-2 align-items-center mb-1">
+              <div class="col">
+                <div class="form-check">
+                  <input class="form-check-input criterion" type="checkbox" id="flexion" data-section="meca">
+                  <label class="form-check-label" for="flexion">Flexion</label>
+                </div>
+              </div>
+              <div class="col-auto">
+                <select class="form-select form-select-sm priority" data-for="flexion">
+                  <option value="should">Should</option>
+                  <option value="must">Must</option>
+                  <option value="nice">Nice</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="row g-2 align-items-center mb-1">
+              <div class="col">
+                <div class="form-check">
+                  <input class="form-check-input criterion" type="checkbox" id="traction" data-section="meca">
+                  <label class="form-check-label" for="traction">Traction</label>
+                </div>
+              </div>
+              <div class="col-auto">
+                <select class="form-select form-select-sm priority" data-for="traction">
+                  <option value="should">Should</option>
+                  <option value="must">Must</option>
+                  <option value="nice">Nice</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="row g-2 align-items-center mb-1">
+              <div class="col">
+                <div class="form-check">
+                  <input class="form-check-input criterion" type="checkbox" id="usure" data-section="meca">
+                  <label class="form-check-label" for="usure">Usure / frottement</label>
+                </div>
+              </div>
+              <div class="col-auto">
+                <select class="form-select form-select-sm priority" data-for="usure">
+                  <option value="should">Should</option>
+                  <option value="must">Must</option>
+                  <option value="nice">Nice</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="row g-2 align-items-center">
+              <div class="col">
+                <div class="form-check">
+                  <input class="form-check-input criterion" type="checkbox" id="fatigue" data-section="meca">
+                  <label class="form-check-label" for="fatigue">Fatigue</label>
+                </div>
+              </div>
+              <div class="col-auto">
+                <select class="form-select form-select-sm priority" data-for="fatigue">
+                  <option value="should">Should</option>
+                  <option value="must">Must</option>
+                  <option value="nice">Nice</option>
+                </select>
+              </div>
+            </div>
+          </fieldset>
+
+          <fieldset class="mb-4">
+            <legend class="fs-6 mb-2">Esthétique</legend>
+
+            <div class="row g-2 align-items-center mb-1">
+              <div class="col">
+                <div class="form-check">
+                  <input class="form-check-input criterion" type="checkbox" id="transparence" data-section="aesthetic">
+                  <label class="form-check-label" for="transparence">Transparence</label>
+                </div>
+              </div>
+              <div class="col-auto">
+                <select class="form-select form-select-sm priority" data-for="transparence">
+                  <option value="should">Should</option>
+                  <option value="must">Must</option>
+                  <option value="nice">Nice</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="row g-2 align-items-center mb-1">
+              <div class="col">
+                <div class="form-check">
+                  <input class="form-check-input criterion" type="checkbox" id="qualite_surface" data-section="aesthetic">
+                  <label class="form-check-label" for="qualite_surface">Qualité de surface</label>
+                </div>
+              </div>
+              <div class="col-auto">
+                <select class="form-select form-select-sm priority" data-for="qualite_surface">
+                  <option value="should">Should</option>
+                  <option value="must">Must</option>
+                  <option value="nice">Nice</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="row g-2 align-items-center mb-1">
+              <div class="col">
+                <div class="form-check">
+                  <input class="form-check-input criterion" type="checkbox" id="texture_possible" data-section="aesthetic">
+                  <label class="form-check-label" for="texture_possible">Texture possible</label>
+                </div>
+              </div>
+              <div class="col-auto">
+                <select class="form-select form-select-sm priority" data-for="texture_possible">
+                  <option value="should">Should</option>
+                  <option value="must">Must</option>
+                  <option value="nice">Nice</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="row g-2 align-items-center">
+              <div class="col">
+                <div class="form-check">
+                  <input class="form-check-input criterion" type="checkbox" id="finition_bril" data-section="aesthetic">
+                  <label class="form-check-label" for="finition_bril">Finition brillante</label>
+                </div>
+              </div>
+              <div class="col-auto">
+                <select class="form-select form-select-sm priority" data-for="finition_bril">
+                  <option value="should">Should</option>
+                  <option value="must">Must</option>
+                  <option value="nice">Nice</option>
+                </select>
+              </div>
+            </div>
+          </fieldset>
+
+          <!-- ===== Réglementaire (cases simples conservées) ===== -->
+          <fieldset class="mb-2">
+            <legend class="fs-6 mb-2">Réglementaire (déclarations)</legend>
+            <div class="row g-3">
+              <div class="col-6 col-md-3">
+                <div class="form-check">
+                  <input class="form-check-input criterion" type="checkbox" id="contact_alimentaire" data-section="regulatory">
+                  <label class="form-check-label" for="contact_alimentaire">Contact alimentaire</label>
+                </div>
+              </div>
+              <div class="col-6 col-md-3">
+                <div class="form-check">
+                  <input class="form-check-input criterion" type="checkbox" id="qualite_medicale" data-section="regulatory">
+                  <label class="form-check-label" for="qualite_medicale">Qualité médicale</label>
+                </div>
+              </div>
+              <div class="col-6 col-md-3">
+                <div class="form-check">
+                  <input class="form-check-input criterion" type="checkbox" id="retardateur_flamme" data-section="regulatory">
+                  <label class="form-check-label" for="retardateur_flamme">Retardateur de flamme</label>
+                </div>
+              </div>
+              <div class="col-6 col-md-3">
+                <div class="form-check">
+                  <input class="form-check-input criterion" type="checkbox" id="proprietes_elec" data-section="regulatory">
+                  <label class="form-check-label" for="proprietes_elec">Propriétés électriques</label>
+                </div>
+              </div>
+            </div>
+          </fieldset>
+        </form>
+
+        <!-- Alerte conflits et tips -->
+        <div id="criteriaConflicts" class="alert alert-warning d-none small mb-3">
+          <i class="bi bi-exclamation-triangle me-2"></i>
+          Certains choix semblent en conflit (ex. Transparence stricte + charge GF). Ajuste les priorités.
         </div>
 
-        <div class="pane">
-          <h4 style="margin:6px 0 10px">Recherche</h4>
-          <div class="row mini">
-            <input id="searchInput" type="search" placeholder="ID / TYPE / NOM..." />
-            <button id="btnSearch" class="btn mini">RECHERCHER</button>
-          </div>
-          <div id="results" style="font-size:12px;margin-top:6px"></div>
-        </div>
-
-        <div class="pane">
-          <h4 style="margin:6px 0 10px">Propriétés</h4>
-          <div id="propsPanel" style="display:grid;grid-template-columns:120px 1fr;gap:6px;font-size:12px"></div>
+        <!-- Shortlist / “Pourquoi” (remplie côté JS) -->
+        <div id="materialShortlist" class="d-none">
+          <hr class="my-3">
+          <h6 class="mb-2">Top 3 matières recommandées</h6>
+          <div id="shortlistCards" class="row g-3"></div>
+          <details class="mt-2">
+            <summary class="small">Pourquoi ces recommandations ?</summary>
+            <div id="whyReco" class="small text-muted mt-2"></div>
+          </details>
         </div>
       </div>
 
-      <!-- Viewer + Analyse -->
-      <div class="card">
-        <!-- Barre d’outils viewer -->
-        <div class="pane row mini" style="margin-bottom:0">
-          <button id="btnMeasure" class="btn btn-outline mini">MESURE</button>
-          <button id="btnAnnot" class="btn btn-outline mini">ANNOTATION</button>
-
-          <button class="btn btn-outline mini clipAxis" data-axis="x">COUPE X</button>
-          <button class="btn btn-outline mini clipAxis" data-axis="y">COUPE Y</button>
-          <button class="btn btn-outline mini clipAxis" data-axis="z">COUPE Z</button>
-          <input id="clipRange" type="range" min="-100" max="100" value="0" />
-          <div style="flex:1"></div>
-          <button id="btnShot" class="btn btn-outline mini">SCREENSHOT</button>
-        </div>
-
-        <!-- Zone viewer -->
-        <div id="viewerShell" class="pane" style="padding-top:8px">
-          <div id="viewerContainer">
-            <canvas id="xeokit-canvas"></canvas>
-            <!-- Overlay pour UI flottantes -->
-            <div id="overlayHost"></div>
-
-            <!-- Trièdre d'axes -->
-            <div id="axisOverlay" class="axis-overlay">
-              <canvas id="axisCanvas" width="84" height="84"></canvas>
-            </div>
-          </div>
-
-          <!-- === Panneau Analyse === -->
-          <div id="analysisPanel" class="pane" style="margin-top:12px;padding:10px;border-radius:10px;background:#fafafa;border:1px solid #eee">
-            <div class="row mini" style="gap:16px;align-items:center;flex-wrap:wrap">
-              <div style="display:flex;align-items:baseline;gap:6px">
-                <div style="font-size:12px;color:#666">Volume</div>
-                <div id="volVal" style="font-weight:600">—</div>
-                <div style="font-size:12px;color:#666">cm³</div>
-              </div>
-
-              <div style="display:flex;align-items:baseline;gap:6px">
-                <div style="font-size:12px;color:#666">Épaisseur min</div>
-                <div id="tminVal" style="font-weight:600">—</div>
-                <div style="font-size:12px;color:#666">mm</div>
-              </div>
-
-              <div style="display:flex;align-items:baseline;gap:6px">
-                <div style="font-size:12px;color:#666">Épaisseur max</div>
-                <div id="tmaxVal" style="font-weight:600">—</div>
-                <div style="font-size:12px;color:#666">mm</div>
-              </div>
-            </div>
-
-            <div class="row mini" style="gap:16px;align-items:center;flex-wrap:wrap;margin-top:8px">
-              <div style="display:flex;align-items:baseline;gap:6px">
-                <div style="font-size:12px;color:#666">Surface projetée</div>
-                <div id="projVal" style="font-weight:600">—</div>
-                <div style="font-size:12px;color:#666">cm²</div>
-                <span style="font-size:11px;color:#8a8a8a;margin-left:8px">
-                  (Changer d’axe peut prendre quelques secondes à s’afficher)
-                </span>
-              </div>
-
-              <div class="row mini" style="gap:10px;align-items:center">
-                <span style="font-size:12px;color:#666">Axe :</span>
-                <label style="display:flex;align-items:center;gap:6px">
-                  <input type="radio" name="projAxis" id="axisX" value="X" /> <span>X</span>
-                </label>
-                <label style="display:flex;align-items:center;gap:6px">
-                  <input type="radio" name="projAxis" id="axisY" value="Y" /> <span>Y</span>
-                </label>
-                <label style="display:flex;align-items:center;gap:6px">
-                  <input type="radio" name="projAxis" id="axisZ" value="Z" checked /> <span>Z</span>
-                </label>
-              </div>
-            </div>
-          </div>
-          <!-- === /Panneau Analyse === -->
-
-          <!-- Bouton Analyser -->
-          <div id="analysisBar" class="analysis-bar" style="margin-top:12px; display:flex; gap:8px; align-items:center;">
-            <button id="btnAnalyser" type="button" class="btn btn-success">🔎 Analyser</button>
-            <span id="analysisHint" style="font-size:0.9rem; opacity:0.8;">
-              Choisis tes critères et obtiens 3 matières recommandées.
-            </span>
-          </div>
-
-          <!-- Progression -->
-          <div class="row mini" style="margin-top:10px;opacity:.8">
-            <div style="font-size:12px">Progression</div>
-            <div style="flex:1;background:#eef0f3;height:6px;border-radius:4px;overflow:hidden">
-              <div id="progressBar" style="height:100%;background:#c2d6ff;width:0%"></div>
-            </div>
-          </div>
-        </div>
+      <!-- Footer -->
+      <div class="modal-footer">
+        <button id="materialConfirmBtn" type="button" class="btn btn-primary">
+          <i class="bi bi-magic me-2"></i>Analyser et recommander
+        </button>
       </div>
-      <!-- /Viewer + Analyse -->
-    </div> <!-- /grid -->
-  </div> <!-- /wrap -->
 
-  <!-- IMPORTANT : main.js est un module car il contient des "import" -->
-  <script type="module" src="/static/js/main.js"></script>
-
-  <!-- Dessin trièdre (inchangé) -->
-  <script type="module">
-    function drawAxes(selected='Z'){
-      const canvas = document.getElementById('axisCanvas');
-      if(!canvas) return;
-      const ctx = canvas.getContext('2d');
-      const W=canvas.width, H=canvas.height, cx=W/2, cy=H/2, L=26;
-      ctx.clearRect(0,0,W,H);
-      ctx.fillStyle = 'rgba(255,255,255,.35)'; ctx.fillRect(0,0,W,H);
-      function arrow(x1,y1,x2,y2,label,color){
-        ctx.strokeStyle=color; ctx.lineWidth=2;
-        ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
-        const ang = Math.atan2(y2-y1, x2-x1);
-        ctx.beginPath();
-        ctx.moveTo(x2,y2);
-        ctx.lineTo(x2-6*Math.cos(ang-0.5), y2-6*Math.sin(ang-0.5));
-        ctx.lineTo(x2-6*Math.cos(ang+0.5), y2-6*Math.sin(ang+0.5));
-        ctx.closePath(); ctx.fillStyle=color; ctx.fill();
-        ctx.font='12px Inter, system-ui, sans-serif'; ctx.fillStyle=color;
-        ctx.fillText(label, x2+4, y2+4);
-      }
-      const dim = '#9aa3af', sel = '#111827';
-      const cX = (selected==='X') ? sel : dim;
-      const cY = (selected==='Y') ? sel : dim;
-      const cZ = (selected==='Z') ? sel : dim;
-      arrow(cx,cy, cx+L,cy,        'X', cX);
-      arrow(cx,cy, cx,cy-L,        'Y', cY);
-      arrow(cx,cy, cx-0.7*L,cy+0.7*L, 'Z', cZ);
-    }
-    drawAxes('Z');
-    document.addEventListener('change', (ev)=>{
-      const t = ev.target;
-      if (t && t.name === 'projAxis') drawAxes(t.value);
-    });
-  </script>
-
-  <script type="module">
-    (function(){
-      const canvas = document.getElementById('axisCanvas');
-      if(!canvas) return;
-      const ctx = canvas.getContext('2d');
-      const W = canvas.width, H = canvas.height;
-      const cx = W/2, cy = H/2, L = 26;
-      function arrow(dx,dy,label,color){
-        const x1=cx, y1=cy;
-        const x2=cx + dx*L, y2=cy + dy*L;
-        ctx.strokeStyle=color; ctx.lineWidth=2;
-        ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
-        const ang = Math.atan2(y2-y1, x2-x1);
-        ctx.beginPath(); ctx.moveTo(x2,y2);
-        ctx.lineTo(x2-6*Math.cos(ang-0.5), y2-6*Math.sin(ang-0.5));
-        ctx.lineTo(x2-6*Math.cos(ang+0.5), y2-6*Math.sin(ang+0.5));
-        ctx.closePath(); ctx.fillStyle=color; ctx.fill();
-        ctx.font='12px Inter, system-ui, sans-serif'; ctx.fillStyle=color;
-        ctx.fillText(label, x2+4, y2+4);
-      }
-      function drawAxesFromView(mV){
-        if (!mV) return;
-        const mv = (x,y,z)=>[
-          mV[0]*x + mV[4]*y + mV[8]*z,
-          mV[1]*x + mV[5]*y + mV[9]*z,
-          mV[2]*x + mV[6]*y + mV[10]*z
-        ];
-        const vX = mv(1,0,0), vY = mv(0,1,0), vZ = mv(0,0,1);
-        const norm2 = ([x,y]) => { const n = Math.hypot(x,y) || 1; return [x/n, y/n]; };
-        const dX = norm2([ vX[0], -vX[1] ]);
-        const dY = norm2([ vY[0], -vY[1] ]);
-        const dZ = norm2([ vZ[0], -vZ[1] ]);
-        const selected = (document.querySelector('input[name="projAxis"]:checked')?.value) || 'Z';
-        const dim = '#9aa3af', sel = '#111827';
-        const cX = (selected==='X') ? sel : dim;
-        const cY = (selected==='Y') ? sel : dim;
-        const cZ = (selected==='Z') ? sel : dim;
-        ctx.clearRect(0,0,W,H);
-        ctx.fillStyle='rgba(255,255,255,.35)'; ctx.fillRect(0,0,W,H);
-        arrow(dX[0], dX[1], 'X', cX);
-        arrow(dY[0], dY[1], 'Y', cY);
-        arrow(dZ[0], dZ[1], 'Z', cZ);
-      }
-      window.__drawAxesFromView = drawAxesFromView;
-      drawAxesFromView([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
-      document.addEventListener('change', (ev)=>{
-        const t = ev.target;
-        if (t && t.name === 'projAxis' && window.__lastViewMatrix) {
-          drawAxesFromView(window.__lastViewMatrix);
-        }
-      });
-    })();
-  </script>
-
-  <script type="module" src="/static/js/ping.js"></script>
-
-  <!-- ===================== MODALE MATIÈRE (Bootstrap) ===================== -->
-  <div id="materialModal" class="modal fade" tabindex="-1" aria-hidden="true" data-role="material">
-    <div class="modal-dialog modal-lg modal-dialog-scrollable">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h5 class="modal-title">Critères matière</h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
-        </div>
-
-        <div class="modal-body">
-          <form id="materialQuestionnaireForm">
-            <div id="criteriaSummary" class="small text-muted mb-2"></div>
-
-            <fieldset class="mb-3">
-              <legend class="fs-6">Contraintes mécaniques</legend>
-              <div class="form-check">
-                <input class="form-check-input criterion" type="checkbox" id="rigidite_elevee" data-section="meca">
-                <label class="form-check-label" for="rigidite_elevee">Rigidité élevée</label>
-              </div>
-              <div class="form-check">
-                <input class="form-check-input criterion" type="checkbox" id="flexibilite" data-section="meca">
-                <label class="form-check-label" for="flexibilite">Flexibilité</label>
-              </div>
-              <div class="form-check">
-                <input class="form-check-input criterion" type="checkbox" id="resistance_chocs" data-section="meca">
-                <label class="form-check-label" for="resistance_chocs">Résistance aux chocs</label>
-              </div>
-              <div class="form-check">
-                <input class="form-check-input criterion" type="checkbox" id="flexion" data-section="meca">
-                <label class="form-check-label" for="flexion">Flexion</label>
-              </div>
-              <div class="form-check">
-                <input class="form-check-input criterion" type="checkbox" id="traction" data-section="meca">
-                <label class="form-check-label" for="traction">Traction</label>
-              </div>
-              <div class="form-check">
-                <input class="form-check-input criterion" type="checkbox" id="usure" data-section="meca">
-                <label class="form-check-label" for="usure">Usure / frottement</label>
-              </div>
-              <div class="form-check">
-                <input class="form-check-input criterion" type="checkbox" id="fatigue" data-section="meca">
-                <label class="form-check-label" for="fatigue">Fatigue</label>
-              </div>
-            </fieldset>
-
-            <fieldset class="mb-3">
-              <legend class="fs-6">Esthétique</legend>
-              <div class="form-check">
-                <input class="form-check-input criterion" type="checkbox" id="transparence" data-section="aesthetic">
-                <label class="form-check-label" for="transparence">Transparence</label>
-              </div>
-              <div class="form-check">
-                <input class="form-check-input criterion" type="checkbox" id="qualite_surface" data-section="aesthetic">
-                <label class="form-check-label" for="qualite_surface">Qualité de surface</label>
-              </div>
-              <div class="form-check">
-                <input class="form-check-input criterion" type="checkbox" id="texture_possible" data-section="aesthetic">
-                <label class="form-check-label" for="texture_possible">Texture possible</label>
-              </div>
-              <div class="form-check">
-                <input class="form-check-input criterion" type="checkbox" id="finition_bril" data-section="aesthetic">
-                <label class="form-check-label" for="finition_bril">Finition brillante</label>
-              </div>
-            </fieldset>
-
-            <fieldset class="mb-3">
-              <legend class="fs-6">Réglementaire</legend>
-              <div class="form-check">
-                <input class="form-check-input criterion" type="checkbox" id="contact_alimentaire" data-section="regulatory">
-                <label class="form-check-label" for="contact_alimentaire">Contact alimentaire</label>
-              </div>
-              <div class="form-check">
-                <input class="form-check-input criterion" type="checkbox" id="qualite_medicale" data-section="regulatory">
-                <label class="form-check-label" for="qualite_medicale">Qualité médicale</label>
-              </div>
-              <div class="form-check">
-                <input class="form-check-input criterion" type="checkbox" id="retardateur_flamme" data-section="regulatory">
-                <label class="form-check-label" for="retardateur_flamme">Retardateur de flamme</label>
-              </div>
-              <div class="form-check">
-                <input class="form-check-input criterion" type="checkbox" id="proprietes_elec" data-section="regulatory">
-                <label class="form-check-label" for="proprietes_elec">Propriétés électriques</label>
-              </div>
-            </fieldset>
-          </form>
-
-          <div id="materialOptions" class="d-none"></div>
-        </div>
-
-        <div class="modal-footer">
-          <button id="materialConfirmBtn" type="button" class="btn btn-primary">
-            <i class="bi bi-magic me-2"></i>Analyser et recommander
-          </button>
-        </div>
-      </div>
     </div>
   </div>
-  <!-- ===================================================================== -->
-
-  <!-- Bootstrap JS (bundle avec Popper) — doit être AVANT tes scripts qui ouvrent la modale -->
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-
-  <!-- Ton moteur de règles + reco (utilise la modale) -->
-  <script src="/static/js/criteria-modal.js"></script>
-
-  <!-- Ton orchestrateur (module) -->
-  <script type="module" src="/static/js/DFMOrchestrator.js"></script>
-
-  <!-- Ouverture universelle + câblage du bouton "Analyser" -->
-  <script>
-    window.openMaterialModal = function () {
-      const el = document.getElementById('materialModal') || document.querySelector('[data-material-modal]');
-      if (!el) return alert('Modale matière introuvable');
-      if (window.bootstrap?.Modal) {
-        bootstrap.Modal.getOrCreateInstance(el, { backdrop: 'static' }).show();
-      } else {
-        // Fallback très simple si Bootstrap absent (dev uniquement)
-        el.style.display = 'block';
-        el.classList.add('open');
-      }
-    };
-    // Clic sur "Analyser" → ouvrir la modale matière
-    document.addEventListener('DOMContentLoaded', () => {
-      document.getElementById('btnAnalyser')?.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        window.openMaterialModal();
-      });
-    });
-  </script>
-</body>
-</html>
+</div>
+<!-- ===================================================================== -->

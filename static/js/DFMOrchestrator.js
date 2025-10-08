@@ -4,7 +4,16 @@
  */
 
 import HeatmapLayer from "./modules/HeatmapLayer.js";
-import { loadCameraPresetOptional } from "./viewer.js";
+// Remove the broken named import and add a local helper:
+async function loadCameraPresetOptional(url) {
+  try {
+    const r = await fetch(url, { cache: "no-store" });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch {
+    return null;
+  }
+}
 
 // État global minimal pour la DFM
 if (typeof window !== "undefined") {
