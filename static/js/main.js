@@ -65,11 +65,10 @@ const projAxisRadios = $$('input[name="projAxis"]');
 /* ====== Bouton "Analyser" & Modale Matière ====== */
 const btnAnalyser = document.querySelector("#btnAnalyser");
 
-/* On accepte soit un id, soit un data-attr. 
-   Ta base existante semble utiliser parfois data-material-modal. */
-const materialModalSelectors = ['#materialModal', '[data-material-modal]'];
-const materialFormSelectors  = ['#materialForm',  '[data-material-form]'];
-const materialResultsSelectors = ['#materialResults', '[data-material-results]'];
+/* On accepte soit un id, soit un data-attr */
+const materialModalSelectors    = ['#materialModal', '[data-material-modal]'];
+const materialFormSelectors     = ['#materialForm',  '[data-material-form]'];
+const materialResultsSelectors  = ['#materialResults', '[data-material-results]'];
 
 function q1(selectors){
   for (const s of selectors) {
@@ -78,14 +77,13 @@ function q1(selectors){
   }
   return null;
 }
+function findMaterialModal()   { return q1(materialModalSelectors); }
+function findMaterialForm()    { return q1(materialFormSelectors); }
+function findMaterialResults() { return q1(materialResultsSelectors); }
 
-function findMaterialModal()    { return q1(materialModalSelectors); }
-function findMaterialForm()     { return q1(materialFormSelectors); }
-function findMaterialResults()  { return q1(materialResultsSelectors); }
-
-/* Ouvre la modale en réutilisant TA logique si présente */
+/* Ouvre la modale en réutilisant TA logique si présente (UNE SEULE DÉFINITION) */
 function openMaterialModal() {
-  // 1) Si ton projet expose déjà une fonction globale, on la réutilise
+  // 1) Fonctions globales déjà présentes dans ton projet
   if (typeof window.showMaterialModal === "function") {
     try { window.showMaterialModal(); return findMaterialModal(); } catch(e){ console.warn(e); }
   }
@@ -93,7 +91,7 @@ function openMaterialModal() {
     try { window.openMaterialModal(); return findMaterialModal(); } catch(e){ console.warn(e); }
   }
 
-  // 2) Sinon, on ouvre nous-mêmes (Bootstrap ou fallback)
+  // 2) Sinon on gère directement
   const el = findMaterialModal();
   if (!el) { alert("Modale critères introuvable (id ou data-attribute)."); return null; }
 
@@ -106,7 +104,6 @@ function openMaterialModal() {
   }
   return el;
 }
-
 
 /* ---------- viewer + plugins ---------- */
 const viewer = new Viewer({
@@ -178,9 +175,10 @@ function drawAxes(selected='Z'){
   arrow(cx,cy, cx-0.7*L,cy+0.7*L, 'Z', cZ);
 }
 drawAxes('Z');
+// ⚠ corrige: écoute bien les radios name="projAxis"
 document.addEventListener('change', (ev)=>{
   const tgt = ev.target;
-  if (tgt && tgt.name === 'axis') drawAxes(tgt.value);
+  if (tgt && tgt.name === 'projAxis') drawAxes(tgt.value);
 });
 
 /* ---------- NavCube ---------- */
@@ -216,10 +214,8 @@ const setAll=(prop,val)=> allIds().forEach(id=>{const o=viewer.scene.objects[id]
 const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); if (propsPanel) propsPanel.innerHTML=""; };
 
 /* ---------- Mesures (format FR + unités robustes) ---------- */
-// FACTEUR maître : millimètres par World Unit (WU)
 let MM_PER_WU = 0.001; // par défaut
 
-// formateur FR
 const frFormat = (val) => {
   const a = Math.abs(val);
   const decimals = a >= 1000 ? 0 : a >= 100 ? 1 : a >= 10 ? 2 : 3;
@@ -243,7 +239,6 @@ function pushLabelFormatterToPlugin() {
 }
 function onUnitsChanged(){ pushLabelFormatterToPlugin(); patchAllMeasureTexts(); }
 
-// Heuristique via AABB
 function updateUnitsFromAABB(aabbLike) {
   try {
     const a = aabbLike || viewer.scene?.aabb;
@@ -261,8 +256,6 @@ function updateUnitsFromAABB(aabbLike) {
     }
   } catch {}
 }
-
-// Ajustement précis avec bbox_mm du serveur
 function updateUnitsFromBBox(bboxMM) {
   try {
     const a = viewer.scene?.aabb;
@@ -421,7 +414,6 @@ async function loadXKT(url, nameHint){
     models.set(id,{model,name:nameHint||id,src:url}); lastModelId=id;
     if (chkEdges?.checked) viewer.scene.edgeMaterial.edgesEnabled=true;
 
-    // init unités + affinage par AABB
     MM_PER_WU = 0.001;
     console.log("[units] init forced to µm→mm");
     onUnitsChanged();
@@ -845,78 +837,23 @@ projAxisRadios.forEach(r => r?.addEventListener("change", ()=>{
 }));
 
 /* ==================== RECOMMANDATION MATIÈRES ==================== */
-/* — DB courte de matières (adaptable) — */
 const MATERIALS_DB = [
-  {
-    name: "ABS (ou PC-ABS)",
-    props: { rigidity:3, impact:3, temp:2, uv:1, chem:1, food:0, cost:3, aesthetics:3, transparent:0, flame:1, dim_stability:2, outdoor:1 },
-    why: "Bon compromis coût/rigidité/impact, finitions propres, moulage facile."
-  },
-  {
-    name: "PC (Polycarbonate)",
-    props: { rigidity:3, impact:5, temp:3, uv:2, chem:1, food:1, cost:1, aesthetics:2, transparent:1, flame:2, dim_stability:3, outdoor:2 },
-    why: "Très résistant aux chocs, tenue thermique, existe en transparent."
-  },
-  {
-    name: "PA66 GF30",
-    props: { rigidity:5, impact:3, temp:4, uv:2, chem:3, food:0, cost:1, aesthetics:1, transparent:0, flame:2, dim_stability:4, outdoor:2 },
-    why: "Très rigide/stable, bonne tenue température et chimie, pièces techniques."
-  },
-  {
-    name: "PP",
-    props: { rigidity:2, impact:2, temp:2, uv:1, chem:3, food:2, cost:5, aesthetics:2, transparent:0, flame:0, dim_stability:1, outdoor:1 },
-    why: "Économique, bonne chimie, souvent OK contact alimentaire."
-  },
-  {
-    name: "POM (Acétal)",
-    props: { rigidity:3, impact:3, temp:2, uv:1, chem:4, food:2, cost:2, aesthetics:2, transparent:0, flame:0, dim_stability:4, outdoor:1 },
-    why: "Très bonne stabilité dimensionnelle & frottement."
-  },
-  {
-    name: "PETG",
-    props: { rigidity:2, impact:3, temp:2, uv:1, chem:2, food:2, cost:3, aesthetics:3, transparent:1, flame:0, dim_stability:2, outdoor:1 },
-    why: "Facile et esthétique, transparence possible, souvent alimentaire."
-  }
+  { name: "ABS (ou PC-ABS)", props: { rigidity:3, impact:3, temp:2, uv:1, chem:1, food:0, cost:3, aesthetics:3, transparent:0, flame:1, dim_stability:2, outdoor:1 }, why: "Bon compromis coût/rigidité/impact, finitions propres, moulage facile." },
+  { name: "PC (Polycarbonate)", props: { rigidity:3, impact:5, temp:3, uv:2, chem:1, food:1, cost:1, aesthetics:2, transparent:1, flame:2, dim_stability:3, outdoor:2 }, why: "Très résistant aux chocs, tenue thermique, existe en transparent." },
+  { name: "PA66 GF30", props: { rigidity:5, impact:3, temp:4, uv:2, chem:3, food:0, cost:1, aesthetics:1, transparent:0, flame:2, dim_stability:4, outdoor:2 }, why: "Très rigide/stable, bonne tenue température et chimie, pièces techniques." },
+  { name: "PP", props: { rigidity:2, impact:2, temp:2, uv:1, chem:3, food:2, cost:5, aesthetics:2, transparent:0, flame:0, dim_stability:1, outdoor:1 }, why: "Économique, bonne chimie, souvent OK contact alimentaire." },
+  { name: "POM (Acétal)", props: { rigidity:3, impact:3, temp:2, uv:1, chem:4, food:2, cost:2, aesthetics:2, transparent:0, flame:0, dim_stability:4, outdoor:1 }, why: "Très bonne stabilité dimensionnelle & frottement." },
+  { name: "PETG", props: { rigidity:2, impact:3, temp:2, uv:1, chem:2, food:2, cost:3, aesthetics:3, transparent:1, flame:0, dim_stability:2, outdoor:1 }, why: "Facile et esthétique, transparence possible, souvent alimentaire." }
 ];
 
-/* — Pondérations par critère (mappe tes champs du formulaire) — */
 const CRITERIA_WEIGHTS = {
-  rigidity: 3,
-  impact: 3,
-  temp: 3,
-  uv: 2,
-  chem: 3,
-  food: 3,
-  cost_low: 3,
-  aesthetics: 2,
-  transparent: 3,
-  flame: 2,
-  dim_stability: 3,
-  outdoor: 2
+  rigidity: 3, impact: 3, temp: 3, uv: 2, chem: 3, food: 3, cost_low: 3,
+  aesthetics: 2, transparent: 3, flame: 2, dim_stability: 3, outdoor: 2
 };
 
-/* — Ouverture modale (Bootstrap 5 si présent, sinon fallback) — */
-function openMaterialModal() {
-  const modalEl = document.querySelector(materialModalSel);
-  if (!modalEl) {
-    console.warn("Modale de matière introuvable:", materialModalSel);
-    alert("Modale critères indisponible. Vérifie l’ID/HTML.");
-    return null;
-  }
-  if (window.bootstrap && window.bootstrap.Modal) {
-    const modal = window.bootstrap.Modal.getOrCreateInstance(modalEl);
-    modal.show();
-    return modalEl;
-  } else {
-    modalEl.classList.add("open");
-    modalEl.style.display = "block";
-    return modalEl;
-  }
-}
-
-/* — Lecture des critères du formulaire — */
+/* Lecture critères du formulaire */
 function readCriteria() {
-  const form = document.querySelector(materialFormSel);
+  const form = findMaterialForm();
   if (!form) return {};
   const selected = {};
   const inputs = form.querySelectorAll("input, select");
@@ -931,7 +868,7 @@ function readCriteria() {
   return selected;
 }
 
-/* — Scoring matières — */
+/* Scoring & rendu */
 function scoreMaterials(selectedCriteria) {
   const normalized = new Set(Object.keys(selectedCriteria).map((k)=>k.split(":")[0]));
   return MATERIALS_DB.map((mat) => {
@@ -939,25 +876,24 @@ function scoreMaterials(selectedCriteria) {
     normalized.forEach((crit) => {
       const w = CRITERIA_WEIGHTS[crit] || 0;
       switch (crit) {
-        case "rigidity":       score += w * (mat.props.rigidity || 0); break;
-        case "impact":         score += w * (mat.props.impact || 0); break;
-        case "temp":           score += w * (mat.props.temp || 0); break;
-        case "uv":             score += w * (mat.props.uv || 0); break;
-        case "chem":           score += w * (mat.props.chem || 0); break;
-        case "food":           score += w * (mat.props.food || 0); break;
-        case "cost_low":       score += w * (mat.props.cost || 0); break;
-        case "aesthetics":     score += w * (mat.props.aesthetics || 0); break;
-        case "transparent":    score += w * (mat.props.transparent || 0); break;
-        case "flame":          score += w * (mat.props.flame || 0); break;
-        case "dim_stability":  score += w * (mat.props.dim_stability || 0); break;
-        case "outdoor":        score += w * (mat.props.outdoor || 0); break;
+        case "rigidity":      score += w * (mat.props.rigidity || 0); break;
+        case "impact":        score += w * (mat.props.impact   || 0); break;
+        case "temp":          score += w * (mat.props.temp      || 0); break;
+        case "uv":            score += w * (mat.props.uv        || 0); break;
+        case "chem":          score += w * (mat.props.chem      || 0); break;
+        case "food":          score += w * (mat.props.food      || 0); break;
+        case "cost_low":      score += w * (mat.props.cost      || 0); break;
+        case "aesthetics":    score += w * (mat.props.aesthetics|| 0); break;
+        case "transparent":   score += w * (mat.props.transparent||0); break;
+        case "flame":         score += w * (mat.props.flame     || 0); break;
+        case "dim_stability": score += w * (mat.props.dim_stability||0); break;
+        case "outdoor":       score += w * (mat.props.outdoor   || 0); break;
       }
     });
     return { ...mat, score };
   }).sort((a, b) => b.score - a.score);
 }
 
-/* — Rendu résultats dans la modale — */
 function renderMaterialResults(ranked) {
   const host = findMaterialResults();
   if (!host) return;
@@ -993,19 +929,16 @@ function renderMaterialResults(ranked) {
     </div>`;
 }
 
-
-/* — Flux bouton “Analyser” — */
+/* Flux bouton “Analyser” */
 btnAnalyser?.addEventListener("click", () => {
-  const modalEl = openMaterialModal();      // ← réutilise ta logique existante
+  const modalEl = openMaterialModal();
   if (!modalEl) return;
-
-  const selected = readCriteria();          // ta fonction de lecture
+  const selected = readCriteria();
   const ranked   = scoreMaterials(selected);
   renderMaterialResults(ranked);
 });
 
-
-/* — Recompute live si un bouton interne existe — */
+/* Recompute live si un bouton interne existe */
 const btnMaterialRecompute = document.querySelector("#btnMaterialRecompute");
 btnMaterialRecompute?.addEventListener("click", (e) => {
   e.preventDefault();
@@ -1014,5 +947,5 @@ btnMaterialRecompute?.addEventListener("click", (e) => {
   renderMaterialResults(ranked);
 });
 
-// Petit export vide pour certains bundlers/linters
+// Export vide
 export {};
