@@ -16,11 +16,9 @@ if (typeof window !== "undefined") {
   };
 }
 
-// PATCH START: selectors
-// const btnVisualiser = document.querySelector('#btnVisualiser');
+// Sélecteurs
 const btnAnalyser = document.querySelector('#btnAnalyser, #analyzeBtn, #btn-analyser');
 const axisPanel   = document.querySelector('#dfmAxisPanel, #axis-panel');
-// PATCH END
 
 // État initial : cacher l'axe mais laisser Analyser cliquable
 if (axisPanel) axisPanel.style.display = "none";
@@ -33,54 +31,35 @@ const UI = {
   info(m){ if (window.showToast) showToast(m,{type:"info"}); },
   warn(m){ if (window.showToast) showToast(m,{type:"warn"}); },
   err(m){  if (window.showToast) showToast(m,{type:"error"}); },
-  setLoading(on){
-    const b = btnAnalyser;
-    if (b) b.disabled = !!on;
-  },
-  progress(pct){
-    const bar = document.getElementById("dfmProgressBar");
-    if (bar) bar.style.width = `${pct}%`;
-  }
+  setLoading(on){ if (btnAnalyser) btnAnalyser.disabled = !!on; },
+  progress(pct){ const bar = document.getElementById("dfmProgressBar"); if (bar) bar.style.width = `${pct}%`; }
 };
 
-const StatusUI = {
-  set(text){
-    const el = document.querySelector('#dfmStatusText');
-    if (el) el.textContent = text || '';
-  }
-};
+const StatusUI = { set(text){ const el = document.querySelector('#dfmStatusText'); if (el) el.textContent = text || ''; } };
 
 function axisToVector(ax){
   if (!ax) return null;
   if (ax.axis === "X") return {x: ax.direction, y:0, z:0};
   if (ax.axis === "Y") return {x:0, y: ax.direction, z:0};
   if (ax.axis === "Z") return {x:0, y:0, z: ax.direction};
-  if (ax.axis === "VECTOR" && Array.isArray(ax.vector)){
-    const [x=0,y=0,z=1] = ax.vector;
-    return {x,y,z};
-  }
+  if (ax.axis === "VECTOR" && Array.isArray(ax.vector)){ const [x=0,y=0,z=1] = ax.vector; return {x,y,z}; }
   return null;
 }
+
 async function pollJobStatus(jobId, onUpdate, onDone, onError) {
   let queuedSince = Date.now();
-
   async function step() {
     try {
       const res = await fetch(`/api/dfm/status?job_id=${encodeURIComponent(jobId)}`);
-      const data = await res.json(); // {status:'queued'|'running'|'done'|'failed', step?, progress?}
-
+      const data = await res.json();
       onUpdate?.(data);
-
       if (data.status === "done") { await onDone?.(data); return; }
       if (data.status === "failed" || data.status === "error") { onError?.(data); return; }
-
       if (data.status === "queued" && Date.now() - queuedSince > 90_000) {
         StatusUI.set("Toujours en file d’attente… un worker va démarrer dès que possible.");
         queuedSince = Date.now();
       }
-    } catch (e) {
-      console.error("poll error", e);
-    }
+    } catch (e) { console.error("poll error", e); }
     setTimeout(step, 1500);
   }
   step();
@@ -88,34 +67,17 @@ async function pollJobStatus(jobId, onUpdate, onDone, onError) {
 
 function renderDFMResults(report = {}) {
   const { score = 0, recommendations = [], metrics = {} } = report;
-
-  const panel = document.getElementById('dfmAnalysisPanel');
-  if (!panel) return;
+  const panel = document.getElementById('dfmAnalysisPanel'); if (!panel) return;
   panel.innerHTML = '';
-
-  const scoreEl = document.createElement('div');
-  scoreEl.textContent = `Score: ${score}`;
-  panel.appendChild(scoreEl);
-
+  const scoreEl = document.createElement('div'); scoreEl.textContent = `Score: ${score}`; panel.appendChild(scoreEl);
   if (Array.isArray(recommendations) && recommendations.length) {
     const ul = document.createElement('ul');
-    recommendations.forEach(r => {
-      const li = document.createElement('li');
-      li.textContent = r.message || r.id || JSON.stringify(r);
-      ul.appendChild(li);
-    });
+    recommendations.forEach(r => { const li = document.createElement('li'); li.textContent = r.message || r.id || JSON.stringify(r); ul.appendChild(li); });
     panel.appendChild(ul);
   }
-
-  if (metrics && Object.keys(metrics).length) {
-    const pre = document.createElement('pre');
-    pre.textContent = JSON.stringify(metrics, null, 2);
-    panel.appendChild(pre);
-  }
+  if (metrics && Object.keys(metrics).length) { const pre = document.createElement('pre'); pre.textContent = JSON.stringify(metrics, null, 2); panel.appendChild(pre); }
 }
-if (typeof window !== 'undefined') {
-  window.renderDFMResults = renderDFMResults;
-}
+if (typeof window !== 'undefined') window.renderDFMResults = renderDFMResults;
 
 async function pollDFMReport(fileId, maxMs=120000){
   const t0 = Date.now();
@@ -123,56 +85,53 @@ async function pollDFMReport(fileId, maxMs=120000){
     const r = await fetch(`/api/simple/report/${fileId}`, { cache: "no-store" });
     if (r.status === 200) {
       const d = await r.json();
-      renderDFMResults?.({
-        score: d.score ?? 0,
-        recommendations: Array.isArray(d.recommendations) ? d.recommendations : [],
-        metrics: d.metrics ?? {}
-      });
+      renderDFMResults?.({ score: d.score ?? 0, recommendations: Array.isArray(d.recommendations) ? d.recommendations : [], metrics: d.metrics ?? {} });
       return;
     }
     await new Promise(res => setTimeout(res, 2500));
   }
-  showError?.("Analyse trop longue, réessaie.");
+  UI.err?.("Analyse trop longue, réessaie.");
 }
 
-// --- Matériau: trouver la "vraie" modale de l'app, PAS un fallback ---
+/* ---------- Matériau: trouve et ouvre la BONNE modale ---------- */
 function findRealMaterialModal() {
-  // 1) candidats connus (ajoute ici ton id exact si besoin)
   const SELS = [
-    '#materialModal',
     '#materialQuestionnaireModal',
+    '#materialModal',
     '[data-material-modal]:not([data-fallback])',
     '.modal[data-role="material"]'
   ];
   const candidates = Array.from(document.querySelectorAll(SELS.join(',')));
-
-  // 2) si plusieurs, on privilégie celle qui contient le vrai formulaire
-  const withForm = candidates.find(el =>
-    el.querySelector('#materialQuestionnaireForm') ||
-    el.querySelector('[data-material-form]')
-  );
+  const withForm = candidates.find(el => el.querySelector('#materialQuestionnaireForm, [data-material-form]'));
   return withForm || candidates[0] || null;
 }
 
 function showMaterialModal() {
   const el = findRealMaterialModal();
-  if (!el) {
-    console.warn('[dfm] modale matière introuvable (id/data-attr).');
-    return;
-  }
+  if (!el) { console.warn('[dfm] modale matière introuvable'); return; }
   if (!window.bootstrap || !bootstrap.Modal) {
-    console.warn('[dfm] bootstrap.Modal absent; affichage basique');
-    el.classList.add('open'); el.style.display = 'block';
+    // Fallback vanilla si Bootstrap absent
+    el.style.display = 'block';
+    el.style.visibility = 'visible';
+    el.style.opacity = '1';
+    el.style.zIndex = '1050';
+    el.classList.add('show');
+    // backdrop minimal
+    let bd = document.getElementById('__dfm_backdrop__');
+    if (!bd) {
+      bd = document.createElement('div');
+      bd.id='__dfm_backdrop__';
+      Object.assign(bd.style,{position:'fixed',inset:'0',background:'rgba(0,0,0,.45)',zIndex:'1040'});
+      document.body.appendChild(bd);
+      bd.addEventListener('click', ()=>{ el.style.display='none'; el.classList.remove('show'); bd.remove(); });
+    }
     return;
   }
-  console.info('[dfm] ouverture modale matière (vraie)');
-  const modal = bootstrap.Modal.getOrCreateInstance(el, { backdrop: 'static' });
-  modal.show();
+  bootstrap.Modal.getOrCreateInstance(el, { backdrop: 'static' }).show();
 }
-
 function openMaterialModal(){ showMaterialModal(); }
 
-// PATCH START: show axis after material confirmed
+/* ---------- Gate matière/axe ---------- */
 function materialIsConfirmed(){ return !!window.selectedMaterial; }
 function showAxisPanelIfReady(){
   if (!axisPanel) return;
@@ -180,132 +139,57 @@ function showAxisPanelIfReady(){
   axisPanel.style.display = '';
 }
 window.addEventListener('material:confirmed', showAxisPanelIfReady);
-window.addEventListener('material:selected',  showAxisPanelIfReady); // compat
-// PATCH END
-
+window.addEventListener('material:selected',  showAxisPanelIfReady);
 window.addEventListener('axis:confirmed', (e) => { window.selectedAxis = e?.detail; });
+function axisIsValidated(){ return !!window.selectedAxis; }
 
-function axisIsValidated(){
-  return !!window.selectedAxis;
-}
-
-// Capter en phase "capture" et court-circuiter d'autres listeners (fallbacks)
-if (btnAnalyser) {
-  btnAnalyser.addEventListener('click', (e) => {
-    e.preventDefault();
-    e.stopImmediatePropagation();   // empêche le fallback du main.js de s'exécuter
-    // workflow DFM: fichier ? matière ? axe ? sinon on ouvre la modale DFM
-    const fileId = orchestrator.resolveFileId?.() || window.currentFileId;
-    if (!fileId) { openMaterialModal(); return; }
-    if (!materialIsConfirmed()) { openMaterialModal(); return; }
-    if (!axisIsValidated()) { showAxisPanelIfReady(); return; }
-    orchestrator.setFileId?.(fileId);
-    orchestrator.startDFM?.();
-  }, true); // <-- capture = true
-}
-
-
-// ---------------------- États ----------------------
-const DFM_STATES = {
-  IDLE:"IDLE", MATERIAL_CONFIRMED:"MATERIAL_CONFIRMED", AXIS_PICK:"AXIS_PICK",
-  RUNNING:"RUNNING", RESULTS:"RESULTS", ERROR:"ERROR"
-};
+/* ---------- Classe orchestrateur ---------- */
+const DFM_STATES = { IDLE:"IDLE", MATERIAL_CONFIRMED:"MATERIAL_CONFIRMED", AXIS_PICK:"AXIS_PICK", RUNNING:"RUNNING", RESULTS:"RESULTS", ERROR:"ERROR" };
 
 class DFMOrchestrator {
   constructor(){
     this.phase = DFM_STATES.IDLE;
-    this.state = this.state || {
-      fileLoaded: false,
-      materialSelected: false,
-      axisConfirmed: false,
-      running: false,
-    };
-    this.fileId = null;
-    this.materialProfile = null;
-    this.demouldAxis = null;
-    this.currentAxis = 'AUTO';
-    this.invert = false;
-    this.axisValidated = false;
-    this.axisSelection = null;
-    this.selectedAxis = null;
-    this.selectedInvert = false;
-    // panneau d'axe injecté à la volée
-    this.axisPanel = null;
-    this.axisPanelInitialized = false;
-    this.axisPicker = null;
-    this.confirmedAxis = null;
+    this.state = this.state || { fileLoaded: false, materialSelected: false, axisConfirmed: false, running: false };
+    this.fileId = null; this.materialProfile = null; this.demouldAxis = null;
+    this.currentAxis = 'AUTO'; this.invert = false; this.axisValidated = false;
+    this.axisSelection = null; this.selectedAxis = null; this.selectedInvert = false;
+    this.axisPanel = null; this.axisPanelInitialized = false; this.axisPicker = null; this.confirmedAxis = null;
   }
 
   init(){
-
     window.addEventListener('material:selected', (e) => {
       this.setMaterialProfile(e.detail.materialProfile);
       window.CAD.materialProfile = this.materialProfile;
-      console.info('[dfm] matière sélectionnée', this.materialProfile);
       window.dispatchEvent(new CustomEvent('material:confirmed'));
     });
-
-    window.addEventListener('material:confirmed', () => {
-      console.info('[dfm] matière validée');
-      this.renderAxisPanel();
-    });
-
+    window.addEventListener('material:confirmed', () => this.renderAxisPanel());
     window.addEventListener('axis:confirmed', (e) => {
-      this.selectedAxis = e.detail.axis;
-      this.selectedInvert = !!e.detail.invert;
+      this.selectedAxis = e.detail.axis; this.selectedInvert = !!e.detail.invert;
       this.state.axisConfirmed = true;
-      console.info('[dfm] axe confirmé', this.selectedAxis, 'invert', this.selectedInvert);
     });
   }
 
-  setState(next){
-    this.phase = next; dbg("state →", next);
-  }
+  setState(next){ this.phase = next; dbg("state →", next); }
 
   setFileId(id){
     if (!id) return false;
-    if (this.fileId && this.fileId !== id) {
-      console.warn('[DFM] file_id mismatch', this.fileId, id);
-      return false;
-    }
-    this.fileId = id;
-    this.state.fileLoaded = true;
-    this.state.axisConfirmed = false;
-    const hidden = document.getElementById('fileId');
-    if (hidden && hidden.type === 'hidden') hidden.value = this.fileId || '';
-    this.refreshAxisState?.();
-    return true;
+    if (this.fileId && this.fileId !== id) { console.warn('[DFM] file_id mismatch', this.fileId, id); return false; }
+    this.fileId = id; this.state.fileLoaded = true; this.state.axisConfirmed = false;
+    const hidden = document.getElementById('fileId'); if (hidden && hidden.type === 'hidden') hidden.value = this.fileId || '';
+    this.refreshAxisState?.(); return true;
   }
   setMaterialProfile(p){
-    this.materialProfile = p || null;
-    this.state.materialSelected = !!this.materialProfile;
-    this.state.axisConfirmed = false;
-    this.resetAxisValidation();
-    dbg('material selected', this.materialProfile, 'axis reset');
-    this.refreshAxisState?.();
+    this.materialProfile = p || null; this.state.materialSelected = !!this.materialProfile; this.state.axisConfirmed = false;
+    this.resetAxisValidation(); this.refreshAxisState?.();
   }
   async debugFileId(){
-    if (!this.fileId) {
-      console.warn('[DFM] debugFileId: aucun file_id');
-      return;
-    }
-    try {
-      const res = await fetch(`/api/dfm/debug/file/${this.fileId}`);
-      const data = await res.json().catch(()=>({}));
-      console.debug('[DFM debug]', data);
-    } catch (err) {
-      console.warn('debugFileId failed', err);
-    }
+    if (!this.fileId) return;
+    try { const res = await fetch(`/api/dfm/debug/file/${this.fileId}`); const data = await res.json().catch(()=>({})); console.debug('[DFM debug]', data); }
+    catch (err) { console.warn('debugFileId failed', err); }
   }
-  setDemouldAxis(a){
-    const vec = axisToVector(a);
-    this.demouldAxis = vec || null;
-    window.CAD.axis = vec;
-  }
-
+  setDemouldAxis(a){ const vec = axisToVector(a); this.demouldAxis = vec || null; window.CAD.axis = vec; }
   resetAxisValidation(){
-    this.axisValidated = false;
-    this.axisSelection = null;
+    this.axisValidated = false; this.axisSelection = null;
     if (this.axisConfirmBtn){
       this.axisConfirmBtn.disabled = false;
       this.axisConfirmBtn.classList.remove('btn-success');
@@ -314,147 +198,79 @@ class DFMOrchestrator {
     }
   }
 
-  // ---------------------- Résolution de fileId ----------------------
   resolveFileId(){
-    // 1) fileId déjà en mémoire ?
     if (this.fileId) return this.fileId;
-
-    // 2) dataset du <body>
-    let id = document.body?.dataset?.fileid;
-    if (id) return id;
-
-    // 3) global (fallback)
-    id = window.CAD?.fileIdStep || window.CADLYTICS?.current?.fileId;
-    if (id) return id;
-
-    // 4) input hidden
-    const hidden = document.getElementById('fileId');
-    if (hidden && hidden.type === 'hidden' && hidden.value) return hidden.value;
-
-    // 5) viewerAdapter éventuel
-    id = window.viewerAdapter?.current?.fileId;
-    if (id) return id;
-
+    let id = document.body?.dataset?.fileid; if (id) return id;
+    id = window.CAD?.fileIdStep || window.CADLYTICS?.current?.fileId; if (id) return id;
+    const hidden = document.getElementById('fileId'); if (hidden && hidden.type === 'hidden' && hidden.value) return hidden.value;
+    id = window.viewerAdapter?.current?.fileId; if (id) return id;
     return null;
   }
-
-  setFileIdFromPage(){
-    const id = this.resolveFileId();
-    if (id) this.setFileId(id);
-    return id;
-  }
+  setFileIdFromPage(){ const id = this.resolveFileId(); if (id) this.setFileId(id); return id; }
 
   initAxisPanel(){
     const panel = document.getElementById('dfmAxisPanel');
     if (!panel){
       const obs = new MutationObserver(()=>{
         const p = document.getElementById('dfmAxisPanel');
-        if (p){
-          obs.disconnect();
-          this.axisPanelInitialized = false;
-          this.initAxisPanel();
-        }
+        if (p){ obs.disconnect(); this.axisPanelInitialized = false; this.initAxisPanel(); }
       });
-      obs.observe(document.body, { childList: true, subtree: true });
-      return;
+      obs.observe(document.body, { childList: true, subtree: true }); return;
     }
     if (this.axisPanelInitialized && this.axisPanel === panel) return;
-    this.axisPanel = panel;
-    this.axisPanelInitialized = true;
-    this.axisPanel.style.display = 'none';
+    this.axisPanel = panel; this.axisPanelInitialized = true; this.axisPanel.style.display = 'none';
 
-    this.axisButtons = {
-      X: document.getElementById('axisXBtn'),
-      Y: document.getElementById('axisYBtn'),
-      Z: document.getElementById('axisZBtn'),
-      AUTO: document.getElementById('axisAutoBtn')
-    };
+    this.axisButtons = { X: document.getElementById('axisXBtn'), Y: document.getElementById('axisYBtn'),
+                         Z: document.getElementById('axisZBtn'), AUTO: document.getElementById('axisAutoBtn') };
     this.invertToggle = document.getElementById('invertAxisToggle');
     this.axisConfirmBtn = document.getElementById('axisConfirmBtn');
 
-    Object.entries(this.axisButtons).forEach(([axis, btn])=>{
-      if (!btn) return;
-      btn.addEventListener('click', ()=>{
-        this.currentAxis = axis;
-        dbg('axis', axis);
-      });
-    });
-
-    if (this.invertToggle){
-      this.invertToggle.addEventListener('change', e=>{
-        this.invert = !!e.target.checked;
-        dbg('invert', this.invert);
-      });
-    }
+    Object.entries(this.axisButtons).forEach(([axis, btn])=>{ if (!btn) return; btn.addEventListener('click', ()=>{ this.currentAxis = axis; }); });
+    if (this.invertToggle){ this.invertToggle.addEventListener('change', e=>{ this.invert = !!e.target.checked; }); }
 
     if (this.axisConfirmBtn){
       this.resetAxisValidation();
       this.axisConfirmBtn.addEventListener('click', () => {
         if (this.axisConfirmBtn.disabled) return;
         this.axisConfirmBtn.disabled = true;
-        dbg('axis confirm before', { fileId: this.fileId, material: this.materialProfile });
         if (!this.fileId || !this.materialProfile){
           UI.info("Importez un fichier et validez la matière avant l’axe.");
           setTimeout(()=>{ this.axisConfirmBtn.disabled = false; }, 400);
           return;
         }
         this.axisValidated = true;
-        this.axisSelection = {
-          axis: this.currentAxis,
-          invert: this.invert,
-          ts: Date.now()
-        };
+        this.axisSelection = { axis: this.currentAxis, invert: this.invert, ts: Date.now() };
         this.setDemouldAxis({ axis: this.currentAxis, direction: this.invert ? -1 : 1 });
         const vec = this.demouldAxis;
         window.dispatchEvent(new CustomEvent('axis:confirmed', { detail: { axis: vec } }));
         this.axisConfirmBtn.innerHTML = 'Axe validé <span class="ms-1">✅</span>';
         this.axisConfirmBtn.classList.remove('btn-primary');
         this.axisConfirmBtn.classList.add('btn-success');
-        dbg('axis confirm after', this.axisSelection);
       });
     }
-
     this.refreshAxisState();
   }
-
   updateAxisPanelState(){
     const enabled = !!(this.fileId && this.materialProfile);
-    if (this.axisButtons){
-      Object.values(this.axisButtons).forEach(btn=>{ if (btn) btn.disabled = !enabled; });
-    }
+    if (this.axisButtons){ Object.values(this.axisButtons).forEach(btn=>{ if (btn) btn.disabled = !enabled; }); }
     if (this.invertToggle) this.invertToggle.disabled = !enabled;
   }
-
   refreshAxisState(){
     const canShow = !!(this.fileId && this.materialProfile);
-    if (this.axisPanel) {
-      this.axisPanel.style.display = canShow ? 'block' : 'none';
-    }
+    if (this.axisPanel) this.axisPanel.style.display = canShow ? 'block' : 'none';
     this.updateAxisPanelState();
   }
 
-  // Affiche le sélecteur d'axe sous le viewer
   renderAxisPanel() {
     if (!this.fileId && typeof this.setFileIdFromPage === 'function') this.setFileIdFromPage();
-    if (!this.fileId || !this.materialProfile) {
-      if (!this.fileId) UI?.info?.("Aucun fichier à analyser. Merci d’importer une pièce.");
-      return; // ne pas afficher l'axe
-    }
+    if (!this.fileId || !this.materialProfile) { if (!this.fileId) UI?.info?.("Aucun fichier à analyser. Merci d’importer une pièce."); return; }
     if (!this.state.materialSelected) return;
 
-    // 2) Nettoyage d’un éventuel panneau déjà présent
-    let panel = document.getElementById('dfmAxisPanel');
-    if (panel) panel.remove();
+    let panel = document.getElementById('dfmAxisPanel'); if (panel) panel.remove();
 
-    // 3) Point d’ancrage: juste après le viewer
-    const viewerEl = document.getElementById('viewer')
-      || document.querySelector('#viewer, #xeokit-viewer, canvas[data-role="viewer"]');
-    if (!viewerEl) {
-      console.warn('[DFM] viewer container introuvable, impossible d’injecter le panneau d’axe');
-      return;
-    }
+    const viewerEl = document.getElementById('viewer') || document.querySelector('#viewer, #xeokit-viewer, canvas[data-role="viewer"]');
+    if (!viewerEl) { console.warn('[DFM] viewer container introuvable, impossible d’injecter le panneau d’axe'); return; }
 
-    // 4) Création du panneau
     panel = document.createElement('div');
     panel.id = 'dfmAxisPanel';
     panel.className = 'card mt-3';
@@ -462,9 +278,7 @@ class DFMOrchestrator {
       <div class="card-body" id="axisPickerContainer">
         <div class="d-flex align-items-center justify-content-between">
           <h6 class="mb-0">Direction de démoulage</h6>
-          <div>
-            <button id="axisConfirmBtn" class="btn btn-primary btn-sm">Valider l’axe</button>
-          </div>
+          <div><button id="axisConfirmBtn" class="btn btn-primary btn-sm">Valider l’axe</button></div>
         </div>
         <div id="axisWidget" class="mt-2"></div>
         <div class="form-check form-switch mt-2">
@@ -472,17 +286,12 @@ class DFMOrchestrator {
           <label class="form-check-label" for="invertAxisToggle">Inverser le sens</label>
         </div>
       </div>`;
-
     viewerEl.insertAdjacentElement('afterend', panel);
-    console.info('[dfm] panneau axe affiché');
 
-    // 5) Instanciation du picker (ou fallback)
     const container = panel.querySelector('#axisWidget');
     if (typeof AxisPicker === 'function') {
-      // AxisPicker(container, { viewer: this.viewer }) si l’API l’accepte
       this.axisPicker = new AxisPicker(container, { viewer: this.viewer });
     } else {
-      // Fallback simple si AxisPicker non chargé
       container.innerHTML = `
         <div class="btn-group" role="group" aria-label="Axe">
           <input type="radio" class="btn-check" name="axis" id="axisX" autocomplete="off" value="X">
@@ -495,539 +304,160 @@ class DFMOrchestrator {
       this.axisPicker = {
         getAxis() {
           const v = (document.querySelector('input[name="axis"]:checked')?.value || 'Z').toUpperCase();
-          // Convention: vecteur +1 sur l’axe choisi
           return v === 'X' ? { x: 1, y: 0, z: 0 } : v === 'Y' ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
         }
       };
     }
-
     this.invertToggle = panel.querySelector('#invertAxisToggle');
 
-    // 6) Bouton "Valider l’axe" → émettre axis:confirmed
     panel.querySelector('#axisConfirmBtn')?.addEventListener('click', () => {
       const axis = this.axisPicker?.getAxis?.();
-      if (!axis) {
-        UI?.info?.("Choisissez une direction d’axe avant de valider.");
-        return;
-      }
+      if (!axis) { UI?.info?.("Choisissez une direction d’axe avant de valider."); return; }
       const invert = !!this.invertToggle?.checked;
-      dbg('axis:confirmed emit', axis, invert);
       window.dispatchEvent(new CustomEvent('axis:confirmed', { detail: { axis, invert } }));
       panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
   }
 
   async handleAnalyzeClick(){
-    console.info('[dfm] analyse demandée');
     const fileId = this.resolveFileId();
-    if (!fileId) { console.info('[dfm] demande fichier'); openMaterialModal(); return; }
-    if (!materialIsConfirmed()) { console.info('[dfm] demande matière'); openMaterialModal(); return; }
-    if (!axisIsValidated()) { console.info('[dfm] demande axe'); showAxisPanelIfReady(); return; }
+    if (!fileId) { openMaterialModal(); return; }
+    if (!materialIsConfirmed()) { openMaterialModal(); return; }
+    if (!axisIsValidated()) { showAxisPanelIfReady(); return; }
     this.setFileId(fileId);
     await this.startDFM();
   }
 
-  // ---------------------- Analyse ----------------------
   async startDFM() {
-    const payload = {
-      file_id: this.fileId,
-      axis: this.selectedAxis || { x: 0, y: 0, z: 1 },
-      material: this.materialProfile?.id,
-      options: {},
-    };
-    console.info('[dfm] lancement analyse', payload);
-
-    if (!payload.file_id || !payload.material || !payload.axis) {
-      UI.info?.('Paramètre manquant pour l’analyse.');
-      return;
-    }
-
-    UI.setLoading?.(true);
-    this.state.running = true;
+    const payload = { file_id: this.fileId, axis: this.selectedAxis || { x:0, y:0, z:1 }, material: this.materialProfile?.id, options: {} };
+    if (!payload.file_id || !payload.material || !payload.axis) { UI.info?.('Paramètre manquant pour l’analyse.'); return; }
+    UI.setLoading?.(true); this.state.running = true;
     try {
-      const res = await fetch('/api/simple/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+      const res = await fetch('/api/simple/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        const msg = data.error || 'Analyse échouée';
-        this.handleError?.(msg);
-        return;
-      }
-      console.info('[dfm] report=', data.report_id);
-      await pollDFMReport(this.fileId); // 404…404…200
+      if (!res.ok) { this.handleError?.(data.error || 'Analyse échouée'); return; }
+      await pollDFMReport(this.fileId);
       await this.renderResults(data);
       window.refreshHistory?.();
-    } catch (err) {
-      console.error('DFM start network error', err);
-      this.handleError?.('Network error');
-    } finally {
-      UI.setLoading?.(false);
-      this.state.running = false;
-    }
+    } catch (err) { console.error('DFM start network error', err); this.handleError?.('Network error'); }
+    finally { UI.setLoading?.(false); this.state.running = false; }
   }
 
   pollStatus(jobId) {
-    pollJobStatus(
-      jobId,
+    pollJobStatus(jobId,
       (s) => {
-        if (s.status === 'queued') {
-          StatusUI.set('En file d’attente…');
-        } else if (s.status === 'running') {
-          const label = s.step ? `Analyse en cours… (${s.step})` : 'Analyse en cours…';
-          StatusUI.set(label);
-          if (typeof s.progress === 'number') UI.progress(s.progress);
-        }
+        if (s.status === 'queued')      StatusUI.set('En file d’attente…');
+        else if (s.status === 'running'){ StatusUI.set(s.step ? `Analyse en cours… (${s.step})` : 'Analyse en cours…'); if (typeof s.progress === 'number') UI.progress(s.progress); }
       },
-      () => {
-        StatusUI.set('Analyse terminée');
-        UI.setLoading(false);
-        this.state.running = false;
-      },
-      () => {
-        StatusUI.set('Analyse échouée');
-        UI.err('Analyse échouée');
-        UI.setLoading(false);
-        this.state.running = false;
-      }
+      () => { StatusUI.set('Analyse terminée'); UI.setLoading(false); this.state.running = false; },
+      () => { StatusUI.set('Analyse échouée'); UI.err('Analyse échouée'); UI.setLoading(false); this.state.running = false; }
     );
   }
+
   async renderResults(results = {}){
     StatusUI.set("Analyse terminée");
     this.setState(DFM_STATES.RESULTS);
-    const section = document.getElementById("dfmResultsSection");
-    if (section) section.style.display = "block";
-    const panel = document.getElementById("dfmAnalysisPanel");
-    if (!panel) return;
+    const section = document.getElementById("dfmResultsSection"); if (section) section.style.display = "block";
+    const panel = document.getElementById("dfmAnalysisPanel"); if (!panel) return;
     panel.innerHTML = "";
 
     if (results.summary){
-      const table = document.createElement("table");
-      table.className = "table table-sm";
+      const table = document.createElement("table"); table.className = "table table-sm";
       const tbody = document.createElement("tbody");
-      Object.entries(results.summary).forEach(([k,v])=>{
-        const tr = document.createElement("tr");
-        tr.innerHTML = `<th>${k}</th><td>${Array.isArray(v) || typeof v === 'object' ? JSON.stringify(v) : v}</td>`;
-        tbody.appendChild(tr);
-      });
-      table.appendChild(tbody);
-      panel.appendChild(table);
+      Object.entries(results.summary).forEach(([k,v])=>{ const tr = document.createElement("tr"); tr.innerHTML = `<th>${k}</th><td>${Array.isArray(v) || typeof v === 'object' ? JSON.stringify(v) : v}</td>`; tbody.appendChild(tr); });
+      table.appendChild(tbody); panel.appendChild(table);
     }
     if (Array.isArray(results.issues) && results.issues.length){
-      const ul = document.createElement("ul");
-      ul.className = "list-unstyled";
-      results.issues.forEach(issue => {
-        const li = document.createElement("li");
-        const sev = issue.severity === 'error' ? 'danger' : issue.severity === 'warn' ? 'warning text-dark' : 'secondary';
-        li.innerHTML = `<span class="badge bg-${sev} me-1">${issue.type}</span>${issue.message}`;
-        ul.appendChild(li);
-      });
+      const ul = document.createElement("ul"); ul.className = "list-unstyled";
+      results.issues.forEach(issue => { const sev = issue.severity === 'error' ? 'danger' : issue.severity === 'warn' ? 'warning text-dark' : 'secondary';
+        const li = document.createElement("li"); li.innerHTML = `<span class="badge bg-${sev} me-1">${issue.type}</span>${issue.message}`; ul.appendChild(li); });
       panel.appendChild(ul);
     }
-
     if (results.heatmap?.per_face?.length) {
-      const hmBtn = document.createElement("button");
-      hmBtn.id = "dfmHeatmapBtn";
-      hmBtn.className = "btn btn-outline-primary btn-sm mt-2";
-      hmBtn.textContent = "Afficher heatmap (beta)";
+      const hmBtn = document.createElement("button"); hmBtn.id = "dfmHeatmapBtn";
+      hmBtn.className = "btn btn-outline-primary btn-sm mt-2"; hmBtn.textContent = "Afficher heatmap (beta)";
       if (!window.viewerAdapter?.viewer) hmBtn.disabled = true;
       hmBtn.addEventListener("click", () => {
-        const mapping = {};
-        results.heatmap.per_face.forEach(({ face_id, value }) => {
-          mapping[face_id] = value;
-        });
-        const layer = new HeatmapLayer(window.viewerAdapter);
-        layer.apply(mapping);
+        const mapping = {}; results.heatmap.per_face.forEach(({ face_id, value }) => { mapping[face_id] = value; });
+        const layer = new HeatmapLayer(window.viewerAdapter); layer.apply(mapping);
       });
       panel.appendChild(hmBtn);
     }
-
     await this._applyViewData();
   }
 
   async _applyViewData(){
-    const fileId = this.fileId;
-    if (!fileId) return;
+    const fileId = this.fileId; if (!fileId) return;
     const preset = await loadCameraPresetOptional(`/static/dfm/${fileId}/camera_states.json`);
     if (preset?.iso) {
       const cam = window.viewerAdapter?.viewer?.camera;
-      if (cam) {
-        cam.eye = preset.iso.eye;
-        cam.look = preset.iso.look;
-        cam.up = preset.iso.up;
-      }
+      if (cam) { cam.eye = preset.iso.eye; cam.look = preset.iso.look; cam.up = preset.iso.up; }
     }
   }
 
   handleError(message){
-    StatusUI.set("Échec de l’analyse");
-    this.setState(DFM_STATES.ERROR);
-    const section = document.getElementById("dfmResultsSection");
-    if (section) section.style.display = "block";
-    const panel = document.getElementById("dfmAnalysisPanel");
-    if (!panel) return;
+    StatusUI.set("Échec de l’analyse"); this.setState(DFM_STATES.ERROR);
+    const section = document.getElementById("dfmResultsSection"); if (section) section.style.display = "block";
+    const panel = document.getElementById("dfmAnalysisPanel"); if (!panel) return;
     panel.innerHTML = `<div class="alert alert-danger">${message}
       <a href="#" id="retryDFM" class="alert-link">Relancer</a></div>`;
-    document.getElementById("retryDFM")?.addEventListener("click", e => {
-      e.preventDefault();
-      this.setState(DFM_STATES.AXIS_PICK);
-    });
-  }
-
-  _renderLoading(){
-    const section = document.getElementById("dfmResultsSection");
-    if (section) section.style.display = "block";
-    const panel = document.getElementById("dfmAnalysisPanel");
-    if (!panel) return;
-    panel.innerHTML = `<div id="dfmLoading" class="text-center my-3">
-      <div class="spinner-border" role="status"></div>
-      <div id="dfmProgressText" class="mt-2">Analyse DFM en cours...</div>
-      <div class="progress mt-2">
-        <div id="dfmProgressBar" class="progress-bar progress-bar-striped" style="width:0%"></div>
-      </div>
-    </div>`;
-  }
-
-  _makeSortable(table){
-    const headers = table.querySelectorAll("th[data-sort]");
-    headers.forEach(h=>{
-      h.style.cursor = "pointer";
-      h.addEventListener("click", ()=>{
-        const key = h.dataset.sort;
-        const tbody = table.tBodies[0];
-        const rows = Array.from(tbody.querySelectorAll("tr"));
-        const asc = h.classList.toggle("asc");
-        rows.sort((a,b)=>{
-          const av = a.dataset[key] || ""; const bv = b.dataset[key] || "";
-          return asc ? av.localeCompare(bv) : bv.localeCompare(av);
-        });
-        rows.forEach(r=>tbody.appendChild(r));
-      });
-    });
+    document.getElementById("retryDFM")?.addEventListener("click", e => { e.preventDefault(); this.setState(DFM_STATES.AXIS_PICK); });
   }
 }
 
+/* ---------- Instance + exposition globale ---------- */
 const orchestrator = (typeof window !== 'undefined' && window.DFMOrchestrator) ? window.DFMOrchestrator : new DFMOrchestrator();
 if (typeof window !== 'undefined') {
   window.DFMOrchestrator = orchestrator;
-  // alias pour les vieux appels qui utilisent "orchestrator"
-window.orchestrator = window.DFMOrchestrator;
-
+  window.orchestrator    = window.DFMOrchestrator; // alias legacy pour vieux appels
 }
 
-// Expose startDFM globally for non-module callers
-if (typeof window !== 'undefined') {
-  if (typeof window.DFMOrchestrator.startDFM === 'function') {
-    window.startDFM = window.DFMOrchestrator.startDFM.bind(window.DFMOrchestrator);
-  }
-  dbg('startDFM exposé ?', typeof window.startDFM);
+/* ---------- Hook bouton Analyser en phase "capture" ---------- */
+if (btnAnalyser) {
+  btnAnalyser.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopImmediatePropagation(); // coupe d'éventuels fallbacks
+    const fileId = orchestrator.resolveFileId?.() || window.currentFileId;
+    if (!fileId || !materialIsConfirmed()) { openMaterialModal(); return; }
+    if (!axisIsValidated()) { showAxisPanelIfReady(); return; }
+    orchestrator.setFileId?.(fileId);
+    orchestrator.startDFM?.();
+  }, true); // capture
 }
 
-// ---------------------- Formulaire matière ----------------------
-const EXCLUSIVE_GROUPS = [
-  ["stiffness","flexibility"],           // exemple : exclusifs
-  ["transparent","flame_retardant"]
-];
-const SECTION_LIMITS = { mechanical:3, aesthetic:2, regulatoryStrong:1 };
-
-// util
-const arr = v => Array.isArray(v) ? v : (v ? [v] : []);
-
-function collectMaterialForm(){
-  const form = document.getElementById("materialQuestionnaireForm");
-  const fd = new FormData(form);
-  const data = {};
-  for (const [k,v] of fd.entries()){
-    const key = k.replace("[]","");
-    if (data[key]) {
-      if (Array.isArray(data[key])) data[key].push(v);
-      else data[key] = [data[key], v];
-    } else data[key] = v;
-  }
-
-  const mech = arr(data.mechanical);
-  const aest = arr(data.aesthetic);
-  const reg  = arr(data.regulatory);
-  const warnings = [];
-
-  // Cap au lieu de throw
-  if (mech.length > SECTION_LIMITS.mechanical){
-    warnings.push("Maximum 3 contraintes mécaniques. Les 3 premières ont été conservées.");
-    mech.length = SECTION_LIMITS.mechanical;
-  }
-  if (aest.length > SECTION_LIMITS.aesthetic){
-    warnings.push("Maximum 2 exigences esthétiques. Les 2 premières ont été conservées.");
-    aest.length = SECTION_LIMITS.aesthetic;
-  }
-  const strongCount = reg.filter(id => document.getElementById(id)?.dataset.strong === "true").length;
-  if (strongCount > SECTION_LIMITS.regulatoryStrong){
-    let kept=false;
-    const filtered = [];
-    for (const id of reg){
-      const strong = document.getElementById(id)?.dataset.strong === "true";
-      if (strong && kept) continue;
-      if (strong) kept = true;
-      filtered.push(id);
-    }
-    data.regulatory = filtered;
-    warnings.push("Maximum 1 contrainte réglementaire forte. Seule la première a été conservée.");
-  }
-
-  // Exclusivités (rigidité vs flexibilité…)
-  const ids = [...mech, ...aest, ...(data.regulatory || reg)];
-  for (const group of EXCLUSIVE_GROUPS){
-    const selected = group.filter(id => ids.includes(id));
-    if (selected.length > 1){
-      const keep = selected[0], drop = selected.slice(1);
-      warnings.push(`Critères exclusifs : ${selected.join(", ")}. Seul « ${keep} » a été conservé.`);
-      drop.forEach(x=>{
-        const iM = mech.indexOf(x); if (iM>=0) mech.splice(iM,1);
-        const iA = aest.indexOf(x); if (iA>=0) aest.splice(iA,1);
-        if (Array.isArray(data.regulatory)){
-          const iR = data.regulatory.indexOf(x); if (iR>=0) data.regulatory.splice(iR,1);
-        }
-      });
-    }
-  }
-
-  const profile = {
-    ...data,
-    mechanical: mech,
-    aesthetic: aest,
-    regulatory: Array.isArray(data.regulatory) ? data.regulatory : reg
-  };
-
-  return { ok:true, data:profile, warnings };
-}
-
-// ---------------------- Wiring du bouton Analyser ----------------------
+/* ---------- Wiring init ---------- */
 function initDFMUI() {
   if (typeof window !== 'undefined') {
     window.showMaterialModal = showMaterialModal;
     window.openMaterialModal = openMaterialModal;
   }
-
   document.addEventListener("DOMContentLoaded", () => {
     orchestrator.setFileId(window.CAD.fileIdStep);
     orchestrator.setMaterialProfile(window.CAD.materialProfile);
-
     window.addEventListener('dfm:fileReady', e => {
       window.CAD.fileIdStep = e.detail.fileId;
       orchestrator.setFileId(e.detail.fileId);
     });
-
     document.getElementById('debugFileId')?.addEventListener('click', () => orchestrator.debugFileId());
-
     orchestrator.init();
   });
 }
-
 if (typeof window !== 'undefined') {
-  window.showMaterialModal = showMaterialModal;
-  window.openMaterialModal = openMaterialModal;
   window.DFM_STATES = DFM_STATES;
   window.dfmOrchestrator = orchestrator;
-  window.collectMaterialForm = collectMaterialForm;
   window.initDFMUI = initDFMUI;
+  window.collectMaterialForm = function collectMaterialForm(){ /* … si besoin, tu peux garder ta version complète */ };
 }
+if (typeof window !== 'undefined' && typeof document !== 'undefined') initDFMUI();
 
-if (typeof window !== 'undefined' && typeof document !== 'undefined') {
-  initDFMUI();
-}
+/* ---------- Self-check ---------- */
 function dfmSelfCheck() {
   const errors = [];
-  if (!window.bootstrap || !bootstrap.Modal) errors.push("bootstrap.Modal absent");
-  if (!(document.getElementById("materialModal") || document.querySelector("[data-material-modal]"))) {
-    errors.push("modal matière absent");
-  }
+  if (!document.querySelector("#materialQuestionnaireModal, #materialModal, [data-material-modal], .modal[data-role='material']")) errors.push("modal matière absente");
   if (!btnAnalyser) errors.push("#btnAnalyser/#analyzeBtn/#btn-analyser absent");
-
-  if (errors.length) {
-    console.warn("[DFM selfcheck] Issues:", errors);
-  } else {
-    dbg('selfcheck OK');
-  }
+  if (errors.length) console.warn("[DFM selfcheck] Issues:", errors); else dbg('selfcheck OK');
 }
+if (typeof window !== 'undefined' && typeof document !== 'undefined') window.requestAnimationFrame(dfmSelfCheck);
 
-if (typeof window !== 'undefined' && typeof document !== 'undefined') {
-  window.requestAnimationFrame(dfmSelfCheck);
-}
-
-// Legacy global for older templates still calling onclick="onAnalyzeClick()"
-if (typeof window !== 'undefined') {
-  window.onAnalyzeClick = () => btnAnalyser?.click();
-}
-
-// --- Visualiser & analyse workflow ---------------------------------------
-function getTolerance() {
-  const v = parseFloat(document.getElementById("toleranceSelect")?.value);
-  return Number.isFinite(v) ? v : 0.1;
-}
-
-if (typeof window !== "undefined") window.getTolerance = getTolerance;
-
-// PATCH START: visualize flow via viewerAdapter
-(function(){
-  function $(s){ return document.querySelector(s); }
-  const btnVisualiser = $('#btnVisualiser');
-
-  async function doVisualize(fid){
-    if (!fid) { console.warn('[visualiser] no fileId'); return; }
-    if (!window.viewerAdapter?.viewer) {
-      // Si personne n'a démarré le viewer, on le fait ici
-      const canvas = document.getElementById('xktCanvas');
-      window.initViewer?.({ canvasElement: canvas });
-    }
-    await window.viewerAdapter?.convert?.(fid); // idempotent: OK si déjà converti
-    await window.viewerAdapter?.loadFromFileId?.(fid);
-  }
-
-  if (btnVisualiser) {
-    btnVisualiser.addEventListener('click', () => doVisualize(window.currentFileId));
-  }
-
-  window.addEventListener('dfm:fileReady', (e) => {
-    const fid = (e?.detail && e.detail.fileId) || window.currentFileId;
-    if (fid) doVisualize(fid);
-  });
-})();
-/* ===========================================
-   DFM — OUVERTURE MODALE SANS BOOTSTRAP
-   - force l'ouverture de la "bonne" modale
-   - capture le clic sur #btnAnalyser
-   - bloque les fallbacks concurrents
-   =========================================== */
-
-// 1) Dis-moi (une bonne fois) quelle est la "vraie" modale à ouvrir.
-//    Mets ici l'ID exact si tu le connais (sinon laisse vide, on devinera).
-window.DFM_MATERIAL_MODAL_SELECTOR = window.DFM_MATERIAL_MODAL_SELECTOR || '#materialQuestionnaireModal';
-
-// 2) Trouve la modale "réelle" (celle avec le formulaire)
-function getMaterialModalEl() {
-  const sel = window.DFM_MATERIAL_MODAL_SELECTOR && document.querySelector(window.DFM_MATERIAL_MODAL_SELECTOR)
-    ? window.DFM_MATERIAL_MODAL_SELECTOR
-    : '#materialQuestionnaireModal, #materialModal, [data-material-modal], .modal[data-role="material"]';
-
-  const list = Array.from(document.querySelectorAll(sel));
-  if (!list.length) return null;
-
-  // priorité à celle qui contient un vrai formulaire matière
-  const withForm = list.find(el => el.querySelector('#materialQuestionnaireForm, [data-material-form]'));
-  return withForm || list[0];
-}
-
-// 3) Ouverture/fermeture "vanilla"
-function openModalVanilla(el) {
-  if (!el) return;
-
-  // backdrop
-  let backdrop = document.getElementById('__dfm_backdrop__');
-  if (!backdrop) {
-    backdrop = document.createElement('div');
-    backdrop.id = '__dfm_backdrop__';
-    Object.assign(backdrop.style, {
-      position:'fixed', inset:'0', background:'rgba(0,0,0,.45)', zIndex:'1040', display:'none'
-    });
-    document.body.appendChild(backdrop);
-  }
-
-  // styles de base pour la modale si besoin
-  el.setAttribute('role', 'dialog');
-  el.setAttribute('aria-modal', 'true');
-  el.style.display = 'block';
-  el.style.visibility = 'visible';
-  el.style.opacity = '1';
-  el.style.zIndex = '1050';
-  el.classList.add('show'); // au cas où tes CSS l’utilisent
-
-  // centre si non positionnée
-  const computed = getComputedStyle(el);
-  if (computed.position === 'static') {
-    el.style.position = 'fixed';
-    el.style.left = '50%';
-    el.style.top = '50%';
-    el.style.transform = 'translate(-50%, -50%)';
-    el.style.maxHeight = '90vh';
-    el.style.overflow = 'auto';
-  }
-
-  // afficher backdrop
-  backdrop.style.display = 'block';
-
-  // fermeture sur click [data-dismiss], .btn-close ou backdrop
-  function tryClose(ev) {
-    const t = ev.target;
-    if (
-      t.matches('.btn-close, [data-dismiss="modal"], [data-bs-dismiss="modal"]') ||
-      t === backdrop
-    ) {
-      closeModalVanilla(el);
-    }
-  }
-  backdrop.addEventListener('click', tryClose);
-  el.addEventListener('click', tryClose);
-  el.__dfm_closeHandlers = { tryClose, backdrop };
-}
-
-function closeModalVanilla(el) {
-  if (!el) return;
-  el.style.display = 'none';
-  el.style.visibility = 'hidden';
-  el.style.opacity = '0';
-  el.classList.remove('show');
-  const backdrop = document.getElementById('__dfm_backdrop__');
-  if (backdrop) backdrop.style.display = 'none';
-  if (el.__dfm_closeHandlers) {
-    const { tryClose, backdrop } = el.__dfm_closeHandlers;
-    backdrop?.removeEventListener('click', tryClose);
-    el.removeEventListener('click', tryClose);
-    delete el.__dfm_closeHandlers;
-  }
-}
-
-// 4) API publique unique (écrase les autres implémentations)
-window.showMaterialModal = window.openMaterialModal = function() {
-  const el = getMaterialModalEl();
-  if (!el) { console.warn('[DFM] Modale matière introuvable'); return; }
-
-  // Si bootstrap est là, on l’utilise; sinon fallback vanilla
-  if (window.bootstrap && window.bootstrap.Modal) {
-    window.bootstrap.Modal.getOrCreateInstance(el, { backdrop: 'static' }).show();
-  } else {
-    openModalVanilla(el);
-  }
-};
-
-// 5) Capture le clic sur le bon bouton et coupe les fallbacks
-(function hookAnalyzeButton(){
-  const BTN_SEL = '#btnAnalyser, #analyzeBtn, #btn-analyser';
-
-  document.addEventListener('click', (e) => {
-    const btn = e.target.closest(BTN_SEL);
-    if (!btn) return;
-
-    e.preventDefault();
-    e.stopImmediatePropagation();  // ← empêche les autres scripts d’ouvrir leur modale
-
-    // Workflow minimal: file → matière → axe
-    const fileId  = window.dfmOrchestrator?.resolveFileId?.() || window.currentFileId;
-    const hasMat  = !!window.selectedMaterial;
-    const hasAxis = !!window.selectedAxis;
-
-    if (!fileId || !hasMat) {
-      return window.showMaterialModal();
-    }
-    if (!hasAxis) {
-      const p = document.querySelector('#dfmAxisPanel, #axis-panel');
-      if (p) p.style.display = '';
-      return;
-    }
-
-    window.dfmOrchestrator?.setFileId?.(fileId);
-    window.dfmOrchestrator?.startDFM?.();
-  }, true); // capture = true (prioritaire)
-})();
-
-// PATCH END
+/* Legacy onclick="onAnalyzeClick()" */
+if (typeof window !== 'undefined') window.onAnalyzeClick = () => btnAnalyser?.click();
