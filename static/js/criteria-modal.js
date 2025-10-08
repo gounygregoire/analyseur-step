@@ -677,5 +677,21 @@ document.getElementById('materialConfirmBtn')?.addEventListener('click', () => {
     console.error('[criteria-modal] analyse failed:', err);
   }
 });
+// === après ton scoring/fermeture de modale ===
+
+// 1) Choix matière à exposer (prends la 1ère de ta shortlist, ou celle que l’utilisateur a cliquée)
+const best = (results && results[0]) ? results[0].mat : { id:'ABS', name:'ABS' };
+
+// 2) Exposer globalement (compat descendante)
+window.selectedMaterial = { id: best.id, name: best.name };
+
+// 3) Event moderne pour l’orchestrateur
+window.dispatchEvent(new CustomEvent('material:selected', {
+  detail: { materialProfile: window.selectedMaterial }
+}));
+
+// (facultatif) compat : certains scripts écoutent 'material:confirmed'
+window.dispatchEvent(new CustomEvent('material:confirmed'));
+
   });
 })();

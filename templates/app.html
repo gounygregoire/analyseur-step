@@ -23,6 +23,11 @@
       border-radius:12px; backdrop-filter: blur(2px);
     }
   </style>
+  <style>
+  #dfmAnalysisPanel .table-sm th, 
+  #dfmAnalysisPanel .table-sm td { vertical-align: middle; }
+</style>
+
 </head>
 <body>
   <div class="wrap">
@@ -214,6 +219,13 @@
   </div>
 </div>
 <!-- === /Zone Axe de démoulage === -->
+
+<!-- === Résultats DFM (caché tant que rien n'est lancé) === -->
+<div id="dfmResultsSection" class="pane" style="display:none; margin-top:12px; padding:10px; border-radius:10px; background:#fafafa; border:1px solid #eee">
+  <div id="dfmAnalysisPanel"><!-- rempli par DFMOrchestrator.js --></div>
+</div>
+<!-- === /Résultats DFM === -->
+
 
 
   <!-- IMPORTANT : main.js est un module car il contient des "import" -->

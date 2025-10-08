@@ -49,6 +49,10 @@ const UI = {
   progress(pct){
     const bar = document.getElementById("dfmProgressBar");
     if (bar) bar.style.width = `${pct}%`;
+    // >>> NEW: propager aussi à d’autres UI si besoin
+    window.dispatchEvent(new CustomEvent('cadlytics:dfm:progress', {
+      detail: { pct: Math.max(0, Math.min(100, pct)), phase: 'server', label: 'Analyse DFM' }
+    }));
   }
 };
 
@@ -70,6 +74,13 @@ function axisToVector(ax){
   }
   return null;
 }
+// >>> NEW: pour publier l’event cadlytics avec X/Y/Z si utile
+function vectorToAxisLetter(v = {x:0,y:0,z:1}) {
+  const ax = Math.abs(v.x) >= Math.abs(v.y) && Math.abs(v.x) >= Math.abs(v.z) ? 'X'
+          : Math.abs(v.y) >= Math.abs(v.x) && Math.abs(v.y) >= Math.abs(v.z) ? 'Y' : 'Z';
+  return ax;
+}
+
 async function pollJobStatus(jobId, onUpdate, onDone, onError) {
   let queuedSince = Date.now();
 
@@ -407,6 +418,8 @@ class DFMOrchestrator {
           setTimeout(()=>{ this.axisConfirmBtn.disabled = false; }, 400);
           return;
         }
+
+        // ===== Validation axe =====
         this.axisValidated = true;
         this.axisSelection = {
           axis: this.currentAxis,
@@ -415,11 +428,33 @@ class DFMOrchestrator {
         };
         this.setDemouldAxis({ axis: this.currentAxis, direction: this.invert ? -1 : 1 });
         const vec = this.demouldAxis;
-        window.dispatchEvent(new CustomEvent('axis:confirmed', { detail: { axis: vec } }));
+
+        // Event natif déjà utilisé dans ton code
+        window.dispatchEvent(new CustomEvent('axis:confirmed', { detail: { axis: vec, invert: this.invert } }));
+
+        // >>> NEW: Event cadlytics pour les autres panneaux (avec lettre X/Y/Z)
+        const axisLetter = vectorToAxisLetter(vec);
+        window.dispatchEvent(new CustomEvent('cadlytics:demould-axis-selected', { detail: { axis: axisLetter } }));
+
+        // Feedback UI
         this.axisConfirmBtn.innerHTML = 'Axe validé <span class="ms-1">✅</span>';
         this.axisConfirmBtn.classList.remove('btn-primary');
         this.axisConfirmBtn.classList.add('btn-success');
         dbg('axis confirm after', this.axisSelection);
+
+        // >>> NEW: Lancer directement l’analyse DFM (intégralité) après validation
+        // (on conserve tes endpoints / workflow existants)
+        const ensured = this.setFileIdFromPage();
+        const fid = ensured || this.fileId;
+        if (fid && this.materialProfile) {
+          // Affiche le loader local
+          this._renderLoading();
+          // Départ de l’analyse serveur
+          this.startDFM();
+        } else {
+          // Relancer bouton au cas où
+          this.axisConfirmBtn.disabled = false;
+        }
       });
     }
 
@@ -512,7 +547,7 @@ class DFMOrchestrator {
 
     this.invertToggle = panel.querySelector('#invertAxisToggle');
 
-    // 6) Bouton "Valider l’axe" → émettre axis:confirmed
+    // 6) Bouton "Valider l’axe" → émettre axis:confirmed (et lancer analyse)
     panel.querySelector('#axisConfirmBtn')?.addEventListener('click', () => {
       const axis = this.axisPicker?.getAxis?.();
       if (!axis) {
@@ -522,7 +557,18 @@ class DFMOrchestrator {
       const invert = !!this.invertToggle?.checked;
       dbg('axis:confirmed emit', axis, invert);
       window.dispatchEvent(new CustomEvent('axis:confirmed', { detail: { axis, invert } }));
+      // >>> NEW: cadlytics event (lettre X/Y/Z)
+      const letter = vectorToAxisLetter(axis);
+      window.dispatchEvent(new CustomEvent('cadlytics:demould-axis-selected', { detail: { axis: letter } }));
       panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+      // Lancer aussitôt l’analyse
+      const ensured = this.setFileIdFromPage();
+      const fid = ensured || this.fileId;
+      if (fid && this.materialProfile) {
+        this._renderLoading();
+        this.startDFM();
+      }
     });
   }
 
@@ -722,8 +768,7 @@ const orchestrator = (typeof window !== 'undefined' && window.DFMOrchestrator) ?
 if (typeof window !== 'undefined') {
   window.DFMOrchestrator = orchestrator;
   // alias pour les vieux appels qui utilisent "orchestrator"
-window.orchestrator = window.DFMOrchestrator;
-
+  window.orchestrator = window.DFMOrchestrator;
 }
 
 // Expose startDFM globally for non-module callers
@@ -742,7 +787,7 @@ const EXCLUSIVE_GROUPS = [
 const SECTION_LIMITS = { mechanical:3, aesthetic:2, regulatoryStrong:1 };
 
 // util
-const arr = v => Array.isArray(v) ? v : (v ? [v] : []);
+const arr = v => Array.isArray(v) ? v : (v ? [v] : []); 
 
 function collectMaterialForm(){
   const form = document.getElementById("materialQuestionnaireForm");
