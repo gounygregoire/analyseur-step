@@ -164,9 +164,9 @@
 
           <!-- Bouton ANalyser (AJOUT) -->
           <div id="analysisBar" class="analysis-bar" style="margin-top:12px; display:flex; gap:8px; align-items:center;">
-            <button id="btnAnalyser" type="button" class="btn btn-primary">🔎 Analyser</button>
+            <button id="btnAnalyser" type="button" class="btn btn-success">🔎 Analyser</button>
             <span id="analysisHint" style="font-size:0.9rem; opacity:0.8;">
-              Ouvre la modale critères et obtiens 3 matières recommandées.
+              Choisis tes critères et obtiens 3 matières recommandées.
             </span>
           </div>
 
@@ -306,5 +306,126 @@
 </script>
 
   <script type="module" src="/static/js/ping.js"></script>
+
+  <!-- MODALE MATIÈRE -->
+<div id="materialModal" class="modal" tabindex="-1" aria-hidden="true" data-role="material">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Critères matière</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
+      </div>
+
+      <div class="modal-body">
+        <form id="materialQuestionnaireForm">
+          <div id="criteriaSummary" class="small text-muted mb-2"></div>
+
+          <fieldset class="mb-3">
+            <legend class="fs-6">Contraintes mécaniques</legend>
+            <div class="form-check">
+              <input class="form-check-input criterion" type="checkbox" id="rigidite_elevee" data-section="meca">
+              <label class="form-check-label" for="rigidite_elevee">Rigidité élevée</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input criterion" type="checkbox" id="flexibilite" data-section="meca">
+              <label class="form-check-label" for="flexibilite">Flexibilité</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input criterion" type="checkbox" id="resistance_chocs" data-section="meca">
+              <label class="form-check-label" for="resistance_chocs">Résistance aux chocs</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input criterion" type="checkbox" id="flexion" data-section="meca">
+              <label class="form-check-label" for="flexion">Flexion</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input criterion" type="checkbox" id="traction" data-section="meca">
+              <label class="form-check-label" for="traction">Traction</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input criterion" type="checkbox" id="usure" data-section="meca">
+              <label class="form-check-label" for="usure">Usure / frottement</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input criterion" type="checkbox" id="fatigue" data-section="meca">
+              <label class="form-check-label" for="fatigue">Fatigue</label>
+            </div>
+          </fieldset>
+
+          <fieldset class="mb-3">
+            <legend class="fs-6">Esthétique</legend>
+            <div class="form-check">
+              <input class="form-check-input criterion" type="checkbox" id="transparence" data-section="aesthetic">
+              <label class="form-check-label" for="transparence">Transparence</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input criterion" type="checkbox" id="qualite_surface" data-section="aesthetic">
+              <label class="form-check-label" for="qualite_surface">Qualité de surface</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input criterion" type="checkbox" id="texture_possible" data-section="aesthetic">
+              <label class="form-check-label" for="texture_possible">Texture possible</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input criterion" type="checkbox" id="finition_bril" data-section="aesthetic">
+              <label class="form-check-label" for="finition_bril">Finition brillante</label>
+            </div>
+          </fieldset>
+
+          <fieldset class="mb-3">
+            <legend class="fs-6">Réglementaire</legend>
+            <div class="form-check">
+              <input class="form-check-input criterion" type="checkbox" id="contact_alimentaire" data-section="regulatory">
+              <label class="form-check-label" for="contact_alimentaire">Contact alimentaire</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input criterion" type="checkbox" id="qualite_medicale" data-section="regulatory">
+              <label class="form-check-label" for="qualite_medicale">Qualité médicale</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input criterion" type="checkbox" id="retardateur_flamme" data-section="regulatory">
+              <label class="form-check-label" for="retardateur_flamme">Retardateur de flamme</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input criterion" type="checkbox" id="proprietes_elec" data-section="regulatory">
+              <label class="form-check-label" for="proprietes_elec">Propriétés électriques</label>
+            </div>
+          </fieldset>
+        </form>
+
+        <div id="materialOptions" class="d-none"></div>
+      </div>
+
+      <div class="modal-footer">
+        <button id="materialConfirmBtn" type="button" class="btn btn-primary">
+          <i class="bi bi-magic me-2"></i>Analyser et recommander
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- (Optionnel) Bootstrap JS si tu l’as -->
+<!-- <script src="https://cdn.jsdelivr.net/npm/bootstrap@5/dist/js/bootstrap.bundle.min.js"></script> -->
+
+<!-- Ton moteur de règles + reco -->
+<script src="/static/js/criteria-modal.js"></script>
+
+<!-- Ton orchestrateur -->
+<script type="module" src="/static/js/DFMOrchestrator.js"></script>
+
+<script>
+  // Ouverture universelle (Bootstrap ou fallback)
+  window.openMaterialModal = function() {
+    const el = document.getElementById('materialModal') || document.querySelector('[data-material-modal]');
+    if (!el) return alert('Modale matière introuvable');
+    if (window.bootstrap?.Modal) {
+      bootstrap.Modal.getOrCreateInstance(el, { backdrop: 'static' }).show();
+    } else {
+      el.style.display = 'block';
+      el.classList.add('open');
+    }
+  };
+</script>
+
 </body>
 </html>
