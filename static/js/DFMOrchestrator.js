@@ -712,6 +712,9 @@ class DFMOrchestrator {
 const orchestrator = (typeof window !== 'undefined' && window.DFMOrchestrator) ? window.DFMOrchestrator : new DFMOrchestrator();
 if (typeof window !== 'undefined') {
   window.DFMOrchestrator = orchestrator;
+  // alias pour les vieux appels qui utilisent "orchestrator"
+window.orchestrator = window.DFMOrchestrator;
+
 }
 
 // Expose startDFM globally for non-module callers
