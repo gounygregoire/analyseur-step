@@ -62,45 +62,75 @@ const axisY   = $("#axisY");
 const axisZ   = $("#axisZ");
 const projAxisRadios = $$('input[name="projAxis"]');
 
-/* ====== Bouton "Analyser" & Modale Matière ====== */
-const btnAnalyser = document.querySelector("#btnAnalyser");
+/* ====== Bouton "Analyser" (3 ids possibles) ====== */
+const btnAnalyser = document.querySelector("#btnAnalyser, #analyzeBtn, #btn-analyser");
 
-/* On accepte soit un id, soit un data-attr */
-const materialModalSelectors    = ['#materialModal', '[data-material-modal]'];
-const materialFormSelectors     = ['#materialForm',  '[data-material-form]'];
-const materialResultsSelectors  = ['#materialResults', '[data-material-results]'];
+/* ------------------------------------------------------------------
+   Fallback modale matière SANS entrer en conflit avec DFMOrchestrator
+   ------------------------------------------------------------------ */
+const materialModalSelectors  = ['#materialModal', '[data-material-modal]'];
+const materialFormSelectors   = ['#materialQuestionnaireForm', '#materialForm', '[data-material-form]'];
+const materialResultsSelectors= ['#materialResults', '[data-material-results]'];
 
-function q1(selectors){
-  for (const s of selectors) {
-    const el = document.querySelector(s);
-    if (el) return el;
-  }
-  return null;
-}
+function q1(list){ for (const s of list){ const el=document.querySelector(s); if (el) return el; } return null; }
 function findMaterialModal()   { return q1(materialModalSelectors); }
 function findMaterialForm()    { return q1(materialFormSelectors); }
 function findMaterialResults() { return q1(materialResultsSelectors); }
 
-/* Ouvre la modale en réutilisant TA logique si présente (UNE SEULE DÉFINITION) */
-function openMaterialModal() {
-  // 1) Fonctions globales déjà présentes dans ton projet
-  if (typeof window.showMaterialModal === "function") {
-    try { window.showMaterialModal(); return findMaterialModal(); } catch(e){ console.warn(e); }
-  }
-  if (typeof window.openMaterialModal === "function") {
-    try { window.openMaterialModal(); return findMaterialModal(); } catch(e){ console.warn(e); }
-  }
+/* crée une petite modale si vraiment rien n'existe dans le DOM */
+function ensureMaterialModalFallback(){
+  let el = findMaterialModal();
+  if (el) return el;
 
-  // 2) Sinon on gère directement
-  const el = findMaterialModal();
-  if (!el) { alert("Modale critères introuvable (id ou data-attribute)."); return null; }
+  const wrap = document.createElement("div");
+  wrap.innerHTML = `
+  <div class="modal fade" data-material-modal tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog"><div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Critères matière</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
+      </div>
+      <div class="modal-body">
+        <form id="materialQuestionnaireForm" class="vstack" style="gap:.5rem">
+          <strong>Contraintes mécaniques</strong>
+          <label><input type="checkbox" name="mechanical" value="stiffness"> Rigidité</label>
+          <label><input type="checkbox" name="mechanical" value="impact"> Choc / Impact</label>
+          <label><input type="checkbox" name="mechanical" value="temperature"> Température</label>
 
+          <strong class="mt-2">Esthétique</strong>
+          <label><input type="checkbox" name="aesthetic" value="cosmetic"> Aspect soigné</label>
+          <label><input type="checkbox" name="aesthetic" value="transparent"> Transparent</label>
+
+          <strong class="mt-2">Réglementaire</strong>
+          <label id="food" data-strong="true"><input type="checkbox" name="regulatory" value="food"> Contact alimentaire</label>
+          <label id="flame_retardant" data-strong="true"><input type="checkbox" name="regulatory" value="flame_retardant"> Auto-extinguible</label>
+        </form>
+
+        <div class="mt-2">
+          <button id="btnMaterialRecompute" type="button" class="btn btn-primary btn-sm">Recommander</button>
+        </div>
+        <div data-material-results style="display:none; margin-top:12px"></div>
+      </div>
+    </div></div>
+  </div>`;
+  el = wrap.firstElementChild;
+  document.body.appendChild(el);
+  return el;
+}
+
+/* ouverture SANS redéclarer openMaterialModal/showMaterialModal */
+function openMaterialModalSafe(){
+  // 1) Si DFM a déjà exposé ses helpers, on les utilise
+  if (typeof window.openMaterialModal === "function") { try { window.openMaterialModal(); return findMaterialModal(); } catch(e){ console.warn(e); } }
+  if (typeof window.showMaterialModal === "function") { try { window.showMaterialModal(); return findMaterialModal(); } catch(e){ console.warn(e); } }
+
+  // 2) Sinon fallback local
+  const el = findMaterialModal() || ensureMaterialModalFallback();
+  if (!el) { alert("Modale critères indisponible."); return null; }
   if (window.bootstrap?.Modal) {
-    const modal = window.bootstrap.Modal.getOrCreateInstance(el);
-    modal.show();
+    window.bootstrap.Modal.getOrCreateInstance(el, { backdrop: "static" }).show();
   } else {
-    el.classList.add("open");
-    el.style.display = "block";
+    el.classList.add("open"); el.style.display="block";
   }
   return el;
 }
@@ -175,10 +205,9 @@ function drawAxes(selected='Z'){
   arrow(cx,cy, cx-0.7*L,cy+0.7*L, 'Z', cZ);
 }
 drawAxes('Z');
-// ⚠ corrige: écoute bien les radios name="projAxis"
 document.addEventListener('change', (ev)=>{
   const tgt = ev.target;
-  if (tgt && tgt.name === 'projAxis') drawAxes(tgt.value);
+  if (tgt && tgt.name === 'axis') drawAxes(tgt.value);
 });
 
 /* ---------- NavCube ---------- */
@@ -256,6 +285,7 @@ function updateUnitsFromAABB(aabbLike) {
     }
   } catch {}
 }
+
 function updateUnitsFromBBox(bboxMM) {
   try {
     const a = viewer.scene?.aabb;
@@ -292,7 +322,7 @@ if ("snapping" in distanceCtrl) {
   window.addEventListener("keyup",   (e)=>{ if (!e.altKey) distanceCtrl.snapping = true;  }, {passive:true});
 }
 
-/* --- Conversion GENERIQUE labels → "mm" --- */
+/* --- Conversion texte d’overlays → mm --- */
 function toFR(n){
   const a = Math.abs(n);
   const d = a >= 1000 ? 0 : a >= 100 ? 1 : a >= 10 ? 2 : 3;
@@ -836,116 +866,19 @@ projAxisRadios.forEach(r => r?.addEventListener("change", ()=>{
   if (currentFileId) fetchStats(currentFileId, currentAxis);
 }));
 
-/* ==================== RECOMMANDATION MATIÈRES ==================== */
-const MATERIALS_DB = [
-  { name: "ABS (ou PC-ABS)", props: { rigidity:3, impact:3, temp:2, uv:1, chem:1, food:0, cost:3, aesthetics:3, transparent:0, flame:1, dim_stability:2, outdoor:1 }, why: "Bon compromis coût/rigidité/impact, finitions propres, moulage facile." },
-  { name: "PC (Polycarbonate)", props: { rigidity:3, impact:5, temp:3, uv:2, chem:1, food:1, cost:1, aesthetics:2, transparent:1, flame:2, dim_stability:3, outdoor:2 }, why: "Très résistant aux chocs, tenue thermique, existe en transparent." },
-  { name: "PA66 GF30", props: { rigidity:5, impact:3, temp:4, uv:2, chem:3, food:0, cost:1, aesthetics:1, transparent:0, flame:2, dim_stability:4, outdoor:2 }, why: "Très rigide/stable, bonne tenue température et chimie, pièces techniques." },
-  { name: "PP", props: { rigidity:2, impact:2, temp:2, uv:1, chem:3, food:2, cost:5, aesthetics:2, transparent:0, flame:0, dim_stability:1, outdoor:1 }, why: "Économique, bonne chimie, souvent OK contact alimentaire." },
-  { name: "POM (Acétal)", props: { rigidity:3, impact:3, temp:2, uv:1, chem:4, food:2, cost:2, aesthetics:2, transparent:0, flame:0, dim_stability:4, outdoor:1 }, why: "Très bonne stabilité dimensionnelle & frottement." },
-  { name: "PETG", props: { rigidity:2, impact:3, temp:2, uv:1, chem:2, food:2, cost:3, aesthetics:3, transparent:1, flame:0, dim_stability:2, outdoor:1 }, why: "Facile et esthétique, transparence possible, souvent alimentaire." }
-];
-
-const CRITERIA_WEIGHTS = {
-  rigidity: 3, impact: 3, temp: 3, uv: 2, chem: 3, food: 3, cost_low: 3,
-  aesthetics: 2, transparent: 3, flame: 2, dim_stability: 3, outdoor: 2
-};
-
-/* Lecture critères du formulaire */
-function readCriteria() {
-  const form = findMaterialForm();
-  if (!form) return {};
-  const selected = {};
-  const inputs = form.querySelectorAll("input, select");
-  inputs.forEach((el) => {
-    if ((el.type === "checkbox" || el.type === "radio") && el.checked) {
-      selected[el.name] = true;
-    } else if (el.tagName === "SELECT") {
-      const val = (el.value || "").toLowerCase();
-      if (val && val !== "none") selected[`${el.name}:${val}`] = true;
-    }
-  });
-  return selected;
-}
-
-/* Scoring & rendu */
-function scoreMaterials(selectedCriteria) {
-  const normalized = new Set(Object.keys(selectedCriteria).map((k)=>k.split(":")[0]));
-  return MATERIALS_DB.map((mat) => {
-    let score = 0;
-    normalized.forEach((crit) => {
-      const w = CRITERIA_WEIGHTS[crit] || 0;
-      switch (crit) {
-        case "rigidity":      score += w * (mat.props.rigidity || 0); break;
-        case "impact":        score += w * (mat.props.impact   || 0); break;
-        case "temp":          score += w * (mat.props.temp      || 0); break;
-        case "uv":            score += w * (mat.props.uv        || 0); break;
-        case "chem":          score += w * (mat.props.chem      || 0); break;
-        case "food":          score += w * (mat.props.food      || 0); break;
-        case "cost_low":      score += w * (mat.props.cost      || 0); break;
-        case "aesthetics":    score += w * (mat.props.aesthetics|| 0); break;
-        case "transparent":   score += w * (mat.props.transparent||0); break;
-        case "flame":         score += w * (mat.props.flame     || 0); break;
-        case "dim_stability": score += w * (mat.props.dim_stability||0); break;
-        case "outdoor":       score += w * (mat.props.outdoor   || 0); break;
-      }
-    });
-    return { ...mat, score };
-  }).sort((a, b) => b.score - a.score);
-}
-
-function renderMaterialResults(ranked) {
-  const host = findMaterialResults();
-  if (!host) return;
-
-  if (!ranked || !ranked.length) {
-    host.style.display = "block";
-    host.innerHTML = `
-      <div class="alert alert-warning" role="alert" style="margin:0;">
-        Aucun critère sélectionné. Coche au moins 1 critère pour une recommandation pertinente.
-      </div>`;
+/* ==================== Lien avec le DFM ==================== */
+/* Le bouton "Analyser" délègue:
+   1) Au DFM s’il est chargé (handleAnalyzeClick).
+   2) Sinon, on ouvre la modale matière (globale) ou le fallback local. */
+btnAnalyser?.addEventListener("click", (e) => {
+  e.preventDefault();
+  if (window.DFMOrchestrator?.handleAnalyzeClick) {
+    window.DFMOrchestrator.handleAnalyzeClick();
     return;
   }
-
-  const top3 = ranked.slice(0, 3);
-  host.style.display = "block";
-  host.innerHTML = `
-    <div class="card" style="margin-top:8px;">
-      <div class="card-body">
-        <h5 class="card-title" style="margin-bottom:8px;">Top 3 matières recommandées</h5>
-        <ol style="margin:0; padding-left:18px;">
-          ${top3.map(m => `
-            <li style="margin-bottom:10px;">
-              <strong>${m.name}</strong>
-              <div style="font-size:0.95rem; opacity:0.9;">${m.why}</div>
-              <div style="font-size:0.85rem; opacity:0.8;">Score: ${m.score.toFixed(1)}</div>
-            </li>
-          `).join("")}
-        </ol>
-        <div style="margin-top:10px; font-size:0.9rem; opacity:0.85;">
-          ⚠️ À valider selon contraintes: normes (UL/EN, alimentaire), couleur/texture, retrait, dispo matière, coût outillage.
-        </div>
-      </div>
-    </div>`;
-}
-
-/* Flux bouton “Analyser” */
-btnAnalyser?.addEventListener("click", () => {
-  const modalEl = openMaterialModal();
-  if (!modalEl) return;
-  const selected = readCriteria();
-  const ranked   = scoreMaterials(selected);
-  renderMaterialResults(ranked);
+  // Pas de DFM: au moins ouvrir la modale de critères
+  openMaterialModalSafe();
 });
 
-/* Recompute live si un bouton interne existe */
-const btnMaterialRecompute = document.querySelector("#btnMaterialRecompute");
-btnMaterialRecompute?.addEventListener("click", (e) => {
-  e.preventDefault();
-  const selected = readCriteria();
-  const ranked = scoreMaterials(selected);
-  renderMaterialResults(ranked);
-});
-
-// Export vide
+// Petit export vide pour certains bundlers/linters
 export {};
