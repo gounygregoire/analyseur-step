@@ -741,54 +741,43 @@
     });
   </script>
 
-  <script>
+<script>
 (function(){
-  const host = document.getElementById('demouldHost');
-  const confMsg = document.getElementById('demouldConfMsg');
+  const host   = document.getElementById('demouldHost');
+  const confMsg= document.getElementById('demouldConfMsg');
 
   function showDemouldPanel(msg, hasConf){
     if (!host) return;
     host.style.display = 'block';
     confMsg.textContent = hasConf
-      ? `Des conflits ont été détectés : ${msg || 'voir détails dans la modale'}`
+      ? `Des conflits ont été détectés : ${msg || 'voir détails'}`
       : 'Aucun conflit bloquant détecté.';
   }
 
-  // Quand l’analyse matière est terminée, on révèle la zone
-  window.addEventListener('cadlytics:material-analysis-done', (ev)=>{
+  // Apparition de la zone après analyse
+  window.addEventListener('cadlytics:material-analysis-done', (ev) => {
     const conflicts = ev.detail?.conflicts || [];
-    showDemouldPanel(conflicts[0] || '', (conflicts.length > 0));
+    showDemouldPanel(conflicts[0] || '', conflicts.length > 0);
+    console.log('[demould] event received', ev.detail);
   });
 
-  // Bouton "AUTO (détecter)" — stub : ici on pourrait appeler ton backend/worker
-  // Pour l’instant on choisit l’axe Z par défaut et on émet un event
-  document.getElementById('btnAutoDemAxis')?.addEventListener('click', ()=>{
+  // AUTO et VALIDER (inchangé)
+  document.getElementById('btnAutoDemAxis')?.addEventListener('click', () => {
     const z = document.querySelector('input[name="demAxis"][value="Z"]');
     if (z) { z.checked = true; }
-    // Event interne si tu veux réagir côté viewer
     window.dispatchEvent(new CustomEvent('cadlytics:demould-axis-auto', { detail: { axis: 'Z' } }));
   });
 
-  // Bouton "Valider l’axe" — synchronise aussi tes radios de surface projetée (X/Y/Z)
-  document.getElementById('btnSetDemAxis')?.addEventListener('click', ()=>{
+  document.getElementById('btnSetDemAxis')?.addEventListener('click', () => {
     const val = document.querySelector('input[name="demAxis"]:checked')?.value || 'Z';
-
-    // 1) Synchroniser les radios de projection (déjà présentes dans ton analysePanel)
     const proj = document.querySelector(`input[name="projAxis"][value="${val}"]`);
     if (proj) {
       proj.checked = true;
       proj.dispatchEvent(new Event('change', { bubbles:true }));
     }
-
-    // 2) Notifier le reste du front (ex: lancer calculs de dépouilles côté worker)
-    window.dispatchEvent(new CustomEvent('cadlytics:demould-axis-selected', {
-      detail: { axis: val }
-    }));
-
-    // 3) Feedback discret
-    confMsg.textContent = `Axe de démoulage défini sur ${val}.`;
+    window.dispatchEvent(new CustomEvent('cadlytics:demould-axis-selected', { detail: { axis: val } }));
+    if (confMsg) confMsg.textContent = `Axe de démoulage défini sur ${val}.`;
   });
-
 })();
 </script>
 

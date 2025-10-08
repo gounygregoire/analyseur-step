@@ -628,41 +628,54 @@
       updateSummaryAndConflicts(readForm());
     });
 
-    // Bouton principal
-    $("#materialConfirmBtn")?.addEventListener("click", ()=>{
-      const f = readForm();
-      updateSummaryAndConflicts(f);
-      
-      // ... à la fin du handler du click sur #materialConfirmBtn
-      const conflicts = detectConflicts(f);
+// Bouton principal
+document.getElementById('materialConfirmBtn')?.addEventListener('click', () => {
+  try {
+    const f = readForm();
+    updateSummaryAndConflicts(f);
 
-      // Fermer la modale
-      const modalEl = document.getElementById('materialModal');
-      bootstrap.Modal.getInstance(modalEl)?.hide();
+    // 1) Scoring & tri
+    let results = MATERIALS.map(mat => {
+      const r = scoreMaterial(mat, f);
+      return { mat, ...r };
+    })
+    .filter(r => r.pass)
+    .sort((a, b) => b.score - a.score);
 
-      // Émettre un event global pour le viewer / panneau démoulage
-      window.dispatchEvent(new CustomEvent('cadlytics:material-analysis-done', {
-        detail: {
-          conflicts,
-          hasConflicts: (conflicts?.length || 0) > 0,
-          shortlist: (results || []).slice(0,3).map(r => ({ id: r.mat.id, score: r.score }))
-        }
-      }));
-
-
-      // Score et tri
-      const results = MATERIALS.map(mat=>{
-        const r = scoreMaterial(mat, f);
-        return {mat, ...r};
-      }).filter(r=>r.pass).sort((a,b)=>b.score-a.score);
-
-      if (!results.length){
-        $("#materialShortlist")?.classList.remove("d-none");
-        $("#shortlistCards").innerHTML = `<div class="col-12"><div class="alert alert-danger small">Aucune matière ne satisfait les contraintes. Allège les Must ou ajuste les seuils.</div></div>`;
-        $("#whyReco").innerHTML = `<div class="small text-muted">Essaie de réduire les Must et/ou d’augmenter le prix cible / baisser Température service.</div>`;
-        return;
-      }
+    // 2) Affichage shortlist (optionnel pour toi)
+    if (!results.length) {
+      document.getElementById('materialShortlist')?.classList.remove('d-none');
+      document.getElementById('shortlistCards').innerHTML =
+        `<div class="col-12"><div class="alert alert-danger small">
+           Aucune matière ne satisfait les contraintes. Allège les Must ou ajuste les seuils.
+         </div></div>`;
+      document.getElementById('whyReco').innerHTML =
+        `<div class="small text-muted">
+           Essaie de réduire les Must et/ou d’augmenter le prix cible / baisser Température service.
+         </div>`;
+    } else {
       renderShortlist(f, results);
-    });
+    }
+
+    // 3) Conflits (pour message court)
+    const conflicts = detectConflicts(f);
+
+    // 4) Fermer la modale proprement
+    const modalEl = document.getElementById('materialModal');
+    const modal = bootstrap.Modal.getInstance(modalEl) || bootstrap.Modal.getOrCreateInstance(modalEl);
+    modal.hide();
+
+    // 5) Émettre l’event global (=> déclenche l’apparition de la zone d’axe)
+    window.dispatchEvent(new CustomEvent('cadlytics:material-analysis-done', {
+      detail: {
+        conflicts,
+        hasConflicts: (conflicts?.length || 0) > 0,
+        shortlist: results.slice(0, 3).map(r => ({ id: r.mat.id, score: r.score }))
+      }
+    }));
+  } catch (err) {
+    console.error('[criteria-modal] analyse failed:', err);
+  }
+});
   });
 })();
