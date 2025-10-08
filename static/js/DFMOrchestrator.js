@@ -890,4 +890,141 @@ if (typeof window !== "undefined") window.getTolerance = getTolerance;
     if (fid) doVisualize(fid);
   });
 })();
+/* ===========================================
+   DFM — OUVERTURE MODALE SANS BOOTSTRAP
+   - force l'ouverture de la "bonne" modale
+   - capture le clic sur #btnAnalyser
+   - bloque les fallbacks concurrents
+   =========================================== */
+
+// 1) Dis-moi (une bonne fois) quelle est la "vraie" modale à ouvrir.
+//    Mets ici l'ID exact si tu le connais (sinon laisse vide, on devinera).
+window.DFM_MATERIAL_MODAL_SELECTOR = window.DFM_MATERIAL_MODAL_SELECTOR || '#materialQuestionnaireModal';
+
+// 2) Trouve la modale "réelle" (celle avec le formulaire)
+function getMaterialModalEl() {
+  const sel = window.DFM_MATERIAL_MODAL_SELECTOR && document.querySelector(window.DFM_MATERIAL_MODAL_SELECTOR)
+    ? window.DFM_MATERIAL_MODAL_SELECTOR
+    : '#materialQuestionnaireModal, #materialModal, [data-material-modal], .modal[data-role="material"]';
+
+  const list = Array.from(document.querySelectorAll(sel));
+  if (!list.length) return null;
+
+  // priorité à celle qui contient un vrai formulaire matière
+  const withForm = list.find(el => el.querySelector('#materialQuestionnaireForm, [data-material-form]'));
+  return withForm || list[0];
+}
+
+// 3) Ouverture/fermeture "vanilla"
+function openModalVanilla(el) {
+  if (!el) return;
+
+  // backdrop
+  let backdrop = document.getElementById('__dfm_backdrop__');
+  if (!backdrop) {
+    backdrop = document.createElement('div');
+    backdrop.id = '__dfm_backdrop__';
+    Object.assign(backdrop.style, {
+      position:'fixed', inset:'0', background:'rgba(0,0,0,.45)', zIndex:'1040', display:'none'
+    });
+    document.body.appendChild(backdrop);
+  }
+
+  // styles de base pour la modale si besoin
+  el.setAttribute('role', 'dialog');
+  el.setAttribute('aria-modal', 'true');
+  el.style.display = 'block';
+  el.style.visibility = 'visible';
+  el.style.opacity = '1';
+  el.style.zIndex = '1050';
+  el.classList.add('show'); // au cas où tes CSS l’utilisent
+
+  // centre si non positionnée
+  const computed = getComputedStyle(el);
+  if (computed.position === 'static') {
+    el.style.position = 'fixed';
+    el.style.left = '50%';
+    el.style.top = '50%';
+    el.style.transform = 'translate(-50%, -50%)';
+    el.style.maxHeight = '90vh';
+    el.style.overflow = 'auto';
+  }
+
+  // afficher backdrop
+  backdrop.style.display = 'block';
+
+  // fermeture sur click [data-dismiss], .btn-close ou backdrop
+  function tryClose(ev) {
+    const t = ev.target;
+    if (
+      t.matches('.btn-close, [data-dismiss="modal"], [data-bs-dismiss="modal"]') ||
+      t === backdrop
+    ) {
+      closeModalVanilla(el);
+    }
+  }
+  backdrop.addEventListener('click', tryClose);
+  el.addEventListener('click', tryClose);
+  el.__dfm_closeHandlers = { tryClose, backdrop };
+}
+
+function closeModalVanilla(el) {
+  if (!el) return;
+  el.style.display = 'none';
+  el.style.visibility = 'hidden';
+  el.style.opacity = '0';
+  el.classList.remove('show');
+  const backdrop = document.getElementById('__dfm_backdrop__');
+  if (backdrop) backdrop.style.display = 'none';
+  if (el.__dfm_closeHandlers) {
+    const { tryClose, backdrop } = el.__dfm_closeHandlers;
+    backdrop?.removeEventListener('click', tryClose);
+    el.removeEventListener('click', tryClose);
+    delete el.__dfm_closeHandlers;
+  }
+}
+
+// 4) API publique unique (écrase les autres implémentations)
+window.showMaterialModal = window.openMaterialModal = function() {
+  const el = getMaterialModalEl();
+  if (!el) { console.warn('[DFM] Modale matière introuvable'); return; }
+
+  // Si bootstrap est là, on l’utilise; sinon fallback vanilla
+  if (window.bootstrap && window.bootstrap.Modal) {
+    window.bootstrap.Modal.getOrCreateInstance(el, { backdrop: 'static' }).show();
+  } else {
+    openModalVanilla(el);
+  }
+};
+
+// 5) Capture le clic sur le bon bouton et coupe les fallbacks
+(function hookAnalyzeButton(){
+  const BTN_SEL = '#btnAnalyser, #analyzeBtn, #btn-analyser';
+
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest(BTN_SEL);
+    if (!btn) return;
+
+    e.preventDefault();
+    e.stopImmediatePropagation();  // ← empêche les autres scripts d’ouvrir leur modale
+
+    // Workflow minimal: file → matière → axe
+    const fileId  = window.dfmOrchestrator?.resolveFileId?.() || window.currentFileId;
+    const hasMat  = !!window.selectedMaterial;
+    const hasAxis = !!window.selectedAxis;
+
+    if (!fileId || !hasMat) {
+      return window.showMaterialModal();
+    }
+    if (!hasAxis) {
+      const p = document.querySelector('#dfmAxisPanel, #axis-panel');
+      if (p) p.style.display = '';
+      return;
+    }
+
+    window.dfmOrchestrator?.setFileId?.(fileId);
+    window.dfmOrchestrator?.startDFM?.();
+  }, true); // capture = true (prioritaire)
+})();
+
 // PATCH END
