@@ -135,26 +135,42 @@ async function pollDFMReport(fileId, maxMs=120000){
   showError?.("Analyse trop longue, réessaie.");
 }
 
+// --- Matériau: trouver la "vraie" modale de l'app, PAS un fallback ---
+function findRealMaterialModal() {
+  // 1) candidats connus (ajoute ici ton id exact si besoin)
+  const SELS = [
+    '#materialModal',
+    '#materialQuestionnaireModal',
+    '[data-material-modal]:not([data-fallback])',
+    '.modal[data-role="material"]'
+  ];
+  const candidates = Array.from(document.querySelectorAll(SELS.join(',')));
+
+  // 2) si plusieurs, on privilégie celle qui contient le vrai formulaire
+  const withForm = candidates.find(el =>
+    el.querySelector('#materialQuestionnaireForm') ||
+    el.querySelector('[data-material-form]')
+  );
+  return withForm || candidates[0] || null;
+}
+
 function showMaterialModal() {
-  if (!window.bootstrap) {
-    console.error("Bootstrap non chargé");
-    return;
-  }
-  const el =
-    document.getElementById("materialModal") ||
-    document.querySelector("[data-material-modal]");
+  const el = findRealMaterialModal();
   if (!el) {
-    console.error("Modal matière introuvable");
+    console.warn('[dfm] modale matière introuvable (id/data-attr).');
     return;
   }
-  console.info('[dfm] ouverture modale matière');
-  const modal = bootstrap.Modal.getOrCreateInstance(el, { backdrop: "static" });
+  if (!window.bootstrap || !bootstrap.Modal) {
+    console.warn('[dfm] bootstrap.Modal absent; affichage basique');
+    el.classList.add('open'); el.style.display = 'block';
+    return;
+  }
+  console.info('[dfm] ouverture modale matière (vraie)');
+  const modal = bootstrap.Modal.getOrCreateInstance(el, { backdrop: 'static' });
   modal.show();
 }
 
-function openMaterialModal(){
-  showMaterialModal();
-}
+function openMaterialModal(){ showMaterialModal(); }
 
 // PATCH START: show axis after material confirmed
 function materialIsConfirmed(){ return !!window.selectedMaterial; }
@@ -173,41 +189,21 @@ function axisIsValidated(){
   return !!window.selectedAxis;
 }
 
+// Capter en phase "capture" et court-circuiter d'autres listeners (fallbacks)
 if (btnAnalyser) {
-  btnAnalyser.addEventListener("click", async () => {
-    if (!window.currentFileId) { openMaterialModal?.(); return; }
-    if (!materialIsConfirmed()) { openMaterialModal?.(); return; }
+  btnAnalyser.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopImmediatePropagation();   // empêche le fallback du main.js de s'exécuter
+    // workflow DFM: fichier ? matière ? axe ? sinon on ouvre la modale DFM
+    const fileId = orchestrator.resolveFileId?.() || window.currentFileId;
+    if (!fileId) { openMaterialModal(); return; }
+    if (!materialIsConfirmed()) { openMaterialModal(); return; }
     if (!axisIsValidated()) { showAxisPanelIfReady(); return; }
-    const payload = {
-      file_id: window.currentFileId,
-      axis: window.selectedAxis?.axis || "auto",
-      invert: !!window.selectedAxis?.invert,
-      material: window.selectedMaterial?.id || window.selectedMaterial
-    };
-    console.log("[dfm] start", payload);
-    const res = await fetch("/api/simple/analyze", {
-      method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify(payload)
-    });
-    console.log("[dfm] analyze status", res.status);
-
-    const t0 = Date.now();
-    while (Date.now() - t0 < 120000) {
-      const rr = await fetch(`/api/simple/report/${window.currentFileId}`, {cache:"no-store"});
-      if (rr.status === 200) {
-        const data = await rr.json();
-        console.log("[dfm] report", data);
-        renderDFMResults?.({
-          score: data.score ?? 0,
-          recommendations: Array.isArray(data.recommendations) ? data.recommendations : [],
-          metrics: data.metrics ?? {}
-        });
-        break;
-      }
-      await new Promise(r => setTimeout(r, 2500));
-    }
-  });
+    orchestrator.setFileId?.(fileId);
+    orchestrator.startDFM?.();
+  }, true); // <-- capture = true
 }
+
 
 // ---------------------- États ----------------------
 const DFM_STATES = {

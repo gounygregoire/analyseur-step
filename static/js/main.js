@@ -879,6 +879,12 @@ btnAnalyser?.addEventListener("click", (e) => {
   // Pas de DFM: au moins ouvrir la modale de critères
   openMaterialModalSafe();
 });
+if (typeof window !== 'undefined') {
+  window.DFMOrchestrator = orchestrator;
+  window.openMaterialModal = openMaterialModal;   // point d’entrée unique
+  window.showMaterialModal = showMaterialModal;
+}
+
 
 // Petit export vide pour certains bundlers/linters
 export {};
