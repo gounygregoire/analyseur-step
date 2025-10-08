@@ -18,8 +18,8 @@ if (typeof window !== "undefined") {
 
 // PATCH START: selectors
 // const btnVisualiser = document.querySelector('#btnVisualiser');
-const btnAnalyser   = document.querySelector('#analyzeBtn, #btn-analyser');
-const axisPanel     = document.querySelector('#dfmAxisPanel, #axis-panel');
+const btnAnalyser = document.querySelector('#btnAnalyser, #analyzeBtn, #btn-analyser');
+const axisPanel   = document.querySelector('#dfmAxisPanel, #axis-panel');
 // PATCH END
 
 // État initial : cacher l'axe mais laisser Analyser cliquable
@@ -836,12 +836,10 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 function dfmSelfCheck() {
   const errors = [];
   if (!window.bootstrap || !bootstrap.Modal) errors.push("bootstrap.Modal absent");
-  if (!(
-    document.getElementById("materialModal") ||
-    document.querySelector("[data-material-modal]")
-  ))
+  if (!(document.getElementById("materialModal") || document.querySelector("[data-material-modal]"))) {
     errors.push("modal matière absent");
-  if (!btnAnalyser) errors.push("#analyzeBtn/#btn-analyser absent");
+  }
+  if (!btnAnalyser) errors.push("#btnAnalyser/#analyzeBtn/#btn-analyser absent");
 
   if (errors.length) {
     console.warn("[DFM selfcheck] Issues:", errors);
