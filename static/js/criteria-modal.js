@@ -632,6 +632,23 @@
     $("#materialConfirmBtn")?.addEventListener("click", ()=>{
       const f = readForm();
       updateSummaryAndConflicts(f);
+      
+      // ... à la fin du handler du click sur #materialConfirmBtn
+      const conflicts = detectConflicts(f);
+
+      // Fermer la modale
+      const modalEl = document.getElementById('materialModal');
+      bootstrap.Modal.getInstance(modalEl)?.hide();
+
+      // Émettre un event global pour le viewer / panneau démoulage
+      window.dispatchEvent(new CustomEvent('cadlytics:material-analysis-done', {
+        detail: {
+          conflicts,
+          hasConflicts: (conflicts?.length || 0) > 0,
+          shortlist: (results || []).slice(0,3).map(r => ({ id: r.mat.id, score: r.score }))
+        }
+      }));
+
 
       // Score et tri
       const results = MATERIALS.map(mat=>{

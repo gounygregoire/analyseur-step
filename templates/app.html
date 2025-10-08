@@ -189,6 +189,33 @@
     </div> <!-- /grid -->
   </div> <!-- /wrap -->
 
+  <!-- === Zone Axe de démoulage (cachée tant que l'analyse matière n'est pas faite) === -->
+<div id="demouldHost" class="pane" style="margin-top:12px; display:none; padding:10px; border-radius:10px; background:#f8fbff; border:1px solid #dbeafe">
+  <div class="row mini" style="gap:12px; align-items:center; flex-wrap:wrap">
+    <div style="font-weight:600;">Axe de démoulage</div>
+    <div id="demouldConfMsg" class="small" style="opacity:.8;">—</div>
+  </div>
+
+  <div class="row mini" style="gap:14px; align-items:center; flex-wrap:wrap; margin-top:6px">
+    <label style="display:flex; align-items:center; gap:6px">
+      <input type="radio" name="demAxis" value="X"> <span>X</span>
+    </label>
+    <label style="display:flex; align-items:center; gap:6px">
+      <input type="radio" name="demAxis" value="Y"> <span>Y</span>
+    </label>
+    <label style="display:flex; align-items:center; gap:6px">
+      <input type="radio" name="demAxis" value="Z" checked> <span>Z</span>
+    </label>
+
+    <button id="btnAutoDemAxis" type="button" class="btn btn-outline mini">AUTO (détecter)</button>
+    <button id="btnSetDemAxis" type="button" class="btn btn-primary mini">Valider l’axe</button>
+
+    <span class="small" style="opacity:.8;">Astuce : la direction de démoulage doit être perpendiculaire au plan de joint principal.</span>
+  </div>
+</div>
+<!-- === /Zone Axe de démoulage === -->
+
+
   <!-- IMPORTANT : main.js est un module car il contient des "import" -->
   <script type="module" src="/static/js/main.js"></script>
 
@@ -713,5 +740,57 @@
       });
     });
   </script>
+
+  <script>
+(function(){
+  const host = document.getElementById('demouldHost');
+  const confMsg = document.getElementById('demouldConfMsg');
+
+  function showDemouldPanel(msg, hasConf){
+    if (!host) return;
+    host.style.display = 'block';
+    confMsg.textContent = hasConf
+      ? `Des conflits ont été détectés : ${msg || 'voir détails dans la modale'}`
+      : 'Aucun conflit bloquant détecté.';
+  }
+
+  // Quand l’analyse matière est terminée, on révèle la zone
+  window.addEventListener('cadlytics:material-analysis-done', (ev)=>{
+    const conflicts = ev.detail?.conflicts || [];
+    showDemouldPanel(conflicts[0] || '', (conflicts.length > 0));
+  });
+
+  // Bouton "AUTO (détecter)" — stub : ici on pourrait appeler ton backend/worker
+  // Pour l’instant on choisit l’axe Z par défaut et on émet un event
+  document.getElementById('btnAutoDemAxis')?.addEventListener('click', ()=>{
+    const z = document.querySelector('input[name="demAxis"][value="Z"]');
+    if (z) { z.checked = true; }
+    // Event interne si tu veux réagir côté viewer
+    window.dispatchEvent(new CustomEvent('cadlytics:demould-axis-auto', { detail: { axis: 'Z' } }));
+  });
+
+  // Bouton "Valider l’axe" — synchronise aussi tes radios de surface projetée (X/Y/Z)
+  document.getElementById('btnSetDemAxis')?.addEventListener('click', ()=>{
+    const val = document.querySelector('input[name="demAxis"]:checked')?.value || 'Z';
+
+    // 1) Synchroniser les radios de projection (déjà présentes dans ton analysePanel)
+    const proj = document.querySelector(`input[name="projAxis"][value="${val}"]`);
+    if (proj) {
+      proj.checked = true;
+      proj.dispatchEvent(new Event('change', { bubbles:true }));
+    }
+
+    // 2) Notifier le reste du front (ex: lancer calculs de dépouilles côté worker)
+    window.dispatchEvent(new CustomEvent('cadlytics:demould-axis-selected', {
+      detail: { axis: val }
+    }));
+
+    // 3) Feedback discret
+    confMsg.textContent = `Axe de démoulage défini sur ${val}.`;
+  });
+
+})();
+</script>
+
 </body>
 </html>
