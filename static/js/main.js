@@ -63,11 +63,50 @@ const axisZ   = $("#axisZ");
 const projAxisRadios = $$('input[name="projAxis"]');
 
 /* ====== Bouton "Analyser" & Modale Matière ====== */
-const btnAnalyser = $("#btnAnalyser");
-// Adapte ces sélecteurs à TA modale/formulaire existants (IDs courants donnés ici) :
-const materialModalSel  = "#materialModal"; // modale existante (Bootstrap ou custom)
-const materialFormSel   = "#materialForm";  // formulaire critères
-const materialResultsEl = $("#materialResults"); // zone résultats DANS la modale (si présente)
+const btnAnalyser = document.querySelector("#btnAnalyser");
+
+/* On accepte soit un id, soit un data-attr. 
+   Ta base existante semble utiliser parfois data-material-modal. */
+const materialModalSelectors = ['#materialModal', '[data-material-modal]'];
+const materialFormSelectors  = ['#materialForm',  '[data-material-form]'];
+const materialResultsSelectors = ['#materialResults', '[data-material-results]'];
+
+function q1(selectors){
+  for (const s of selectors) {
+    const el = document.querySelector(s);
+    if (el) return el;
+  }
+  return null;
+}
+
+function findMaterialModal()    { return q1(materialModalSelectors); }
+function findMaterialForm()     { return q1(materialFormSelectors); }
+function findMaterialResults()  { return q1(materialResultsSelectors); }
+
+/* Ouvre la modale en réutilisant TA logique si présente */
+function openMaterialModal() {
+  // 1) Si ton projet expose déjà une fonction globale, on la réutilise
+  if (typeof window.showMaterialModal === "function") {
+    try { window.showMaterialModal(); return findMaterialModal(); } catch(e){ console.warn(e); }
+  }
+  if (typeof window.openMaterialModal === "function") {
+    try { window.openMaterialModal(); return findMaterialModal(); } catch(e){ console.warn(e); }
+  }
+
+  // 2) Sinon, on ouvre nous-mêmes (Bootstrap ou fallback)
+  const el = findMaterialModal();
+  if (!el) { alert("Modale critères introuvable (id ou data-attribute)."); return null; }
+
+  if (window.bootstrap?.Modal) {
+    const modal = window.bootstrap.Modal.getOrCreateInstance(el);
+    modal.show();
+  } else {
+    el.classList.add("open");
+    el.style.display = "block";
+  }
+  return el;
+}
+
 
 /* ---------- viewer + plugins ---------- */
 const viewer = new Viewer({
@@ -920,7 +959,7 @@ function scoreMaterials(selectedCriteria) {
 
 /* — Rendu résultats dans la modale — */
 function renderMaterialResults(ranked) {
-  const host = materialResultsEl || document.querySelector("#materialResults");
+  const host = findMaterialResults();
   if (!host) return;
 
   if (!ranked || !ranked.length) {
@@ -954,14 +993,17 @@ function renderMaterialResults(ranked) {
     </div>`;
 }
 
+
 /* — Flux bouton “Analyser” — */
 btnAnalyser?.addEventListener("click", () => {
-  const modal = openMaterialModal(); // ouvre la modale existante
-  if (!modal) return;
-  const selected = readCriteria();
-  const ranked = scoreMaterials(selected);
+  const modalEl = openMaterialModal();      // ← réutilise ta logique existante
+  if (!modalEl) return;
+
+  const selected = readCriteria();          // ta fonction de lecture
+  const ranked   = scoreMaterials(selected);
   renderMaterialResults(ranked);
 });
+
 
 /* — Recompute live si un bouton interne existe — */
 const btnMaterialRecompute = document.querySelector("#btnMaterialRecompute");
