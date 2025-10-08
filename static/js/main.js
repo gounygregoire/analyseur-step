@@ -62,6 +62,13 @@ const axisY   = $("#axisY");
 const axisZ   = $("#axisZ");
 const projAxisRadios = $$('input[name="projAxis"]');
 
+/* ====== Bouton "Analyser" & Modale Matière ====== */
+const btnAnalyser = $("#btnAnalyser");
+// Adapte ces sélecteurs à TA modale/formulaire existants (IDs courants donnés ici) :
+const materialModalSel  = "#materialModal"; // modale existante (Bootstrap ou custom)
+const materialFormSel   = "#materialForm";  // formulaire critères
+const materialResultsEl = $("#materialResults"); // zone résultats DANS la modale (si présente)
+
 /* ---------- viewer + plugins ---------- */
 const viewer = new Viewer({
   canvasId: "xeokit-canvas",
@@ -171,7 +178,7 @@ const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); select
 
 /* ---------- Mesures (format FR + unités robustes) ---------- */
 // FACTEUR maître : millimètres par World Unit (WU)
-let MM_PER_WU = 0.001; // on part du principe que beaucoup de STEP arrivent en µm → mm
+let MM_PER_WU = 0.001; // par défaut
 
 // formateur FR
 const frFormat = (val) => {
@@ -185,12 +192,10 @@ const frFormat = (val) => {
 };
 const mmFromWU = (wu) => wu * MM_PER_WU;
 
-/** pousse le formatter au plugin (si supporté) + rafraîchit les libellés */
 function pushLabelFormatterToPlugin() {
   const fmt = (wu) => `${frFormat(mmFromWU(wu))} mm`;
   try { distancePlugin.cfg = { ...(distancePlugin.cfg||{}), labelFormat: fmt }; } catch {}
   try { distancePlugin.labelFormat = fmt; } catch {}
-  // petit flip pour forcer refresh interne de l’affichage
   try {
     const shown = !!distancePlugin.labelsShown;
     distancePlugin.labelsShown = !shown;
@@ -199,7 +204,7 @@ function pushLabelFormatterToPlugin() {
 }
 function onUnitsChanged(){ pushLabelFormatterToPlugin(); patchAllMeasureTexts(); }
 
-// Heuristique via AABB si bbox serveur pas encore là
+// Heuristique via AABB
 function updateUnitsFromAABB(aabbLike) {
   try {
     const a = aabbLike || viewer.scene?.aabb;
@@ -207,9 +212,9 @@ function updateUnitsFromAABB(aabbLike) {
     const sx = a[3]-a[0], sy = a[4]-a[1], sz = a[5]-a[2];
     const maxWU = Math.max(sx, sy, sz);
     let next = MM_PER_WU;
-    if (maxWU > 1500)      next = 0.001; // WU ~ µm → mm
-    else if (maxWU < 0.5)  next = 1000;  // WU ~ m  → mm
-    else                   next = 1;     // WU ~ mm → mm
+    if (maxWU > 1500)      next = 0.001; // µm → mm
+    else if (maxWU < 0.5)  next = 1000;  // m → mm
+    else                   next = 1;     // mm → mm
     if (Math.abs(next - MM_PER_WU) > 1e-9) {
       MM_PER_WU = next;
       console.log("[units] mm per WU =", MM_PER_WU);
@@ -243,7 +248,6 @@ function updateUnitsFromBBox(bboxMM) {
 const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
   container: overlayHost,
   labelsShown: true,
-  // certaines versions acceptent "units" ou "labelFormat" — on pousse aussi manuellement ci-dessous
   units: "mm"
 });
 const distanceCtrl = new DistanceMeasurementsMouseControl(distancePlugin, { snapping: true });
@@ -256,8 +260,7 @@ if ("snapping" in distanceCtrl) {
   window.addEventListener("keyup",   (e)=>{ if (!e.altKey) distanceCtrl.snapping = true;  }, {passive:true});
 }
 
-/* --- Conversion GENERIQUE de tout texte "…m" → "… mm" en tenant compte de MM_PER_WU --- */
-// On patche *tout* le texte de overlayHost (pas seulement des classes) pour être 100% robustes.
+/* --- Conversion GENERIQUE labels → "mm" --- */
 function toFR(n){
   const a = Math.abs(n);
   const d = a >= 1000 ? 0 : a >= 100 ? 1 : a >= 10 ? 2 : 3;
@@ -265,7 +268,6 @@ function toFR(n){
 }
 function textMetersToMMWithScale(s) {
   if (!s) return s;
-  // remplace <nombre>m (ou "m" précédé d’un espace) par <nombre_en_mm> mm.
   return s
     .replace(/(-?\d{1,3}(?:[ \u00A0.,]\d{3})*(?:[.,]\d+)?|\d+(?:[.,]\d+)?)(\s*)m\b/gi, (full, num) => {
       const valWU = parseFloat(String(num).replace(/\s|\u00A0/g, '').replace(',', '.'));
@@ -273,7 +275,7 @@ function textMetersToMMWithScale(s) {
       const mm = valWU * MM_PER_WU;
       return `${toFR(mm)} mm`;
     })
-    .replace(/[≈~]\s*/g, '≈ '); // homogénéise le signe d’approximation
+    .replace(/[≈~]\s*/g, '≈ ');
 }
 function patchNodeTextDeep(root) {
   if (!root) return;
@@ -287,14 +289,11 @@ function patchNodeTextDeep(root) {
   }
 }
 function patchAllMeasureTexts(){ try { patchNodeTextDeep(overlayHost); } catch {} }
-// observe le DOM des overlays
 if (overlayHost) {
   const mo = new MutationObserver(() => patchAllMeasureTexts());
   mo.observe(overlayHost, { childList: true, subtree: true, characterData: true });
 }
-// recoller à chaque frame (si le plugin réécrit ses labels après nous)
 viewer.scene.on("tick", patchAllMeasureTexts);
-// pousser le formatter SDK aussi
 pushLabelFormatterToPlugin();
 
 /* ====== Panneau "Mesures" ====== */
@@ -383,7 +382,7 @@ async function loadXKT(url, nameHint){
     models.set(id,{model,name:nameHint||id,src:url}); lastModelId=id;
     if (chkEdges?.checked) viewer.scene.edgeMaterial.edgesEnabled=true;
 
-    // 1) valeur de départ sûre, 2) ajustement par AABB sur quelques frames
+    // init unités + affinage par AABB
     MM_PER_WU = 0.001;
     console.log("[units] init forced to µm→mm");
     onUnitsChanged();
@@ -459,7 +458,7 @@ async function uploadAndShow(file) {
   }
 }
 
-/* ---------- FICHIERS UI (fiabilisé) ---------- */
+/* ---------- FICHIERS UI ---------- */
 function openFileChooser(){
   try{
     if (fileInput && !fileInput.disabled){
@@ -756,7 +755,7 @@ function renderStats(json){
 
   if (Array.isArray(json.bbox_mm)) {
     window.__bbox_mm = json.bbox_mm;
-    updateUnitsFromBBox(window.__bbox_mm); // plus précis si dispo
+    updateUnitsFromBBox(window.__bbox_mm);
   }
 
   if (volVal)  volVal.textContent  = f3(json.volume_cm3);
@@ -775,7 +774,6 @@ function clearStatsUI(){
   renderStats({ volume_cm3: null, projected_area_cm2: null, thickness_min_mm: null, thickness_max_mm: null, bbox_mm: window.__bbox_mm });
 }
 
-/** Récupère les stats serveur pour un file_id donné + axe. */
 async function fetchStats(fileId, axis = 'Z') {
   if (!fileId) { clearStatsUI(); return; }
   try {
@@ -801,11 +799,178 @@ async function fetchStats(fileId, axis = 'Z') {
   }
 }
 
-/* Radios X/Y/Z → recalcul de la surface projetée */
+/* Radios X/Y/Z → recalcul surface projetée */
 projAxisRadios.forEach(r => r?.addEventListener("change", ()=>{
   currentAxis = getSelectedAxis();
   if (currentFileId) fetchStats(currentFileId, currentAxis);
 }));
 
-// Petit export vide pour certains bundlers/linters (reste un module ES)
+/* ==================== RECOMMANDATION MATIÈRES ==================== */
+/* — DB courte de matières (adaptable) — */
+const MATERIALS_DB = [
+  {
+    name: "ABS (ou PC-ABS)",
+    props: { rigidity:3, impact:3, temp:2, uv:1, chem:1, food:0, cost:3, aesthetics:3, transparent:0, flame:1, dim_stability:2, outdoor:1 },
+    why: "Bon compromis coût/rigidité/impact, finitions propres, moulage facile."
+  },
+  {
+    name: "PC (Polycarbonate)",
+    props: { rigidity:3, impact:5, temp:3, uv:2, chem:1, food:1, cost:1, aesthetics:2, transparent:1, flame:2, dim_stability:3, outdoor:2 },
+    why: "Très résistant aux chocs, tenue thermique, existe en transparent."
+  },
+  {
+    name: "PA66 GF30",
+    props: { rigidity:5, impact:3, temp:4, uv:2, chem:3, food:0, cost:1, aesthetics:1, transparent:0, flame:2, dim_stability:4, outdoor:2 },
+    why: "Très rigide/stable, bonne tenue température et chimie, pièces techniques."
+  },
+  {
+    name: "PP",
+    props: { rigidity:2, impact:2, temp:2, uv:1, chem:3, food:2, cost:5, aesthetics:2, transparent:0, flame:0, dim_stability:1, outdoor:1 },
+    why: "Économique, bonne chimie, souvent OK contact alimentaire."
+  },
+  {
+    name: "POM (Acétal)",
+    props: { rigidity:3, impact:3, temp:2, uv:1, chem:4, food:2, cost:2, aesthetics:2, transparent:0, flame:0, dim_stability:4, outdoor:1 },
+    why: "Très bonne stabilité dimensionnelle & frottement."
+  },
+  {
+    name: "PETG",
+    props: { rigidity:2, impact:3, temp:2, uv:1, chem:2, food:2, cost:3, aesthetics:3, transparent:1, flame:0, dim_stability:2, outdoor:1 },
+    why: "Facile et esthétique, transparence possible, souvent alimentaire."
+  }
+];
+
+/* — Pondérations par critère (mappe tes champs du formulaire) — */
+const CRITERIA_WEIGHTS = {
+  rigidity: 3,
+  impact: 3,
+  temp: 3,
+  uv: 2,
+  chem: 3,
+  food: 3,
+  cost_low: 3,
+  aesthetics: 2,
+  transparent: 3,
+  flame: 2,
+  dim_stability: 3,
+  outdoor: 2
+};
+
+/* — Ouverture modale (Bootstrap 5 si présent, sinon fallback) — */
+function openMaterialModal() {
+  const modalEl = document.querySelector(materialModalSel);
+  if (!modalEl) {
+    console.warn("Modale de matière introuvable:", materialModalSel);
+    alert("Modale critères indisponible. Vérifie l’ID/HTML.");
+    return null;
+  }
+  if (window.bootstrap && window.bootstrap.Modal) {
+    const modal = window.bootstrap.Modal.getOrCreateInstance(modalEl);
+    modal.show();
+    return modalEl;
+  } else {
+    modalEl.classList.add("open");
+    modalEl.style.display = "block";
+    return modalEl;
+  }
+}
+
+/* — Lecture des critères du formulaire — */
+function readCriteria() {
+  const form = document.querySelector(materialFormSel);
+  if (!form) return {};
+  const selected = {};
+  const inputs = form.querySelectorAll("input, select");
+  inputs.forEach((el) => {
+    if ((el.type === "checkbox" || el.type === "radio") && el.checked) {
+      selected[el.name] = true;
+    } else if (el.tagName === "SELECT") {
+      const val = (el.value || "").toLowerCase();
+      if (val && val !== "none") selected[`${el.name}:${val}`] = true;
+    }
+  });
+  return selected;
+}
+
+/* — Scoring matières — */
+function scoreMaterials(selectedCriteria) {
+  const normalized = new Set(Object.keys(selectedCriteria).map((k)=>k.split(":")[0]));
+  return MATERIALS_DB.map((mat) => {
+    let score = 0;
+    normalized.forEach((crit) => {
+      const w = CRITERIA_WEIGHTS[crit] || 0;
+      switch (crit) {
+        case "rigidity":       score += w * (mat.props.rigidity || 0); break;
+        case "impact":         score += w * (mat.props.impact || 0); break;
+        case "temp":           score += w * (mat.props.temp || 0); break;
+        case "uv":             score += w * (mat.props.uv || 0); break;
+        case "chem":           score += w * (mat.props.chem || 0); break;
+        case "food":           score += w * (mat.props.food || 0); break;
+        case "cost_low":       score += w * (mat.props.cost || 0); break;
+        case "aesthetics":     score += w * (mat.props.aesthetics || 0); break;
+        case "transparent":    score += w * (mat.props.transparent || 0); break;
+        case "flame":          score += w * (mat.props.flame || 0); break;
+        case "dim_stability":  score += w * (mat.props.dim_stability || 0); break;
+        case "outdoor":        score += w * (mat.props.outdoor || 0); break;
+      }
+    });
+    return { ...mat, score };
+  }).sort((a, b) => b.score - a.score);
+}
+
+/* — Rendu résultats dans la modale — */
+function renderMaterialResults(ranked) {
+  const host = materialResultsEl || document.querySelector("#materialResults");
+  if (!host) return;
+
+  if (!ranked || !ranked.length) {
+    host.style.display = "block";
+    host.innerHTML = `
+      <div class="alert alert-warning" role="alert" style="margin:0;">
+        Aucun critère sélectionné. Coche au moins 1 critère pour une recommandation pertinente.
+      </div>`;
+    return;
+  }
+
+  const top3 = ranked.slice(0, 3);
+  host.style.display = "block";
+  host.innerHTML = `
+    <div class="card" style="margin-top:8px;">
+      <div class="card-body">
+        <h5 class="card-title" style="margin-bottom:8px;">Top 3 matières recommandées</h5>
+        <ol style="margin:0; padding-left:18px;">
+          ${top3.map(m => `
+            <li style="margin-bottom:10px;">
+              <strong>${m.name}</strong>
+              <div style="font-size:0.95rem; opacity:0.9;">${m.why}</div>
+              <div style="font-size:0.85rem; opacity:0.8;">Score: ${m.score.toFixed(1)}</div>
+            </li>
+          `).join("")}
+        </ol>
+        <div style="margin-top:10px; font-size:0.9rem; opacity:0.85;">
+          ⚠️ À valider selon contraintes: normes (UL/EN, alimentaire), couleur/texture, retrait, dispo matière, coût outillage.
+        </div>
+      </div>
+    </div>`;
+}
+
+/* — Flux bouton “Analyser” — */
+btnAnalyser?.addEventListener("click", () => {
+  const modal = openMaterialModal(); // ouvre la modale existante
+  if (!modal) return;
+  const selected = readCriteria();
+  const ranked = scoreMaterials(selected);
+  renderMaterialResults(ranked);
+});
+
+/* — Recompute live si un bouton interne existe — */
+const btnMaterialRecompute = document.querySelector("#btnMaterialRecompute");
+btnMaterialRecompute?.addEventListener("click", (e) => {
+  e.preventDefault();
+  const selected = readCriteria();
+  const ranked = scoreMaterials(selected);
+  renderMaterialResults(ranked);
+});
+
+// Petit export vide pour certains bundlers/linters
 export {};

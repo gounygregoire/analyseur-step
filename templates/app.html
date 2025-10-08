@@ -141,7 +141,6 @@
                 <div style="font-size:12px;color:#666">Surface projetée</div>
                 <div id="projVal" style="font-weight:600">—</div>
                 <div style="font-size:12px;color:#666">cm²</div>
-                <!-- <<< AJOUT : note de délai pour le recalcul par axe -->
                 <span style="font-size:11px;color:#8a8a8a;margin-left:8px">
                   (Changer d’axe peut prendre quelques secondes à s’afficher)
                 </span>
@@ -162,6 +161,14 @@
             </div>
           </div>
           <!-- === /Panneau Analyse === -->
+
+          <!-- Bouton ANalyser (AJOUT) -->
+          <div id="analysisBar" class="analysis-bar" style="margin-top:12px; display:flex; gap:8px; align-items:center;">
+            <button id="btnAnalyser" type="button" class="btn btn-primary">🔎 Analyser</button>
+            <span id="analysisHint" style="font-size:0.9rem; opacity:0.8;">
+              Ouvre la modale critères et obtiens 3 matières recommandées.
+            </span>
+          </div>
 
           <!-- Progression -->
           <div class="row mini" style="margin-top:10px;opacity:.8">
@@ -226,7 +233,7 @@
     });
   </script>
 
-  <<script type="module">
+  <script type="module">
 /**
  * Trièdre d'axes qui suit la rotation de la caméra.
  * On expose window.__drawAxesFromView(viewMatrix) que main.js appellera à chaque tick.
@@ -252,11 +259,8 @@
     ctx.fillText(label, x2+4, y2+4);
   }
 
-  // mV = camera.viewMatrix (Float32Array[16])
   function drawAxesFromView(mV){
     if (!mV) return;
-
-    // Transforme un vecteur direction (w=0) par la viewMatrix
     const mv = (x,y,z)=>[
       mV[0]*x + mV[4]*y + mV[8]*z,
       mV[1]*x + mV[5]*y + mV[9]*z,
@@ -271,7 +275,6 @@
       return [x/n, y/n];
     };
 
-    // En 2D écran : X→droite, Y→haut (donc -vy pour inverser l'axe Y canvas)
     const dX = norm2([ vX[0], -vX[1] ]);
     const dY = norm2([ vY[0], -vY[1] ]);
     const dZ = norm2([ vZ[0], -vZ[1] ]);
@@ -290,13 +293,9 @@
     arrow(dZ[0], dZ[1], 'Z', cZ);
   }
 
-  // Expose pour main.js
   window.__drawAxesFromView = drawAxesFromView;
-
-  // Dessin neutre au boot (caméra identité)
   drawAxesFromView([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
 
-  // Repeindre quand on change l'axe sélectionné (pour la mise en évidence X/Y/Z)
   document.addEventListener('change', (ev)=>{
     const t = ev.target;
     if (t && t.name === 'projAxis' && window.__lastViewMatrix) {
