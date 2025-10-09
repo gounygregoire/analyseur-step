@@ -342,8 +342,8 @@ function patchNodeTextDeep(root) {
   while (walker.nextNode()) edits.push(walker.currentNode);
   for (const t of edits) {
     const before = t.nodeValue;
-    const after  = textMetersToMMWithScale(before);
-    if (after !== before) t.nodeValue = after;
+    theAfter = textMetersToMMWithScale(before);
+    if (theAfter !== before) t.nodeValue = theAfter;
   }
 }
 function patchAllMeasureTexts(){ try { patchNodeTextDeep(overlayHost); } catch {} }
@@ -819,7 +819,6 @@ btnShot?.addEventListener("click",()=>{
 function f3(v){ return (v==null || !isFinite(+v)) ? "—" : (+v).toFixed(3).replace(".", ","); }
 function setText(el, txt){ if (el && el.textContent !== txt) el.textContent = txt; }
 
-// rendu robuste
 function renderStats(json){
   if (!json || typeof json !== "object") return;
   lastStats = json;
@@ -850,12 +849,6 @@ function clearStatsUI(force=false){
     bbox_mm: window.__bbox_mm
   });
 }
-
-// re-render si l’UI se reconstruit
-window.addEventListener('dfm:fileReady', ()=>{ if (lastStats) renderStats(lastStats); });
-document.addEventListener('visibilitychange', ()=>{
-  if (document.visibilityState === 'visible' && lastStats) renderStats(lastStats);
-});
 
 /* --- Stats polling controller (singleton) --- */
 const StatsPoller = (() => {
@@ -931,7 +924,7 @@ btnAnalyser?.addEventListener("click", (e) => {
   openMaterialModalSafe();
 });
 
-// si un autre script signale "fichier prêt", on re-fetch
+/* ✅ Un seul listener dfm:fileReady : déclenche le polling (pas de re-render direct) */
 window.addEventListener('dfm:fileReady', (ev)=>{
   const fid = ev?.detail?.fileId || currentFileId;
   if (fid) fetchStats(fid, getSelectedAxis());
