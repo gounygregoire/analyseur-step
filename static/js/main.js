@@ -53,11 +53,9 @@ const clipRange    = $("#clipRange");
 const btnShot      = $("#btnShot");
 
 /* ====== Analyse: sélecteurs panneau (DYNAMIQUES) ====== */
-// ⚠️ On ne capture plus les refs une fois pour toutes : on les re-résout au rendu
 const getEl = (sel) => document.querySelector(sel);
 const getStatEl = (primarySel, dataMetric) =>
   getEl(primarySel) || getEl(`[data-metric="${dataMetric}"]`);
-
 const projAxisRadios = () => $$('input[name="projAxis"]');
 
 /* ====== Bouton "Analyser" (3 ids possibles) ====== */
@@ -225,9 +223,9 @@ let clipPlaneDir   = [1,0,0];
 /* ====== Analyse: état courant ====== */
 let currentFileId = null;
 let currentAxis   = "Z";
-let lastStats     = null; // ✅ on garde le dernier JSON pour re-rendre si l’UI se régénère
+let lastStats     = null; // cache dernier JSON
 
-// 🔁 Lecture d’axe robuste : radios > IDs (#axisX/#axisY/#axisZ) > Z
+// Lecture d’axe robuste
 function getSelectedAxis(){
   const r = document.querySelector('input[name="projAxis"]:checked');
   if (r && r.value) return r.value.toUpperCase();
@@ -485,9 +483,7 @@ async function uploadAndShow(file) {
         models.clear(); selectedIds.clear();
       }
       console.log("[viewer] loading XKT (local):", fileURL);
-      // avant de lancer le loadXKT du fichier converti
-      cancelStatsPolling(); // stoppe l'ancien poll s'il existe
-
+      StatsPoller.cancel(); // stoppe l'ancien poll
       await loadXKT(fileURL, f.name);
       return;
     }
@@ -519,9 +515,7 @@ async function uploadAndShow(file) {
     }
 
     console.log("[viewer] loading XKT]:", xktUrl);
-    // avant de lancer le loadXKT du fichier converti
-    cancelStatsPolling(); // stoppe l'ancien poll s'il existe
-
+    StatsPoller.cancel(); // stoppe l'ancien poll
     await loadXKT(xktUrl, f.name);
   } catch (e) {
     console.error(e);
@@ -657,7 +651,7 @@ function worldToOverlayXY(world){
   const vx = mV[0]*x + mV[4]*y + mV[8]*z  + mV[12];
   const vy = mV[1]*x + mV[5]*y + mV[9]*z  + mV[13];
   const vz = mV[2]*x + mV[6]*y + mV[10]*z + mV[14];
-  const vw = mV[3]*x + mV[7]*y + mV[11]*z + mV[15]; // (fix) pas "* vw"
+  const vw = mV[3]*x + mV[7]*y + mV[11]*z + mV[15];
 
   const cx = mP[0]*vx + mP[4]*vy + mP[8]*vz  + mP[12]*vw;
   const cy = mP[1]*vx + mP[5]*vy + mP[9]*vz  + mP[13]*vw;
@@ -823,35 +817,31 @@ btnShot?.addEventListener("click",()=>{
 
 /* ==================== ANALYSE : fetch & rendu ==================== */
 function f3(v){ return (v==null || !isFinite(+v)) ? "—" : (+v).toFixed(3).replace(".", ","); }
+function setText(el, txt){ if (el && el.textContent !== txt) el.textContent = txt; }
 
-// ✅ rendu robuste : on re-résout les nœuds à chaque appel
+// rendu robuste
 function renderStats(json){
   if (!json || typeof json !== "object") return;
-  lastStats = json; // cache pour re-rendu ultérieur
+  lastStats = json;
 
-  // aligne les unités sur bbox_mm renvoyée par l’API
   if (Array.isArray(json.bbox_mm)) {
     window.__bbox_mm = json.bbox_mm;
     updateUnitsFromBBox(window.__bbox_mm);
   }
 
-const elVol  = document.querySelector("#volVal")  || document.querySelector('[data-metric="volume"]');
-const elProj = document.querySelector("#projVal") || document.querySelector('[data-metric="projected_area"]');
-const elTmin = document.querySelector("#tminVal")|| document.querySelector('[data-metric="tmin"]');
-const elTmax = document.querySelector("#tmaxVal")|| document.querySelector('[data-metric="tmax"]');
+  const elVol  = getStatEl("#volVal",  "volume");
+  const elProj = getStatEl("#projVal", "projected_area");
+  const elTmin = getStatEl("#tminVal","tmin");
+  const elTmax = getStatEl("#tmaxVal","tmax");
 
-setText(elVol,  f3(json.volume_cm3));
-setText(elProj, f3(json.projected_area_cm2));
-setText(elTmin, f3(json.thickness_min_mm));
-setText(elTmax, f3(json.thickness_max_mm));
-
-function setText(el, txt){ if (el && el.textContent !== txt) el.textContent = txt; }
-
+  setText(elVol,  f3(json.volume_cm3));
+  setText(elProj, f3(json.projected_area_cm2));
+  setText(elTmin, f3(json.thickness_min_mm));
+  setText(elTmax, f3(json.thickness_max_mm));
 }
 
-
 function clearStatsUI(force=false){
-  if (!force && __statsPoll?.lastOk) return; // ✅ conserve l’affichage existant
+  if (!force && StatsPoller.state?.lastOk) return; // conserve l’affichage existant
   renderStats({
     volume_cm3: null,
     projected_area_cm2: null,
@@ -861,121 +851,74 @@ function clearStatsUI(force=false){
   });
 }
 
-// 🔁 re-render des stats quand l’UI signale quelque-chose d'utile
-// (pas de MutationObserver global pour éviter le lag)
-window.addEventListener('dfm:fileReady', (ev)=>{
-  if (lastStats) renderStats(lastStats);
-});
+// re-render si l’UI se reconstruit
+window.addEventListener('dfm:fileReady', ()=>{ if (lastStats) renderStats(lastStats); });
 document.addEventListener('visibilitychange', ()=>{
   if (document.visibilityState === 'visible' && lastStats) renderStats(lastStats);
 });
 
+/* --- Stats polling controller (singleton) --- */
+const StatsPoller = (() => {
+  let state = { token: 0, timer: null, lastOk: null, fileId: null, axis: "Z" };
 
-async function pollOnce(token) {
-  // si un autre poll a démarré entre-temps → on s'arrête
-  if (token !== __statsPoll.token) return;
-
-  const { fileId, axis } = __statsPoll;
-  if (!fileId) return;
-
-  const url = `/api/shape/stats?file_id=${encodeURIComponent(fileId)}&axis=${axis}`;
-  try {
-    const res  = await fetch(url, { cache: 'no-store' });
-    let data = null; try { data = await res.json(); } catch {}
-
-    if (token !== __statsPoll.token) return; // re-vérif
-
-    if (res.status === 200 && data) {
-      // compat champs alternatifs éventuels
-      if (data.volume_mm3 != null && data.volume_cm3 == null) {
-        data.volume_cm3 = (+data.volume_mm3) / 1000;
-      }
-      if (data.projected_area_mm2 != null && data.projected_area_cm2 == null) {
-        data.projected_area_cm2 = (+data.projected_area_mm2) / 100;
-      }
-      __statsPoll.lastOk = data;
-      renderStats(data);     // 🔒 on rend une fois les bonnes valeurs
-      cancelStatsPolling();  // ✅ on STOPPE le polling dès 200 OK
-      return;
-    }
-
-    if (res.status === 202 && data && (data.status === 'queued' || data.status === 'processing')) {
-      // on NE vide PAS l'UI pour éviter le clignotement : on conserve lastOk affiché
-      const delay = Math.max(800, ((data.retry_in_sec ?? 2) * 1000));
-      __statsPoll.timer = setTimeout(()=> pollOnce(token), delay);
-      return;
-    }
-
-    // Erreur non 200/202 : on n'efface pas si on a déjà une valeur affichée
-    if (!__statsPoll.lastOk) clearStatsUI();
-    cancelStatsPolling();
-    console.warn('[analyse] API error', res.status, data);
-  } catch (err) {
-    if (!__statsPoll.lastOk) clearStatsUI();
-    cancelStatsPolling();
-    console.error('[analyse] stats failed', err);
+  function cancel() {
+    if (state.timer) { clearTimeout(state.timer); state.timer = null; }
   }
-}
-let __statsPoll = { token: 0, timer: null, lastOk: null, fileId: null, axis: "Z" };
 
-function cancelStatsPolling() {
-  if (__statsPoll.timer) { clearTimeout(__statsPoll.timer); __statsPoll.timer = null; }
-}
+  async function _pollOnce(myToken) {
+    if (myToken !== state.token) return;
+    const { fileId, axis } = state;
+    if (!fileId) return;
 
-function startStatsPolling(fileId, axis) {
-  cancelStatsPolling();
-  const t = Math.random() + Date.now();
-  __statsPoll = { ...__statsPoll, token: t, fileId, axis: (axis||"Z").toUpperCase() };
-  pollOnce(t);
-}
+    try {
+      const res  = await fetch(`/api/shape/stats?file_id=${encodeURIComponent(fileId)}&axis=${axis}`, { cache: 'no-store' });
+      let data = null; try { data = await res.json(); } catch {}
 
-async function pollOnce(token) {
-  if (token !== __statsPoll.token) return;
-  const { fileId, axis } = __statsPoll;
-  if (!fileId) return;
+      if (myToken !== state.token) return;
 
-  try {
-    const res  = await fetch(`/api/shape/stats?file_id=${encodeURIComponent(fileId)}&axis=${axis}`, { cache: 'no-store' });
-    let data = null; try { data = await res.json(); } catch {}
+      if (res.status === 200 && data) {
+        if (data.volume_mm3 != null && data.volume_cm3 == null) data.volume_cm3 = (+data.volume_mm3)/1000;
+        if (data.projected_area_mm2 != null && data.projected_area_cm2 == null) data.projected_area_cm2 = (+data.projected_area_mm2)/100;
+        state.lastOk = data;
+        renderStats(data);
+        cancel(); // stop dès OK
+        return;
+      }
 
-    if (token !== __statsPoll.token) return;
+      if (res.status === 202 && data && (data.status === "queued" || data.status === "processing")) {
+        state.timer = setTimeout(() => _pollOnce(myToken), Math.max(800, ((data.retry_in_sec ?? 2) * 1000)));
+        return;
+      }
 
-    if (res.status === 200 && data) {
-      if (data.volume_mm3 != null && data.volume_cm3 == null) data.volume_cm3 = (+data.volume_mm3)/1000;
-      if (data.projected_area_mm2 != null && data.projected_area_cm2 == null) data.projected_area_cm2 = (+data.projected_area_mm2)/100;
-      __statsPoll.lastOk = data;
-      renderStats(data);
-      cancelStatsPolling();           // ✅ stop dès OK
-      return;
+      if (!state.lastOk) clearStatsUI(true);
+      cancel();
+      console.warn("[analyse] API error", res.status, data);
+
+    } catch (e) {
+      if (!state.lastOk) clearStatsUI(true);
+      cancel();
+      console.error("[analyse] stats failed", e);
     }
-
-    if (res.status === 202 && data && (data.status === "queued" || data.status === "processing")) {
-      // ❌ ne pas effacer : on garde les dernières valeurs affichées
-      __statsPoll.timer = setTimeout(()=> pollOnce(token), Math.max(800, ((data.retry_in_sec ?? 2) * 1000)));
-      return;
-    }
-
-    // Erreur : on n'efface pas si on a déjà une valeur
-    if (!__statsPoll.lastOk) clearStatsUI(true);
-    cancelStatsPolling();
-    console.warn("[analyse] API error", res.status, data);
-
-  } catch (e) {
-    if (!__statsPoll.lastOk) clearStatsUI(true);
-    cancelStatsPolling();
-    console.error("[analyse] stats failed", e);
   }
-}
 
-// Remplace l’ancienne fetchStats par un proxy vers le contrôleur
-function fetchStats(fileId, axis='Z') { startStatsPolling(fileId, axis); }
+  function start(fileId, axis='Z') {
+    cancel();
+    state.token = Math.random() + Date.now();
+    state.fileId = fileId;
+    state.axis = (axis || 'Z').toUpperCase();
+    _pollOnce(state.token);
+  }
 
+  return { start, cancel, get state(){ return state; } };
+})();
 
+// proxy fetchStats
+function fetchStats(fileId, axis='Z') { StatsPoller.start(fileId, axis); }
 
 /* Radios X/Y/Z → recalcul surface projetée */
 projAxisRadios().forEach(r => r?.addEventListener("change", ()=>{
   currentAxis = getSelectedAxis();
-  if (currentFileId) fetchStats(currentFileId, currentAxis); // pas de clear() ici
+  if (currentFileId) fetchStats(currentFileId, currentAxis);
 }));
 
 /* ==================== Lien avec le DFM ==================== */
@@ -988,7 +931,7 @@ btnAnalyser?.addEventListener("click", (e) => {
   openMaterialModalSafe();
 });
 
-// ✅ si un autre script (ou l’onglet) signale "fichier prêt", on re-fetch
+// si un autre script signale "fichier prêt", on re-fetch
 window.addEventListener('dfm:fileReady', (ev)=>{
   const fid = ev?.detail?.fileId || currentFileId;
   if (fid) fetchStats(fid, getSelectedAxis());
