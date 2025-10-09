@@ -52,15 +52,13 @@ const clipButtons  = $$(".clipAxis");
 const clipRange    = $("#clipRange");
 const btnShot      = $("#btnShot");
 
-/* ====== Analyse: sélecteurs panneau ====== */
-const volVal  = $("#volVal");
-const projVal = $("#projVal");
-const tminVal = $("#tminVal");
-const tmaxVal = $("#tmaxVal");
-const axisX   = $("#axisX");
-const axisY   = $("#axisY");
-const axisZ   = $("#axisZ");
-const projAxisRadios = $$('input[name="projAxis"]');
+/* ====== Analyse: sélecteurs panneau (DYNAMIQUES) ====== */
+// ⚠️ On ne capture plus les refs une fois pour toutes : on les re-résout au rendu
+const getEl = (sel) => document.querySelector(sel);
+const getStatEl = (primarySel, dataMetric) =>
+  getEl(primarySel) || getEl(`[data-metric="${dataMetric}"]`);
+
+const projAxisRadios = () => $$('input[name="projAxis"]');
 
 /* ====== Bouton "Analyser" (3 ids possibles) ====== */
 const btnAnalyser = document.querySelector("#btnAnalyser, #analyzeBtn, #btn-analyser");
@@ -227,7 +225,15 @@ let clipPlaneDir   = [1,0,0];
 /* ====== Analyse: état courant ====== */
 let currentFileId = null;
 let currentAxis   = "Z";
-const getSelectedAxis = () => (axisX?.checked && "X") || (axisY?.checked && "Y") || "Z";
+let lastStats     = null; // ✅ on garde le dernier JSON pour re-rendre si l’UI se régénère
+
+// 🔁 Lecture d’axe robuste : radios > IDs (#axisX/#axisY/#axisZ) > Z
+function getSelectedAxis(){
+  const r = document.querySelector('input[name="projAxis"]:checked');
+  if (r && r.value) return r.value.toUpperCase();
+  const ax = $("#axisX")?.checked ? "X" : $("#axisY")?.checked ? "Y" : $("#axisZ")?.checked ? "Z" : "Z";
+  return ax;
+}
 
 const setProgress=(p)=>{ if (progressBar) progressBar.style.width = `${Math.max(0,Math.min(100,p))}%`; };
 const allIds=()=> viewer.scene?.objectIds ?? [];
@@ -813,8 +819,10 @@ btnShot?.addEventListener("click",()=>{
 /* ==================== ANALYSE : fetch & rendu ==================== */
 function f3(v){ return (v==null || !isFinite(+v)) ? "—" : (+v).toFixed(3).replace(".", ","); }
 
+// ✅ rendu robuste : on re-résout les nœuds à chaque appel
 function renderStats(json){
   if (!json || typeof json !== "object") return;
+  lastStats = json; // cache pour re-rendu ultérieur
 
   // aligne les unités sur bbox_mm renvoyée par l’API
   if (Array.isArray(json.bbox_mm)) {
@@ -822,17 +830,15 @@ function renderStats(json){
     updateUnitsFromBBox(window.__bbox_mm);
   }
 
-  if (volVal)  volVal.textContent  = f3(json.volume_cm3);
-  if (projVal) projVal.textContent = f3(json.projected_area_cm2);
-  if (tminVal) tminVal.textContent = f3(json.thickness_min_mm);
-  if (tmaxVal) tmaxVal.textContent = f3(json.thickness_max_mm);
+  const elVol  = getStatEl("#volVal",  "volume");
+  const elProj = getStatEl("#projVal", "projected_area");
+  const elTmin = getStatEl("#tminVal", "tmin");
+  const elTmax = getStatEl("#tmaxVal", "tmax");
 
-  // si tu as des spans data-metric dans ton HTML
-  const d = (sel, v) => { const el = document.querySelector(sel); if (el) el.textContent = v; };
-  if (typeof json.volume_cm3 !== "undefined")         d('[data-metric="volume"]',         f3(json.volume_cm3));
-  if (typeof json.thickness_min_mm !== "undefined")   d('[data-metric="tmin"]',           f3(json.thickness_min_mm));
-  if (typeof json.thickness_max_mm !== "undefined")   d('[data-metric="tmax"]',           f3(json.thickness_max_mm));
-  if (typeof json.projected_area_cm2 !== "undefined") d('[data-metric="projected_area"]', f3(json.projected_area_cm2));
+  if (elVol)  elVol.textContent  = f3(json.volume_cm3);
+  if (elProj) elProj.textContent = f3(json.projected_area_cm2);
+  if (elTmin) elTmin.textContent = f3(json.thickness_min_mm);
+  if (elTmax) elTmax.textContent = f3(json.thickness_max_mm);
 }
 
 function clearStatsUI(){
@@ -844,6 +850,12 @@ function clearStatsUI(){
     bbox_mm: window.__bbox_mm
   });
 }
+
+// 🔁 observer global : si l’UI recrée les spans (#ids ou [data-metric]), on re-rend le cache
+const statsObserver = new MutationObserver(()=>{
+  if (lastStats) renderStats(lastStats);
+});
+statsObserver.observe(document.body, { childList:true, subtree:true });
 
 async function fetchStats(fileId, axis = 'Z') {
   if (!fileId) { clearStatsUI(); return; }
@@ -871,7 +883,7 @@ async function fetchStats(fileId, axis = 'Z') {
 }
 
 /* Radios X/Y/Z → recalcul surface projetée */
-projAxisRadios.forEach(r => r?.addEventListener("change", ()=>{
+projAxisRadios().forEach(r => r?.addEventListener("change", ()=>{
   currentAxis = getSelectedAxis();
   if (currentFileId) fetchStats(currentFileId, currentAxis);
 }));
@@ -884,6 +896,12 @@ btnAnalyser?.addEventListener("click", (e) => {
     return;
   }
   openMaterialModalSafe();
+});
+
+// ✅ si un autre script (ou l’onglet) signale "fichier prêt", on re-fetch
+window.addEventListener('dfm:fileReady', (ev)=>{
+  const fid = ev?.detail?.fileId || currentFileId;
+  if (fid) fetchStats(fid, getSelectedAxis());
 });
 
 // Export vide
