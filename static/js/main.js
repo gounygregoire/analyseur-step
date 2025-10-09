@@ -353,7 +353,6 @@ if (overlayHost) {
   const mo = new MutationObserver(() => patchAllMeasureTexts());
   mo.observe(overlayHost, { childList: true, subtree: true, characterData: true });
 }
-viewer.scene.on("tick", patchAllMeasureTexts);
 pushLabelFormatterToPlugin();
 
 /* ====== Panneau "Mesures" ====== */
@@ -851,25 +850,43 @@ function clearStatsUI(){
   });
 }
 
-// 🔁 observer global : si l’UI recrée les spans (#ids ou [data-metric]), on re-rend le cache
-const statsObserver = new MutationObserver(()=>{
+// 🔁 re-render des stats quand l’UI signale quelque-chose d'utile
+// (pas de MutationObserver global pour éviter le lag)
+window.addEventListener('dfm:fileReady', (ev)=>{
   if (lastStats) renderStats(lastStats);
 });
-statsObserver.observe(document.body, { childList:true, subtree:true });
+document.addEventListener('visibilitychange', ()=>{
+  if (document.visibilityState === 'visible' && lastStats) renderStats(lastStats);
+});
 
 async function fetchStats(fileId, axis = 'Z') {
-  if (!fileId) { clearStatsUI(); return; }
-  try {
-    const res  = await fetch(`/api/shape/stats?file_id=${encodeURIComponent(fileId)}&axis=${axis}`, { cache: 'no-store' });
-    const data = await res.json();
+  if (!fileId) { clearStatsUI(); console.warn('[analyse] pas de fileId'); return; }
+  axis = (axis || getSelectedAxis() || 'Z').toUpperCase();
+  console.log('[analyse] fetchStats →', { fileId, axis });
 
-    if (res.status === 200 && data && typeof data.volume_cm3 !== 'undefined') {
+  try {
+    const url = `/api/shape/stats?file_id=${encodeURIComponent(fileId)}&axis=${axis}`;
+    const res  = await fetch(url, { cache: 'no-store' });
+    let data = null;
+    try { data = await res.json(); } catch { data = null; }
+
+    if (res.status === 200 && data) {
+      // compat champs alternatifs éventuels
+      if (data.volume_mm3 != null && data.volume_cm3 == null) {
+        data.volume_cm3 = (+data.volume_mm3) / 1000; // 1 cm3 = 1000 mm3
+      }
+      if (data.projected_area_mm2 != null && data.projected_area_cm2 == null) {
+        data.projected_area_cm2 = (+data.projected_area_mm2) / 100; // 1 cm2 = 100 mm2
+      }
       renderStats(data);
+      console.log('[analyse] stats ok', data);
       return;
     }
 
     if (res.status === 202 && data && (data.status === 'queued' || data.status === 'processing')) {
-      setTimeout(() => fetchStats(fileId, axis), ((data.retry_in_sec ?? 2) * 1000));
+      const t = Math.max(500, ((data.retry_in_sec ?? 2) * 1000));
+      console.log('[analyse] en attente… retry dans', t, 'ms');
+      setTimeout(() => fetchStats(fileId, axis), t);
       return;
     }
 
@@ -881,6 +898,7 @@ async function fetchStats(fileId, axis = 'Z') {
     console.error('[analyse] fetchStats failed', err);
   }
 }
+
 
 /* Radios X/Y/Z → recalcul surface projetée */
 projAxisRadios().forEach(r => r?.addEventListener("change", ()=>{
