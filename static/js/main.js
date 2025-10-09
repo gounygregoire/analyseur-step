@@ -141,6 +141,9 @@ const viewer = new Viewer({
   dtxEnabled: true,
   transparent: true
 });
+/* >>> expose le viewer pour le bridge */
+window.viewer = viewer;
+
 new FastNavPlugin(viewer, { flyToDuration: 0.9, hideEdges:false, autoHideEdges:false });
 
 const xktLoader = new XKTLoaderPlugin(viewer, {
@@ -452,6 +455,69 @@ async function loadXKT(url, nameHint){
       if (++tries > 10) clearInterval(iv);
     }, 80);
 
+    /* ==========================================================
+       BRIDGE CADLYTICS — expose viewerAdapter + métriques + event
+       ========================================================== */
+    (function cadlyticsViewerBridge(){
+      try {
+        if (!window.viewerAdapter) window.viewerAdapter = {};
+        if (!window.viewerAdapter.viewer) window.viewerAdapter.viewer = window.viewer;
+
+        if (typeof window.viewerAdapter.getBasicStats !== 'function') {
+          window.viewerAdapter.getBasicStats = async function(){
+            const scene = window.viewerAdapter?.viewer?.scene;
+            let aabb = scene?.aabb;
+            if ((!aabb || aabb.length !== 6) && typeof scene?.getAABB === 'function') {
+              try { aabb = scene.getAABB(); } catch {}
+            }
+            if ((!aabb || aabb.length !== 6) && scene?.models) {
+              const models = Object.values(scene.models);
+              if (models.length && models[0]?.aabb?.length === 6) aabb = models[0].aabb;
+            }
+            if (!aabb || aabb.length !== 6) return { volume_cm3:0, tmin_mm:0, tmax_mm:0 };
+            const dx = aabb[3]-aabb[0], dy = aabb[4]-aabb[1], dz = aabb[5]-aabb[2]; // mm
+            const volume_cm3 = Math.max(0, (dx*dy*dz) / 1000);
+            const tmin_mm = Math.max(0, Math.min(dx,dy,dz) * 0.05);
+            const tmax_mm = Math.max(dx,dy,dz) * 0.5;
+            return { volume_cm3, tmin_mm, tmax_mm };
+          };
+        }
+        if (typeof window.viewerAdapter.getProjectedArea !== 'function') {
+          window.viewerAdapter.getProjectedArea = async function(axis){
+            const ax = (axis||'Z').toUpperCase();
+            const scene = window.viewerAdapter?.viewer?.scene;
+            let aabb = scene?.aabb;
+            if ((!aabb || aabb.length !== 6) && typeof scene?.getAABB === 'function') {
+              try { aabb = scene.getAABB(); } catch {}
+            }
+            if ((!aabb || aabb.length !== 6) && scene?.models) {
+              const models = Object.values(scene.models);
+              if (models.length && models[0]?.aabb?.length === 6) aabb = models[0].aabb;
+            }
+            if (!aabb || aabb.length !== 6) return 0;
+            const dx = aabb[3]-aabb[0], dy = aabb[4]-aabb[1], dz = aabb[5]-aabb[2];
+            const mm2 = ax==='X' ? (dy*dz) : ax==='Y' ? (dx*dz) : (dx*dy);
+            return Math.max(0, mm2/100); // mm² -> cm²
+          };
+        }
+
+        // fileId courant (si déjà connu)
+        if (window.currentFileId == null && typeof currentFileId !== "undefined") {
+          window.currentFileId = currentFileId;
+        }
+
+        // notifier l’UI que le fichier est prêt → remplit Volume/Épaisseurs/Surface
+        setTimeout(()=>{
+          window.dispatchEvent(new CustomEvent('dfm:fileReady', {
+            detail: { fileId: window.currentFileId || null }
+          }));
+        }, 50);
+      } catch(e){
+        console.warn('[bridge] viewerAdapter init failed', e);
+      }
+    })();
+    /* ===================== FIN BRIDGE ===================== */
+
     try {
       currentAxis = getSelectedAxis();
       if (currentFileId) { fetchStats(currentFileId, currentAxis); }
@@ -472,6 +538,7 @@ async function uploadAndShow(file) {
   try {
     if (/\.(xkt)$/i.test(f.name)) {
       currentFileId = null;
+      window.currentFileId = null;
       const fileURL = URL.createObjectURL(f);
       if (!chkAdditive?.checked) {
         for (const [, i] of models) { try { i.model.destroy(); } catch {} }
@@ -499,6 +566,7 @@ async function uploadAndShow(file) {
     }
 
     currentFileId = j.file_id || null;
+    window.currentFileId = currentFileId; // <<< exposé global pour DFM/bridge
     const xktUrl = new URL(j.xkt_url, location.origin).toString();
     console.log("[upload] ok:", { file_id: currentFileId, xktUrl });
 
@@ -644,7 +712,7 @@ function worldToOverlayXY(world){
   const vx = mV[0]*x + mV[4]*y + mV[8]*z  + mV[12];
   const vy = mV[1]*x + mV[5]*y + mV[9]*z  + mV[13];
   const vz = mV[2]*x + mV[6]*y + mV[10]*z + mV[14];
-  const vw = mV[3]*x + mV[7]*y + mV[11]*z + mV[15];
+  const vw = mV[3]*x + mV[7]*y + mV[11]*z + mV[15]*vw;
 
   const cx = mP[0]*vx + mP[4]*vy + mP[8]*vz  + mP[12]*vw;
   const cy = mP[1]*vx + mP[5]*vy + mP[9]*vz  + mP[13]*vw;
