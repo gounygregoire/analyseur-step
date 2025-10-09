@@ -1,5 +1,7 @@
 // /static/js/main.js — UTF-8 (NO BOM)
 console.log("main.js loaded ✅");
+// force l’ID de la vraie modale matière
+window.DFM_MATERIAL_MODAL_SELECTOR = '#materialQuestionnaireModal';
 
 import {
   Viewer,
