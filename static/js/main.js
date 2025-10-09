@@ -58,99 +58,107 @@ const getStatEl = (primarySel, dataMetric) =>
   getEl(primarySel) || getEl(`[data-metric="${dataMetric}"]`);
 const projAxisRadios = () => $$('input[name="projAxis"]');
 
-/* ====== Bouton "Analyser" : orchestrateur + fallback auto ====== */
+/* ====== Bouton "Analyser" : sans conflit DFM + fallback auto ====== */
+
+// Sélecteurs possibles du bouton
 const ANALYZE_SEL =
   '#btnAnalyser, #analyzeBtn, #btn-analyser, #btnAnalyse, #analyser, .btn-analyser, [data-action="analyze"], [data-act="analyze"]';
 
+// La modale est-elle déjà visible ?
 function isMaterialModalOpen() {
-  // cas Bootstrap .modal.show ou notre fallback .open
   return !!(
     document.querySelector('.modal.show') ||
     document.querySelector('[data-material-modal].open')
   );
 }
 
-function markMaterialModalOpened() {
-  // petit flag pour éviter les doubles ouvertures
-  window.__materialModalOpenedAt = Date.now();
-}
-
-function openMaterialModalOnce() {
-  if (isMaterialModalOpen()) return;
-  const el = openMaterialModalSafe();
-  if (el) markMaterialModalOpened();
-}
-
-function handleAnalyzeClick(e) {
-  if (e) e.preventDefault();
-
-  // 1) Tenter l’orchestrateur s’il est présent
-  let orchestratorCalled = false;
+// Ouvre la modale via les API globales si dispo, sinon fallback vanilla
+function openMaterialFallback() {
   try {
-    if (window.DFMOrchestrator?.handleAnalyzeClick) {
-      orchestratorCalled = true;
-      window.DFMOrchestrator.handleAnalyzeClick();
-    }
-  } catch (err) {
-    console.warn('[analyse] orchestrator error → fallback', err);
+    if (typeof window.openMaterialModal === 'function') { window.openMaterialModal(); return true; }
+    if (typeof window.showMaterialModal === 'function') { window.showMaterialModal(); return true; }
+  } catch (e) { console.warn(e); }
+
+  // Fallback minimal local si aucune API n'est dispo
+  let el = document.querySelector('[data-material-modal]') || document.getElementById('materialModal');
+  if (!el) {
+    // crée la modale fallback si absente (même markup que ton ensureMaterialModalFallback)
+    const wrap = document.createElement('div');
+    wrap.innerHTML = `
+      <div class="modal fade" data-material-modal tabindex="-1" aria-hidden="true" data-fallback>
+        <div class="modal-dialog"><div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">Critères matière</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
+          </div>
+          <div class="modal-body">
+            <form id="materialQuestionnaireForm" class="vstack" style="gap:.5rem">
+              <strong>Contraintes mécaniques</strong>
+              <label><input type="checkbox" name="mechanical" value="stiffness"> Rigidité</label>
+              <label><input type="checkbox" name="mechanical" value="impact"> Choc / Impact</label>
+              <label><input type="checkbox" name="mechanical" value="temperature"> Température</label>
+              <strong class="mt-2">Esthétique</strong>
+              <label><input type="checkbox" name="aesthetic" value="cosmetic"> Aspect soigné</label>
+              <label><input type="checkbox" name="aesthetic" value="transparent"> Transparent</label>
+              <strong class="mt-2">Réglementaire</strong>
+              <label data-strong="true"><input type="checkbox" name="regulatory" value="food"> Contact alimentaire</label>
+              <label data-strong="true"><input type="checkbox" name="regulatory" value="flame_retardant"> Auto-extinguible</label>
+            </form>
+          </div>
+        </div></div>
+      </div>`;
+    el = wrap.firstElementChild;
+    document.body.appendChild(el);
   }
 
-  // 2) Si pas d’orchestrateur → fallback immédiat
-  if (!orchestratorCalled) {
-    openMaterialModalOnce();
+  if (window.bootstrap?.Modal) {
+    window.bootstrap.Modal.getOrCreateInstance(el, { backdrop: 'static' }).show();
+  } else {
+    el.classList.add('open');
+    el.style.display = 'block';
+  }
+  return true;
+}
+
+// Gestion du clic côté main.js — en phase bubbling, et respect du preventDefault du DFM
+function handleAnalyzeClickMain(ev) {
+  // Si l’orchestrateur a intercepté (preventDefault) → ne rien faire
+  if (ev.defaultPrevented) return;
+
+  // Laisser d’abord l’orchestrateur gérer s’il existe
+  const hasOrchestrator = !!(window.DFMOrchestrator?.handleAnalyzeClick);
+  if (hasOrchestrator) {
+    // On ne déclenche pas nous-mêmes l’orchestrateur : son listener capture a déjà été appelé.
+    // On vérifie simplement qu’une modale s’ouvre, sinon on passe en fallback.
+    setTimeout(() => {
+      if (!isMaterialModalOpen()) openMaterialFallback();
+    }, 300);
     return;
   }
 
-  // 3) Orchestrateur présent : on lui laisse 250 ms pour ouvrir quelque chose.
-  //    S’il ne montre aucune modale, on déclenche notre fallback pour ne pas laisser l’utilisateur sans retour.
-  setTimeout(() => {
-    if (!isMaterialModalOpen()) {
-      openMaterialModalOnce();
-    }
-  }, 250);
+  // Pas d’orchestrateur → on ouvre directement la modale matière
+  openMaterialFallback();
 }
 
-// Branchement robuste : câble tous les boutons existants…
+// Brancher tous les boutons existants
 function wireAnalyzeButtons() {
   document.querySelectorAll(ANALYZE_SEL).forEach((btn) => {
-    if (btn.__wiredAnalyze) return;
-    btn.__wiredAnalyze = true;
-    btn.addEventListener('click', handleAnalyzeClick);
+    if (btn.__wiredAnalyzeMain) return;
+    btn.__wiredAnalyzeMain = true;
+    // Important : phase bubbling (par défaut) pour passer après le handler capture du DFM
+    btn.addEventListener('click', handleAnalyzeClickMain);
   });
 }
 wireAnalyzeButtons();
 
-// …recâble si l’UI ré-injecte des boutons
-new MutationObserver(wireAnalyzeButtons).observe(document.body, {
-  subtree: true,
-  childList: true,
-});
+// Re-branchement si l’UI réinjecte des boutons
+new MutationObserver(wireAnalyzeButtons).observe(document.body, { childList: true, subtree: true });
 
-// …et délégation de secours
-document.addEventListener(
-  'click',
-  (e) => {
-    const t = e.target?.closest?.(ANALYZE_SEL);
-    if (t) handleAnalyzeClick(e);
-  },
-  { capture: true }
-);
-/* ---------- viewer + plugins ---------- */
-const viewer = new Viewer({
-  canvasId: "xeokit-canvas",
-  dtxEnabled: true,
-  transparent: true
+// Délégation de secours (bubbling)
+document.addEventListener('click', (e) => {
+  const t = e.target?.closest?.(ANALYZE_SEL);
+  if (t) handleAnalyzeClickMain(e);
 });
-window.viewer = viewer;
-
-new FastNavPlugin(viewer, { flyToDuration: 0.9, hideEdges:false, autoHideEdges:false });
-
-const xktLoader = new XKTLoaderPlugin(viewer, {
-  dracoDecompressorPath:
-    "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/resources/draco/"
-});
-const sections = new SectionPlanesPlugin(viewer);
-new AnnotationsPlugin(viewer, { container: overlayHost });
 
 /* ========= Canvas & overlay sizing ========= */
 const canvasEl = document.getElementById("xeokit-canvas");
