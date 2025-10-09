@@ -52,113 +52,96 @@ const clipButtons  = $$(".clipAxis");
 const clipRange    = $("#clipRange");
 const btnShot      = $("#btnShot");
 
+/* ===== FIX: ouverture fiable de la VRAIE modale matière ===== */
+const ANALYZE_SEL =
+  '#btnAnalyser, #analyzeBtn, #btn-analyser, #btnAnalyse, #analyser, .btn-analyser, [data-action="analyze"], [data-act="analyze"]';
+
+// ta modale d’hier :
+const MATERIAL_MODAL_SEL =
+  '#materialQuestionnaireModal, #materialModal, [data-material-modal], .modal[data-role="material"]';
+
+function getMaterialModalEl() {
+  const list = Array.from(document.querySelectorAll(MATERIAL_MODAL_SEL));
+  if (!list.length) return null;
+  // priorité à celle qui contient le formulaire
+  return (
+    list.find(el => el.querySelector('#materialQuestionnaireForm, [data-material-form]')) ||
+    list[0]
+  );
+}
+
+function openMaterialModalHard() {
+  const el = getMaterialModalEl();
+  if (!el) { console.warn('[main] Modale matière introuvable'); return; }
+
+  if (window.bootstrap?.Modal) {
+    window.bootstrap.Modal.getOrCreateInstance(el, { backdrop: 'static' }).show();
+  } else {
+    // fallback vanilla (sans Bootstrap)
+    let bd = document.getElementById('__mm_backdrop__');
+    if (!bd) {
+      bd = document.createElement('div');
+      bd.id = '__mm_backdrop__';
+      Object.assign(bd.style, { position:'fixed', inset:'0', background:'rgba(0,0,0,.45)', zIndex:'1040' });
+      document.body.appendChild(bd);
+      bd.addEventListener('click', () => closeMaterialModalHard());
+    }
+    el.classList.add('show');
+    Object.assign(el.style, {
+      display:'block', visibility:'visible', opacity:'1', zIndex:'1050',
+      position:(getComputedStyle(el).position === 'static' ? 'fixed' : getComputedStyle(el).position),
+      left:'50%', top:'50%', transform:'translate(-50%, -50%)', maxHeight:'90vh', overflow:'auto'
+    });
+    el.addEventListener('click', (ev)=>{
+      if (ev.target.matches('.btn-close,[data-bs-dismiss="modal"],[data-dismiss="modal"]')) closeMaterialModalHard();
+    });
+  }
+}
+function closeMaterialModalHard() {
+  const el = getMaterialModalEl();
+  const bd = document.getElementById('__mm_backdrop__');
+  if (el) {
+    el.classList.remove('show');
+    el.style.display = 'none';
+    el.style.visibility = 'hidden';
+    el.style.opacity = '0';
+  }
+  if (bd) bd.remove();
+}
+
+// expose pour les autres scripts (DFMOrchestrator l’utilise si présent)
+window.openMaterialModal = window.openMaterialModal || openMaterialModalHard;
+window.showMaterialModal = window.showMaterialModal || openMaterialModalHard;
+
+// sécurité : si aucun autre script n’a ouvert la modale après le clic, on la force
+function wireAnalyzeButtons() {
+  document.querySelectorAll(ANALYZE_SEL).forEach((btn) => {
+    if (btn.__wiredAnalyzeMain) return;
+    btn.__wiredAnalyzeMain = true;
+    btn.addEventListener('click', (ev) => {
+      // si l’orchestrateur a intercepté (capture + preventDefault), on ne fait rien ici
+      if (ev.defaultPrevented) return;
+
+      // laisse sa chance à l’orchestrateur; sinon fallback dur
+      setTimeout(() => {
+        const open =
+          document.querySelector('.modal.show') ||
+          document.querySelector('#materialQuestionnaireModal.show') ||
+          document.querySelector('[data-material-modal].show, [data-material-modal].open');
+        if (!open) openMaterialModalHard();
+      }, 250);
+    });
+  });
+}
+wireAnalyzeButtons();
+new MutationObserver(wireAnalyzeButtons).observe(document.body, { childList:true, subtree:true });
+/* ===== FIN FIX ===== */
+
 /* ====== Analyse: sélecteurs panneau (DYNAMIQUES) ====== */
 const getEl = (sel) => document.querySelector(sel);
 const getStatEl = (primarySel, dataMetric) =>
   getEl(primarySel) || getEl(`[data-metric="${dataMetric}"]`);
 const projAxisRadios = () => $$('input[name="projAxis"]');
-
-/* ====== Bouton "Analyser" : sans conflit DFM + fallback auto ====== */
-
-// Sélecteurs possibles du bouton
-const ANALYZE_SEL =
-  '#btnAnalyser, #analyzeBtn, #btn-analyser, #btnAnalyse, #analyser, .btn-analyser, [data-action="analyze"], [data-act="analyze"]';
-
-// La modale est-elle déjà visible ?
-function isMaterialModalOpen() {
-  return !!(
-    document.querySelector('.modal.show') ||
-    document.querySelector('[data-material-modal].open')
-  );
-}
-
-// Ouvre la modale via les API globales si dispo, sinon fallback vanilla
-function openMaterialFallback() {
-  try {
-    if (typeof window.openMaterialModal === 'function') { window.openMaterialModal(); return true; }
-    if (typeof window.showMaterialModal === 'function') { window.showMaterialModal(); return true; }
-  } catch (e) { console.warn(e); }
-
-  // Fallback minimal local si aucune API n'est dispo
-  let el = document.querySelector('[data-material-modal]') || document.getElementById('materialModal');
-  if (!el) {
-    // crée la modale fallback si absente (même markup que ton ensureMaterialModalFallback)
-    const wrap = document.createElement('div');
-    wrap.innerHTML = `
-      <div class="modal fade" data-material-modal tabindex="-1" aria-hidden="true" data-fallback>
-        <div class="modal-dialog"><div class="modal-content">
-          <div class="modal-header">
-            <h5 class="modal-title">Critères matière</h5>
-            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
-          </div>
-          <div class="modal-body">
-            <form id="materialQuestionnaireForm" class="vstack" style="gap:.5rem">
-              <strong>Contraintes mécaniques</strong>
-              <label><input type="checkbox" name="mechanical" value="stiffness"> Rigidité</label>
-              <label><input type="checkbox" name="mechanical" value="impact"> Choc / Impact</label>
-              <label><input type="checkbox" name="mechanical" value="temperature"> Température</label>
-              <strong class="mt-2">Esthétique</strong>
-              <label><input type="checkbox" name="aesthetic" value="cosmetic"> Aspect soigné</label>
-              <label><input type="checkbox" name="aesthetic" value="transparent"> Transparent</label>
-              <strong class="mt-2">Réglementaire</strong>
-              <label data-strong="true"><input type="checkbox" name="regulatory" value="food"> Contact alimentaire</label>
-              <label data-strong="true"><input type="checkbox" name="regulatory" value="flame_retardant"> Auto-extinguible</label>
-            </form>
-          </div>
-        </div></div>
-      </div>`;
-    el = wrap.firstElementChild;
-    document.body.appendChild(el);
-  }
-
-  if (window.bootstrap?.Modal) {
-    window.bootstrap.Modal.getOrCreateInstance(el, { backdrop: 'static' }).show();
-  } else {
-    el.classList.add('open');
-    el.style.display = 'block';
-  }
-  return true;
-}
-
-// Gestion du clic côté main.js — en phase bubbling, et respect du preventDefault du DFM
-function handleAnalyzeClickMain(ev) {
-  // Si l’orchestrateur a intercepté (preventDefault) → ne rien faire
-  if (ev.defaultPrevented) return;
-
-  // Laisser d’abord l’orchestrateur gérer s’il existe
-  const hasOrchestrator = !!(window.DFMOrchestrator?.handleAnalyzeClick);
-  if (hasOrchestrator) {
-    // On ne déclenche pas nous-mêmes l’orchestrateur : son listener capture a déjà été appelé.
-    // On vérifie simplement qu’une modale s’ouvre, sinon on passe en fallback.
-    setTimeout(() => {
-      if (!isMaterialModalOpen()) openMaterialFallback();
-    }, 300);
-    return;
-  }
-
-  // Pas d’orchestrateur → on ouvre directement la modale matière
-  openMaterialFallback();
-}
-
-// Brancher tous les boutons existants
-function wireAnalyzeButtons() {
-  document.querySelectorAll(ANALYZE_SEL).forEach((btn) => {
-    if (btn.__wiredAnalyzeMain) return;
-    btn.__wiredAnalyzeMain = true;
-    // Important : phase bubbling (par défaut) pour passer après le handler capture du DFM
-    btn.addEventListener('click', handleAnalyzeClickMain);
-  });
-}
-wireAnalyzeButtons();
-
-// Re-branchement si l’UI réinjecte des boutons
-new MutationObserver(wireAnalyzeButtons).observe(document.body, { childList: true, subtree: true });
-
-// Délégation de secours (bubbling)
-document.addEventListener('click', (e) => {
-  const t = e.target?.closest?.(ANALYZE_SEL);
-  if (t) handleAnalyzeClickMain(e);
-});
 
 /* ---------- viewer + plugins ---------- */
 const viewer = new Viewer({
@@ -858,7 +841,7 @@ btnShot?.addEventListener("click",()=>{
 function f3(v){ return (v==null || !isFinite(+v)) ? "—" : (+v).toFixed(3).replace(".", ","); }
 function setText(el, txt){ if (el && el.textContent !== txt) el.textContent = txt; }
 
-/* --- Anti-blink : garde-fou contre les réécritures externes des métriques --- */
+/* --- Anti-blink --- */
 const StatsSafe = (() => {
   const idToMetric = (el) => {
     if (!el) return null;
@@ -869,12 +852,10 @@ const StatsSafe = (() => {
     if (el.id === 'tmaxVal') return 'tmax';
     return null;
   };
-
-  const expected = {}; // metric -> expected string
+  const expected = {};
   let applying = false;
-
   const mo = new MutationObserver((mutList) => {
-    if (applying) return; // ignore nos propres écritures
+    if (applying) return;
     for (const m of mutList) {
       let node = m.type === 'characterData' ? m.target?.parentElement : m.target;
       if (!node) continue;
@@ -885,7 +866,7 @@ const StatsSafe = (() => {
       const have = node.textContent;
       if (have !== want) {
         applying = true;
-        node.textContent = want; // restaure immédiatement
+        node.textContent = want;
         applying = false;
       }
     }
@@ -926,7 +907,7 @@ function renderStats(json){
 }
 
 function clearStatsUI(force=false){
-  if (!force && StatsPoller.state?.lastOk) return; // conserve l’affichage existant
+  if (!force && StatsPoller.state?.lastOk) return;
   renderStats({
     volume_cm3: null,
     projected_area_cm2: null,
@@ -936,7 +917,7 @@ function clearStatsUI(force=false){
   });
 }
 
-/* --- Stats polling controller (singleton) --- */
+/* --- Stats polling controller --- */
 const StatsPoller = (() => {
   let state = { token: 0, timer: null, lastOk: null, fileId: null, axis: "Z" };
 
@@ -960,7 +941,7 @@ const StatsPoller = (() => {
         if (data.projected_area_mm2 != null && data.projected_area_cm2 == null) data.projected_area_cm2 = (+data.projected_area_mm2)/100;
         state.lastOk = data;
         renderStats(data);
-        cancel(); // stop dès OK
+        cancel();
         return;
       }
 
@@ -1001,12 +982,11 @@ projAxisRadios().forEach(r => r?.addEventListener("change", ()=>{
 }));
 
 /* ==================== Lien avec le DFM ==================== */
-
-/* ✅ Un seul listener dfm:fileReady : déclenche le polling (pas de re-render direct) */
+// ✅ Un seul listener dfm:fileReady : déclenche le polling
 window.addEventListener('dfm:fileReady', (ev)=>{
   const fid = ev?.detail?.fileId || currentFileId;
   if (fid) fetchStats(fid, getSelectedAxis());
 });
 
-// Export vide
+// Export vide (ESM)
 export {};
