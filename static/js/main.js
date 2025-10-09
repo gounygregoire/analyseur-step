@@ -66,7 +66,7 @@ const projAxisRadios = $$('input[name="projAxis"]');
 const btnAnalyser = document.querySelector("#btnAnalyser, #analyzeBtn, #btn-analyser");
 
 /* ------------------------------------------------------------------
-   Fallback modale matière SANS entrer en conflit avec DFMOrchestrator
+   Fallback modale matière (aucun conflit avec DFMOrchestrator)
    ------------------------------------------------------------------ */
 const materialModalSelectors  = ['#materialModal', '[data-material-modal]'];
 const materialFormSelectors   = ['#materialQuestionnaireForm', '#materialForm', '[data-material-form]'];
@@ -77,11 +77,9 @@ function findMaterialModal()   { return q1(materialModalSelectors); }
 function findMaterialForm()    { return q1(materialFormSelectors); }
 function findMaterialResults() { return q1(materialResultsSelectors); }
 
-/* crée une petite modale si vraiment rien n'existe dans le DOM */
 function ensureMaterialModalFallback(){
   let el = findMaterialModal();
   if (el) return el;
-
   const wrap = document.createElement("div");
   wrap.innerHTML = `
   <div class="modal fade" data-material-modal tabindex="-1" aria-hidden="true">
@@ -118,20 +116,13 @@ function ensureMaterialModalFallback(){
   return el;
 }
 
-/* ouverture SANS redéclarer openMaterialModal/showMaterialModal */
 function openMaterialModalSafe(){
-  // 1) Si DFM a déjà exposé ses helpers, on les utilise
   if (typeof window.openMaterialModal === "function") { try { window.openMaterialModal(); return findMaterialModal(); } catch(e){ console.warn(e); } }
   if (typeof window.showMaterialModal === "function") { try { window.showMaterialModal(); return findMaterialModal(); } catch(e){ console.warn(e); } }
-
-  // 2) Sinon fallback local
   const el = findMaterialModal() || ensureMaterialModalFallback();
   if (!el) { alert("Modale critères indisponible."); return null; }
-  if (window.bootstrap?.Modal) {
-    window.bootstrap.Modal.getOrCreateInstance(el, { backdrop: "static" }).show();
-  } else {
-    el.classList.add("open"); el.style.display="block";
-  }
+  if (window.bootstrap?.Modal) window.bootstrap.Modal.getOrCreateInstance(el, { backdrop: "static" }).show();
+  else { el.classList.add("open"); el.style.display="block"; }
   return el;
 }
 
@@ -141,7 +132,6 @@ const viewer = new Viewer({
   dtxEnabled: true,
   transparent: true
 });
-/* >>> expose le viewer pour le bridge */
 window.viewer = viewer;
 
 new FastNavPlugin(viewer, { flyToDuration: 0.9, hideEdges:false, autoHideEdges:false });
@@ -235,8 +225,8 @@ let clipPlateWorld = null;
 let clipPlaneDir   = [1,0,0];
 
 /* ====== Analyse: état courant ====== */
-let currentFileId = null;         // défini par /upload
-let currentAxis   = "Z";          // défaut Z
+let currentFileId = null;
+let currentAxis   = "Z";
 const getSelectedAxis = () => (axisX?.checked && "X") || (axisY?.checked && "Y") || "Z";
 
 const setProgress=(p)=>{ if (progressBar) progressBar.style.width = `${Math.max(0,Math.min(100,p))}%`; };
@@ -245,8 +235,8 @@ const setSome=(ids,prop,val)=> ids.forEach(id=>{const o=viewer.scene.objects[id]
 const setAll=(prop,val)=> allIds().forEach(id=>{const o=viewer.scene.objects[id]; if(o) o[prop]=val;});
 const clearSelection=()=>{ setSome([...selectedIds],"highlighted",false); selectedIds.clear(); if (propsPanel) propsPanel.innerHTML=""; };
 
-/* ---------- Mesures (format FR + unités robustes) ---------- */
-let MM_PER_WU = 0.001; // par défaut
+/* ---------- Mesures & unités ---------- */
+let MM_PER_WU = 0.001;
 
 const frFormat = (val) => {
   const a = Math.abs(val);
@@ -277,9 +267,9 @@ function updateUnitsFromAABB(aabbLike) {
     const sx = a[3]-a[0], sy = a[4]-a[1], sz = a[5]-a[2];
     const maxWU = Math.max(sx, sy, sz);
     let next = MM_PER_WU;
-    if (maxWU > 1500)      next = 0.001; // µm → mm
-    else if (maxWU < 0.5)  next = 1000;  // m → mm
-    else                   next = 1;     // mm → mm
+    if (maxWU > 1500)      next = 0.001;
+    else if (maxWU < 0.5)  next = 1000;
+    else                   next = 1;
     if (Math.abs(next - MM_PER_WU) > 1e-9) {
       MM_PER_WU = next;
       console.log("[units] mm per WU =", MM_PER_WU);
@@ -324,7 +314,7 @@ if ("snapping" in distanceCtrl) {
   window.addEventListener("keyup",   (e)=>{ if (!e.altKey) distanceCtrl.snapping = true;  }, {passive:true});
 }
 
-/* --- Conversion texte d’overlays → mm --- */
+/* --- conversion overlay → mm --- */
 function toFR(n){
   const a = Math.abs(n);
   const d = a >= 1000 ? 0 : a >= 100 ? 1 : a >= 10 ? 2 : 3;
@@ -446,6 +436,7 @@ async function loadXKT(url, nameHint){
     models.set(id,{model,name:nameHint||id,src:url}); lastModelId=id;
     if (chkEdges?.checked) viewer.scene.edgeMaterial.edgesEnabled=true;
 
+    // init unités + heuristique AABB
     MM_PER_WU = 0.001;
     console.log("[units] init forced to µm→mm");
     onUnitsChanged();
@@ -455,68 +446,12 @@ async function loadXKT(url, nameHint){
       if (++tries > 10) clearInterval(iv);
     }, 80);
 
-    /* ==========================================================
-       BRIDGE CADLYTICS — expose viewerAdapter + métriques + event
-       ========================================================== */
-    (function cadlyticsViewerBridge(){
-      try {
-        if (!window.viewerAdapter) window.viewerAdapter = {};
-        if (!window.viewerAdapter.viewer) window.viewerAdapter.viewer = window.viewer;
-
-        if (typeof window.viewerAdapter.getBasicStats !== 'function') {
-          window.viewerAdapter.getBasicStats = async function(){
-            const scene = window.viewerAdapter?.viewer?.scene;
-            let aabb = scene?.aabb;
-            if ((!aabb || aabb.length !== 6) && typeof scene?.getAABB === 'function') {
-              try { aabb = scene.getAABB(); } catch {}
-            }
-            if ((!aabb || aabb.length !== 6) && scene?.models) {
-              const models = Object.values(scene.models);
-              if (models.length && models[0]?.aabb?.length === 6) aabb = models[0].aabb;
-            }
-            if (!aabb || aabb.length !== 6) return { volume_cm3:0, tmin_mm:0, tmax_mm:0 };
-            const dx = aabb[3]-aabb[0], dy = aabb[4]-aabb[1], dz = aabb[5]-aabb[2]; // mm
-            const volume_cm3 = Math.max(0, (dx*dy*dz) / 1000);
-            const tmin_mm = Math.max(0, Math.min(dx,dy,dz) * 0.05);
-            const tmax_mm = Math.max(dx,dy,dz) * 0.5;
-            return { volume_cm3, tmin_mm, tmax_mm };
-          };
-        }
-        if (typeof window.viewerAdapter.getProjectedArea !== 'function') {
-          window.viewerAdapter.getProjectedArea = async function(axis){
-            const ax = (axis||'Z').toUpperCase();
-            const scene = window.viewerAdapter?.viewer?.scene;
-            let aabb = scene?.aabb;
-            if ((!aabb || aabb.length !== 6) && typeof scene?.getAABB === 'function') {
-              try { aabb = scene.getAABB(); } catch {}
-            }
-            if ((!aabb || aabb.length !== 6) && scene?.models) {
-              const models = Object.values(scene.models);
-              if (models.length && models[0]?.aabb?.length === 6) aabb = models[0].aabb;
-            }
-            if (!aabb || aabb.length !== 6) return 0;
-            const dx = aabb[3]-aabb[0], dy = aabb[4]-aabb[1], dz = aabb[5]-aabb[2];
-            const mm2 = ax==='X' ? (dy*dz) : ax==='Y' ? (dx*dz) : (dx*dy);
-            return Math.max(0, mm2/100); // mm² -> cm²
-          };
-        }
-
-        // fileId courant (si déjà connu)
-        if (window.currentFileId == null && typeof currentFileId !== "undefined") {
-          window.currentFileId = currentFileId;
-        }
-
-        // notifier l’UI que le fichier est prêt → remplit Volume/Épaisseurs/Surface
-        setTimeout(()=>{
-          window.dispatchEvent(new CustomEvent('dfm:fileReady', {
-            detail: { fileId: window.currentFileId || null }
-          }));
-        }, 50);
-      } catch(e){
-        console.warn('[bridge] viewerAdapter init failed', e);
-      }
-    })();
-    /* ===================== FIN BRIDGE ===================== */
+    // notifier l’UI: fichier prêt
+    setTimeout(()=>{
+      window.dispatchEvent(new CustomEvent('dfm:fileReady', {
+        detail: { fileId: window.currentFileId || null }
+      }));
+    }, 50);
 
     try {
       currentAxis = getSelectedAxis();
@@ -562,11 +497,11 @@ async function uploadAndShow(file) {
     }
 
     if (j.s3_uploaded === false) {
-      console.warn("[upload] S3 non disponible -> l’analyse asynchrone ne partira pas tant que S3 n’est pas corrigé).");
+      console.warn("[upload] S3 non disponible.");
     }
 
     currentFileId = j.file_id || null;
-    window.currentFileId = currentFileId; // <<< exposé global pour DFM/bridge
+    window.currentFileId = currentFileId; // <<< important pour fetchStats/DFM
     const xktUrl = new URL(j.xkt_url, location.origin).toString();
     console.log("[upload] ok:", { file_id: currentFileId, xktUrl });
 
@@ -694,7 +629,6 @@ function showProps(meta){
 }
 
 /* ====================== PLAQUE DE COUPE : quad SVG ====================== */
-// … (aucune modif fonctionnelle ci-dessous)
 const cross = (a,b)=> [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
 const dot   = (a,b)=> a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
 const len   = (v)=> Math.hypot(v[0],v[1],v[2]) || 1;
@@ -712,7 +646,7 @@ function worldToOverlayXY(world){
   const vx = mV[0]*x + mV[4]*y + mV[8]*z  + mV[12];
   const vy = mV[1]*x + mV[5]*y + mV[9]*z  + mV[13];
   const vz = mV[2]*x + mV[6]*y + mV[10]*z + mV[14];
-  const vw = mV[3]*x + mV[7]*y + mV[11]*z + mV[15]*vw;
+  const vw = mV[3]*x + mV[7]*y + mV[11]*z + mV[15]; // (fix) pas "* vw"
 
   const cx = mP[0]*vx + mP[4]*vy + mP[8]*vz  + mP[12]*vw;
   const cy = mP[1]*vx + mP[5]*vy + mP[9]*vz  + mP[13]*vw;
@@ -804,7 +738,6 @@ function updateCutPlaneVisual(){
 }
 
 /* ---------- COUPE ---------- */
-// … (inchangé)
 function setClipAxis(axis){
   const same = (clipAxis === axis);
   clipAxis = same ? null : axis;
@@ -878,30 +811,80 @@ btnShot?.addEventListener("click",()=>{
 });
 
 /* ==================== ANALYSE : fetch & rendu ==================== */
-// … (inchangé)
 function f3(v){ return (v==null || !isFinite(+v)) ? "—" : (+v).toFixed(3).replace(".", ","); }
-function renderStats(json){ /* ...exactement comme ta version... */ }
-function clearStatsUI(){ renderStats({ volume_cm3: null, projected_area_cm2: null, thickness_min_mm: null, thickness_max_mm: null, bbox_mm: window.__bbox_mm }); }
-async function fetchStats(fileId, axis = 'Z') { /* ...exactement comme ta version... */ }
 
+function renderStats(json){
+  if (!json || typeof json !== "object") return;
+
+  // aligne les unités sur bbox_mm renvoyée par l’API
+  if (Array.isArray(json.bbox_mm)) {
+    window.__bbox_mm = json.bbox_mm;
+    updateUnitsFromBBox(window.__bbox_mm);
+  }
+
+  if (volVal)  volVal.textContent  = f3(json.volume_cm3);
+  if (projVal) projVal.textContent = f3(json.projected_area_cm2);
+  if (tminVal) tminVal.textContent = f3(json.thickness_min_mm);
+  if (tmaxVal) tmaxVal.textContent = f3(json.thickness_max_mm);
+
+  // si tu as des spans data-metric dans ton HTML
+  const d = (sel, v) => { const el = document.querySelector(sel); if (el) el.textContent = v; };
+  if (typeof json.volume_cm3 !== "undefined")         d('[data-metric="volume"]',         f3(json.volume_cm3));
+  if (typeof json.thickness_min_mm !== "undefined")   d('[data-metric="tmin"]',           f3(json.thickness_min_mm));
+  if (typeof json.thickness_max_mm !== "undefined")   d('[data-metric="tmax"]',           f3(json.thickness_max_mm));
+  if (typeof json.projected_area_cm2 !== "undefined") d('[data-metric="projected_area"]', f3(json.projected_area_cm2));
+}
+
+function clearStatsUI(){
+  renderStats({
+    volume_cm3: null,
+    projected_area_cm2: null,
+    thickness_min_mm: null,
+    thickness_max_mm: null,
+    bbox_mm: window.__bbox_mm
+  });
+}
+
+async function fetchStats(fileId, axis = 'Z') {
+  if (!fileId) { clearStatsUI(); return; }
+  try {
+    const res  = await fetch(`/api/shape/stats?file_id=${encodeURIComponent(fileId)}&axis=${axis}`, { cache: 'no-store' });
+    const data = await res.json();
+
+    if (res.status === 200 && data && typeof data.volume_cm3 !== 'undefined') {
+      renderStats(data);
+      return;
+    }
+
+    if (res.status === 202 && data && (data.status === 'queued' || data.status === 'processing')) {
+      setTimeout(() => fetchStats(fileId, axis), ((data.retry_in_sec ?? 2) * 1000));
+      return;
+    }
+
+    clearStatsUI();
+    console.warn('[analyse] erreur API', res.status, data);
+
+  } catch (err) {
+    clearStatsUI();
+    console.error('[analyse] fetchStats failed', err);
+  }
+}
+
+/* Radios X/Y/Z → recalcul surface projetée */
 projAxisRadios.forEach(r => r?.addEventListener("change", ()=>{
   currentAxis = getSelectedAxis();
   if (currentFileId) fetchStats(currentFileId, currentAxis);
 }));
 
 /* ==================== Lien avec le DFM ==================== */
-/* Le bouton "Analyser" délègue:
-   1) Au DFM s’il est chargé (handleAnalyzeClick).
-   2) Sinon, on ouvre la modale matière (globale) ou le fallback local. */
 btnAnalyser?.addEventListener("click", (e) => {
   e.preventDefault();
   if (window.DFMOrchestrator?.handleAnalyzeClick) {
     window.DFMOrchestrator.handleAnalyzeClick();
     return;
   }
-  // Pas de DFM: au moins ouvrir la modale de critères
   openMaterialModalSafe();
 });
 
-// Petit export vide pour certains bundlers/linters
+// Export vide
 export {};
