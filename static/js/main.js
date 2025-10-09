@@ -58,59 +58,72 @@ const getStatEl = (primarySel, dataMetric) =>
   getEl(primarySel) || getEl(`[data-metric="${dataMetric}"]`);
 const projAxisRadios = () => $$('input[name="projAxis"]');
 
-/* ====== Bouton "Analyser" (3 ids possibles) ====== */
-const btnAnalyser = document.querySelector("#btnAnalyser, #analyzeBtn, #btn-analyser");
+/* ====== Bouton "Analyser" : wiring robuste + fallback ====== */
+// on supporte plusieurs variantes d'IDs/classes/attributs
+const ANALYZE_SEL =
+  '#btnAnalyser, #analyzeBtn, #btn-analyser, #btnAnalyse, #analyser, .btn-analyser, [data-action="analyze"], [data-act="analyze"]';
 
-/* ------------------------------------------------------------------
-   Fallback modale matière (aucun conflit avec DFMOrchestrator)
-   ------------------------------------------------------------------ */
-const materialModalSelectors  = ['#materialModal', '[data-material-modal]'];
-const materialFormSelectors   = ['#materialQuestionnaireForm', '#materialForm', '[data-material-form]'];
-const materialResultsSelectors= ['#materialResults', '[data-material-results]'];
+function handleAnalyzeClick(e){
+  if (e) e.preventDefault();
 
-function q1(list){ for (const s of list){ const el=document.querySelector(s); if (el) return el; } return null; }
-function findMaterialModal()   { return q1(materialModalSelectors); }
-function findMaterialForm()    { return q1(materialFormSelectors); }
-function findMaterialResults() { return q1(materialResultsSelectors); }
+  // 1) Orchestrateur externe ? On lui passe la main.
+  if (window.DFMOrchestrator?.handleAnalyzeClick) {
+    try { window.DFMOrchestrator.handleAnalyzeClick(); return; } catch (err) { console.warn(err); }
+  }
 
-function ensureMaterialModalFallback(){
-  let el = findMaterialModal();
-  if (el) return el;
-  const wrap = document.createElement("div");
-  wrap.innerHTML = `
-  <div class="modal fade" data-material-modal tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog"><div class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title">Critères matière</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
-      </div>
-      <div class="modal-body">
-        <form id="materialQuestionnaireForm" class="vstack" style="gap:.5rem">
-          <strong>Contraintes mécaniques</strong>
-          <label><input type="checkbox" name="mechanical" value="stiffness"> Rigidité</label>
-          <label><input type="checkbox" name="mechanical" value="impact"> Choc / Impact</label>
-          <label><input type="checkbox" name="mechanical" value="temperature"> Température</label>
-
-          <strong class="mt-2">Esthétique</strong>
-          <label><input type="checkbox" name="aesthetic" value="cosmetic"> Aspect soigné</label>
-          <label><input type="checkbox" name="aesthetic" value="transparent"> Transparent</label>
-
-          <strong class="mt-2">Réglementaire</strong>
-          <label id="food" data-strong="true"><input type="checkbox" name="regulatory" value="food"> Contact alimentaire</label>
-          <label id="flame_retardant" data-strong="true"><input type="checkbox" name="regulatory" value="flame_retardant"> Auto-extinguible</label>
-        </form>
-
-        <div class="mt-2">
-          <button id="btnMaterialRecompute" type="button" class="btn btn-primary btn-sm">Recommander</button>
-        </div>
-        <div data-material-results style="display:none; margin-top:12px"></div>
-      </div>
-    </div></div>
-  </div>`;
-  el = wrap.firstElementChild;
-  document.body.appendChild(el);
-  return el;
+  // 2) Fallback : on ouvre la modale intégrée + branche le bouton "Recommander"
+  const modal = openMaterialModalSafe();
+  if (!modal) return;
+  setTimeout(ensureMaterialHandlers, 0); // branchement après rendu de la modale
 }
+
+function ensureMaterialHandlers(){
+  const form = (function q1(list){ for (const s of ['#materialQuestionnaireForm', '#materialForm', '[data-material-form]']){ const el=document.querySelector(s); if (el) return el; } return null; })();
+  const res  = (function q1(list){ for (const s of ['#materialResults', '[data-material-results]']){ const el=document.querySelector(s); if (el) return el; } return null; })();
+  const btn  = document.querySelector('#btnMaterialRecompute');
+
+  if (!btn || btn.__wired) return;
+  btn.__wired = true;
+
+  // Mini reco locale (fallback visuel) si pas d’orchestrateur
+  btn.addEventListener('click', ()=>{
+    if (!form || !res) return;
+    const fd = new FormData(form);
+    const picks = [...fd].map(([k,v])=>String(v)).filter(Boolean);
+
+    // démo : 3 "reco" basées sur les cases cochées (sinon défauts)
+    const base = ["PA12", "ABS", "PETG"];
+    const fromForm = Array.from(new Set(picks)).slice(0,3);
+    const top3 = (fromForm.length ? fromForm : base).slice(0,3);
+
+    res.innerHTML = `
+      <div class="mt-2">
+        <strong>3 matières recommandées</strong>
+        <ol style="margin:6px 0 0 18px">${top3.map(m=>`<li>${m}</li>`).join("")}</ol>
+      </div>`;
+    res.style.display = 'block';
+  });
+}
+
+// Branchement robuste : on câble ce qui existe déjà…
+function wireAnalyzeButtons(){
+  document.querySelectorAll(ANALYZE_SEL).forEach(btn=>{
+    if (btn.__wired) return;
+    btn.__wired = true;
+    btn.addEventListener('click', handleAnalyzeClick);
+  });
+}
+wireAnalyzeButtons();
+
+// …on recâble si l’UI rerend des boutons…
+new MutationObserver(wireAnalyzeButtons).observe(document.body, { subtree:true, childList:true });
+
+// …et on ajoute une délégation de secours (si le bouton est injecté dynamiquement)
+document.addEventListener('click', (e)=>{
+  const t = e.target?.closest?.(ANALYZE_SEL);
+  if (t) handleAnalyzeClick(e);
+}, { capture:true });
+
 
 function openMaterialModalSafe(){
   if (typeof window.openMaterialModal === "function") { try { window.openMaterialModal(); return findMaterialModal(); } catch(e){ console.warn(e); } }
@@ -962,14 +975,6 @@ projAxisRadios().forEach(r => r?.addEventListener("change", ()=>{
 }));
 
 /* ==================== Lien avec le DFM ==================== */
-btnAnalyser?.addEventListener("click", (e) => {
-  e.preventDefault();
-  if (window.DFMOrchestrator?.handleAnalyzeClick) {
-    window.DFMOrchestrator.handleAnalyzeClick();
-    return;
-  }
-  openMaterialModalSafe();
-});
 
 /* ✅ Un seul listener dfm:fileReady : déclenche le polling (pas de re-render direct) */
 window.addEventListener('dfm:fileReady', (ev)=>{
