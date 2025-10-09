@@ -58,83 +58,83 @@ const getStatEl = (primarySel, dataMetric) =>
   getEl(primarySel) || getEl(`[data-metric="${dataMetric}"]`);
 const projAxisRadios = () => $$('input[name="projAxis"]');
 
-/* ====== Bouton "Analyser" : wiring robuste + fallback ====== */
-// on supporte plusieurs variantes d'IDs/classes/attributs
+/* ====== Bouton "Analyser" : orchestrateur + fallback auto ====== */
 const ANALYZE_SEL =
   '#btnAnalyser, #analyzeBtn, #btn-analyser, #btnAnalyse, #analyser, .btn-analyser, [data-action="analyze"], [data-act="analyze"]';
 
-function handleAnalyzeClick(e){
+function isMaterialModalOpen() {
+  // cas Bootstrap .modal.show ou notre fallback .open
+  return !!(
+    document.querySelector('.modal.show') ||
+    document.querySelector('[data-material-modal].open')
+  );
+}
+
+function markMaterialModalOpened() {
+  // petit flag pour éviter les doubles ouvertures
+  window.__materialModalOpenedAt = Date.now();
+}
+
+function openMaterialModalOnce() {
+  if (isMaterialModalOpen()) return;
+  const el = openMaterialModalSafe();
+  if (el) markMaterialModalOpened();
+}
+
+function handleAnalyzeClick(e) {
   if (e) e.preventDefault();
 
-  // 1) Orchestrateur externe ? On lui passe la main.
-  if (window.DFMOrchestrator?.handleAnalyzeClick) {
-    try { window.DFMOrchestrator.handleAnalyzeClick(); return; } catch (err) { console.warn(err); }
+  // 1) Tenter l’orchestrateur s’il est présent
+  let orchestratorCalled = false;
+  try {
+    if (window.DFMOrchestrator?.handleAnalyzeClick) {
+      orchestratorCalled = true;
+      window.DFMOrchestrator.handleAnalyzeClick();
+    }
+  } catch (err) {
+    console.warn('[analyse] orchestrator error → fallback', err);
   }
 
-  // 2) Fallback : on ouvre la modale intégrée + branche le bouton "Recommander"
-  const modal = openMaterialModalSafe();
-  if (!modal) return;
-  setTimeout(ensureMaterialHandlers, 0); // branchement après rendu de la modale
+  // 2) Si pas d’orchestrateur → fallback immédiat
+  if (!orchestratorCalled) {
+    openMaterialModalOnce();
+    return;
+  }
+
+  // 3) Orchestrateur présent : on lui laisse 250 ms pour ouvrir quelque chose.
+  //    S’il ne montre aucune modale, on déclenche notre fallback pour ne pas laisser l’utilisateur sans retour.
+  setTimeout(() => {
+    if (!isMaterialModalOpen()) {
+      openMaterialModalOnce();
+    }
+  }, 250);
 }
 
-function ensureMaterialHandlers(){
-  const form = (function q1(list){ for (const s of ['#materialQuestionnaireForm', '#materialForm', '[data-material-form]']){ const el=document.querySelector(s); if (el) return el; } return null; })();
-  const res  = (function q1(list){ for (const s of ['#materialResults', '[data-material-results]']){ const el=document.querySelector(s); if (el) return el; } return null; })();
-  const btn  = document.querySelector('#btnMaterialRecompute');
-
-  if (!btn || btn.__wired) return;
-  btn.__wired = true;
-
-  // Mini reco locale (fallback visuel) si pas d’orchestrateur
-  btn.addEventListener('click', ()=>{
-    if (!form || !res) return;
-    const fd = new FormData(form);
-    const picks = [...fd].map(([k,v])=>String(v)).filter(Boolean);
-
-    // démo : 3 "reco" basées sur les cases cochées (sinon défauts)
-    const base = ["PA12", "ABS", "PETG"];
-    const fromForm = Array.from(new Set(picks)).slice(0,3);
-    const top3 = (fromForm.length ? fromForm : base).slice(0,3);
-
-    res.innerHTML = `
-      <div class="mt-2">
-        <strong>3 matières recommandées</strong>
-        <ol style="margin:6px 0 0 18px">${top3.map(m=>`<li>${m}</li>`).join("")}</ol>
-      </div>`;
-    res.style.display = 'block';
-  });
-}
-
-// Branchement robuste : on câble ce qui existe déjà…
-function wireAnalyzeButtons(){
-  document.querySelectorAll(ANALYZE_SEL).forEach(btn=>{
-    if (btn.__wired) return;
-    btn.__wired = true;
+// Branchement robuste : câble tous les boutons existants…
+function wireAnalyzeButtons() {
+  document.querySelectorAll(ANALYZE_SEL).forEach((btn) => {
+    if (btn.__wiredAnalyze) return;
+    btn.__wiredAnalyze = true;
     btn.addEventListener('click', handleAnalyzeClick);
   });
 }
 wireAnalyzeButtons();
 
-// …on recâble si l’UI rerend des boutons…
-new MutationObserver(wireAnalyzeButtons).observe(document.body, { subtree:true, childList:true });
+// …recâble si l’UI ré-injecte des boutons
+new MutationObserver(wireAnalyzeButtons).observe(document.body, {
+  subtree: true,
+  childList: true,
+});
 
-// …et on ajoute une délégation de secours (si le bouton est injecté dynamiquement)
-document.addEventListener('click', (e)=>{
-  const t = e.target?.closest?.(ANALYZE_SEL);
-  if (t) handleAnalyzeClick(e);
-}, { capture:true });
-
-
-function openMaterialModalSafe(){
-  if (typeof window.openMaterialModal === "function") { try { window.openMaterialModal(); return findMaterialModal(); } catch(e){ console.warn(e); } }
-  if (typeof window.showMaterialModal === "function") { try { window.showMaterialModal(); return findMaterialModal(); } catch(e){ console.warn(e); } }
-  const el = findMaterialModal() || ensureMaterialModalFallback();
-  if (!el) { alert("Modale critères indisponible."); return null; }
-  if (window.bootstrap?.Modal) window.bootstrap.Modal.getOrCreateInstance(el, { backdrop: "static" }).show();
-  else { el.classList.add("open"); el.style.display="block"; }
-  return el;
-}
-
+// …et délégation de secours
+document.addEventListener(
+  'click',
+  (e) => {
+    const t = e.target?.closest?.(ANALYZE_SEL);
+    if (t) handleAnalyzeClick(e);
+  },
+  { capture: true }
+);
 /* ---------- viewer + plugins ---------- */
 const viewer = new Viewer({
   canvasId: "xeokit-canvas",
