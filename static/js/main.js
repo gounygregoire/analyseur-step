@@ -829,16 +829,22 @@ function renderStats(json){
     updateUnitsFromBBox(window.__bbox_mm);
   }
 
-  const elVol  = getStatEl("#volVal",  "volume");
-  const elProj = getStatEl("#projVal", "projected_area");
-  const elTmin = getStatEl("#tminVal", "tmin");
-  const elTmax = getStatEl("#tmaxVal", "tmax");
+const elVol  = getStatEl("#volVal",  "volume");
+const elProj = getStatEl("#projVal", "projected_area");
+const elTmin = getStatEl("#tminVal", "tmin");
+const elTmax = getStatEl("#tmaxVal", "tmax");
 
-  if (elVol)  elVol.textContent  = f3(json.volume_cm3);
-  if (elProj) elProj.textContent = f3(json.projected_area_cm2);
-  if (elTmin) elTmin.textContent = f3(json.thickness_min_mm);
-  if (elTmax) elTmax.textContent = f3(json.thickness_max_mm);
+setText(elVol,  f3(json.volume_cm3));
+setText(elProj, f3(json.projected_area_cm2));
+setText(elTmin, f3(json.thickness_min_mm));
+setText(elTmax, f3(json.thickness_max_mm));
+
+function setText(el, txt){
+  if (!el) return;
+  if (el.textContent !== txt) el.textContent = txt;
 }
+}
+
 
 function clearStatsUI(){
   renderStats({
@@ -859,45 +865,77 @@ document.addEventListener('visibilitychange', ()=>{
   if (document.visibilityState === 'visible' && lastStats) renderStats(lastStats);
 });
 
-async function fetchStats(fileId, axis = 'Z') {
-  if (!fileId) { clearStatsUI(); console.warn('[analyse] pas de fileId'); return; }
-  axis = (axis || getSelectedAxis() || 'Z').toUpperCase();
-  console.log('[analyse] fetchStats →', { fileId, axis });
+// --- Stats polling controller (anti-clignotement) ---
+let __statsPoll = {
+  token: 0,        // id logique de la session (fileId+axis)
+  timer: null,     // setTimeout id
+  lastOk: null,    // dernier JSON 200 OK
+  fileId: null,
+  axis: "Z"
+};
 
+function cancelStatsPolling() {
+  if (__statsPoll.timer) { clearTimeout(__statsPoll.timer); __statsPoll.timer = null; }
+}
+
+function startStatsPolling(fileId, axis) {
+  cancelStatsPolling();
+  const t = Date.now() + Math.random(); // nouveau token unique
+  __statsPoll = { ...__statsPoll, token: t, fileId, axis: (axis||"Z").toUpperCase() };
+  pollOnce(t);
+}
+
+async function pollOnce(token) {
+  // si un autre poll a démarré entre-temps → on s'arrête
+  if (token !== __statsPoll.token) return;
+
+  const { fileId, axis } = __statsPoll;
+  if (!fileId) return;
+
+  const url = `/api/shape/stats?file_id=${encodeURIComponent(fileId)}&axis=${axis}`;
   try {
-    const url = `/api/shape/stats?file_id=${encodeURIComponent(fileId)}&axis=${axis}`;
     const res  = await fetch(url, { cache: 'no-store' });
-    let data = null;
-    try { data = await res.json(); } catch { data = null; }
+    let data = null; try { data = await res.json(); } catch {}
+
+    if (token !== __statsPoll.token) return; // re-vérif
 
     if (res.status === 200 && data) {
       // compat champs alternatifs éventuels
       if (data.volume_mm3 != null && data.volume_cm3 == null) {
-        data.volume_cm3 = (+data.volume_mm3) / 1000; // 1 cm3 = 1000 mm3
+        data.volume_cm3 = (+data.volume_mm3) / 1000;
       }
       if (data.projected_area_mm2 != null && data.projected_area_cm2 == null) {
-        data.projected_area_cm2 = (+data.projected_area_mm2) / 100; // 1 cm2 = 100 mm2
+        data.projected_area_cm2 = (+data.projected_area_mm2) / 100;
       }
-      renderStats(data);
-      console.log('[analyse] stats ok', data);
+      __statsPoll.lastOk = data;
+      renderStats(data);     // 🔒 on rend une fois les bonnes valeurs
+      cancelStatsPolling();  // ✅ on STOPPE le polling dès 200 OK
       return;
     }
 
     if (res.status === 202 && data && (data.status === 'queued' || data.status === 'processing')) {
-      const t = Math.max(500, ((data.retry_in_sec ?? 2) * 1000));
-      console.log('[analyse] en attente… retry dans', t, 'ms');
-      setTimeout(() => fetchStats(fileId, axis), t);
+      // on NE vide PAS l'UI pour éviter le clignotement : on conserve lastOk affiché
+      const delay = Math.max(800, ((data.retry_in_sec ?? 2) * 1000));
+      __statsPoll.timer = setTimeout(()=> pollOnce(token), delay);
       return;
     }
 
-    clearStatsUI();
-    console.warn('[analyse] erreur API', res.status, data);
-
+    // Erreur non 200/202 : on n'efface pas si on a déjà une valeur affichée
+    if (!__statsPoll.lastOk) clearStatsUI();
+    cancelStatsPolling();
+    console.warn('[analyse] API error', res.status, data);
   } catch (err) {
-    clearStatsUI();
-    console.error('[analyse] fetchStats failed', err);
+    if (!__statsPoll.lastOk) clearStatsUI();
+    cancelStatsPolling();
+    console.error('[analyse] stats failed', err);
   }
 }
+
+// Remplace l’ancienne fetchStats par un proxy vers le contrôleur
+function fetchStats(fileId, axis = 'Z') {
+  startStatsPolling(fileId, axis);
+}
+
 
 
 /* Radios X/Y/Z → recalcul surface projetée */
