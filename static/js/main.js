@@ -342,8 +342,8 @@ function patchNodeTextDeep(root) {
   while (walker.nextNode()) edits.push(walker.currentNode);
   for (const t of edits) {
     const before = t.nodeValue;
-    theAfter = textMetersToMMWithScale(before);
-    if (theAfter !== before) t.nodeValue = theAfter;
+    const after  = textMetersToMMWithScale(before);
+    if (after !== before) t.nodeValue = after;
   }
 }
 function patchAllMeasureTexts(){ try { patchNodeTextDeep(overlayHost); } catch {} }
@@ -505,7 +505,7 @@ async function uploadAndShow(file) {
     }
 
     currentFileId = j.file_id || null;
-    window.currentFileId = currentFileId; // <<< important pour fetchStats/DFM
+    window.currentFileId = currentFileId;
     const xktUrl = new URL(j.xkt_url, location.origin).toString();
     console.log("[upload] ok:", { file_id: currentFileId, xktUrl });
 
@@ -515,7 +515,7 @@ async function uploadAndShow(file) {
     }
 
     console.log("[viewer] loading XKT]:", xktUrl);
-    StatsPoller.cancel(); // stoppe l'ancien poll
+    StatsPoller.cancel();
     await loadXKT(xktUrl, f.name);
   } catch (e) {
     console.error(e);
@@ -819,6 +819,58 @@ btnShot?.addEventListener("click",()=>{
 function f3(v){ return (v==null || !isFinite(+v)) ? "—" : (+v).toFixed(3).replace(".", ","); }
 function setText(el, txt){ if (el && el.textContent !== txt) el.textContent = txt; }
 
+/* --- Anti-blink : garde-fou contre les réécritures externes des métriques --- */
+const StatsSafe = (() => {
+  const idToMetric = (el) => {
+    if (!el) return null;
+    if (el.getAttribute?.('data-metric')) return el.getAttribute('data-metric');
+    if (el.id === 'volVal')  return 'volume';
+    if (el.id === 'projVal') return 'projected_area';
+    if (el.id === 'tminVal') return 'tmin';
+    if (el.id === 'tmaxVal') return 'tmax';
+    return null;
+  };
+
+  const expected = {}; // metric -> expected string
+  let applying = false;
+
+  const mo = new MutationObserver((mutList) => {
+    if (applying) return; // ignore nos propres écritures
+    for (const m of mutList) {
+      let node = m.type === 'characterData' ? m.target?.parentElement : m.target;
+      if (!node) continue;
+      const metric = idToMetric(node);
+      if (!metric) continue;
+      const want = expected[metric];
+      if (want == null) continue;
+      const have = node.textContent;
+      if (have !== want) {
+        applying = true;
+        node.textContent = want; // restaure immédiatement
+        applying = false;
+      }
+    }
+  });
+  mo.observe(document.body, { subtree:true, childList:true, characterData:true });
+
+  function setMetric(metric, text) {
+    expected[metric] = text;
+    const el =
+      metric === 'volume'         ? getStatEl("#volVal","volume") :
+      metric === 'projected_area' ? getStatEl("#projVal","projected_area") :
+      metric === 'tmin'           ? getStatEl("#tminVal","tmin") :
+      metric === 'tmax'           ? getStatEl("#tmaxVal","tmax") : null;
+
+    if (el) {
+      applying = true;
+      if (el.textContent !== text) el.textContent = text;
+      applying = false;
+    }
+  }
+
+  return { setMetric };
+})();
+
 function renderStats(json){
   if (!json || typeof json !== "object") return;
   lastStats = json;
@@ -828,15 +880,10 @@ function renderStats(json){
     updateUnitsFromBBox(window.__bbox_mm);
   }
 
-  const elVol  = getStatEl("#volVal",  "volume");
-  const elProj = getStatEl("#projVal", "projected_area");
-  const elTmin = getStatEl("#tminVal","tmin");
-  const elTmax = getStatEl("#tmaxVal","tmax");
-
-  setText(elVol,  f3(json.volume_cm3));
-  setText(elProj, f3(json.projected_area_cm2));
-  setText(elTmin, f3(json.thickness_min_mm));
-  setText(elTmax, f3(json.thickness_max_mm));
+  StatsSafe.setMetric('volume',         f3(json.volume_cm3));
+  StatsSafe.setMetric('projected_area', f3(json.projected_area_cm2));
+  StatsSafe.setMetric('tmin',           f3(json.thickness_min_mm));
+  StatsSafe.setMetric('tmax',           f3(json.thickness_max_mm));
 }
 
 function clearStatsUI(force=false){
