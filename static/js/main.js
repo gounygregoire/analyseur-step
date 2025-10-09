@@ -485,6 +485,9 @@ async function uploadAndShow(file) {
         models.clear(); selectedIds.clear();
       }
       console.log("[viewer] loading XKT (local):", fileURL);
+      // avant de lancer le loadXKT du fichier converti
+      cancelStatsPolling(); // stoppe l'ancien poll s'il existe
+
       await loadXKT(fileURL, f.name);
       return;
     }
@@ -516,6 +519,9 @@ async function uploadAndShow(file) {
     }
 
     console.log("[viewer] loading XKT]:", xktUrl);
+    // avant de lancer le loadXKT du fichier converti
+    cancelStatsPolling(); // stoppe l'ancien poll s'il existe
+
     await loadXKT(xktUrl, f.name);
   } catch (e) {
     console.error(e);
@@ -829,24 +835,23 @@ function renderStats(json){
     updateUnitsFromBBox(window.__bbox_mm);
   }
 
-const elVol  = getStatEl("#volVal",  "volume");
-const elProj = getStatEl("#projVal", "projected_area");
-const elTmin = getStatEl("#tminVal", "tmin");
-const elTmax = getStatEl("#tmaxVal", "tmax");
+const elVol  = document.querySelector("#volVal")  || document.querySelector('[data-metric="volume"]');
+const elProj = document.querySelector("#projVal") || document.querySelector('[data-metric="projected_area"]');
+const elTmin = document.querySelector("#tminVal")|| document.querySelector('[data-metric="tmin"]');
+const elTmax = document.querySelector("#tmaxVal")|| document.querySelector('[data-metric="tmax"]');
 
 setText(elVol,  f3(json.volume_cm3));
 setText(elProj, f3(json.projected_area_cm2));
 setText(elTmin, f3(json.thickness_min_mm));
 setText(elTmax, f3(json.thickness_max_mm));
 
-function setText(el, txt){
-  if (!el) return;
-  if (el.textContent !== txt) el.textContent = txt;
-}
+function setText(el, txt){ if (el && el.textContent !== txt) el.textContent = txt; }
+
 }
 
 
-function clearStatsUI(){
+function clearStatsUI(force=false){
+  if (!force && __statsPoll?.lastOk) return; // ✅ conserve l’affichage existant
   renderStats({
     volume_cm3: null,
     projected_area_cm2: null,
@@ -865,25 +870,6 @@ document.addEventListener('visibilitychange', ()=>{
   if (document.visibilityState === 'visible' && lastStats) renderStats(lastStats);
 });
 
-// --- Stats polling controller (anti-clignotement) ---
-let __statsPoll = {
-  token: 0,        // id logique de la session (fileId+axis)
-  timer: null,     // setTimeout id
-  lastOk: null,    // dernier JSON 200 OK
-  fileId: null,
-  axis: "Z"
-};
-
-function cancelStatsPolling() {
-  if (__statsPoll.timer) { clearTimeout(__statsPoll.timer); __statsPoll.timer = null; }
-}
-
-function startStatsPolling(fileId, axis) {
-  cancelStatsPolling();
-  const t = Date.now() + Math.random(); // nouveau token unique
-  __statsPoll = { ...__statsPoll, token: t, fileId, axis: (axis||"Z").toUpperCase() };
-  pollOnce(t);
-}
 
 async function pollOnce(token) {
   // si un autre poll a démarré entre-temps → on s'arrête
@@ -930,18 +916,66 @@ async function pollOnce(token) {
     console.error('[analyse] stats failed', err);
   }
 }
+let __statsPoll = { token: 0, timer: null, lastOk: null, fileId: null, axis: "Z" };
+
+function cancelStatsPolling() {
+  if (__statsPoll.timer) { clearTimeout(__statsPoll.timer); __statsPoll.timer = null; }
+}
+
+function startStatsPolling(fileId, axis) {
+  cancelStatsPolling();
+  const t = Math.random() + Date.now();
+  __statsPoll = { ...__statsPoll, token: t, fileId, axis: (axis||"Z").toUpperCase() };
+  pollOnce(t);
+}
+
+async function pollOnce(token) {
+  if (token !== __statsPoll.token) return;
+  const { fileId, axis } = __statsPoll;
+  if (!fileId) return;
+
+  try {
+    const res  = await fetch(`/api/shape/stats?file_id=${encodeURIComponent(fileId)}&axis=${axis}`, { cache: 'no-store' });
+    let data = null; try { data = await res.json(); } catch {}
+
+    if (token !== __statsPoll.token) return;
+
+    if (res.status === 200 && data) {
+      if (data.volume_mm3 != null && data.volume_cm3 == null) data.volume_cm3 = (+data.volume_mm3)/1000;
+      if (data.projected_area_mm2 != null && data.projected_area_cm2 == null) data.projected_area_cm2 = (+data.projected_area_mm2)/100;
+      __statsPoll.lastOk = data;
+      renderStats(data);
+      cancelStatsPolling();           // ✅ stop dès OK
+      return;
+    }
+
+    if (res.status === 202 && data && (data.status === "queued" || data.status === "processing")) {
+      // ❌ ne pas effacer : on garde les dernières valeurs affichées
+      __statsPoll.timer = setTimeout(()=> pollOnce(token), Math.max(800, ((data.retry_in_sec ?? 2) * 1000)));
+      return;
+    }
+
+    // Erreur : on n'efface pas si on a déjà une valeur
+    if (!__statsPoll.lastOk) clearStatsUI(true);
+    cancelStatsPolling();
+    console.warn("[analyse] API error", res.status, data);
+
+  } catch (e) {
+    if (!__statsPoll.lastOk) clearStatsUI(true);
+    cancelStatsPolling();
+    console.error("[analyse] stats failed", e);
+  }
+}
 
 // Remplace l’ancienne fetchStats par un proxy vers le contrôleur
-function fetchStats(fileId, axis = 'Z') {
-  startStatsPolling(fileId, axis);
-}
+function fetchStats(fileId, axis='Z') { startStatsPolling(fileId, axis); }
 
 
 
 /* Radios X/Y/Z → recalcul surface projetée */
 projAxisRadios().forEach(r => r?.addEventListener("change", ()=>{
   currentAxis = getSelectedAxis();
-  if (currentFileId) fetchStats(currentFileId, currentAxis);
+  if (currentFileId) fetchStats(currentFileId, currentAxis); // pas de clear() ici
 }));
 
 /* ==================== Lien avec le DFM ==================== */
