@@ -594,45 +594,63 @@ class DFMOrchestrator {
 
   // ---------------------- Analyse ----------------------
   async startDFM() {
-    const payload = {
-      file_id: this.fileId,
-      axis: this.selectedAxis || { x: 0, y: 0, z: 1 },
-      material: this.materialProfile?.id,
-      options: {},
-    };
-    console.info('[dfm] lancement analyse', payload);
+  const payload = {
+    file_id: this.fileId,
+    axis: this.selectedAxis || { x: 0, y: 0, z: 1 },
+    material: this.materialProfile?.id,
+    options: {},
+  };
+  console.info('[dfm] lancement analyse', payload);
 
-    if (!payload.file_id || !payload.material || !payload.axis) {
-      UI.info?.('Paramètre manquant pour l’analyse.');
+  if (!payload.file_id || !payload.material || !payload.axis) {
+    UI.info?.('Paramètre manquant pour l’analyse.');
+    return;
+  }
+
+  // >>> NEW: progression visible dès le départ
+  UI.progress?.(5);
+
+  UI.setLoading?.(true);
+  this.state.running = true;
+  try {
+    const res = await fetch('/api/simple/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json().catch(() => ({}));
+
+    // >>> NEW: si le backend renvoie un job_id, on suit la progression serveur
+    if (data?.job_id) {
+      this.pollStatus(data.job_id);   // <- alimentera UI.progress() → cadlytics:dfm:progress
+    }
+
+    if (!res.ok) {
+      const msg = data.error || 'Analyse échouée';
+      this.handleError?.(msg);
       return;
     }
 
-    UI.setLoading?.(true);
-    this.state.running = true;
-    try {
-      const res = await fetch('/api/simple/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        const msg = data.error || 'Analyse échouée';
-        this.handleError?.(msg);
-        return;
-      }
-      console.info('[dfm] report=', data.report_id);
-      await pollDFMReport(this.fileId); // 404…404…200
-      await this.renderResults(data);
-      window.refreshHistory?.();
-    } catch (err) {
-      console.error('DFM start network error', err);
-      this.handleError?.('Network error');
-    } finally {
-      UI.setLoading?.(false);
-      this.state.running = false;
-    }
+    console.info('[dfm] report=', data.report_id);
+
+    // petite progression intermédiaire pendant l’attente du rapport
+    UI.progress?.(25);
+
+    await pollDFMReport(this.fileId); // 404…404…200
+    UI.progress?.(90);
+    await this.renderResults(data);
+    UI.progress?.(100);
+
+    window.refreshHistory?.();
+  } catch (err) {
+    console.error('DFM start network error', err);
+    this.handleError?.('Network error');
+  } finally {
+    UI.setLoading?.(false);
+    this.state.running = false;
   }
+}
+
 
   pollStatus(jobId) {
     pollJobStatus(
@@ -937,16 +955,24 @@ if (typeof window !== "undefined") window.getTolerance = getTolerance;
   function $(s){ return document.querySelector(s); }
   const btnVisualiser = $('#btnVisualiser');
 
-  async function doVisualize(fid){
-    if (!fid) { console.warn('[visualiser] no fileId'); return; }
-    if (!window.viewerAdapter?.viewer) {
-      // Si personne n'a démarré le viewer, on le fait ici
-      const canvas = document.getElementById('xktCanvas');
-      window.initViewer?.({ canvasElement: canvas });
-    }
-    await window.viewerAdapter?.convert?.(fid); // idempotent: OK si déjà converti
-    await window.viewerAdapter?.loadFromFileId?.(fid);
+  // PATCH: après le load, annonce que le fichier est prêt + rafraîchit l’UI de base
+async function doVisualize(fid){
+  if (!fid) { console.warn('[visualiser] no fileId'); return; }
+  if (!window.viewerAdapter?.viewer) {
+    const canvas = document.getElementById('xktCanvas') || document.getElementById('xeokit-canvas');
+    window.initViewer?.({ canvasElement: canvas });
   }
+  await window.viewerAdapter?.convert?.(fid);
+  await window.viewerAdapter?.loadFromFileId?.(fid);
+
+  // >>> NEW: file prêt
+  window.currentFileId = fid;
+  // petit délai pour laisser la bbox/scene se stabiliser
+  setTimeout(() => {
+    window.dispatchEvent(new CustomEvent('dfm:fileReady', { detail: { fileId: fid } }));
+  }, 50);
+}
+
 
   if (btnVisualiser) {
     btnVisualiser.addEventListener('click', () => doVisualize(window.currentFileId));
