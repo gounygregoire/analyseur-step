@@ -263,3 +263,6 @@ a:hover{ text-decoration: underline; }
   pointer-events:none;
   opacity:.9;
 }
+
+#dfmQuickSection .card h6 { font-weight: 600; }
+#dfmQuickSection .card .small li + li { margin-top: 4px; }

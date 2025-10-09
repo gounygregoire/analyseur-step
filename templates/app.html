@@ -194,12 +194,68 @@
     </div> <!-- /grid -->
   </div> <!-- /wrap -->
 
+<!-- === Aperçu DFM rapide (Phase A) === -->
+<div id="dfmQuickSection" class="pane" style="display:none; margin-top:12px; padding:10px; border-radius:10px; background:#f7fafc; border:1px solid #e6ebf2">
+  <div class="row" style="gap:10px; align-items:stretch; flex-wrap:wrap">
+    <div class="col" style="min-width:220px">
+      <div class="card h-100" id="dfmCardDraft">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-center">
+            <h6 class="mb-0">Dépouilles</h6>
+            <span class="badge bg-secondary" id="dfmBadgeDraft">—</span>
+          </div>
+          <ul class="list-unstyled small mt-2" id="dfmListDraft"><li class="text-muted">En attente…</li></ul>
+        </div>
+      </div>
+    </div>
+    <div class="col" style="min-width:220px">
+      <div class="card h-100" id="dfmCardUndercut">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-center">
+            <h6 class="mb-0">Contre-dépouilles</h6>
+            <span class="badge bg-secondary" id="dfmBadgeUndercut">—</span>
+          </div>
+          <ul class="list-unstyled small mt-2" id="dfmListUndercut"><li class="text-muted">En attente…</li></ul>
+        </div>
+      </div>
+    </div>
+    <div class="col" style="min-width:220px">
+      <div class="card h-100" id="dfmCardTonnage">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-center">
+            <h6 class="mb-0">Tonnage</h6>
+            <span class="badge bg-secondary" id="dfmBadgeTonnage">—</span>
+          </div>
+          <ul class="list-unstyled small mt-2" id="dfmListTonnage"><li class="text-muted">En attente…</li></ul>
+        </div>
+      </div>
+    </div>
+    <div class="col" style="min-width:220px">
+      <div class="card h-100" id="dfmCardThickness">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-center">
+            <h6 class="mb-0">Épaisseurs</h6>
+            <span class="badge bg-secondary" id="dfmBadgeThickness">—</span>
+          </div>
+          <ul class="list-unstyled small mt-2" id="dfmListThickness"><li class="text-muted">En attente…</li></ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- mini progression (branchée sur l’event cadlytics:dfm:progress) -->
+  <div class="progress mt-3">
+    <div id="dfmQuickProgress" class="progress-bar progress-bar-striped" style="width:0%"></div>
+  </div>
+</div>
+<!-- === /Aperçu DFM rapide === -->
+
 <!-- === Résultats DFM (caché tant que rien n'est lancé) === -->
 <div id="dfmResultsSection" class="pane" style="display:none; margin-top:12px; padding:10px; border-radius:10px; background:#fafafa; border:1px solid #eee">
   <div id="dfmAnalysisPanel"><!-- rempli par DFMOrchestrator.js --></div>
 </div>
 <!-- === /Résultats DFM === -->
- 
+
   <!-- === Zone Axe de démoulage (cachée tant que l'analyse matière n'est pas faite) === -->
 <div id="demouldHost" class="pane" style="margin-top:12px; display:none; padding:10px; border-radius:10px; background:#f8fbff; border:1px solid #dbeafe">
   <div class="row mini" style="gap:12px; align-items:center; flex-wrap:wrap">
@@ -790,6 +846,88 @@
     }
     window.dispatchEvent(new CustomEvent('cadlytics:demould-axis-selected', { detail: { axis: val } }));
     if (confMsg) confMsg.textContent = `Axe de démoulage défini sur ${val}.`;
+  });
+})();
+</script>
+
+<script>
+(function(){
+  const sec = document.getElementById('dfmQuickSection');
+  if (!sec) return;
+
+  // util rendu simple
+  function badge(el, severity){
+    const map = { ok:'bg-success', warn:'bg-warning text-dark', fail:'bg-danger', neutral:'bg-secondary' };
+    el.className = 'badge ' + (map[severity] || map.neutral);
+    el.textContent = severity === 'ok' ? 'OK' : severity === 'fail' ? 'KO' : (severity === 'warn' ? 'À surveiller' : '—');
+  }
+  function list(el, arr){
+    el.innerHTML = '';
+    (arr && arr.length ? arr : [{label:'—',value:'—'}]).forEach(m=>{
+      const li = document.createElement('li');
+      const val = (m.unit && m.value!=null) ? `${m.value} ${m.unit}` : (m.value ?? '—');
+      li.innerHTML = `<span class="text-muted">${m.label||m.key||''}</span> : <strong>${val}</strong>`;
+      if (Array.isArray(m.tips) && m.tips.length){
+        const tips = document.createElement('div'); tips.className = 'text-muted';
+        tips.style.fontSize='11px'; tips.textContent = '• ' + m.tips[0];
+        li.appendChild(tips);
+      }
+      el.appendChild(li);
+    });
+  }
+  function pickSeverity(metrics){
+    // si l’un est fail -> fail ; sinon warn si au moins un warn ; sinon ok si au moins un pass false? ; par défaut neutral
+    if (!Array.isArray(metrics)) return 'neutral';
+    if (metrics.some(m=>m.severity==='fail'||m.pass===false)) return 'fail';
+    if (metrics.some(m=>m.severity==='warn')) return 'warn';
+    if (metrics.some(m=>m.pass===true || m.severity==='ok')) return 'ok';
+    return 'neutral';
+  }
+
+  function updateCard(section, metrics){
+    const map = {
+      draft:     { badge:'#dfmBadgeDraft',     list:'#dfmListDraft' },
+      undercut:  { badge:'#dfmBadgeUndercut',  list:'#dfmListUndercut' },
+      tonnage:   { badge:'#dfmBadgeTonnage',   list:'#dfmListTonnage' },
+      thickness: { badge:'#dfmBadgeThickness', list:'#dfmListThickness' }
+    };
+    const cfg = map[section]; if (!cfg) return;
+    const b = document.querySelector(cfg.badge);
+    const l = document.querySelector(cfg.list);
+    badge(b, pickSeverity(metrics));
+    list(l, metrics);
+    sec.style.display = ''; // assure visible
+  }
+
+  // 1) Quand l’utilisateur choisit l’axe -> reset & affiche la section
+  window.addEventListener('cadlytics:demould-axis-selected', ()=>{
+    sec.style.display = '';
+    document.getElementById('dfmQuickProgress').style.width = '0%';
+    ['Draft','Undercut','Tonnage','Thickness'].forEach(k=>{
+      const b = document.getElementById('dfmBadge'+k); if (b) { b.className='badge bg-secondary'; b.textContent='—'; }
+      const l = document.getElementById('dfmList'+k); if (l) { l.innerHTML = '<li class="text-muted">Calcul en cours…</li>'; }
+    });
+  });
+
+  // 2) Brancher sur la progression déjà émise par l’orchestrateur
+  window.addEventListener('cadlytics:dfm:progress', (ev)=>{
+    const pct = Math.max(0, Math.min(100, ev.detail?.pct ?? 0));
+    const bar = document.getElementById('dfmQuickProgress');
+    if (bar) bar.style.width = pct + '%';
+  });
+
+  // 3) Quand le rapport serveur arrive (DFMOrchestrator -> renderDFMResults)
+  window.addEventListener('cadlytics:dfm:report', (ev)=>{
+    const m = ev.detail?.metrics || {};
+    // On supporte deux formats :
+    //  - m.draft / m.undercut / m.tonnage / m.thickness : tableaux de métriques (notre format conseillé)
+    //  - sinon, on tente des clés "simples" (fallback)
+    updateCard('draft',     m.draft     || m.DRAFT      || m.dépouille   || []);
+    updateCard('undercut',  m.undercut  || m.UNDERCUT   || m.contredep   || []);
+    updateCard('tonnage',   m.tonnage   || m.TONNAGE    || m.clamp       || []);
+    updateCard('thickness', m.thickness || m.THICKNESS  || m.epaisseurs  || []);
+
+    // Si aucune métrique reconnue, on laisse l’aperçu en "—" et l’utilisateur lit le panneau détaillé.
   });
 })();
 </script>

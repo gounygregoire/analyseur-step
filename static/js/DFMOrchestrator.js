@@ -132,6 +132,16 @@ function renderDFMResults(report = {}) {
     pre.textContent = JSON.stringify(metrics, null, 2);
     panel.appendChild(pre);
   }
+    // >>> NEW: notifier l’UI "aperçu" avec les métriques du rapport
+  try {
+    window.dispatchEvent(new CustomEvent('cadlytics:dfm:report', {
+      detail: {
+        score,
+        recommendations,
+        metrics
+      }
+    }));
+  } catch {}
 }
 if (typeof window !== 'undefined') {
   window.renderDFMResults = renderDFMResults;
