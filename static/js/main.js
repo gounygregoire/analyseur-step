@@ -160,6 +160,24 @@ document.addEventListener('click', (e) => {
   if (t) handleAnalyzeClickMain(e);
 });
 
+/* ---------- viewer + plugins ---------- */
+const viewer = new Viewer({
+  canvasId: "xeokit-canvas",
+  dtxEnabled: true,
+  transparent: true
+});
+window.viewer = viewer;
+
+new FastNavPlugin(viewer, { flyToDuration: 0.9, hideEdges:false, autoHideEdges:false });
+
+const xktLoader = new XKTLoaderPlugin(viewer, {
+  dracoDecompressorPath:
+    "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/resources/draco/"
+});
+
+const sections = new SectionPlanesPlugin(viewer);
+new AnnotationsPlugin(viewer, { container: overlayHost });
+
 /* ========= Canvas & overlay sizing ========= */
 const canvasEl = document.getElementById("xeokit-canvas");
 function resizeCanvasAndOverlay() {
