@@ -809,77 +809,108 @@ runLocalPhaseA(letter).then(()=>console.info('[dfm quick] done'));
       }
     );
   }
-  // === Heatmap dépouille (locale) — avec fallback géométrie ============
-  async applyDraftHeatmap(draftMap = null, opts = {}) {
-    try {
-      const tryBuild = opts.tryBuild !== false; // par défaut on tente de construire si vide
+// === Heatmap dépouille (locale) — avec logs & fallback ==================
+async applyDraftHeatmap(draftMap = null, opts = {}) {
+  try {
+    const tryBuild = opts.tryBuild !== false;
 
-      // 0) récupérer axe choisi (vector → letter)
-      const vec = this.selectedAxis || { x:0, y:0, z:1 };
-      const maxAbs = Math.max(Math.abs(vec.x||0), Math.abs(vec.y||0), Math.abs(vec.z||0));
-      const letter = (maxAbs===Math.abs(vec.x)) ? 'X' : (maxAbs===Math.abs(vec.y) ? 'Y' : 'Z');
+    // Axe validé -> lettre
+    const vec = this.selectedAxis || { x:0, y:0, z:1 };
+    const maxAbs = Math.max(Math.abs(vec.x||0), Math.abs(vec.y||0), Math.abs(vec.z||0));
+    const letter = (maxAbs===Math.abs(vec.x)) ? 'X' : (maxAbs===Math.abs(vec.y) ? 'Y' : 'Z');
 
-      // 1) draftMap fourni ? sinon, prendre le cache local
-      let map = draftMap || window.__quickDraftMap || {};
+    // 1) récupérer la map locale
+    let map = draftMap || window.__quickDraftMap || {};
+    let mapSize = Object.keys(map).length;
+    console.info('[heatmap] incoming map size =', mapSize);
 
-      // 2) si vide et autorisé -> construire depuis la géométrie du viewer
-      if ((!map || !Object.keys(map).length) && tryBuild) {
-        const faces = await this._computeFacesFromViewer();
-        if (faces.length) {
-          const ax = (letter==='X')?[1,0,0]:(letter==='Y')?[0,1,0]:[0,0,1];
-          map = {};
-          const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
-          for (const f of faces) {
-            // dépouille en degrés ≈ 90° - angle(normal, axe)
-            const n = f.normal || [0,0,1];
-            const cos = Math.abs(n[0]*ax[0] + n[1]*ax[1] + n[2]*ax[2]);
-            const ang = Math.acos(clamp(cos,-1,1)) * 180/Math.PI;
-            const draft = 90 - ang;
-            map[f.id] = draft;
-          }
-          window.__quickDraftMap = map; // cache pour d’autres usages
+    // 2) si vide -> construire un fallback depuis la géométrie
+    if (mapSize === 0 && tryBuild) {
+      console.info('[heatmap] building fallback map from viewer geometry…');
+      const faces = await this._computeFacesFromViewer();
+      console.info('[heatmap] fallback faces =', faces.length);
+      if (faces.length) {
+        const ax = (letter==='X')?[1,0,0]:(letter==='Y')?[0,1,0]:[0,0,1];
+        const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
+        map = {};
+        for (const f of faces) {
+          const n = f.normal || [0,0,1];
+          const cos = Math.abs(n[0]*ax[0] + n[1]*ax[1] + n[2]*ax[2]);
+          const ang = Math.acos(clamp(cos,-1,1)) * 180/Math.PI;
+          const draft = 90 - ang;
+          map[f.id] = draft;
         }
+        window.__quickDraftMap = map;
+        mapSize = Object.keys(map).length;
+        console.info('[heatmap] built map size =', mapSize);
       }
-
-      if (!map || !Object.keys(map).length) {
-        UI?.info?.("Pas de données locales de dépouille encore calculées.");
-        return;
-      }
-
-      // 3) Assurer le viewer initialisé + fichier chargé
-      if (!window.viewerAdapter?.viewer) {
-        const canvas =
-          document.getElementById('xeokit-canvas') ||
-          document.getElementById('xktCanvas') ||
-          document.querySelector('canvas');
-        if (!canvas) {
-          UI?.err?.("Canvas viewer introuvable.");
-          return;
-        }
-        if (typeof window.initViewer === 'function') {
-          await window.initViewer({ canvasElement: canvas });
-        }
-      }
-      const fileId = this.resolveFileId?.() || window.currentFileId || window.CAD?.fileIdStep;
-      if (fileId && window.viewerAdapter?.loadFromFileId) {
-        await window.viewerAdapter?.convert?.(fileId);
-        await window.viewerAdapter?.loadFromFileId?.(fileId);
-      }
-      if (!window.viewerAdapter?.viewer) {
-        UI?.err?.("Viewer non initialisé.");
-        return;
-      }
-
-      // 4) Appliquer la heatmap via HeatmapLayer (déjà importé en haut du fichier)
-      const layer = new HeatmapLayer(window.viewerAdapter);
-      const { min = 0, max = 5 } = opts; // 0–5° par défaut
-      layer.apply(map, { min, max });
-      StatusUI.set("Heatmap dépouille appliquée");
-    } catch (e) {
-      console.warn("[DFM] applyDraftHeatmap error", e);
-      UI?.err?.("Impossible d'appliquer la heatmap (voir console).");
     }
+
+    if (mapSize === 0) {
+      alert("Pas de données locales de dépouille encore calculées.");
+      return;
+    }
+
+    // 3) Assurer viewer + modèle chargé
+    if (!window.viewerAdapter?.viewer) {
+      const canvas =
+        document.getElementById('xeokit-canvas') ||
+        document.getElementById('xktCanvas') ||
+        document.querySelector('canvas');
+      if (typeof window.initViewer === 'function' && canvas) {
+        await window.initViewer({ canvasElement: canvas });
+      }
+    }
+    const fileId = this.resolveFileId?.() || window.currentFileId || window.CAD?.fileIdStep;
+    if (fileId && window.viewerAdapter?.loadFromFileId) {
+      await window.viewerAdapter?.convert?.(fileId);
+      await window.viewerAdapter?.loadFromFileId?.(fileId);
+    }
+    if (!window.viewerAdapter?.viewer) {
+      alert("Viewer non initialisé.");
+      return;
+    }
+
+    // 4) Appliquer via HeatmapLayer
+    if (typeof HeatmapLayer !== 'function') {
+      console.warn('[heatmap] HeatmapLayer indisponible');
+      alert("HeatmapLayer indisponible (module non chargé).");
+      return;
+    }
+    const layer = new HeatmapLayer(window.viewerAdapter);
+
+    // >>> IMPORTANT : diagnostique le nombre de matches.
+    // Beaucoup d’implémentations exposent apply() sans retour.
+    // On force un compteur en détectant les clés réellement “consommées”
+    // en essayant d’abord une application “sèche” si supportée.
+    let appliedCount = 0;
+
+    if (typeof layer.applyWithCount === 'function') {
+      appliedCount = layer.applyWithCount(map, { min: 0, max: 5 });
+    } else {
+      // fallback : on applique et on suppose que le layer expose un compteur debug
+      layer.apply(map, { min: 0, max: 5 });
+      appliedCount = layer.debugAppliedCount || 0; // si non dispo, restera 0
+    }
+
+    console.info('[heatmap] mapSize =', mapSize, 'appliedCount =', appliedCount);
+
+    if (appliedCount === 0) {
+      // → c’est le cas le plus fréquent : schéma d’ID incompatible
+      alert(
+        "Aucune face n’a été colorisée (0 correspondance).\n" +
+        "Probable : schéma d’ID de faces différent de celui attendu par HeatmapLayer.\n" +
+        "Solution rapide : donne-moi le contenu de modules/HeatmapLayer.js pour que j’adapte la traduction d’IDs."
+      );
+      return;
+    }
+
+    StatusUI.set("Heatmap dépouille appliquée");
+  } catch (e) {
+    console.warn("[DFM] applyDraftHeatmap error", e);
+    alert("Impossible d'appliquer la heatmap (voir console).");
   }
+}
 
   // --- Fallback: extraction très robuste des triangles/mesh du viewer ---
   async _computeFacesFromViewer() {

@@ -960,8 +960,10 @@ window.addEventListener('cadlytics:demould-axis-selected', (e)=>console.log('[df
     // et tryBuild:true pour construire un map si vide
     await (window.DFMOrchestrator?.applyDraftHeatmap?.(null, { tryBuild: true }) || Promise.resolve());
   }
-  document.getElementById('dfmBtnHeatmapDraft')
-    ?.addEventListener('click', applyDraftHeatmapLocal);
+document.getElementById('dfmBtnHeatmapDraft')
+  ?.addEventListener('click', async () => {
+    await (window.DFMOrchestrator?.applyDraftHeatmap?.(null, { tryBuild: true }) || Promise.resolve());
+  });
 
   // === PANNEAU CONSEILS ================================================
   const tipsPanel = document.getElementById('dfmTipsPanel');
