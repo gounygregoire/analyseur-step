@@ -148,7 +148,7 @@ const projAxisRadios = () => $$('input[name="projAxis"]');
 /* ---------- viewer + plugins ---------- */
 const viewer = new Viewer({
   canvasId: "xeokit-canvas",
-  dtxEnabled: true,
+  dtxEnabled: false,
   transparent: true
 });
 // PATCH: exposer le viewer pour la sonde & signaler "prêt"
