@@ -78,20 +78,42 @@ async function __quickBasicStats(){ try{return await window.__getBasicStats?.()?
 async function __quickFaces(){ try{return await window.__getFaces?.()??[];}catch{return [];} }
 
 async function quickCheckDraft(axis){
-  const ax=axisLetterToVec(axis), faces=await __quickFaces();
-  let areaTot=0, areaKO=0, areaWarn=0; const thr={external:1.0,internal:0.5};
-  for(const f of faces){
-    const n=f.normal||[0,0,1]; const cos=dot3(n,ax);
-    const ang=Math.acos(Math.max(-1,Math.min(1,Math.abs(cos))))*180/Math.PI;
-    const draft=90-ang; areaTot+=(f.area||0); const need=(f.isExternal?thr.external:thr.internal);
-    if(draft<need) areaKO+=(f.area||0); else if(draft<need+0.5) areaWarn+=(f.area||0);
+  const ax = axisLetterToVec(axis);
+  const faces = await __quickFaces();
+  let areaTot=0, areaKO=0, areaWarn=0;
+
+  // seuils génériques – on gardera la même logique que plus haut
+  const thr = { external: 1.0, internal: 0.5 };
+
+  // >>> NEW: carte pour heatmap locale
+  const draftMap = {}; // face_id -> draftDeg (degrés)
+
+  for (const f of faces){
+    const n = f.normal || [0,0,1];
+    const cos = dot3(n, ax);
+    const angDeg = Math.acos(Math.max(-1, Math.min(1, Math.abs(cos)))) * 180/Math.PI;
+    const draft = 90 - angDeg; // en degrés (≈ dépouille)
+    draftMap[f.id ?? f.face_id ?? `f${draftMap.length}`] = draft;
+
+    areaTot += (f.area||0);
+    const need = (f.isExternal ? thr.external : thr.internal);
+    if (draft < need) areaKO += (f.area||0);
+    else if (draft < need + 0.5) areaWarn += (f.area||0);
   }
-  const pctKO=areaTot?(100*areaKO/areaTot):0, pctWarn=areaTot?(100*areaWarn/areaTot):0;
+
+  const pctKO = areaTot ? (100*areaKO/areaTot) : 0;
+  const pctWarn = areaTot ? (100*areaWarn/areaTot) : 0;
+
+  // >>> NEW: exposer la map au global pour l’UI
+  window.__quickDraftMap = draftMap;
+
   return [
-    {key:'draft_area_KO',label:'% surface sous dépouille',value:pctKO.toFixed(1),unit:'%',pass:pctKO<5,severity:pctKO>15?'fail':(pctKO>5?'warn':'ok'),tips:['Augmenter la dépouille','Réduire le grain / revoir axe']},
-    {key:'draft_area_warn',label:'% surface proche du seuil',value:pctWarn.toFixed(1),unit:'%',pass:true}
+    { key:'draft_area_KO',   label:'% surface sous dépouille', value:pctKO.toFixed(1), unit:'%', pass: pctKO<5, severity: pctKO>15?'fail':(pctKO>5?'warn':'ok'),
+      tips:['Augmenter la dépouille','Réduire le grain / revoir axe'] },
+    { key:'draft_area_warn', label:'% surface proche du seuil', value:pctWarn.toFixed(1), unit:'%', pass:true }
   ];
 }
+
 async function quickUndercuts(axis){
   const ax=axisLetterToVec(axis), faces=await __quickFaces();
   const bad=faces.filter(f=>dot3(f.normal||[0,0,1],ax)<-0.05);

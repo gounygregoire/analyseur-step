@@ -266,3 +266,5 @@ a:hover{ text-decoration: underline; }
 
 #dfmQuickSection .card h6 { font-weight: 600; }
 #dfmQuickSection .card .small li + li { margin-top: 4px; }
+
+#dfmTipsList li + li { margin-top: 4px; }

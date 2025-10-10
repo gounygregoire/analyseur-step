@@ -247,6 +247,26 @@
   <div class="progress mt-3">
     <div id="dfmQuickProgress" class="progress-bar progress-bar-striped" style="width:0%"></div>
   </div>
+    <!-- Actions rapides -->
+  <div class="d-flex align-items-center gap-2 mt-3">
+    <button id="dfmBtnHeatmapDraft" class="btn btn-outline-primary btn-sm">
+      Heatmap dépouille (instantané)
+    </button>
+    <button id="dfmBtnToggleTips" class="btn btn-outline-secondary btn-sm">
+      Voir les conseils
+    </button>
+  </div>
+
+  <!-- Panneau Conseils -->
+  <div id="dfmTipsPanel" class="mt-2" style="display:none">
+    <div class="card">
+      <div class="card-body">
+        <h6 class="mb-2">Conseils</h6>
+        <ul id="dfmTipsList" class="small mb-0"></ul>
+      </div>
+    </div>
+  </div>
+
 </div>
 <!-- === /Aperçu DFM rapide === -->
 
@@ -934,6 +954,74 @@ window.addEventListener('cadlytics:demould-axis-selected', (e)=>console.log('[df
     // Si aucune métrique reconnue, on laisse l’aperçu en "—" et l’utilisateur lit le panneau détaillé.
   });
 })();
+  // === HEATMAP DÉPOUILLE (locale) ======================================
+  function applyDraftHeatmapLocal() {
+    const map = window.__quickDraftMap || {};
+    if (!window.viewerAdapter?.viewer) {
+      alert("Viewer non initialisé.");
+      return;
+    }
+    if (!Object.keys(map).length) {
+      alert("Pas de données locales de dépouille encore calculées.");
+      return;
+    }
+    try {
+      // Normalisation simple: valeur = draftDeg (0–~30)
+      const layer = new HeatmapLayer(window.viewerAdapter); // déjà importé côté orchestrateur
+      layer.apply(map); // si ton HeatmapLayer prend un mapping {face_id: value}
+    } catch (e) {
+      console.warn("Heatmap dépouille: erreur", e);
+      alert("Impossible d'appliquer la heatmap (voir console).");
+    }
+  }
+  document.getElementById('dfmBtnHeatmapDraft')?.addEventListener('click', applyDraftHeatmapLocal);
+
+  // === PANNEAU CONSEILS ================================================
+  const tipsPanel = document.getElementById('dfmTipsPanel');
+  const tipsList  = document.getElementById('dfmTipsList');
+  const btnTips   = document.getElementById('dfmBtnToggleTips');
+
+  function collectTipsFromMetrics(metrics) {
+    // agrège les tips des métriques warn/fail en priorité
+    const items = [];
+    const sections = ['draft','undercut','tonnage','thickness'];
+    sections.forEach(sec=>{
+      const arr = metrics?.[sec] || [];
+      arr.forEach(m=>{
+        const sev = (m.severity || (m.pass===false?'fail':'ok'));
+        if (sev === 'ok') return;
+        if (Array.isArray(m.tips)) {
+          m.tips.forEach(t => items.push({ text: t, section: sec, sev }));
+        }
+      });
+    });
+    return items;
+  }
+
+  function renderTips(items){
+    tipsList.innerHTML = '';
+    if (!items.length) {
+      tipsList.innerHTML = '<li class="text-muted">Aucun conseil pour l’instant.</li>';
+      return;
+    }
+    items.forEach(it=>{
+      const li = document.createElement('li');
+      const badge = it.sev==='fail' ? 'danger' : (it.sev==='warn' ? 'warning text-dark' : 'secondary');
+      li.innerHTML = `<span class="badge bg-${badge} me-1">${it.section}</span>${it.text}`;
+      tipsList.appendChild(li);
+    });
+  }
+
+  btnTips?.addEventListener('click', ()=>{
+    tipsPanel.style.display = (tipsPanel.style.display==='none'||!tipsPanel.style.display) ? 'block' : 'none';
+  });
+
+  // A chaque rapport (local ou serveur), on met à jour les conseils
+  window.addEventListener('cadlytics:dfm:report', (ev)=>{
+    const items = collectTipsFromMetrics(ev.detail?.metrics || {});
+    renderTips(items);
+  });
+
 </script>
 <script>
 /* Branche la barre "Progression" (#progressBar) sur les events DFM */
