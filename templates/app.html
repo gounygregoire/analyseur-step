@@ -194,6 +194,96 @@
     </div> <!-- /grid -->
   </div> <!-- /wrap -->
 
+  <script>
+/* DFM PROBE for xeokit/XKT — installs __getFaces/__getProjectedArea/__getBasicStats
+   Works even if viewerAdapter APIs are minimal. Logs what it finds. */
+(function dfmProbeInstall(){
+  function nowReady(){ return !!(window.viewerAdapter && window.viewerAdapter.viewer); }
+  if (!nowReady()) { document.addEventListener('dfm:viewer-ready', dfmProbeInstall, { once:true }); return; }
+
+  const viewer = window.viewerAdapter.viewer;
+  const scene  = viewer?.scene;
+
+  // --- helper math
+  const mul4 = (m,[x,y,z])=>[ m[0]*x+m[4]*y+m[8]*z+m[12], m[1]*x+m[5]*y+m[9]*z+m[13], m[2]*x+m[6]*y+m[10]*z+m[14] ];
+  const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+  const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+  const len=(v)=>Math.hypot(v[0],v[1],v[2])||1;
+  const norm=(v)=>{const L=len(v); return [v[0]/L,v[1]/L,v[2]/L];};
+
+  // --- collect meshes in a very permissive way (xeokit versions differ)
+  function collectMeshes() {
+    const meshes = [];
+    if (scene?.meshes)  Object.values(scene.meshes).forEach(m => m && meshes.push(m));
+    if (scene?.objects) Object.values(scene.objects).forEach(o => o && meshes.push(o));
+    if (typeof scene?.iterate === 'function') scene.iterate(o => o && meshes.push(o));
+    return meshes;
+  }
+
+  // --- try many geometry shapes to get positions/indices
+  function getGeomArrays(mesh) {
+    const g = mesh.geometry || mesh._geometry || mesh._state?.geometry || mesh._mesh?.geometry || mesh._geometryTarget || {};
+    const pos = g.positions || g._positions || g._state?.positions || g.vertexPositions || g._vertexPositions || g.verts || g.coordinates;
+    const idx = g.indices   || g._indices   || g._state?.indices   || g.triangles      || g._triangles      || g.faces;
+    const P = pos?.data || pos?.array || pos || null;
+    const I = idx?.data || idx?.array || idx || null;
+    return (P && I && P.length && I.length) ? { P, I } : null;
+  }
+
+  // --- HOOK: faces with world normals & areas (capped for perf)
+  window.__getFaces = async function(){
+    const faces = [];
+    const meshes = collectMeshes();
+    let totalTris = 0;
+    const MAX_TRIS = 20000;
+
+    for (const m of meshes) {
+      const gi = getGeomArrays(m);
+      if (!gi) continue;
+      const { P, I } = gi;
+      const wm = m.worldMatrix || m.matrix || m.worldTransform?.matrix || m.transform?.matrix || [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
+
+      for (let i=0; i<I.length-2; i+=3) {
+        const i0 = I[i]*3, i1 = I[i+1]*3, i2 = I[i+2]*3;
+        if (i2+2 >= P.length) break;
+        const p0 = mul4(wm,[P[i0],P[i0+1],P[i0+2]]);
+        const p1 = mul4(wm,[P[i1],P[i1+1],P[i1+2]]);
+        const p2 = mul4(wm,[P[i2],P[i2+1],P[i2+2]]);
+        const e1 = sub(p1,p0), e2 = sub(p2,p0);
+        const n  = norm(cross(e1,e2));
+        const area = 0.5 * len(cross(e1,e2));
+        faces.push({ id: `${m.id||m.entityId||m._id||'mesh'}:${i/3}`, normal:n, area });
+        totalTris++;
+        if (totalTris >= MAX_TRIS) break;
+      }
+      if (totalTris >= MAX_TRIS) break;
+    }
+    console.log('[dfm probe] meshes=', meshes.length, 'faces=', faces.length);
+    return faces;
+  };
+
+  // --- HOOK: quick projected area (sum of |n·axis|*area)
+  window.__getProjectedArea = async function(axisLetter){
+    const faces = await window.__getFaces();
+    const ax = axisLetter==='X'?[1,0,0]:axisLetter==='Y'?[0,1,0]:[0,0,1];
+    let s = 0;
+    for (const f of faces) {
+      const n = f.normal; s += Math.abs(n[0]*ax[0]+n[1]*ax[1]+n[2]*ax[2]) * (f.area||0);
+    }
+    // xeokit est souvent en mètres → m² -> cm²
+    return s * 10000; // ajuste si tes unités diffèrent
+  };
+
+  // --- HOOK: basic stats (fallback depuis l’UI si aucune API)
+  window.__getBasicStats = async function(){
+    const parse = id => parseFloat((document.getElementById(id)?.textContent||'').replace(',','.')) || 0;
+    return { volume_cm3: parse('volVal'), tmin_mm: parse('tminVal'), tmax_mm: parse('tmaxVal') };
+  };
+
+  console.log('[dfm probe] hooks installed');
+})();
+</script>
+
 <!-- === Aperçu DFM rapide (Phase A) === -->
 <div id="dfmQuickSection" class="pane" style="display:none; margin-top:12px; padding:10px; border-radius:10px; background:#f7fafc; border:1px solid #e6ebf2">
   <div class="row" style="gap:10px; align-items:stretch; flex-wrap:wrap">
