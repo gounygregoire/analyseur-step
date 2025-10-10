@@ -121,10 +121,7 @@ function wireAnalyzeButtons() {
     if (btn.__wiredAnalyzeMain) return;
     btn.__wiredAnalyzeMain = true;
     btn.addEventListener('click', (ev) => {
-      // si l’orchestrateur a intercepté (capture + preventDefault), on ne fait rien ici
       if (ev.defaultPrevented) return;
-
-      // laisse sa chance à l’orchestrateur; sinon fallback dur
       setTimeout(() => {
         const open =
           document.querySelector('.modal.show') ||
@@ -153,21 +150,18 @@ const viewer = new Viewer({
 });
 // PATCH: exposer le viewer pour la sonde & signaler "prêt"
 window.viewerAdapter = window.viewerAdapter || {};
-window.viewerAdapter.viewer = viewer;         // ← ton instance xeokit
+window.viewerAdapter.viewer = viewer;
 document.dispatchEvent(new Event('dfm:viewer-ready'));
-
 window.viewer = viewer;
 
 new FastNavPlugin(viewer, { flyToDuration: 0.9, hideEdges:false, autoHideEdges:false });
 
 /* -----------------------------------------------------------------------
-   XKT LOADER — conserve la géométrie CPU (indispensable pour heatmap/probe)
-   Plusieurs flags sont posés pour couvrir les variations de versions xeokit.
+   XKT LOADER — on pousse des flags “garde-fous” (ignorés si non supportés)
 ------------------------------------------------------------------------ */
 const xktLoader = new XKTLoaderPlugin(viewer, {
   dracoDecompressorPath:
     "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/resources/draco/",
-  // ► Clés “garde-fous” (la lib ignore celles qu’elle ne connaît pas)
   storeGeometry: true,
   keepGeometry: true,
   parseGeometryStreams: true,
@@ -467,22 +461,17 @@ btnMeasure?.addEventListener("click", toggleMeasure);
 window.addEventListener("keydown", (e)=>{ if (e.key==="Escape" && distanceCtrl.active) deactivateMeasure(); }, {passive:true});
 if (btnAnnot) { btnAnnot.style.display = "none"; btnAnnot.disabled = true; }
 
-// À mettre juste après la création du viewer, AVANT loadXKT(...)
+/* ---- Hook géométrie (optionnel selon version xeokit) ---- */
 (function hookGeometryCapture(){
   const sc = viewer.scene;
   const orig = sc.createGeometry?.bind(sc);
   if (!orig) { console.warn('[geom-capture] createGeometry indisponible'); return; }
-
   sc.createGeometry = function(params){
     const g = orig(params);
     try {
       const P = params?.positions?.data || params?.positions?.array || params?.positions || null;
       const I = params?.indices?.data   || params?.indices?.array   || params?.indices   || null;
-      if (P && I) {
-        // on épingle une copie accessible côté app
-        g.__dfmPositions = P;
-        g.__dfmIndices   = I;
-      }
+      if (P && I) { g.__dfmPositions = P; g.__dfmIndices = I; }
     } catch {}
     return g;
   };
@@ -492,8 +481,6 @@ if (btnAnnot) { btnAnnot.style.display = "none"; btnAnnot.disabled = true; }
 /* ---------- chargement XKT ---------- */
 async function loadXKT(url, nameHint){
   const id="m"+Date.now();
-
-  // ► IMPORTANT : répéter les flags “géométrie CPU” au niveau du load()
   const model = xktLoader.load({
     id,
     src: url,
@@ -505,13 +492,6 @@ async function loadXKT(url, nameHint){
     decodeGeometry: true,
     decompressGeometry: true
   });
-
-  function getGeomArrays(m){
-  const g = m.geometry || m._geometry || {};
-  const P = g.__dfmPositions;
-  const I = g.__dfmIndices;
-  return (P && I && P.length && I.length) ? { P, I } : null;
-}
 
   setProgress(8);
   model.on("progress", p=> setProgress(8+Math.round(p*84)));
@@ -538,7 +518,7 @@ async function loadXKT(url, nameHint){
       }));
     }, 50);
 
-    // ► Auto-check non bloquant : si la sonde est là, loggue le nb de faces
+    // info facultative
     setTimeout(async () => {
       try {
         if (typeof window.__getFaces === 'function') {
@@ -559,6 +539,99 @@ async function loadXKT(url, nameHint){
   return id;
 }
 
+/* ====================== PROBE SAFE: __getFaces via échantillonnage écran ====================== */
+(function installProbeSafe(){
+  const sleep = (ms)=> new Promise(r=>setTimeout(r,ms));
+  const norm  = (v)=>{ const L = Math.hypot(v[0],v[1],v[2]) || 1; return [v[0]/L, v[1]/L, v[2]/L]; };
+
+  function projectToCanvas(p){ // -> coords en pixels (canvas)
+    const cam = viewer.camera;
+    const mV  = cam.viewMatrix;
+    const mP  = cam.projMatrix || cam.projectionMatrix;
+    if (!mV || !mP) return null;
+    const x=p[0], y=p[1], z=p[2];
+    const vx = mV[0]*x + mV[4]*y + mV[8]*z  + mV[12];
+    const vy = mV[1]*x + mV[5]*y + mV[9]*z  + mV[13];
+    const vz = mV[2]*x + mV[6]*y + mV[10]*z + mV[14];
+    const vw = mV[3]*x + mV[7]*y + mV[11]*z + mV[15];
+    const cx = mP[0]*vx + mP[4]*vy + mP[8]*vz  + mP[12]*vw;
+    const cy = mP[1]*vx + mP[5]*vy + mP[9]*vz  + mP[13]*vw;
+    const cw = mP[3]*vx + mP[7]*vy + mP[11]*vz + mP[15]*vw;
+    if (!cw) return null;
+    const nx = cx/cw, ny = cy/cw;
+    const W = canvasEl.clientWidth || canvasEl.width;
+    const H = canvasEl.clientHeight || canvasEl.height;
+    return { x:(nx*0.5+0.5)*W, y:(1-(ny*0.5+0.5))*H, W, H };
+  }
+
+  function screenRectFromAABB(){
+    const a = viewer.scene?.aabb || [0,0,0,0,0,0];
+    const cs = [
+      [a[0],a[1],a[2]],[a[3],a[1],a[2]],[a[0],a[4],a[2]],[a[3],a[4],a[2]],
+      [a[0],a[1],a[5]],[a[3],a[1],a[5]],[a[0],a[4],a[5]],[a[3],a[4],a[5]]
+    ].map(projectToCanvas).filter(Boolean);
+    if (!cs.length) return { x0:0, y0:0, x1:canvasEl.clientWidth, y1:canvasEl.clientHeight };
+    const xs = cs.map(p=>p.x), ys = cs.map(p=>p.y);
+    const x0 = Math.max(0, Math.min(...xs)), y0 = Math.max(0, Math.min(...ys));
+    const x1 = Math.min(canvasEl.clientWidth,  Math.max(...xs));
+    const y1 = Math.min(canvasEl.clientHeight, Math.max(...ys));
+    const pad = 6;
+    return { x0:Math.max(0,x0-pad), y0:Math.max(0,y0-pad), x1:Math.min(canvasEl.clientWidth,x1+pad), y1:Math.min(canvasEl.clientHeight,y1+pad) };
+  }
+
+  async function waitSceneReady(maxMs=2000){
+    const t0 = performance.now();
+    while (performance.now()-t0 < maxMs){
+      const a = viewer.scene?.aabb;
+      if (a && (a[3]-a[0])>1e-6 && (a[4]-a[1])>1e-6 && (a[5]-a[2])>1e-6) return true;
+      await sleep(50);
+    }
+    return true; // on tente quand même
+  }
+
+  window.__getFaces = async function(maxSamples=3500){
+    await waitSceneReady(1200);
+    const faces = [];
+    const rect = screenRectFromAABB();
+    const w = Math.max(1, rect.x1-rect.x0), h = Math.max(1, rect.y1-rect.y0);
+    const areaScreen = w*h;
+
+    // grille à peu près carrée
+    const nx = Math.max(16, Math.round(Math.sqrt(maxSamples * (w/h))));
+    const ny = Math.max(16, Math.round(maxSamples / nx));
+    const stepX = w / nx, stepY = h / ny;
+    const sampleArea = areaScreen / (nx*ny);
+
+    for (let iy=0; iy<ny; iy++){
+      const y = rect.y0 + (iy+0.5)*stepY;
+      for (let ix=0; ix<nx; ix++){
+        const x = rect.x0 + (ix+0.5)*stepX;
+        const hit = viewer.scene.pick({ canvasPos:[x,y], pickSurface:true });
+        if (hit && hit.worldNormal){
+          const n = norm(hit.worldNormal);
+          faces.push({ normal:n, area: sampleArea }); // aire approximative
+        }
+      }
+    }
+
+    console.log('[probe safe] faces =', faces.length);
+    return faces;
+  };
+
+  // petite API utilitaire que ton DFM peut consommer si besoin
+  window.__getProjectedArea = function(axisLetter='Z'){
+    const ax = String(axisLetter||'Z').toUpperCase();
+    const a = viewer.scene?.aabb;
+    if (!a) return 0;
+    const dx=a[3]-a[0], dy=a[4]-a[1], dz=a[5]-a[2];
+    const mm2 = (ax==='X') ? dy*dz : (ax==='Y') ? dx*dz : dx*dy;
+    return Math.max(0, mm2/100); // mm² -> cm²
+  };
+
+  console.log('[probe safe] installed');
+})();
+
+/* ---------- FICHIERS / upload ---------- */
 async function uploadAndShow(file) {
   const f = file || fileInput?.files?.[0];
   if (!f) { alert("Choisis un fichier .step/.stp/.stl (ou .xkt)"); return; }
@@ -577,26 +650,22 @@ async function uploadAndShow(file) {
         models.clear(); selectedIds.clear();
       }
       console.log("[viewer] loading XKT (local):", fileURL);
-      StatsPoller.cancel(); // stoppe l'ancien poll
+      StatsPoller.cancel();
       await loadXKT(fileURL, f.name);
       return;
     }
 
     const fd = new FormData();
     fd.append("file", f);
-
     const res = await fetch("/upload", { method: "POST", body: fd });
-    let j = null;
-    try { j = await res.json(); } catch {}
+    let j = null; try { j = await res.json(); } catch {}
 
     if (!res.ok || !j || !j.xkt_url) {
       console.error("[upload] bad response", res.status, j);
       throw new Error(`upload failed (${res.status})`);
     }
 
-    if (j.s3_uploaded === false) {
-      console.warn("[upload] S3 non disponible.");
-    }
+    if (j.s3_uploaded === false) console.warn("[upload] S3 non disponible.");
 
     currentFileId = j.file_id || null;
     window.currentFileId = currentFileId;
@@ -731,7 +800,7 @@ function showProps(meta){
 const cross = (a,b)=> [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
 const dot   = (a,b)=> a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
 const len   = (v)=> Math.hypot(v[0],v[1],v[2]) || 1;
-const norm  = (v)=>{ const L=len(v); return [v[0]/L,v[1]/L,v[2]/L]; };
+const normV = (v)=>{ const L=len(v); return [v[0]/L,v[1]/L,v[2]/L]; };
 const add3  = (a,b)=> [a[0]+b[0],a[1]+b[1],a[2]+b[2]];
 const mul3  = (v,s)=> [v[0]*s, v[1]*s, v[2]*s];
 
@@ -791,11 +860,11 @@ function updateCutPlaneVisual(){
   if (!clipPlateWorld) { if (cutPoly) cutPoly.setAttribute("points",""); return; }
   ensureCutSvg();
 
-  const n = norm(clipPlaneDir);
+  const n = normV(clipPlaneDir);
   let up = [0,1,0];
   if (Math.abs(dot(up,n)) > 0.95) up = [1,0,0];
-  const u = norm(cross(up, n));
-  const v = norm(cross(n, u));
+  const u = normV(cross(up, n));
+  const v = normV(cross(n, u));
 
   const aabb = viewer.scene?.aabb || [0,0,0,0,0,0];
   const corners = [
@@ -1054,7 +1123,6 @@ projAxisRadios().forEach(r => r?.addEventListener("change", ()=>{
 }));
 
 /* ==================== Lien avec le DFM ==================== */
-// ✅ Un seul listener dfm:fileReady : déclenche le polling
 window.addEventListener('dfm:fileReady', (ev)=>{
   const fid = ev?.detail?.fileId || currentFileId;
   if (fid) fetchStats(fid, getSelectedAxis());
