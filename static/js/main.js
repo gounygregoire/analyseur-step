@@ -160,9 +160,20 @@ window.viewer = viewer;
 
 new FastNavPlugin(viewer, { flyToDuration: 0.9, hideEdges:false, autoHideEdges:false });
 
+/* -----------------------------------------------------------------------
+   XKT LOADER — conserve la géométrie CPU (indispensable pour heatmap/probe)
+   Plusieurs flags sont posés pour couvrir les variations de versions xeokit.
+------------------------------------------------------------------------ */
 const xktLoader = new XKTLoaderPlugin(viewer, {
   dracoDecompressorPath:
-    "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/resources/draco/"
+    "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/resources/draco/",
+  // ► Clés “garde-fous” (la lib ignore celles qu’elle ne connaît pas)
+  storeGeometry: true,
+  keepGeometry: true,
+  parseGeometryStreams: true,
+  readGeometry: true,
+  decodeGeometry: true,
+  decompressGeometry: true
 });
 
 const sections = new SectionPlanesPlugin(viewer);
@@ -459,7 +470,20 @@ if (btnAnnot) { btnAnnot.style.display = "none"; btnAnnot.disabled = true; }
 /* ---------- chargement XKT ---------- */
 async function loadXKT(url, nameHint){
   const id="m"+Date.now();
-  const model=xktLoader.load({id, src:url, edges:!!chkEdges?.checked});
+
+  // ► IMPORTANT : répéter les flags “géométrie CPU” au niveau du load()
+  const model = xktLoader.load({
+    id,
+    src: url,
+    edges: !!chkEdges?.checked,
+    storeGeometry: true,
+    keepGeometry: true,
+    parseGeometryStreams: true,
+    readGeometry: true,
+    decodeGeometry: true,
+    decompressGeometry: true
+  });
+
   setProgress(8);
   model.on("progress", p=> setProgress(8+Math.round(p*84)));
   model.on("loaded", ()=>{
@@ -484,6 +508,18 @@ async function loadXKT(url, nameHint){
         detail: { fileId: window.currentFileId || null }
       }));
     }, 50);
+
+    // ► Auto-check non bloquant : si la sonde est là, loggue le nb de faces
+    setTimeout(async () => {
+      try {
+        if (typeof window.__getFaces === 'function') {
+          const faces = await window.__getFaces();
+          console.log('[geom] faces available =', Array.isArray(faces) ? faces.length : 0);
+        }
+      } catch (e) {
+        console.warn('[geom] probe error (non-bloquant)', e);
+      }
+    }, 0);
 
     try {
       currentAxis = getSelectedAxis();
