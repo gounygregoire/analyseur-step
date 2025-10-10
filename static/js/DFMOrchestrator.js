@@ -809,17 +809,45 @@ runLocalPhaseA(letter).then(()=>console.info('[dfm quick] done'));
       }
     );
   }
-    // === Heatmap dépouille (locale) — safe, init viewer si besoin ==========
-  async applyDraftHeatmap(draftMap = {}, opts = {}) {
+  // === Heatmap dépouille (locale) — avec fallback géométrie ============
+  async applyDraftHeatmap(draftMap = null, opts = {}) {
     try {
-      if (!draftMap || !Object.keys(draftMap).length) {
-        UI?.info?.("Pas de données de dépouille locales à afficher.");
+      const tryBuild = opts.tryBuild !== false; // par défaut on tente de construire si vide
+
+      // 0) récupérer axe choisi (vector → letter)
+      const vec = this.selectedAxis || { x:0, y:0, z:1 };
+      const maxAbs = Math.max(Math.abs(vec.x||0), Math.abs(vec.y||0), Math.abs(vec.z||0));
+      const letter = (maxAbs===Math.abs(vec.x)) ? 'X' : (maxAbs===Math.abs(vec.y) ? 'Y' : 'Z');
+
+      // 1) draftMap fourni ? sinon, prendre le cache local
+      let map = draftMap || window.__quickDraftMap || {};
+
+      // 2) si vide et autorisé -> construire depuis la géométrie du viewer
+      if ((!map || !Object.keys(map).length) && tryBuild) {
+        const faces = await this._computeFacesFromViewer();
+        if (faces.length) {
+          const ax = (letter==='X')?[1,0,0]:(letter==='Y')?[0,1,0]:[0,0,1];
+          map = {};
+          const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
+          for (const f of faces) {
+            // dépouille en degrés ≈ 90° - angle(normal, axe)
+            const n = f.normal || [0,0,1];
+            const cos = Math.abs(n[0]*ax[0] + n[1]*ax[1] + n[2]*ax[2]);
+            const ang = Math.acos(clamp(cos,-1,1)) * 180/Math.PI;
+            const draft = 90 - ang;
+            map[f.id] = draft;
+          }
+          window.__quickDraftMap = map; // cache pour d’autres usages
+        }
+      }
+
+      if (!map || !Object.keys(map).length) {
+        UI?.info?.("Pas de données locales de dépouille encore calculées.");
         return;
       }
 
-      // 1) Assurer le viewer
+      // 3) Assurer le viewer initialisé + fichier chargé
       if (!window.viewerAdapter?.viewer) {
-        // essaie d'initialiser avec le canvas existant
         const canvas =
           document.getElementById('xeokit-canvas') ||
           document.getElementById('xktCanvas') ||
@@ -828,36 +856,90 @@ runLocalPhaseA(letter).then(()=>console.info('[dfm quick] done'));
           UI?.err?.("Canvas viewer introuvable.");
           return;
         }
-        // init viewer si ton app expose initViewer
         if (typeof window.initViewer === 'function') {
           await window.initViewer({ canvasElement: canvas });
         }
       }
-
-      // 2) S'assurer que le fichier courant est chargé dans le viewer
       const fileId = this.resolveFileId?.() || window.currentFileId || window.CAD?.fileIdStep;
       if (fileId && window.viewerAdapter?.loadFromFileId) {
-        // convert est idempotent dans ton adapter ; au pire on ne fait rien
         await window.viewerAdapter?.convert?.(fileId);
         await window.viewerAdapter?.loadFromFileId?.(fileId);
       }
-
       if (!window.viewerAdapter?.viewer) {
         UI?.err?.("Viewer non initialisé.");
         return;
       }
 
-      // 3) Appliquer la heatmap via HeatmapLayer (déjà importé dans ce module)
+      // 4) Appliquer la heatmap via HeatmapLayer (déjà importé en haut du fichier)
       const layer = new HeatmapLayer(window.viewerAdapter);
-      // palette/scale optionnelles
-      const { min = 0, max = 5 } = opts; // 0–5° de dépouille par défaut
-      layer.apply(draftMap, { min, max }); // adapte si ta classe prend d'autres options
-
-      // petit feedback
+      const { min = 0, max = 5 } = opts; // 0–5° par défaut
+      layer.apply(map, { min, max });
       StatusUI.set("Heatmap dépouille appliquée");
     } catch (e) {
       console.warn("[DFM] applyDraftHeatmap error", e);
       UI?.err?.("Impossible d'appliquer la heatmap (voir console).");
+    }
+  }
+
+  // --- Fallback: extraction très robuste des triangles/mesh du viewer ---
+  async _computeFacesFromViewer() {
+    try {
+      const v = window.viewerAdapter?.viewer;
+      const scene = v?.scene;
+      if (!scene) return [];
+
+      // 1) récupérer une liste de "meshes" quoi qu’il arrive
+      const meshes = [];
+      if (scene.meshes) {
+        for (const k in scene.meshes) { if (scene.meshes[k]) meshes.push(scene.meshes[k]); }
+      } else if (scene.objects) {
+        for (const k in scene.objects) {
+          const o = scene.objects[k];
+          if (o && (o.geometry || o._geometry || o._state?.geometry)) meshes.push(o);
+        }
+      } else if (scene.iterate) {
+        scene.iterate((n)=>{ if (n?.geometry) meshes.push(n); });
+      }
+
+      const faces = [];
+      const mul4x4 = (m,[x,y,z])=>[
+        m[0]*x+m[4]*y+m[8]*z+m[12],
+        m[1]*x+m[5]*y+m[9]*z+m[13],
+        m[2]*x+m[6]*y+m[10]*z+m[14]
+      ];
+      const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+      const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+      const len=(v)=>Math.hypot(v[0],v[1],v[2])||1;
+      const norm=(v)=>{const L=len(v); return [v[0]/L,v[1]/L,v[2]/L];};
+
+      const MAX_FACES = 15000; // budget perf
+      let budget = MAX_FACES;
+
+      for (const m of meshes) {
+        if (budget<=0) break;
+        const g = m.geometry || m._geometry || m._state?.geometry || {};
+        const pos = g.positions || g._positions || g.verts || g.coordinates;
+        const idx = g.indices   || g._indices   || g.triangles || g.faces;
+        if (!pos || !idx) continue;
+
+        const wm = m.worldMatrix || m.matrix || m.worldTransform?.matrix || m.transform?.matrix || [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
+        const step = Math.max(1, Math.ceil(idx.length / (3* (budget/3))));
+        // iterate triangles (i, i+1, i+2)
+        for (let i=0; i<idx.length-2 && budget>0; i += 3*step) {
+          const i0 = idx[i]*3, i1 = idx[i+1]*3, i2 = idx[i+2]*3;
+          const p0 = mul4x4(wm, [pos[i0], pos[i0+1], pos[i0+2]]);
+          const p1 = mul4x4(wm, [pos[i1], pos[i1+1], pos[i1+2]]);
+          const p2 = mul4x4(wm, [pos[i2], pos[i2+1], pos[i2+2]]);
+          const n  = norm(cross(sub(p1,p0), sub(p2,p0)));
+          const area = 0.5 * len(cross(sub(p1,p0), sub(p2,p0)));
+          faces.push({ id: `${m.id||m._id||'m'}:${i}`, normal:n, area });
+          budget--;
+        }
+      }
+      return faces;
+    } catch (e) {
+      console.warn("[DFM] _computeFacesFromViewer fallback failed", e);
+      return [];
     }
   }
 

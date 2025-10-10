@@ -956,17 +956,12 @@ window.addEventListener('cadlytics:demould-axis-selected', (e)=>console.log('[df
 })();
     // === HEATMAP DÉPOUILLE (via orchestrateur) ============================
   async function applyDraftHeatmapLocal() {
-    const map = window.__quickDraftMap || {};
-    if (!Object.keys(map).length) {
-      alert("Pas de données locales de dépouille encore calculées.");
-      return;
-    }
-    // passer par l'orchestrateur (gère init viewer + load + HeatmapLayer)
-    await (window.DFMOrchestrator?.applyDraftHeatmap?.(map) || Promise.resolve());
+    // on passe null pour laisser l’orchestrateur utiliser __quickDraftMap
+    // et tryBuild:true pour construire un map si vide
+    await (window.DFMOrchestrator?.applyDraftHeatmap?.(null, { tryBuild: true }) || Promise.resolve());
   }
   document.getElementById('dfmBtnHeatmapDraft')
     ?.addEventListener('click', applyDraftHeatmapLocal);
-
 
   // === PANNEAU CONSEILS ================================================
   const tipsPanel = document.getElementById('dfmTipsPanel');
