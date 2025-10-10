@@ -132,6 +132,26 @@ async function runLocalPhaseA(axisLetter){
 }
 // ========================================================================
 
+// RENDRE DISPO AU GLOBAL + FALLBACK SI L’ORCHESTRATEUR N’APPELLE PAS
+if (typeof window !== 'undefined') {
+  window.runLocalPhaseA = runLocalPhaseA;
+
+  // Fallback : si un autre code émet cadlytics:demould-axis-selected,
+  // on lance l'analyse locale ici (et on évite les doubles appels).
+  window.__quickPhaseALock = false;
+  window.addEventListener('cadlytics:demould-axis-selected', (ev) => {
+    const letter = (ev.detail && ev.detail.axis) || 'Z';
+    // ne pas relancer si déjà en cours dans ce tick
+    if (window.__quickPhaseALock) return;
+    window.__quickPhaseALock = true;
+    console.info('[dfm quick] fallback listener -> runLocalPhaseA(', letter, ')');
+    runLocalPhaseA(letter).finally(() => {
+      // petit délai pour éviter des rafales d’events
+      setTimeout(() => { window.__quickPhaseALock = false; }, 150);
+    });
+  });
+}
+
 
 function axisToVector(ax){
   if (!ax) return null;
@@ -647,6 +667,14 @@ class DFMOrchestrator {
 window.dispatchEvent(new CustomEvent('axis:confirmed', { detail: { axis, invert } }));
 const letter = vectorToAxisLetter(axis);
 window.dispatchEvent(new CustomEvent('cadlytics:demould-axis-selected', { detail: { axis: letter } }));
+// LANCER DIRECTEMENT L'ANALYSE LOCALE (en plus du fallback)
+try {
+  console.info('[dfm quick] direct call from axisConfirmBtn');
+  runLocalPhaseA(letter);
+} catch (e) {
+  console.warn('[dfm quick] direct call failed, fallback will handle', e);
+}
+
 
 // >>> APPEL IMMÉDIAT DE L’ANALYSE LOCALE
 runLocalPhaseA(letter).then(()=>console.info('[dfm quick] done'));
