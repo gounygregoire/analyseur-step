@@ -195,55 +195,53 @@
   </div> <!-- /wrap -->
 
 <script>
-/* DFM PROBE SAFE (v5) — n'accède qu'au viewer.scene, jamais aux CSS/DOM */
-(function installProbeSafe(){
-  function nowReady(){ return !!(window.viewerAdapter && window.viewerAdapter.viewer); }
-  function getViewer(){ return window.viewerAdapter?.viewer || null; }
-
-  // maths util
-  const mul4 = (m,[x,y,z])=>[ m[0]*x+m[4]*y+m[8]*z+m[12], m[1]*x+m[5]*y+m[9]*z+m[13], m[2]*x+m[6]*y+m[10]*z+m[14] ];
-  const sub  = (a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+/* PROBE SAFE – aucune lecture de CSS. Expose __getFaces() */
+(function(){
+  function arr(x){ return x?.data || x?.array || x || null; }
+  function norm(v){ const L=Math.hypot(v[0],v[1],v[2])||1; return [v[0]/L,v[1]/L,v[2]/L]; }
+  const mul4=(m,[x,y,z])=>[ m[0]*x+m[4]*y+m[8]*z+m[12], m[1]*x+m[5]*y+m[9]*z+m[13], m[2]*x+m[6]*y+m[10]*z+m[14] ];
+  const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
   const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
-  const len  =(v)=>Math.hypot(v[0],v[1],v[2])||1;
-  const norm =(v)=>{const L=len(v); return [v[0]/L,v[1]/L,v[2]/L];};
+  const vlen=v=>Math.hypot(v[0],v[1],v[2])||1;
 
   function collectMeshes(scene){
     const ms=[];
     if (!scene) return ms;
     if (scene.meshes)  ms.push(...Object.values(scene.meshes));
     if (scene.objects) ms.push(...Object.values(scene.objects));
-    if (typeof scene.iterate === 'function') scene.iterate(o=>o&&ms.push(o));
+    if (scene._objects)ms.push(...Object.values(scene._objects));
+    if (typeof scene.iterate==='function') scene.iterate(o=>ms.push(o));
     return ms.filter(Boolean);
   }
 
-  function arr(x){ return x?.data || x?.array || x || null; }
-
   function getGeomArrays(m){
-    const gCands = [
-      m.geometry, m._geometry, m._state?.geometry, m._mesh?.geometry,
-      m._rendererMesh?.geometry, m._rendererNode?.geometry
+    const G = [
+      m.geometry, m._geometry, m._mesh?.geometry, m._rendererMesh?.geometry,
+      m._rendererNode?.geometry, m._state?.geometry
     ].filter(Boolean);
-    for (const g of gCands){
-      let P = arr(g.positions || g._positions || g.vertexPositions || g._vertexPositions || g._state?.positions);
-      let I = arr(g.indices   || g._indices   || g.triangles      || g._triangles      || g._state?.indices);
+    for (const g of G){
+      let P = arr(g.positions || g._positions || g.vertexPositions || g._vertexPositions ||
+                  g.decompressedPositions || g.positionsDecompressed || g._state?.positions);
+      let I = arr(g.indices   || g._indices   || g.triangles       || g._triangles       || g._state?.indices);
+      if (!P && typeof g.getPositions==='function') { try{ P=g.getPositions(); }catch{} }
+      if (!I && typeof g.getIndices  ==='function') { try{ I=g.getIndices();   }catch{} }
+      P = arr(P); I = arr(I);
       if (P && I && P.length && I.length) return {P,I};
     }
     return null;
   }
 
   function install(){
-    if (!nowReady()) return false;
-    const viewer = getViewer();
+    const viewer = window.viewerAdapter?.viewer;
+    if (!viewer?.scene) return false;
 
-    // --- faces (uniquement depuis viewer.scene)
     window.__getFaces = async function(){
-      const faces=[]; let tris=0; const MAX=30000;
+      const faces=[]; let tri=0; const MAX=40000;
       const ms = collectMeshes(viewer.scene);
       for (const m of ms){
         const gi = getGeomArrays(m); if (!gi) continue;
         const {P,I} = gi;
-        const wm = m.worldMatrix || m.matrix || m.worldTransform?.matrix || m.transform?.matrix ||
-                   [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
+        const wm = m.worldMatrix || m.matrix || [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
         for (let i=0;i<I.length-2;i+=3){
           const a=I[i]*3,b=I[i+1]*3,c=I[i+2]*3;
           if (c+2>=P.length) break;
@@ -251,64 +249,25 @@
           const p1=mul4(wm,[P[b],P[b+1],P[b+2]]);
           const p2=mul4(wm,[P[c],P[c+1],P[c+2]]);
           const e1=sub(p1,p0), e2=sub(p2,p0);
-          const n=norm(cross(e1,e2)); const area=0.5*len(cross(e1,e2));
-          faces.push({normal:n, area});
-          if (++tris>=MAX) break;
+          const n=norm(cross(e1,e2)); const area=0.5*vlen(cross(e1,e2));
+          faces.push({ id: tri, normal:n, area });
+          if (++tri>=MAX) break;
         }
-        if (tris>=MAX) break;
+        if (tri>=MAX) break;
       }
-      // console.log('[probe v5] faces=', faces.length);
+      console.log('[probe safe] faces =', faces.length);
       return faces;
     };
 
-    // --- aire projetée (essaie faces; sinon AABB)
-    window.__getProjectedArea = async function(axisLetter){
-      const ax = (axisLetter||'Z').toUpperCase();
-      try{
-        const faces = await window.__getFaces();
-        if (faces && faces.length){
-          const a = ax==='X'?[1,0,0]:ax==='Y'?[0,1,0]:[0,0,1];
-          let s=0; for (const f of faces){ const n=f.normal; s += Math.abs(n[0]*a[0]+n[1]*a[1]+n[2]*a[2]) * (f.area||0); }
-          return s*10000; // m² -> cm² (xeokit est souvent en mètres)
-        }
-      }catch(e){ /* ignore */ }
-      // fallback AABB en mm
-      const aabb = viewer?.scene?.aabb;
-      if (aabb && aabb.length===6){
-        const dx=aabb[3]-aabb[0], dy=aabb[4]-aabb[1], dz=aabb[5]-aabb[2]; // mm
-        const mm2 = ax==='X' ? (dy*dz) : ax==='Y' ? (dx*dz) : (dx*dy);
-        return Math.max(0, mm2/100); // mm² -> cm²
-      }
-      return 0;
-    };
-
-    // --- stats basiques
-    window.__getBasicStats = async function(){
-      if (typeof window.viewerAdapter?.getBasicStats === 'function'){
-        const s = await window.viewerAdapter.getBasicStats();
-        return { volume_cm3:+(s?.volume_cm3||0), tmin_mm:+(s?.tmin_mm||0), tmax_mm:+(s?.tmax_mm||0) };
-      }
-      const aabb = viewer?.scene?.aabb;
-      if (aabb && aabb.length===6){
-        const dx=aabb[3]-aabb[0], dy=aabb[4]-aabb[1], dz=aabb[5]-aabb[2];
-        const volume_cm3 = Math.max(0, (dx*dy*dz)/1000);
-        const tmin_mm    = Math.max(0, Math.min(dx,dy,dz)*0.05);
-        const tmax_mm    = Math.max(dx,dy,dz)*0.5;
-        return { volume_cm3, tmin_mm, tmax_mm };
-      }
-      return { volume_cm3:0, tmin_mm:0, tmax_mm:0 };
-    };
-
-    console.log('[probe v5] installed');
+    console.log('[probe safe] installed');
     return true;
   }
 
-  if (!install()){
-    // on attend que le viewer soit exposé
-    document.addEventListener('dfm:viewer-ready', install, { once:true });
-  }
+  let tries=0;
+  const t=setInterval(()=>{ if (install()) { clearInterval(t); } else if (++tries>60) clearInterval(t); }, 500);
 })();
 </script>
+
 
 
 <!-- === Aperçu DFM rapide (Phase A) === -->

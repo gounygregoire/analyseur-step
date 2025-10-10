@@ -1026,6 +1026,54 @@ async applyDraftHeatmap(draftMap = null, opts = {}) {
 
     await this._applyViewData();
   }
+  // Heatmap dépouille locale (fallback quand on n'a pas de map serveur)
+async applyDraftHeatmap(incomingMap = null, { tryBuild = false } = {}) {
+  try {
+    // 1) Si on nous passe déjà une map (ex: depuis le serveur), on l'applique telle quelle
+    if (incomingMap && Object.keys(incomingMap).length) {
+      const layer = new HeatmapLayer(window.viewerAdapter);
+      layer.apply(incomingMap);
+      return;
+    }
+
+    // 2) Sinon, on tente un calcul local
+    if (!tryBuild) {
+      UI.info?.("Pas de données locales. Lance l’analyse complète pour obtenir la heatmap.");
+      return;
+    }
+
+    if (typeof window.__getFaces !== 'function') {
+      UI.info?.("Viewer non prêt pour la heatmap locale.");
+      return;
+    }
+    const faces = await window.__getFaces();
+    if (!faces?.length) {
+      UI.info?.("Pas de maillage accessible pour la heatmap locale.");
+      return;
+    }
+
+    // axe de démoulage (normalisé)
+    const ax = this.selectedAxis || { x: 0, y: 0, z: 1 };
+    const L = Math.hypot(ax.x, ax.y, ax.z) || 1;
+    const nAxis = { x: ax.x / L, y: ax.y / L, z: ax.z / L };
+
+    // score = angle (en degrés) entre la normale et l’axe de démoulage
+    const map = {};
+    for (let i = 0; i < faces.length; i++) {
+      const n = faces[i].normal;
+      const dot = Math.abs(n[0] * nAxis.x + n[1] * nAxis.y + n[2] * nAxis.z); // 0..1
+      const ang = Math.acos(Math.min(1, Math.max(0, dot)));                  // 0..pi/2
+      map[i] = (ang * 180) / Math.PI;                                        // degrés
+    }
+
+    const layer = new HeatmapLayer(window.viewerAdapter);
+    layer.apply(map);
+  } catch (e) {
+    console.warn('[heatmap local] failed', e);
+    UI.info?.("Impossible d’afficher la heatmap locale sur ce modèle.");
+  }
+}
+
 
   async _applyViewData(){
     const fileId = this.fileId;
