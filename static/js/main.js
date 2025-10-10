@@ -467,6 +467,28 @@ btnMeasure?.addEventListener("click", toggleMeasure);
 window.addEventListener("keydown", (e)=>{ if (e.key==="Escape" && distanceCtrl.active) deactivateMeasure(); }, {passive:true});
 if (btnAnnot) { btnAnnot.style.display = "none"; btnAnnot.disabled = true; }
 
+// À mettre juste après la création du viewer, AVANT loadXKT(...)
+(function hookGeometryCapture(){
+  const sc = viewer.scene;
+  const orig = sc.createGeometry?.bind(sc);
+  if (!orig) { console.warn('[geom-capture] createGeometry indisponible'); return; }
+
+  sc.createGeometry = function(params){
+    const g = orig(params);
+    try {
+      const P = params?.positions?.data || params?.positions?.array || params?.positions || null;
+      const I = params?.indices?.data   || params?.indices?.array   || params?.indices   || null;
+      if (P && I) {
+        // on épingle une copie accessible côté app
+        g.__dfmPositions = P;
+        g.__dfmIndices   = I;
+      }
+    } catch {}
+    return g;
+  };
+  console.log('[geom-capture] actif');
+})();
+
 /* ---------- chargement XKT ---------- */
 async function loadXKT(url, nameHint){
   const id="m"+Date.now();
@@ -483,6 +505,13 @@ async function loadXKT(url, nameHint){
     decodeGeometry: true,
     decompressGeometry: true
   });
+
+  function getGeomArrays(m){
+  const g = m.geometry || m._geometry || {};
+  const P = g.__dfmPositions;
+  const I = g.__dfmIndices;
+  return (P && I && P.length && I.length) ? { P, I } : null;
+}
 
   setProgress(8);
   model.on("progress", p=> setProgress(8+Math.round(p*84)));
