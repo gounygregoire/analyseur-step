@@ -194,172 +194,118 @@
     </div> <!-- /grid -->
   </div> <!-- /wrap -->
 
- <script>
-/* DFM PROBE V4 – cherche la géométrie en profondeur (xeokit/XKT)
-   - installe window.__getFaces / __getProjectedArea
-   - marche même si la géométrie est enfouie dans des sous-objets internes
-*/
-(function dfmProbeInstallV4(){
-  // ---- maths
-  const mul4=(m,[x,y,z])=>[ m[0]*x+m[4]*y+m[8]*z+m[12], m[1]*x+m[5]*y+m[9]*z+m[13], m[2]*x+m[6]*y+m[10]*z+m[14] ];
-  const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+<script>
+/* DFM PROBE SAFE (v5) — n'accède qu'au viewer.scene, jamais aux CSS/DOM */
+(function installProbeSafe(){
+  function nowReady(){ return !!(window.viewerAdapter && window.viewerAdapter.viewer); }
+  function getViewer(){ return window.viewerAdapter?.viewer || null; }
+
+  // maths util
+  const mul4 = (m,[x,y,z])=>[ m[0]*x+m[4]*y+m[8]*z+m[12], m[1]*x+m[5]*y+m[9]*z+m[13], m[2]*x+m[6]*y+m[10]*z+m[14] ];
+  const sub  = (a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
   const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
-  const len=v=>Math.hypot(v[0],v[1],v[2])||1, norm=v=>{const L=len(v); return [v[0]/L,v[1]/L,v[2]/L];};
+  const len  =(v)=>Math.hypot(v[0],v[1],v[2])||1;
+  const norm =(v)=>{const L=len(v); return [v[0]/L,v[1]/L,v[2]/L];};
 
-  // ---- outillage
-  const arr = x => (x && (x.data||x.array||x.values||x.buffer?.data||x)) || null;
-  const isTyped = v => v && (ArrayBuffer.isView(v) || Array.isArray(v));
-  const isLikelyPos = a => isTyped(a) && a.length>=9 && a.length%3===0;
-  const isLikelyIdx = a => isTyped(a) && a.length>=3 && a.length%3===0;
-
-  function getViewer(){
-    return (
-      window.viewerAdapter?.viewer ||
-      window.viewer?.viewer ||
-      window.viewer ||
-      window.xktViewer ||
-      null
-    );
-  }
-
-  // collecte “meshes” de façon très permissive
   function collectMeshes(scene){
     const ms=[];
     if (!scene) return ms;
     if (scene.meshes)  ms.push(...Object.values(scene.meshes));
     if (scene.objects) ms.push(...Object.values(scene.objects));
-    if (scene._objects) ms.push(...Object.values(scene._objects));
-    if (typeof scene.iterate === 'function') scene.iterate(o=>ms.push(o));
+    if (typeof scene.iterate === 'function') scene.iterate(o=>o&&ms.push(o));
     return ms.filter(Boolean);
   }
 
-  // scan récursif profond pour trouver tableaux positions / indices
-  function deepScanForGeom(root, maxNodes=5000){
-    const posCands=[], idxCands=[];
-    const seen = new WeakSet();
-    const stack = [{o:root, path:'root'}];
+  function arr(x){ return x?.data || x?.array || x || null; }
 
-    while (stack.length){
-      const {o, path} = stack.pop();
-      if (!o || typeof o!=='object') continue;
-      if (seen.has(o)) continue;
-      seen.add(o);
-
-      // repère tableaux
-      for (const k in o){
-        const v = o[k];
-        // évite gros buffers inutiles de shaders
-        if (v && typeof v==='object') {
-          const A = arr(v);
-          if (A && isTyped(A)) {
-            if (isLikelyPos(A) && (A.BYTES_PER_ELEMENT || 4) <= 8) posCands.push({data:A, path:path+'.'+k});
-            if (isLikelyIdx(A)) idxCands.push({data:A, path:path+'.'+k});
-          }
-        }
-      }
-
-      // parcourt les fils
-      if (maxNodes-- <= 0) break;
-      for (const k in o){
-        const v = o[k];
-        // ignore fonctions & primitifs
-        if (!v || typeof v!=='object') continue;
-        // évite boucles infinies sur parent/scene
-        if (k==='parent' || k==='scene' || k==='_parent' || k==='_scene') continue;
-        stack.push({o:v, path: path+'.'+k});
-      }
+  function getGeomArrays(m){
+    const gCands = [
+      m.geometry, m._geometry, m._state?.geometry, m._mesh?.geometry,
+      m._rendererMesh?.geometry, m._rendererNode?.geometry
+    ].filter(Boolean);
+    for (const g of gCands){
+      let P = arr(g.positions || g._positions || g.vertexPositions || g._vertexPositions || g._state?.positions);
+      let I = arr(g.indices   || g._indices   || g.triangles      || g._triangles      || g._state?.indices);
+      if (P && I && P.length && I.length) return {P,I};
     }
-
-    // heuristique simple : plus gros tableau pour positions / indices
-    posCands.sort((a,b)=>b.data.length - a.data.length);
-    idxCands.sort((a,b)=>b.data.length - a.data.length);
-    const P = posCands[0]?.data || null;
-    const I = idxCands[0]?.data || null;
-
-    return { P, I, Ppath: posCands[0]?.path, Ipath: idxCands[0]?.path };
-  }
-
-  function pickWorldMatrix(m){
-    return (
-      m.worldMatrix ||
-      m.matrix ||
-      m.worldTransform?.matrix ||
-      m.transform?.matrix ||
-      m._worldMatrix ||
-      [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]
-    );
+    return null;
   }
 
   function install(){
+    if (!nowReady()) return false;
     const viewer = getViewer();
-    if (!viewer || !viewer.scene) return false;
 
-    window.__dfmDumpGeom = function(){
-      const s = viewer.scene;
-      const ms = collectMeshes(s);
-      console.log('[probe v4] mesh candidates =', ms.length);
-      ms.slice(0,5).forEach((m,i)=>{
-        const d = deepScanForGeom(m);
-        console.log(`#${i}`, {
-          id: m.id || m.entityId || m._id,
-          posLen: d.P?.length || 0,
-          idxLen: d.I?.length || 0,
-          posPath: d.Ppath,
-          idxPath: d.Ipath
-        });
-      });
-    };
-
+    // --- faces (uniquement depuis viewer.scene)
     window.__getFaces = async function(){
       const faces=[]; let tris=0; const MAX=30000;
       const ms = collectMeshes(viewer.scene);
-      let used=0;
-
       for (const m of ms){
-        const {P, I} = deepScanForGeom(m);
-        if (!P || !I) continue;
-        used++;
-        const wm = pickWorldMatrix(m);
-
-        for (let i=0; i<I.length-2; i+=3){
-          const a=I[i]*3, b=I[i+1]*3, c=I[i+2]*3;
-          if (c+2 >= P.length) break;
+        const gi = getGeomArrays(m); if (!gi) continue;
+        const {P,I} = gi;
+        const wm = m.worldMatrix || m.matrix || m.worldTransform?.matrix || m.transform?.matrix ||
+                   [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
+        for (let i=0;i<I.length-2;i+=3){
+          const a=I[i]*3,b=I[i+1]*3,c=I[i+2]*3;
+          if (c+2>=P.length) break;
           const p0=mul4(wm,[P[a],P[a+1],P[a+2]]);
           const p1=mul4(wm,[P[b],P[b+1],P[b+2]]);
           const p2=mul4(wm,[P[c],P[c+1],P[c+2]]);
-          const nrm=norm(cross(sub(p1,p0), sub(p2,p0)));
-          const area=0.5*len(cross(sub(p1,p0), sub(p2,p0)));
-          faces.push({ normal:nrm, area });
+          const e1=sub(p1,p0), e2=sub(p2,p0);
+          const n=norm(cross(e1,e2)); const area=0.5*len(cross(e1,e2));
+          faces.push({normal:n, area});
           if (++tris>=MAX) break;
         }
         if (tris>=MAX) break;
       }
-      console.log('[probe v4] meshes=', ms.length, 'used=', used, 'faces=', faces.length);
+      // console.log('[probe v5] faces=', faces.length);
       return faces;
     };
 
+    // --- aire projetée (essaie faces; sinon AABB)
     window.__getProjectedArea = async function(axisLetter){
-      const faces = await window.__getFaces();
-      const ax = (axisLetter==='X')?[1,0,0]:(axisLetter==='Y')?[0,1,0]:[0,0,1];
-      let s=0;
-      for (const f of faces){ const n=f.normal; s += Math.abs(n[0]*ax[0]+n[1]*ax[1]+n[2]*ax[2]) * (f.area||0); }
-      return s*10000; // m²→cm² si la scène est en mètres
+      const ax = (axisLetter||'Z').toUpperCase();
+      try{
+        const faces = await window.__getFaces();
+        if (faces && faces.length){
+          const a = ax==='X'?[1,0,0]:ax==='Y'?[0,1,0]:[0,0,1];
+          let s=0; for (const f of faces){ const n=f.normal; s += Math.abs(n[0]*a[0]+n[1]*a[1]+n[2]*a[2]) * (f.area||0); }
+          return s*10000; // m² -> cm² (xeokit est souvent en mètres)
+        }
+      }catch(e){ /* ignore */ }
+      // fallback AABB en mm
+      const aabb = viewer?.scene?.aabb;
+      if (aabb && aabb.length===6){
+        const dx=aabb[3]-aabb[0], dy=aabb[4]-aabb[1], dz=aabb[5]-aabb[2]; // mm
+        const mm2 = ax==='X' ? (dy*dz) : ax==='Y' ? (dx*dz) : (dx*dy);
+        return Math.max(0, mm2/100); // mm² -> cm²
+      }
+      return 0;
     };
 
-    console.log('[probe v4] installed');
+    // --- stats basiques
+    window.__getBasicStats = async function(){
+      if (typeof window.viewerAdapter?.getBasicStats === 'function'){
+        const s = await window.viewerAdapter.getBasicStats();
+        return { volume_cm3:+(s?.volume_cm3||0), tmin_mm:+(s?.tmin_mm||0), tmax_mm:+(s?.tmax_mm||0) };
+      }
+      const aabb = viewer?.scene?.aabb;
+      if (aabb && aabb.length===6){
+        const dx=aabb[3]-aabb[0], dy=aabb[4]-aabb[1], dz=aabb[5]-aabb[2];
+        const volume_cm3 = Math.max(0, (dx*dy*dz)/1000);
+        const tmin_mm    = Math.max(0, Math.min(dx,dy,dz)*0.05);
+        const tmax_mm    = Math.max(dx,dy,dz)*0.5;
+        return { volume_cm3, tmin_mm, tmax_mm };
+      }
+      return { volume_cm3:0, tmin_mm:0, tmax_mm:0 };
+    };
+
+    console.log('[probe v5] installed');
     return true;
   }
 
-  // installe quand le viewer est prêt (ou poll si besoin)
-  function tryInstall(){
-    if (install()) return;
-    let tries=0;
-    const t=setInterval(()=>{ if (install() || ++tries>60) clearInterval(t); }, 500);
-  }
-  if (window.viewerAdapter?.viewer) {
-    tryInstall();
-  } else {
-    document.addEventListener('dfm:viewer-ready', tryInstall, { once:true });
+  if (!install()){
+    // on attend que le viewer soit exposé
+    document.addEventListener('dfm:viewer-ready', install, { once:true });
   }
 })();
 </script>
@@ -1195,80 +1141,78 @@ document.getElementById('dfmBtnHeatmapDraft')
 </script>
 <script>
 /* Rafraîchit les métriques de base depuis le viewer et les expose en helpers */
-(function(){
-  function setText(id, val){
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.textContent = (val ?? '—');
-  }
-
-  // ---- Helpers exposés (utilisés par l'orchestrateur) ----
-  window.__getBasicStats = async function(){
-    // 1) Si ton viewerAdapter expose déjà des stats, on les utilise
-    if (typeof window.viewerAdapter?.getBasicStats === 'function') {
-      const s = await window.viewerAdapter.getBasicStats(); // {volume_cm3,tmin_mm,tmax_mm}
-      return {
-        volume_cm3: Number(s?.volume_cm3) || 0,
-        tmin_mm:    Number(s?.tmin_mm)    || 0,
-        tmax_mm:    Number(s?.tmax_mm)    || 0
-      };
+    function setText(id, val){
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.textContent = (val ?? '—');
     }
-    // 2) Fallback léger via la bounding box (approx)
-    const aabb = window.viewerAdapter?.viewer?.scene?.aabb;
-    if (aabb && aabb.length === 6) {
+
+    // ---- Helpers exposés (utilisés par l'orchestrateur) ----
+    window.__getBasicStats = async function(){
+      // 1) Si ton viewerAdapter expose déjà des stats, on les utilise
+      if (typeof window.viewerAdapter?.getBasicStats === 'function') {
+        const s = await window.viewerAdapter.getBasicStats(); // {volume_cm3,tmin_mm,tmax_mm}
+        return {
+          volume_cm3: Number(s?.volume_cm3) || 0,
+          tmin_mm:    Number(s?.tmin_mm)    || 0,
+          tmax_mm:    Number(s?.tmax_mm)    || 0
+        };
+      }
+      // 2) Fallback léger via la bounding box (approx)
+      const aabb = window.viewerAdapter?.viewer?.scene?.aabb;
+      if (aabb && aabb.length === 6) {
+        const dx = aabb[3]-aabb[0], dy = aabb[4]-aabb[1], dz = aabb[5]-aabb[2]; // mm
+        const volume_cm3 = Math.max(0, (dx*dy*dz) / 1000); // mm^3 -> cm^3
+        // épaisseurs min/max très approximatives
+        const tmin_mm = Math.max(0, Math.min(dx,dy,dz) * 0.05);
+        const tmax_mm = Math.max(dx,dy,dz) * 0.5;
+        return { volume_cm3, tmin_mm, tmax_mm };
+      }
+      return { volume_cm3:0, tmin_mm:0, tmax_mm:0 };
+    };
+
+
+    // --- Aire projetée
+    window.__getProjectedArea = async function(axisLetter){
+      const ax = (axisLetter || 'Z').toUpperCase();
+
+      // 1) Implémentation native (si dispo)
+      if (typeof window.viewerAdapter?.getProjectedArea === 'function') {
+        try { return await window.viewerAdapter.getProjectedArea(ax); }
+        catch (e) { console.warn('[projArea native failed]', e); }
+      }
+
+      // 2) Fallback via AABB (rectangle projeté)
+      const aabb = window.viewerAdapter?.viewer?.scene?.aabb;
+      if (!aabb || aabb.length !== 6) return 0;
       const dx = aabb[3]-aabb[0], dy = aabb[4]-aabb[1], dz = aabb[5]-aabb[2]; // mm
-      const volume_cm3 = Math.max(0, (dx*dy*dz) / 1000); // mm^3 -> cm^3
-      // épaisseurs min/max très approximatives
-      const tmin_mm = Math.max(0, Math.min(dx,dy,dz) * 0.05);
-      const tmax_mm = Math.max(dx,dy,dz) * 0.5;
-      return { volume_cm3, tmin_mm, tmax_mm };
-    }
-    return { volume_cm3:0, tmin_mm:0, tmax_mm:0 };
-  };
+      const mm2 = ax==='X' ? (dy*dz) : ax==='Y' ? (dx*dz) : (dx*dy);
+      return Math.max(0, mm2/100); // mm² -> cm²
+    };
 
-  window.__getProjectedArea = async function(axisLetter){
-    const ax = (axisLetter || 'Z').toUpperCase();
-    // 1) Implémentation native si dispo
-    if (typeof window.viewerAdapter?.getProjectedArea === 'function') {
-      return await window.viewerAdapter.getProjectedArea(ax); // en cm² idéalement
-    }
-    // 2) Fallback via AABB (aire du rectangle projeté)
-    const aabb = window.viewerAdapter?.viewer?.scene?.aabb;
-    if (!aabb || aabb.length !== 6) return 0;
-    const dx = aabb[3]-aabb[0], dy = aabb[4]-aabb[1], dz = aabb[5]-aabb[2]; // mm
-    const mm2 = ax==='X' ? (dy*dz) : ax==='Y' ? (dx*dz) : (dx*dy);
-    return Math.max(0, mm2/100); // mm² -> cm²
-  };
+    // --- Rafraîchissement UI (après fileReady)
+    (function(){
+      async function refreshBasicUI(){
+        const s = await window.__getBasicStats();
+        const set = (id,val)=>{ const el=document.getElementById(id); if (el) el.textContent = val; };
+        set('volVal',  s?.volume_cm3 ? s.volume_cm3.toFixed(1) : '—');
+        set('tminVal', s?.tmin_mm    ? s.tmin_mm.toFixed(2)     : '—');
+        set('tmaxVal', s?.tmax_mm    ? s.tmax_mm.toFixed(2)     : '—');
+      }
 
-  // ---- Rafraîchissement UI ----
-  async function refreshBasicUI(){
-    const s = await window.__getBasicStats();
-    setText('volVal',  s.volume_cm3 ? s.volume_cm3.toFixed(1) : '—');
-    setText('tminVal', s.tmin_mm    ? s.tmin_mm.toFixed(2)     : '—');
-    setText('tmaxVal', s.tmax_mm    ? s.tmax_mm.toFixed(2)     : '—');
-  }
+      async function refreshProjUI(){
+        const axis = (document.querySelector('input[name="projAxis"]:checked')?.value) || 'Z';
+        const a = await window.__getProjectedArea(axis);
+        const el = document.getElementById('projVal');
+        if (el) el.textContent = a ? a.toFixed(1) : '—';
+      }
 
-  async function refreshProjUI(){
-    const axis = (document.querySelector('input[name="projAxis"]:checked')?.value) || 'Z';
-    const a = await window.__getProjectedArea(axis);
-    setText('projVal', a ? a.toFixed(1) : '—');
-  }
+      // 1) uniquement quand le fichier est prêt (évite le “flash” de valeurs)
+      window.addEventListener('dfm:fileReady', ()=>{ refreshBasicUI(); refreshProjUI(); });
 
-  // 1) Quand le fichier est prêt (signal émis dans ton flow)
-  window.addEventListener('dfm:fileReady', function(){
-    refreshBasicUI(); refreshProjUI();
-  });
-
-  // 2) Recalcul si on change l’axe de projection (tes radios X/Y/Z)
-  document.addEventListener('change', function(ev){
-    if (ev.target && ev.target.name === 'projAxis') refreshProjUI();
-  });
-
-  // 3) Sécurité : 1er rafraîchissement après DOM prêt (si modèle déjà chargé)
-  document.addEventListener('DOMContentLoaded', function(){
-    setTimeout(()=>{ refreshBasicUI(); refreshProjUI(); }, 400);
-  });
-})();
+      // 2) recalcule quand on change l’axe
+      document.addEventListener('change', (ev)=>{ if (ev.target?.name === 'projAxis') refreshProjUI(); });
+    })();
 </script>
 
 
