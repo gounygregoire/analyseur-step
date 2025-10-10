@@ -151,6 +151,11 @@ const viewer = new Viewer({
   dtxEnabled: true,
   transparent: true
 });
+// PATCH: exposer le viewer pour la sonde & signaler "prêt"
+window.viewerAdapter = window.viewerAdapter || {};
+window.viewerAdapter.viewer = viewer;         // ← ton instance xeokit
+document.dispatchEvent(new Event('dfm:viewer-ready'));
+
 window.viewer = viewer;
 
 new FastNavPlugin(viewer, { flyToDuration: 0.9, hideEdges:false, autoHideEdges:false });

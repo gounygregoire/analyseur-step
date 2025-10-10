@@ -194,95 +194,176 @@
     </div> <!-- /grid -->
   </div> <!-- /wrap -->
 
-  <script>
-/* DFM PROBE for xeokit/XKT — installs __getFaces/__getProjectedArea/__getBasicStats
-   Works even if viewerAdapter APIs are minimal. Logs what it finds. */
-(function dfmProbeInstall(){
-  function nowReady(){ return !!(window.viewerAdapter && window.viewerAdapter.viewer); }
-  if (!nowReady()) { document.addEventListener('dfm:viewer-ready', dfmProbeInstall, { once:true }); return; }
-
-  const viewer = window.viewerAdapter.viewer;
-  const scene  = viewer?.scene;
-
-  // --- helper math
-  const mul4 = (m,[x,y,z])=>[ m[0]*x+m[4]*y+m[8]*z+m[12], m[1]*x+m[5]*y+m[9]*z+m[13], m[2]*x+m[6]*y+m[10]*z+m[14] ];
+ <script>
+/* DFM PROBE V4 – cherche la géométrie en profondeur (xeokit/XKT)
+   - installe window.__getFaces / __getProjectedArea
+   - marche même si la géométrie est enfouie dans des sous-objets internes
+*/
+(function dfmProbeInstallV4(){
+  // ---- maths
+  const mul4=(m,[x,y,z])=>[ m[0]*x+m[4]*y+m[8]*z+m[12], m[1]*x+m[5]*y+m[9]*z+m[13], m[2]*x+m[6]*y+m[10]*z+m[14] ];
   const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
   const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
-  const len=(v)=>Math.hypot(v[0],v[1],v[2])||1;
-  const norm=(v)=>{const L=len(v); return [v[0]/L,v[1]/L,v[2]/L];};
+  const len=v=>Math.hypot(v[0],v[1],v[2])||1, norm=v=>{const L=len(v); return [v[0]/L,v[1]/L,v[2]/L];};
 
-  // --- collect meshes in a very permissive way (xeokit versions differ)
-  function collectMeshes() {
-    const meshes = [];
-    if (scene?.meshes)  Object.values(scene.meshes).forEach(m => m && meshes.push(m));
-    if (scene?.objects) Object.values(scene.objects).forEach(o => o && meshes.push(o));
-    if (typeof scene?.iterate === 'function') scene.iterate(o => o && meshes.push(o));
-    return meshes;
+  // ---- outillage
+  const arr = x => (x && (x.data||x.array||x.values||x.buffer?.data||x)) || null;
+  const isTyped = v => v && (ArrayBuffer.isView(v) || Array.isArray(v));
+  const isLikelyPos = a => isTyped(a) && a.length>=9 && a.length%3===0;
+  const isLikelyIdx = a => isTyped(a) && a.length>=3 && a.length%3===0;
+
+  function getViewer(){
+    return (
+      window.viewerAdapter?.viewer ||
+      window.viewer?.viewer ||
+      window.viewer ||
+      window.xktViewer ||
+      null
+    );
   }
 
-  // --- try many geometry shapes to get positions/indices
-  function getGeomArrays(mesh) {
-    const g = mesh.geometry || mesh._geometry || mesh._state?.geometry || mesh._mesh?.geometry || mesh._geometryTarget || {};
-    const pos = g.positions || g._positions || g._state?.positions || g.vertexPositions || g._vertexPositions || g.verts || g.coordinates;
-    const idx = g.indices   || g._indices   || g._state?.indices   || g.triangles      || g._triangles      || g.faces;
-    const P = pos?.data || pos?.array || pos || null;
-    const I = idx?.data || idx?.array || idx || null;
-    return (P && I && P.length && I.length) ? { P, I } : null;
+  // collecte “meshes” de façon très permissive
+  function collectMeshes(scene){
+    const ms=[];
+    if (!scene) return ms;
+    if (scene.meshes)  ms.push(...Object.values(scene.meshes));
+    if (scene.objects) ms.push(...Object.values(scene.objects));
+    if (scene._objects) ms.push(...Object.values(scene._objects));
+    if (typeof scene.iterate === 'function') scene.iterate(o=>ms.push(o));
+    return ms.filter(Boolean);
   }
 
-  // --- HOOK: faces with world normals & areas (capped for perf)
-  window.__getFaces = async function(){
-    const faces = [];
-    const meshes = collectMeshes();
-    let totalTris = 0;
-    const MAX_TRIS = 20000;
+  // scan récursif profond pour trouver tableaux positions / indices
+  function deepScanForGeom(root, maxNodes=5000){
+    const posCands=[], idxCands=[];
+    const seen = new WeakSet();
+    const stack = [{o:root, path:'root'}];
 
-    for (const m of meshes) {
-      const gi = getGeomArrays(m);
-      if (!gi) continue;
-      const { P, I } = gi;
-      const wm = m.worldMatrix || m.matrix || m.worldTransform?.matrix || m.transform?.matrix || [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
+    while (stack.length){
+      const {o, path} = stack.pop();
+      if (!o || typeof o!=='object') continue;
+      if (seen.has(o)) continue;
+      seen.add(o);
 
-      for (let i=0; i<I.length-2; i+=3) {
-        const i0 = I[i]*3, i1 = I[i+1]*3, i2 = I[i+2]*3;
-        if (i2+2 >= P.length) break;
-        const p0 = mul4(wm,[P[i0],P[i0+1],P[i0+2]]);
-        const p1 = mul4(wm,[P[i1],P[i1+1],P[i1+2]]);
-        const p2 = mul4(wm,[P[i2],P[i2+1],P[i2+2]]);
-        const e1 = sub(p1,p0), e2 = sub(p2,p0);
-        const n  = norm(cross(e1,e2));
-        const area = 0.5 * len(cross(e1,e2));
-        faces.push({ id: `${m.id||m.entityId||m._id||'mesh'}:${i/3}`, normal:n, area });
-        totalTris++;
-        if (totalTris >= MAX_TRIS) break;
+      // repère tableaux
+      for (const k in o){
+        const v = o[k];
+        // évite gros buffers inutiles de shaders
+        if (v && typeof v==='object') {
+          const A = arr(v);
+          if (A && isTyped(A)) {
+            if (isLikelyPos(A) && (A.BYTES_PER_ELEMENT || 4) <= 8) posCands.push({data:A, path:path+'.'+k});
+            if (isLikelyIdx(A)) idxCands.push({data:A, path:path+'.'+k});
+          }
+        }
       }
-      if (totalTris >= MAX_TRIS) break;
+
+      // parcourt les fils
+      if (maxNodes-- <= 0) break;
+      for (const k in o){
+        const v = o[k];
+        // ignore fonctions & primitifs
+        if (!v || typeof v!=='object') continue;
+        // évite boucles infinies sur parent/scene
+        if (k==='parent' || k==='scene' || k==='_parent' || k==='_scene') continue;
+        stack.push({o:v, path: path+'.'+k});
+      }
     }
-    console.log('[dfm probe] meshes=', meshes.length, 'faces=', faces.length);
-    return faces;
-  };
 
-  // --- HOOK: quick projected area (sum of |n·axis|*area)
-  window.__getProjectedArea = async function(axisLetter){
-    const faces = await window.__getFaces();
-    const ax = axisLetter==='X'?[1,0,0]:axisLetter==='Y'?[0,1,0]:[0,0,1];
-    let s = 0;
-    for (const f of faces) {
-      const n = f.normal; s += Math.abs(n[0]*ax[0]+n[1]*ax[1]+n[2]*ax[2]) * (f.area||0);
-    }
-    // xeokit est souvent en mètres → m² -> cm²
-    return s * 10000; // ajuste si tes unités diffèrent
-  };
+    // heuristique simple : plus gros tableau pour positions / indices
+    posCands.sort((a,b)=>b.data.length - a.data.length);
+    idxCands.sort((a,b)=>b.data.length - a.data.length);
+    const P = posCands[0]?.data || null;
+    const I = idxCands[0]?.data || null;
 
-  // --- HOOK: basic stats (fallback depuis l’UI si aucune API)
-  window.__getBasicStats = async function(){
-    const parse = id => parseFloat((document.getElementById(id)?.textContent||'').replace(',','.')) || 0;
-    return { volume_cm3: parse('volVal'), tmin_mm: parse('tminVal'), tmax_mm: parse('tmaxVal') };
-  };
+    return { P, I, Ppath: posCands[0]?.path, Ipath: idxCands[0]?.path };
+  }
 
-  console.log('[dfm probe] hooks installed');
+  function pickWorldMatrix(m){
+    return (
+      m.worldMatrix ||
+      m.matrix ||
+      m.worldTransform?.matrix ||
+      m.transform?.matrix ||
+      m._worldMatrix ||
+      [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]
+    );
+  }
+
+  function install(){
+    const viewer = getViewer();
+    if (!viewer || !viewer.scene) return false;
+
+    window.__dfmDumpGeom = function(){
+      const s = viewer.scene;
+      const ms = collectMeshes(s);
+      console.log('[probe v4] mesh candidates =', ms.length);
+      ms.slice(0,5).forEach((m,i)=>{
+        const d = deepScanForGeom(m);
+        console.log(`#${i}`, {
+          id: m.id || m.entityId || m._id,
+          posLen: d.P?.length || 0,
+          idxLen: d.I?.length || 0,
+          posPath: d.Ppath,
+          idxPath: d.Ipath
+        });
+      });
+    };
+
+    window.__getFaces = async function(){
+      const faces=[]; let tris=0; const MAX=30000;
+      const ms = collectMeshes(viewer.scene);
+      let used=0;
+
+      for (const m of ms){
+        const {P, I} = deepScanForGeom(m);
+        if (!P || !I) continue;
+        used++;
+        const wm = pickWorldMatrix(m);
+
+        for (let i=0; i<I.length-2; i+=3){
+          const a=I[i]*3, b=I[i+1]*3, c=I[i+2]*3;
+          if (c+2 >= P.length) break;
+          const p0=mul4(wm,[P[a],P[a+1],P[a+2]]);
+          const p1=mul4(wm,[P[b],P[b+1],P[b+2]]);
+          const p2=mul4(wm,[P[c],P[c+1],P[c+2]]);
+          const nrm=norm(cross(sub(p1,p0), sub(p2,p0)));
+          const area=0.5*len(cross(sub(p1,p0), sub(p2,p0)));
+          faces.push({ normal:nrm, area });
+          if (++tris>=MAX) break;
+        }
+        if (tris>=MAX) break;
+      }
+      console.log('[probe v4] meshes=', ms.length, 'used=', used, 'faces=', faces.length);
+      return faces;
+    };
+
+    window.__getProjectedArea = async function(axisLetter){
+      const faces = await window.__getFaces();
+      const ax = (axisLetter==='X')?[1,0,0]:(axisLetter==='Y')?[0,1,0]:[0,0,1];
+      let s=0;
+      for (const f of faces){ const n=f.normal; s += Math.abs(n[0]*ax[0]+n[1]*ax[1]+n[2]*ax[2]) * (f.area||0); }
+      return s*10000; // m²→cm² si la scène est en mètres
+    };
+
+    console.log('[probe v4] installed');
+    return true;
+  }
+
+  // installe quand le viewer est prêt (ou poll si besoin)
+  function tryInstall(){
+    if (install()) return;
+    let tries=0;
+    const t=setInterval(()=>{ if (install() || ++tries>60) clearInterval(t); }, 500);
+  }
+  if (window.viewerAdapter?.viewer) {
+    tryInstall();
+  } else {
+    document.addEventListener('dfm:viewer-ready', tryInstall, { once:true });
+  }
 })();
 </script>
+
 
 <!-- === Aperçu DFM rapide (Phase A) === -->
 <div id="dfmQuickSection" class="pane" style="display:none; margin-top:12px; padding:10px; border-radius:10px; background:#f7fafc; border:1px solid #e6ebf2">
