@@ -63,131 +63,72 @@ const StatusUI = {
   }
 };
 // ====== ANALYSE LOCALE RAPIDE (Phase A instantanée) ======================
-
-// Règles mini par matière (étends librement)
 const MAT_RULES_QUICK = {
-  ABS:        { draftExt: 1.0, draftInt: 0.5, P_inj_bar: 600, tmin: 1.2 },
-  PC:         { draftExt: 1.5, draftInt: 1.0, P_inj_bar: 800, tmin: 1.8 },
-  PP:         { draftExt: 1.0, draftInt: 0.5, P_inj_bar: 500, tmin: 1.2 },
-  'PA66 GF30':{ draftExt: 1.0, draftInt: 0.5, P_inj_bar: 800, tmin: 1.5 }
+  ABS:{draftExt:1.0,draftInt:0.5,P_inj_bar:600,tmin:1.2},
+  PC:{draftExt:1.5,draftInt:1.0,P_inj_bar:800,tmin:1.8},
+  PP:{draftExt:1.0,draftInt:0.5,P_inj_bar:500,tmin:1.2},
+  'PA66 GF30':{draftExt:1.0,draftInt:0.5,P_inj_bar:800,tmin:1.5}
 };
-const dot3 = (a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
-const axisLetterToVec = (A)=>A==='X'?[1,0,0]:A==='Y'?[0,1,0]:[0,0,1];
+const dot3=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const axisLetterToVec=(A)=>A==='X'?[1,0,0]:A==='Y'?[0,1,0]:[0,0,1];
+const getQuickMatRules=(m)=>MAT_RULES_QUICK[(m?.id||m?.name||'ABS')]||MAT_RULES_QUICK.ABS;
 
-function getQuickMatRules(m){
-  const id = (m?.id || m?.name || 'ABS');
-  return MAT_RULES_QUICK[id] || MAT_RULES_QUICK.ABS;
-}
+async function __quickProjectedArea(axis){ try{return await window.__getProjectedArea?.(axis)??0;}catch{return 0;} }
+async function __quickBasicStats(){ try{return await window.__getBasicStats?.()??{volume_cm3:0,tmin_mm:null,tmax_mm:null};}catch{return {volume_cm3:0,tmin_mm:null,tmax_mm:null};} }
+async function __quickFaces(){ try{return await window.__getFaces?.()??[];}catch{return [];} }
 
-// Wrappers vers le viewer (fallback sûrs)
-async function __quickProjectedArea(axisLetter){
-  try { return await window.__getProjectedArea?.(axisLetter) ?? 0; } catch{ return 0; }
-}
-async function __quickBasicStats(){
-  try { return await window.__getBasicStats?.() ?? { volume_cm3:0, tmin_mm:null, tmax_mm:null }; }
-  catch{ return { volume_cm3:0, tmin_mm:null, tmax_mm:null }; }
-}
-async function __quickFaces(){
-  try { return await window.__getFaces?.() ?? []; } catch { return []; }
-}
-
-// ---- Checks rapides ----
-async function quickCheckDraft(axisLetter){
-  const ax = axisLetterToVec(axisLetter);
-  const faces = await __quickFaces();
-  let areaTot=0, areaKO=0, areaWarn=0;
-
-  // seuils génériques (affinés ensuite avec la matière dans runLocalPhaseA)
-  const thr = { external: 1.0, internal: 0.5 };
-
-  for (const f of faces){
-    const n = f.normal || [0,0,1];
-    const cos = dot3(n, ax);
-    // approx "dépouille" simplifiée : 90° - angle avec l’axe
-    const angDeg = Math.acos(Math.max(-1, Math.min(1, Math.abs(cos)))) * 180/Math.PI;
-    const draft = 90 - angDeg; // en degrés
-    areaTot += (f.area||0);
-    const need = (f.isExternal ? thr.external : thr.internal);
-    if (draft < need) areaKO += (f.area||0);
-    else if (draft < need + 0.5) areaWarn += (f.area||0);
+async function quickCheckDraft(axis){
+  const ax=axisLetterToVec(axis), faces=await __quickFaces();
+  let areaTot=0, areaKO=0, areaWarn=0; const thr={external:1.0,internal:0.5};
+  for(const f of faces){
+    const n=f.normal||[0,0,1]; const cos=dot3(n,ax);
+    const ang=Math.acos(Math.max(-1,Math.min(1,Math.abs(cos))))*180/Math.PI;
+    const draft=90-ang; areaTot+=(f.area||0); const need=(f.isExternal?thr.external:thr.internal);
+    if(draft<need) areaKO+=(f.area||0); else if(draft<need+0.5) areaWarn+=(f.area||0);
   }
-  const pctKO = areaTot ? (100*areaKO/areaTot) : 0;
-  const pctWarn = areaTot ? (100*areaWarn/areaTot) : 0;
-
+  const pctKO=areaTot?(100*areaKO/areaTot):0, pctWarn=areaTot?(100*areaWarn/areaTot):0;
   return [
-    { key:'draft_area_KO', label:'% surface sous dépouille', value:pctKO.toFixed(1), unit:'%', pass: pctKO<5, severity: pctKO>15?'fail':(pctKO>5?'warn':'ok'),
-      tips:['Augmenter la dépouille','Réduire le grain / revoir axe'] },
-    { key:'draft_area_warn', label:'% surface proche du seuil', value:pctWarn.toFixed(1), unit:'%', pass:true }
+    {key:'draft_area_KO',label:'% surface sous dépouille',value:pctKO.toFixed(1),unit:'%',pass:pctKO<5,severity:pctKO>15?'fail':(pctKO>5?'warn':'ok'),tips:['Augmenter la dépouille','Réduire le grain / revoir axe']},
+    {key:'draft_area_warn',label:'% surface proche du seuil',value:pctWarn.toFixed(1),unit:'%',pass:true}
   ];
 }
-
-async function quickUndercuts(axisLetter){
-  const ax = axisLetterToVec(axisLetter);
-  const faces = await __quickFaces();
-  const bad = faces.filter(f => dot3(f.normal||[0,0,1], ax) < -0.05);
-  const areaBad = bad.reduce((s,f)=>s+(f.area||0),0);
-  const areaTot = faces.reduce((s,f)=>s+(f.area||0),0);
-  const pct = areaTot ? (100*areaBad/areaTot) : 0;
-
+async function quickUndercuts(axis){
+  const ax=axisLetterToVec(axis), faces=await __quickFaces();
+  const bad=faces.filter(f=>dot3(f.normal||[0,0,1],ax)<-0.05);
+  const areaBad=bad.reduce((s,f)=>s+(f.area||0),0), areaTot=faces.reduce((s,f)=>s+(f.area||0),0);
+  const pct=areaTot?(100*areaBad/areaTot):0;
+  return [{key:'undercut_pct',label:'% surfaces en contre-dépouille',value:pct.toFixed(1),unit:'%',pass:pct<3,severity:pct>8?'fail':(pct>3?'warn':'ok'),tips:['Prévoir tiroir / split','Modifier plan de joint']}];
+}
+async function quickTonnage(axis,material){
+  const rules=getQuickMatRules(material), area_cm2=await __quickProjectedArea(axis);
+  const F_kN=(rules.P_inj_bar*1e5)*(area_cm2*1e-4)/1000; const tonnage=Math.ceil(F_kN/9.81); const pass=tonnage<=150;
   return [
-    { key:'undercut_pct', label:'% surfaces en contre-dépouille', value:pct.toFixed(1), unit:'%', pass: pct<3,
-      severity: pct>8?'fail':(pct>3?'warn':'ok'),
-      tips:['Prévoir tiroir / split','Modifier plan de joint'] }
+    {key:'proj_area',label:'Surface projetée',value:area_cm2.toFixed(1),unit:'cm²',pass:true},
+    {key:'tonnage',label:'Tonnage presse estimé',value:tonnage,unit:'T',pass,severity:pass?'ok':'warn',tips:pass?[]:['Réduire aire projetée / matière P_inj plus faible']}
   ];
 }
-
-async function quickTonnage(axisLetter, material){
-  const rules = getQuickMatRules(material);
-  const area_cm2 = await __quickProjectedArea(axisLetter);
-  const F_kN = (rules.P_inj_bar * 1e5) * (area_cm2 * 1e-4) / 1000;
-  const tonnage = Math.ceil(F_kN / 9.81);
-  const pass = tonnage <= 150;
-  return [
-    { key:'proj_area', label:'Surface projetée', value:area_cm2.toFixed(1), unit:'cm²', pass:true },
-    { key:'tonnage',   label:'Tonnage presse estimé', value:tonnage, unit:'T', pass, severity: pass?'ok':'warn',
-      tips: pass?[]:['Réduire aire projetée / privilégier matière à P_inj plus faible'] }
-  ];
-}
-
 async function quickMaterialVsThickness(material){
-  const rules = getQuickMatRules(material);
-  const s = await __quickBasicStats();
-  const okT = (s.tmin_mm ?? 0) >= rules.tmin;
+  const rules=getQuickMatRules(material), s=await __quickBasicStats();
+  const okT=(s.tmin_mm??0)>=rules.tmin;
   return [
-    { key:'mat_tmin_req', label:'Épaisseur mini matière', value:rules.tmin, unit:'mm', pass:true },
-    { key:'part_tmin',    label:'Épaisseur mini pièce',  value:s.tmin_mm, unit:'mm', pass:okT, severity: okT?'ok':'fail',
-      tips: okT?[]:[`Augmenter t_min à ≥ ${rules.tmin} mm`] }
+    {key:'mat_tmin_req',label:'Épaisseur mini matière',value:rules.tmin,unit:'mm',pass:true},
+    {key:'part_tmin',label:'Épaisseur mini pièce',value:s.tmin_mm,unit:'mm',pass:okT,severity:okT?'ok':'fail',tips:okT?[]:[`Augmenter t_min à ≥ ${rules.tmin} mm`]}
   ];
 }
-
-// ---- Orchestrateur local ----
 async function runLocalPhaseA(axisLetter){
+  console.info('[dfm quick] start with axis', axisLetter);
   try{
-    // annoncer la section quick
-    window.dispatchEvent(new CustomEvent('cadlytics:demould-axis-selected', { detail:{ axis: axisLetter }}));
+    window.dispatchEvent(new CustomEvent('cadlytics:demould-axis-selected',{detail:{axis:axisLetter}}));
     UI.progress(5);
-
-    const material = window.selectedMaterial || { id:'ABS', name:'ABS' };
-
-    const draft    = await quickCheckDraft(axisLetter);      UI.progress(15);
-    const undercut = await quickUndercuts(axisLetter);       UI.progress(25);
-    const tonnage  = await quickTonnage(axisLetter, material); UI.progress(35);
-    const thick    = await quickMaterialVsThickness(material); UI.progress(45);
-
-    // pousser dans l’aperçu (même event que le backend pour réutiliser la même UI)
-    window.dispatchEvent(new CustomEvent('cadlytics:dfm:report',{
-      detail:{
-        metrics: {
-          draft: draft,
-          undercut: undercut,
-          tonnage: tonnage,
-          thickness: thick
-        }
-      }
-    }));
-  }catch(e){
-    console.warn('[DFM quick] erreur', e);
-  }
+    const material=window.selectedMaterial||{id:'ABS',name:'ABS'};
+    const draft=await quickCheckDraft(axisLetter);   UI.progress(15);
+    const under=await quickUndercuts(axisLetter);    UI.progress(25);
+    const ton=await quickTonnage(axisLetter,material); UI.progress(35);
+    const thk=await quickMaterialVsThickness(material); UI.progress(45);
+    const payload={detail:{metrics:{draft:draft,undercut:under,tonnage:ton,thickness:thk}}};
+    console.info('[dfm quick] dispatch report', payload);
+    window.dispatchEvent(new CustomEvent('cadlytics:dfm:report', payload));
+  }catch(e){ console.warn('[dfm quick] error', e); }
 }
 // ========================================================================
 
@@ -706,8 +647,9 @@ class DFMOrchestrator {
 window.dispatchEvent(new CustomEvent('axis:confirmed', { detail: { axis, invert } }));
 const letter = vectorToAxisLetter(axis);
 window.dispatchEvent(new CustomEvent('cadlytics:demould-axis-selected', { detail: { axis: letter } }));
-// >>> NEW: lancer l’aperçu DFM local immédiat
-runLocalPhaseA(letter);
+
+// >>> APPEL IMMÉDIAT DE L’ANALYSE LOCALE
+runLocalPhaseA(letter).then(()=>console.info('[dfm quick] done'));
 
 // (la suite garde ton loader + appel serveur)
       panel.scrollIntoView({ behavior: 'smooth', block: 'center' });

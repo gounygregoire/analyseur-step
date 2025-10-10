@@ -851,6 +851,10 @@
 </script>
 
 <script>
+  console.log('[dfm ui] quick listener loaded');
+window.addEventListener('cadlytics:dfm:report', (e)=>console.log('[dfm ui] report evt', e.detail));
+window.addEventListener('cadlytics:demould-axis-selected', (e)=>console.log('[dfm ui] axis evt', e.detail));
+
 (function(){
   const sec = document.getElementById('dfmQuickSection');
   if (!sec) return;
