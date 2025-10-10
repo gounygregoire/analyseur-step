@@ -809,6 +809,58 @@ runLocalPhaseA(letter).then(()=>console.info('[dfm quick] done'));
       }
     );
   }
+    // === Heatmap dépouille (locale) — safe, init viewer si besoin ==========
+  async applyDraftHeatmap(draftMap = {}, opts = {}) {
+    try {
+      if (!draftMap || !Object.keys(draftMap).length) {
+        UI?.info?.("Pas de données de dépouille locales à afficher.");
+        return;
+      }
+
+      // 1) Assurer le viewer
+      if (!window.viewerAdapter?.viewer) {
+        // essaie d'initialiser avec le canvas existant
+        const canvas =
+          document.getElementById('xeokit-canvas') ||
+          document.getElementById('xktCanvas') ||
+          document.querySelector('canvas');
+        if (!canvas) {
+          UI?.err?.("Canvas viewer introuvable.");
+          return;
+        }
+        // init viewer si ton app expose initViewer
+        if (typeof window.initViewer === 'function') {
+          await window.initViewer({ canvasElement: canvas });
+        }
+      }
+
+      // 2) S'assurer que le fichier courant est chargé dans le viewer
+      const fileId = this.resolveFileId?.() || window.currentFileId || window.CAD?.fileIdStep;
+      if (fileId && window.viewerAdapter?.loadFromFileId) {
+        // convert est idempotent dans ton adapter ; au pire on ne fait rien
+        await window.viewerAdapter?.convert?.(fileId);
+        await window.viewerAdapter?.loadFromFileId?.(fileId);
+      }
+
+      if (!window.viewerAdapter?.viewer) {
+        UI?.err?.("Viewer non initialisé.");
+        return;
+      }
+
+      // 3) Appliquer la heatmap via HeatmapLayer (déjà importé dans ce module)
+      const layer = new HeatmapLayer(window.viewerAdapter);
+      // palette/scale optionnelles
+      const { min = 0, max = 5 } = opts; // 0–5° de dépouille par défaut
+      layer.apply(draftMap, { min, max }); // adapte si ta classe prend d'autres options
+
+      // petit feedback
+      StatusUI.set("Heatmap dépouille appliquée");
+    } catch (e) {
+      console.warn("[DFM] applyDraftHeatmap error", e);
+      UI?.err?.("Impossible d'appliquer la heatmap (voir console).");
+    }
+  }
+
   async renderResults(results = {}){
     StatusUI.set("Analyse terminée");
     this.setState(DFM_STATES.RESULTS);

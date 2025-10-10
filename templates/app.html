@@ -954,27 +954,19 @@ window.addEventListener('cadlytics:demould-axis-selected', (e)=>console.log('[df
     // Si aucune métrique reconnue, on laisse l’aperçu en "—" et l’utilisateur lit le panneau détaillé.
   });
 })();
-  // === HEATMAP DÉPOUILLE (locale) ======================================
-  function applyDraftHeatmapLocal() {
+    // === HEATMAP DÉPOUILLE (via orchestrateur) ============================
+  async function applyDraftHeatmapLocal() {
     const map = window.__quickDraftMap || {};
-    if (!window.viewerAdapter?.viewer) {
-      alert("Viewer non initialisé.");
-      return;
-    }
     if (!Object.keys(map).length) {
       alert("Pas de données locales de dépouille encore calculées.");
       return;
     }
-    try {
-      // Normalisation simple: valeur = draftDeg (0–~30)
-      const layer = new HeatmapLayer(window.viewerAdapter); // déjà importé côté orchestrateur
-      layer.apply(map); // si ton HeatmapLayer prend un mapping {face_id: value}
-    } catch (e) {
-      console.warn("Heatmap dépouille: erreur", e);
-      alert("Impossible d'appliquer la heatmap (voir console).");
-    }
+    // passer par l'orchestrateur (gère init viewer + load + HeatmapLayer)
+    await (window.DFMOrchestrator?.applyDraftHeatmap?.(map) || Promise.resolve());
   }
-  document.getElementById('dfmBtnHeatmapDraft')?.addEventListener('click', applyDraftHeatmapLocal);
+  document.getElementById('dfmBtnHeatmapDraft')
+    ?.addEventListener('click', applyDraftHeatmapLocal);
+
 
   // === PANNEAU CONSEILS ================================================
   const tipsPanel = document.getElementById('dfmTipsPanel');
