@@ -11,10 +11,10 @@
   <!-- Bootstrap CSS (pour la modale overlay) -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
 
-  <!-- Icônes Bootstrap (utilisées dans le bouton) -->
+  <!-- Icônes Bootstrap -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
 
-  <!-- Style léger pour le trièdre d'axes -->
+  <!-- Style léger pour le trièdre d’axes -->
   <style>
     .axis-overlay{
       position:absolute; left:18px; top:90px;
@@ -24,10 +24,9 @@
     }
   </style>
   <style>
-  #dfmAnalysisPanel .table-sm th, 
-  #dfmAnalysisPanel .table-sm td { vertical-align: middle; }
-</style>
-
+    #dfmAnalysisPanel .table-sm th, 
+    #dfmAnalysisPanel .table-sm td { vertical-align: middle; }
+  </style>
 </head>
 <body>
   <div class="wrap">
@@ -125,7 +124,7 @@
             </div>
           </div>
 
-          <!-- === Panneau Analyse === -->
+          <!-- === Panneau Analyse (métriques instantanées) === -->
           <div id="analysisPanel" class="pane" style="margin-top:12px;padding:10px;border-radius:10px;background:#fafafa;border:1px solid #eee">
             <div class="row mini" style="gap:16px;align-items:center;flex-wrap:wrap">
               <div style="display:flex;align-items:baseline;gap:6px">
@@ -173,7 +172,7 @@
           </div>
           <!-- === /Panneau Analyse === -->
 
-          <!-- Bouton Analyser -->
+          <!-- Barre Analyser -->
           <div id="analysisBar" class="analysis-bar" style="margin-top:12px; display:flex; gap:8px; align-items:center;">
             <button id="btnAnalyser" type="button" class="btn btn-success">🔎 Analyser</button>
             <span id="analysisHint" style="font-size:0.9rem; opacity:0.8;">
@@ -181,7 +180,7 @@
             </span>
           </div>
 
-          <!-- Progression -->
+          <!-- Progression globale -->
           <div class="row mini" style="margin-top:10px;opacity:.8">
             <div style="font-size:12px">Progression</div>
             <div style="flex:1;background:#eef0f3;height:6px;border-radius:4px;overflow:hidden">
@@ -194,197 +193,192 @@
     </div> <!-- /grid -->
   </div> <!-- /wrap -->
 
-<script>
-/* PROBE SAFE – aucune lecture de CSS. Expose __getFaces() */
-(function(){
-  function arr(x){ return x?.data || x?.array || x || null; }
-  function norm(v){ const L=Math.hypot(v[0],v[1],v[2])||1; return [v[0]/L,v[1]/L,v[2]/L]; }
-  const mul4=(m,[x,y,z])=>[ m[0]*x+m[4]*y+m[8]*z+m[12], m[1]*x+m[5]*y+m[9]*z+m[13], m[2]*x+m[6]*y+m[10]*z+m[14] ];
-  const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
-  const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
-  const vlen=v=>Math.hypot(v[0],v[1],v[2])||1;
+  <!-- === Probe SAFE : expose __getFaces() pour la Phase A locale === -->
+  <script>
+    (function(){
+      function arr(x){ return x?.data || x?.array || x || null; }
+      function norm(v){ const L=Math.hypot(v[0],v[1],v[2])||1; return [v[0]/L,v[1]/L,v[2]/L]; }
+      const mul4=(m,[x,y,z])=>[ m[0]*x+m[4]*y+m[8]*z+m[12], m[1]*x+m[5]*y+m[9]*z+m[13], m[2]*x+m[6]*y+m[10]*z+m[14] ];
+      const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+      const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+      const vlen=v=>Math.hypot(v[0],v[1],v[2])||1;
 
-  function collectMeshes(scene){
-    const ms=[];
-    if (!scene) return ms;
-    if (scene.meshes)  ms.push(...Object.values(scene.meshes));
-    if (scene.objects) ms.push(...Object.values(scene.objects));
-    if (scene._objects)ms.push(...Object.values(scene._objects));
-    if (typeof scene.iterate==='function') scene.iterate(o=>ms.push(o));
-    return ms.filter(Boolean);
-  }
-
-  function getGeomArrays(m){
-    const G = [
-      m.geometry, m._geometry, m._mesh?.geometry, m._rendererMesh?.geometry,
-      m._rendererNode?.geometry, m._state?.geometry
-    ].filter(Boolean);
-    for (const g of G){
-      let P = arr(g.positions || g._positions || g.vertexPositions || g._vertexPositions ||
-                  g.decompressedPositions || g.positionsDecompressed || g._state?.positions);
-      let I = arr(g.indices   || g._indices   || g.triangles       || g._triangles       || g._state?.indices);
-      if (!P && typeof g.getPositions==='function') { try{ P=g.getPositions(); }catch{} }
-      if (!I && typeof g.getIndices  ==='function') { try{ I=g.getIndices();   }catch{} }
-      P = arr(P); I = arr(I);
-      if (P && I && P.length && I.length) return {P,I};
-    }
-    return null;
-  }
-
-  function install(){
-    const viewer = window.viewerAdapter?.viewer;
-    if (!viewer?.scene) return false;
-
-    window.__getFaces = async function(){
-      const faces=[]; let tri=0; const MAX=40000;
-      const ms = collectMeshes(viewer.scene);
-      for (const m of ms){
-        const gi = getGeomArrays(m); if (!gi) continue;
-        const {P,I} = gi;
-        const wm = m.worldMatrix || m.matrix || [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
-        for (let i=0;i<I.length-2;i+=3){
-          const a=I[i]*3,b=I[i+1]*3,c=I[i+2]*3;
-          if (c+2>=P.length) break;
-          const p0=mul4(wm,[P[a],P[a+1],P[a+2]]);
-          const p1=mul4(wm,[P[b],P[b+1],P[b+2]]);
-          const p2=mul4(wm,[P[c],P[c+1],P[c+2]]);
-          const e1=sub(p1,p0), e2=sub(p2,p0);
-          const n=norm(cross(e1,e2)); const area=0.5*vlen(cross(e1,e2));
-          faces.push({ id: tri, normal:n, area });
-          if (++tri>=MAX) break;
-        }
-        if (tri>=MAX) break;
+      function collectMeshes(scene){
+        const ms=[];
+        if (!scene) return ms;
+        if (scene.meshes)  ms.push(...Object.values(scene.meshes));
+        if (scene.objects) ms.push(...Object.values(scene.objects));
+        if (scene._objects)ms.push(...Object.values(scene._objects));
+        if (typeof scene.iterate==='function') scene.iterate(o=>ms.push(o));
+        return ms.filter(Boolean);
       }
-      console.log('[probe safe] faces =', faces.length);
-      return faces;
-    };
 
-    console.log('[probe safe] installed');
-    return true;
-  }
+      function getGeomArrays(m){
+        const G = [
+          m.geometry, m._geometry, m._mesh?.geometry, m._rendererMesh?.geometry,
+          m._rendererNode?.geometry, m._state?.geometry
+        ].filter(Boolean);
+        for (const g of G){
+          let P = arr(g.positions || g._positions || g.vertexPositions || g._vertexPositions ||
+                      g.decompressedPositions || g.positionsDecompressed || g._state?.positions);
+          let I = arr(g.indices   || g._indices   || g.triangles       || g._triangles       || g._state?.indices);
+          if (!P && typeof g.getPositions==='function') { try{ P=g.getPositions(); }catch{} }
+          if (!I && typeof g.getIndices  ==='function') { try{ I=g.getIndices();   }catch{} }
+          P = arr(P); I = arr(I);
+          if (P && I && P.length && I.length) return {P,I};
+        }
+        return null;
+      }
 
-  let tries=0;
-  const t=setInterval(()=>{ if (install()) { clearInterval(t); } else if (++tries>60) clearInterval(t); }, 500);
-})();
-</script>
+      function install(){
+        const viewer = window.viewerAdapter?.viewer;
+        if (!viewer?.scene) return false;
 
+        window.__getFaces = async function(){
+          const faces=[]; let tri=0; const MAX=40000;
+          const ms = collectMeshes(viewer.scene);
+          for (const m of ms){
+            const gi = getGeomArrays(m); if (!gi) continue;
+            const {P,I} = gi;
+            const wm = m.worldMatrix || m.matrix || [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
+            for (let i=0;i<I.length-2;i+=3){
+              const a=I[i]*3,b=I[i+1]*3,c=I[i+2]*3;
+              if (c+2>=P.length) break;
+              const p0=mul4(wm,[P[a],P[a+1],P[a+2]]);
+              const p1=mul4(wm,[P[b],P[b+1],P[b+2]]);
+              const p2=mul4(wm,[P[c],P[c+1],P[c+2]]);
+              const e1=sub(p1,p0), e2=sub(p2,p0);
+              const n=norm(cross(e1,e2)); const area=0.5*vlen(cross(e1,e2));
+              faces.push({ id: tri, normal:n, area });
+              if (++tri>=MAX) break;
+            }
+            if (tri>=MAX) break;
+          }
+          console.log('[probe safe] faces =', faces.length);
+          return faces;
+        };
 
+        console.log('[probe safe] installed');
+        return true;
+      }
 
-<!-- === Aperçu DFM rapide (Phase A) === -->
-<div id="dfmQuickSection" class="pane" style="display:none; margin-top:12px; padding:10px; border-radius:10px; background:#f7fafc; border:1px solid #e6ebf2">
-  <div class="row" style="gap:10px; align-items:stretch; flex-wrap:wrap">
-    <div class="col" style="min-width:220px">
-      <div class="card h-100" id="dfmCardDraft">
-        <div class="card-body">
-          <div class="d-flex justify-content-between align-items-center">
-            <h6 class="mb-0">Dépouilles</h6>
-            <span class="badge bg-secondary" id="dfmBadgeDraft">—</span>
+      let tries=0;
+      const t=setInterval(()=>{ if (install()) { clearInterval(t); } else if (++tries>60) clearInterval(t); }, 500);
+    })();
+  </script>
+
+  <!-- === Aperçu DFM rapide (Phase A) === -->
+  <div id="dfmQuickSection" class="pane" style="display:none; margin-top:12px; padding:10px; border-radius:10px; background:#f7fafc; border:1px solid #e6ebf2">
+    <div class="row" style="gap:10px; align-items:stretch; flex-wrap:wrap">
+      <div class="col" style="min-width:220px">
+        <div class="card h-100" id="dfmCardDraft">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center">
+              <h6 class="mb-0">Dépouilles</h6>
+              <span class="badge bg-secondary" id="dfmBadgeDraft">—</span>
+            </div>
+            <ul class="list-unstyled small mt-2" id="dfmListDraft"><li class="text-muted">En attente…</li></ul>
           </div>
-          <ul class="list-unstyled small mt-2" id="dfmListDraft"><li class="text-muted">En attente…</li></ul>
+        </div>
+      </div>
+      <div class="col" style="min-width:220px">
+        <div class="card h-100" id="dfmCardUndercut">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center">
+              <h6 class="mb-0">Contre-dépouilles</h6>
+              <span class="badge bg-secondary" id="dfmBadgeUndercut">—</span>
+            </div>
+            <ul class="list-unstyled small mt-2" id="dfmListUndercut"><li class="text-muted">En attente…</li></ul>
+          </div>
+        </div>
+      </div>
+      <div class="col" style="min-width:220px">
+        <div class="card h-100" id="dfmCardTonnage">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center">
+              <h6 class="mb-0">Tonnage</h6>
+              <span class="badge bg-secondary" id="dfmBadgeTonnage">—</span>
+            </div>
+            <ul class="list-unstyled small mt-2" id="dfmListTonnage"><li class="text-muted">En attente…</li></ul>
+          </div>
+        </div>
+      </div>
+      <div class="col" style="min-width:220px">
+        <div class="card h-100" id="dfmCardThickness">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center">
+              <h6 class="mb-0">Épaisseurs</h6>
+              <span class="badge bg-secondary" id="dfmBadgeThickness">—</span>
+            </div>
+            <ul class="list-unstyled small mt-2" id="dfmListThickness"><li class="text-muted">En attente…</li></ul>
+          </div>
         </div>
       </div>
     </div>
-    <div class="col" style="min-width:220px">
-      <div class="card h-100" id="dfmCardUndercut">
-        <div class="card-body">
-          <div class="d-flex justify-content-between align-items-center">
-            <h6 class="mb-0">Contre-dépouilles</h6>
-            <span class="badge bg-secondary" id="dfmBadgeUndercut">—</span>
-          </div>
-          <ul class="list-unstyled small mt-2" id="dfmListUndercut"><li class="text-muted">En attente…</li></ul>
-        </div>
-      </div>
-    </div>
-    <div class="col" style="min-width:220px">
-      <div class="card h-100" id="dfmCardTonnage">
-        <div class="card-body">
-          <div class="d-flex justify-content-between align-items-center">
-            <h6 class="mb-0">Tonnage</h6>
-            <span class="badge bg-secondary" id="dfmBadgeTonnage">—</span>
-          </div>
-          <ul class="list-unstyled small mt-2" id="dfmListTonnage"><li class="text-muted">En attente…</li></ul>
-        </div>
-      </div>
-    </div>
-    <div class="col" style="min-width:220px">
-      <div class="card h-100" id="dfmCardThickness">
-        <div class="card-body">
-          <div class="d-flex justify-content-between align-items-center">
-            <h6 class="mb-0">Épaisseurs</h6>
-            <span class="badge bg-secondary" id="dfmBadgeThickness">—</span>
-          </div>
-          <ul class="list-unstyled small mt-2" id="dfmListThickness"><li class="text-muted">En attente…</li></ul>
-        </div>
-      </div>
-    </div>
-  </div>
 
-  <!-- mini progression (branchée sur l’event cadlytics:dfm:progress) -->
-  <div class="progress mt-3">
-    <div id="dfmQuickProgress" class="progress-bar progress-bar-striped" style="width:0%"></div>
-  </div>
+    <!-- mini progression (branchée sur l’event cadlytics:dfm:progress) -->
+    <div class="progress mt-3">
+      <div id="dfmQuickProgress" class="progress-bar progress-bar-striped" style="width:0%"></div>
+    </div>
+
     <!-- Actions rapides -->
-  <div class="d-flex align-items-center gap-2 mt-3">
-    <button id="dfmBtnHeatmapDraft" class="btn btn-outline-primary btn-sm">
-      Heatmap dépouille (instantané)
-    </button>
-    <button id="dfmBtnToggleTips" class="btn btn-outline-secondary btn-sm">
-      Voir les conseils
-    </button>
-  </div>
+    <div class="d-flex align-items-center gap-2 mt-3">
+      <button id="dfmBtnHeatmapDraft" class="btn btn-outline-primary btn-sm">
+        Heatmap dépouille (instantané)
+      </button>
+      <button id="dfmBtnToggleTips" class="btn btn-outline-secondary btn-sm">
+        Voir les conseils
+      </button>
+    </div>
 
-  <!-- Panneau Conseils -->
-  <div id="dfmTipsPanel" class="mt-2" style="display:none">
-    <div class="card">
-      <div class="card-body">
-        <h6 class="mb-2">Conseils</h6>
-        <ul id="dfmTipsList" class="small mb-0"></ul>
+    <!-- Panneau Conseils -->
+    <div id="dfmTipsPanel" class="mt-2" style="display:none">
+      <div class="card">
+        <div class="card-body">
+          <h6 class="mb-2">Conseils</h6>
+          <ul id="dfmTipsList" class="small mb-0"></ul>
+        </div>
       </div>
     </div>
   </div>
+  <!-- === /Aperçu DFM rapide === -->
 
-</div>
-<!-- === /Aperçu DFM rapide === -->
-
-<!-- === Résultats DFM (caché tant que rien n'est lancé) === -->
-<div id="dfmResultsSection" class="pane" style="display:none; margin-top:12px; padding:10px; border-radius:10px; background:#fafafa; border:1px solid #eee">
-  <div id="dfmAnalysisPanel"><!-- rempli par DFMOrchestrator.js --></div>
-</div>
-<!-- === /Résultats DFM === -->
-
-  <!-- === Zone Axe de démoulage (cachée tant que l'analyse matière n'est pas faite) === -->
-<div id="demouldHost" class="pane" style="margin-top:12px; display:none; padding:10px; border-radius:10px; background:#f8fbff; border:1px solid #dbeafe">
-  <div class="row mini" style="gap:12px; align-items:center; flex-wrap:wrap">
-    <div style="font-weight:600;">Axe de démoulage</div>
-    <div id="demouldConfMsg" class="small" style="opacity:.8;">—</div>
+  <!-- === Résultats DFM === -->
+  <div id="dfmResultsSection" class="pane" style="display:none; margin-top:12px; padding:10px; border-radius:10px; background:#fafafa; border:1px solid #eee">
+    <div id="dfmAnalysisPanel"></div>
   </div>
+  <!-- === /Résultats DFM === -->
 
-  <div class="row mini" style="gap:14px; align-items:center; flex-wrap:wrap; margin-top:6px">
-    <label style="display:flex; align-items:center; gap:6px">
-      <input type="radio" name="demAxis" value="X"> <span>X</span>
-    </label>
-    <label style="display:flex; align-items:center; gap:6px">
-      <input type="radio" name="demAxis" value="Y"> <span>Y</span>
-    </label>
-    <label style="display:flex; align-items:center; gap:6px">
-      <input type="radio" name="demAxis" value="Z" checked> <span>Z</span>
-    </label>
+  <!-- === Zone Axe de démoulage === -->
+  <div id="demouldHost" class="pane" style="margin-top:12px; display:none; padding:10px; border-radius:10px; background:#f8fbff; border:1px solid #dbeafe">
+    <div class="row mini" style="gap:12px; align-items:center; flex-wrap:wrap">
+      <div style="font-weight:600;">Axe de démoulage</div>
+      <div id="demouldConfMsg" class="small" style="opacity:.8;">—</div>
+    </div>
 
-    <button id="btnAutoDemAxis" type="button" class="btn btn-outline mini">AUTO (détecter)</button>
-    <button id="btnSetDemAxis" type="button" class="btn btn-primary mini">Valider l’axe</button>
+    <div class="row mini" style="gap:14px; align-items:center; flex-wrap:wrap; margin-top:6px">
+      <label style="display:flex; align-items:center; gap:6px">
+        <input type="radio" name="demAxis" value="X"> <span>X</span>
+      </label>
+      <label style="display:flex; align-items:center; gap:6px">
+        <input type="radio" name="demAxis" value="Y"> <span>Y</span>
+      </label>
+      <label style="display:flex; align-items:center; gap:6px">
+        <input type="radio" name="demAxis" value="Z" checked> <span>Z</span>
+      </label>
 
-    <span class="small" style="opacity:.8;">Astuce : la direction de démoulage doit être perpendiculaire au plan de joint principal.</span>
+      <button id="btnAutoDemAxis" type="button" class="btn btn-outline mini">AUTO (détecter)</button>
+      <button id="btnSetDemAxis" type="button" class="btn btn-primary mini">Valider l’axe</button>
+
+      <span class="small" style="opacity:.8;">Astuce : la direction de démoulage doit être perpendiculaire au plan de joint principal.</span>
+    </div>
   </div>
-</div>
-<!-- === /Zone Axe de démoulage === -->
+  <!-- === /Zone Axe de démoulage === -->
 
-
-
-
-  <!-- IMPORTANT : main.js est un module car il contient des "import" -->
+  <!-- === main.js (module) : viewerAdapter, I/O, UI de base === -->
   <script type="module" src="/static/js/main.js"></script>
 
-  <!-- Dessin trièdre (inchangé) -->
+  <!-- === Trièdre simple (dessin initial) === -->
   <script type="module">
     function drawAxes(selected='Z'){
       const canvas = document.getElementById('axisCanvas');
@@ -420,6 +414,7 @@
     });
   </script>
 
+  <!-- === Trièdre dynamique (suivi vue) === -->
   <script type="module">
     (function(){
       const canvas = document.getElementById('axisCanvas');
@@ -474,414 +469,412 @@
     })();
   </script>
 
+  <!-- Ping (keep-alive/dev) -->
   <script type="module" src="/static/js/ping.js"></script>
 
   <!-- ===================== MODALE MATIÈRE (Bootstrap) ===================== -->
-<div id="materialModal" class="modal fade" tabindex="-1" aria-hidden="true" data-role="material" data-bs-backdrop="static" aria-labelledby="materialModalTitle">
-  <div class="modal-dialog modal-xl modal-dialog-scrollable">
-    <div class="modal-content">
+  <div id="materialModal" class="modal fade" tabindex="-1" aria-hidden="true" data-role="material" data-bs-backdrop="static" aria-labelledby="materialModalTitle">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+      <div class="modal-content">
 
-      <!-- Header -->
-      <div class="modal-header">
-        <div class="d-flex align-items-center gap-3">
-          <h5 id="materialModalTitle" class="modal-title mb-0">Critères matière</h5>
+        <!-- Header -->
+        <div class="modal-header">
+          <div class="d-flex align-items-center gap-3">
+            <h5 id="materialModalTitle" class="modal-title mb-0">Critères matière</h5>
 
-          <!-- Presets -->
-          <div class="input-group input-group-sm" style="width:auto;">
-            <span class="input-group-text">Preset</span>
-            <select id="materialPreset" class="form-select form-select-sm">
-              <option value="">— choisir —</option>
-              <option value="outdoor_uv">Capot extérieur (UV/Intempéries)</option>
-              <option value="clip_flexible">Pièce clipsée / flexion</option>
-              <option value="medical_sterile">Médical stérilisable</option>
-              <option value="charniere_film">Charnière film</option>
-              <option value="optique_transparente">Transparence optique</option>
-              <option value="electrique_cti">Électrique CTI élevé</option>
-            </select>
+            <!-- Presets -->
+            <div class="input-group input-group-sm" style="width:auto;">
+              <span class="input-group-text">Preset</span>
+              <select id="materialPreset" class="form-select form-select-sm">
+                <option value="">— choisir —</option>
+                <option value="outdoor_uv">Capot extérieur (UV/Intempéries)</option>
+                <option value="clip_flexible">Pièce clipsée / flexion</option>
+                <option value="medical_sterile">Médical stérilisable</option>
+                <option value="charniere_film">Charnière film</option>
+                <option value="optique_transparente">Transparence optique</option>
+                <option value="electrique_cti">Électrique CTI élevé</option>
+              </select>
+            </div>
+          </div>
+
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
+        </div>
+
+        <!-- Body -->
+        <div class="modal-body">
+          <form id="materialQuestionnaireForm" class="pb-2">
+            <!-- Résumé dynamique -->
+            <div id="criteriaSummary" class="small text-muted mb-3">
+              <span class="me-3"><span class="badge bg-success-subtle border text-success" id="critOK">Validés: 0</span></span>
+              <span class="me-3"><span class="badge bg-warning-subtle border text-warning" id="critWARN">Avertissements: 0</span></span>
+              <span><span class="badge bg-danger-subtle border text-danger" id="critBLOCK">Bloquants: 0</span></span>
+            </div>
+
+            <!-- ===== Contexte d’usage ===== -->
+            <fieldset class="mb-4">
+              <legend class="fs-6 mb-2">Contexte d’usage</legend>
+
+              <div class="row g-3">
+                <!-- Température service -->
+                <div class="col-12 col-md-6">
+                  <label for="tempServiceMax" class="form-label mb-1">Température service max (°C)</label>
+                  <div class="d-flex align-items-center gap-2">
+                    <input type="range" class="form-range" id="tempServiceMax" min="20" max="200" step="5" value="60">
+                    <span class="badge bg-light border text-muted" id="tempServiceMaxVal">60°C</span>
+                  </div>
+                </div>
+
+                <!-- Exposition UV -->
+                <div class="col-6 col-md-3">
+                  <div class="form-check form-switch mt-4">
+                    <input class="form-check-input" type="checkbox" id="expoUV">
+                    <label class="form-check-label" for="expoUV">Exposition UV / extérieur</label>
+                  </div>
+                </div>
+
+                <!-- Humidité / immersion -->
+                <div class="col-6 col-md-3">
+                  <div class="form-check form-switch mt-4">
+                    <input class="form-check-input" type="checkbox" id="expoHumidite">
+                    <label class="form-check-label" for="expoHumidite">Humidité / immersion</label>
+                  </div>
+                </div>
+
+                <!-- Chimie -->
+                <div class="col-12">
+                  <label class="form-label mb-1">Exposition chimique</label>
+                  <div class="d-flex flex-wrap gap-2" id="chimieTags">
+                    <input type="checkbox" class="btn-check" id="chem_huiles" autocomplete="off">
+                    <label class="btn btn-sm btn-outline-secondary" for="chem_huiles">Huiles</label>
+
+                    <input type="checkbox" class="btn-check" id="chem_solvents" autocomplete="off">
+                    <label class="btn btn-sm btn-outline-secondary" for="chem_solvents">Solvants</label>
+
+                    <input type="checkbox" class="btn-check" id="chem_alcool" autocomplete="off">
+                    <label class="btn btn-sm btn-outline-secondary" for="chem_alcool">Alcool</label>
+
+                    <input type="checkbox" class="btn-check" id="chem_detergents" autocomplete="off">
+                    <label class="btn btn-sm btn-outline-secondary" for="chem_detergents">Détergents</label>
+
+                    <input type="checkbox" class="btn-check" id="chem_eausalee" autocomplete="off">
+                    <label class="btn btn-sm btn-outline-secondary" for="chem_eausalee">Eau salée</label>
+                  </div>
+                </div>
+              </div>
+            </fieldset>
+
+            <!-- ===== Réglementaire & coût ===== -->
+            <fieldset class="mb-4">
+              <legend class="fs-6 mb-2">Réglementaire & coût</legend>
+              <div class="row g-3">
+                <div class="col-12 col-md-4">
+                  <label for="ul94" class="form-label mb-1">UL94 (inflammabilité)</label>
+                  <select id="ul94" class="form-select form-select-sm">
+                    <option value="">Indifférent</option>
+                    <option value="HB">HB</option>
+                    <option value="V-2">V-2</option>
+                    <option value="V-1">V-1</option>
+                    <option value="V-0">V-0</option>
+                  </select>
+                </div>
+
+                <div class="col-12 col-md-4">
+                  <label for="prixCible" class="form-label mb-1">Prix cible (€/kg)</label>
+                  <div class="d-flex align-items-center gap-2">
+                    <input type="range" class="form-range" id="prixCible" min="2" max="60" step="1" value="8">
+                    <span class="badge bg-light border text-muted" id="prixCibleVal">8 €/kg</span>
+                  </div>
+                </div>
+
+                <div class="col-12 col-md-4">
+                  <label for="regionConformite" class="form-label mb-1">Zone / Conformité</label>
+                  <select id="regionConformite" class="form-select form-select-sm">
+                    <option value="">Indifférent</option>
+                    <option value="UE">UE (REACH/ROHS, EU 10/2011)</option>
+                    <option value="US">US (FDA, UL, Prop65)</option>
+                  </select>
+                </div>
+              </div>
+            </fieldset>
+
+            <!-- ===== Process & pièce ===== -->
+            <fieldset class="mb-4">
+              <legend class="fs-6 mb-2">Process & pièce</legend>
+              <div class="row g-3">
+                <div class="col-12 col-md-4">
+                  <label for="process" class="form-label mb-1">Process envisagé</label>
+                  <select id="process" class="form-select form-select-sm">
+                    <option value="injection">Injection plastique</option>
+                    <option value="usinage">Usinage</option>
+                    <option value="impression3d">Impression 3D</option>
+                  </select>
+                </div>
+                <div class="col-12 col-md-4">
+                  <label for="epMin" class="form-label mb-1">Épaisseur pièce (min, mm)</label>
+                  <input id="epMin" type="number" step="0.1" min="0" class="form-control form-control-sm" placeholder="ex. 0.8">
+                </div>
+                <div class="col-12 col-md-4">
+                  <label for="features" class="form-label mb-1">Spécificités</label>
+                  <select id="features" class="form-select form-select-sm" multiple>
+                    <option value="snapfits">Encliquetages</option>
+                    <option value="hinge">Charnière film</option>
+                    <option value="overmold">Surmoulage</option>
+                    <option value="transparent">Zone transparente</option>
+                    <option value="inserts">Inserts laiton</option>
+                  </select>
+                </div>
+              </div>
+            </fieldset>
+
+            <!-- ===== Contraintes mécaniques ===== -->
+            <fieldset class="mb-3">
+              <legend class="fs-6 mb-2">Contraintes mécaniques</legend>
+
+              <div class="row g-2 align-items-center mb-1">
+                <div class="col">
+                  <div class="form-check">
+                    <input class="form-check-input criterion" type="checkbox" id="rigidite_elevee" data-section="meca">
+                    <label class="form-check-label" for="rigidite_elevee">Rigidité élevée</label>
+                  </div>
+                </div>
+                <div class="col-auto">
+                  <select class="form-select form-select-sm priority" data-for="rigidite_elevee">
+                    <option value="should">Should</option>
+                    <option value="must">Must</option>
+                    <option value="nice">Nice</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="row g-2 align-items-center mb-1">
+                <div class="col">
+                  <div class="form-check">
+                    <input class="form-check-input criterion" type="checkbox" id="flexibilite" data-section="meca">
+                    <label class="form-check-label" for="flexibilite">Flexibilité</label>
+                  </div>
+                </div>
+                <div class="col-auto">
+                  <select class="form-select form-select-sm priority" data-for="flexibilite">
+                    <option value="should">Should</option>
+                    <option value="must">Must</option>
+                    <option value="nice">Nice</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="row g-2 align-items-center mb-1">
+                <div class="col">
+                  <div class="form-check">
+                    <input class="form-check-input criterion" type="checkbox" id="resistance_chocs" data-section="meca">
+                    <label class="form-check-label" for="resistance_chocs">Résistance aux chocs</label>
+                  </div>
+                </div>
+                <div class="col-auto">
+                  <select class="form-select form-select-sm priority" data-for="resistance_chocs">
+                    <option value="should">Should</option>
+                    <option value="must">Must</option>
+                    <option value="nice">Nice</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="row g-2 align-items-center mb-1">
+                <div class="col">
+                  <div class="form-check">
+                    <input class="form-check-input criterion" type="checkbox" id="flexion" data-section="meca">
+                    <label class="form-check-label" for="flexion">Flexion</label>
+                  </div>
+                </div>
+                <div class="col-auto">
+                  <select class="form-select form-select-sm priority" data-for="flexion">
+                    <option value="should">Should</option>
+                    <option value="must">Must</option>
+                    <option value="nice">Nice</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="row g-2 align-items-center mb-1">
+                <div class="col">
+                  <div class="form-check">
+                    <input class="form-check-input criterion" type="checkbox" id="traction" data-section="meca">
+                    <label class="form-check-label" for="traction">Traction</label>
+                  </div>
+                </div>
+                <div class="col-auto">
+                  <select class="form-select form-select-sm priority" data-for="traction">
+                    <option value="should">Should</option>
+                    <option value="must">Must</option>
+                    <option value="nice">Nice</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="row g-2 align-items-center mb-1">
+                <div class="col">
+                  <div class="form-check">
+                    <input class="form-check-input criterion" type="checkbox" id="usure" data-section="meca">
+                    <label class="form-check-label" for="usure">Usure / frottement</label>
+                  </div>
+                </div>
+                <div class="col-auto">
+                  <select class="form-select form-select-sm priority" data-for="usure">
+                    <option value="should">Should</option>
+                    <option value="must">Must</option>
+                    <option value="nice">Nice</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="row g-2 align-items-center">
+                <div class="col">
+                  <div class="form-check">
+                    <input class="form-check-input criterion" type="checkbox" id="fatigue" data-section="meca">
+                    <label class="form-check-label" for="fatigue">Fatigue</label>
+                  </div>
+                </div>
+                <div class="col-auto">
+                  <select class="form-select form-select-sm priority" data-for="fatigue">
+                    <option value="should">Should</option>
+                    <option value="must">Must</option>
+                    <option value="nice">Nice</option>
+                  </select>
+                </div>
+              </div>
+            </fieldset>
+
+            <!-- ===== Esthétique ===== -->
+            <fieldset class="mb-4">
+              <legend class="fs-6 mb-2">Esthétique</legend>
+
+              <div class="row g-2 align-items-center mb-1">
+                <div class="col">
+                  <div class="form-check">
+                    <input class="form-check-input criterion" type="checkbox" id="transparence" data-section="aesthetic">
+                    <label class="form-check-label" for="transparence">Transparence</label>
+                  </div>
+                </div>
+                <div class="col-auto">
+                  <select class="form-select form-select-sm priority" data-for="transparence">
+                    <option value="should">Should</option>
+                    <option value="must">Must</option>
+                    <option value="nice">Nice</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="row g-2 align-items-center mb-1">
+                <div class="col">
+                  <div class="form-check">
+                    <input class="form-check-input criterion" type="checkbox" id="qualite_surface" data-section="aesthetic">
+                    <label class="form-check-label" for="qualite_surface">Qualité de surface</label>
+                  </div>
+                </div>
+                <div class="col-auto">
+                  <select class="form-select form-select-sm priority" data-for="qualite_surface">
+                    <option value="should">Should</option>
+                    <option value="must">Must</option>
+                    <option value="nice">Nice</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="row g-2 align-items-center mb-1">
+                <div class="col">
+                  <div class="form-check">
+                    <input class="form-check-input criterion" type="checkbox" id="texture_possible" data-section="aesthetic">
+                    <label class="form-check-label" for="texture_possible">Texture possible</label>
+                  </div>
+                </div>
+                <div class="col-auto">
+                  <select class="form-select form-select-sm priority" data-for="texture_possible">
+                    <option value="should">Should</option>
+                    <option value="must">Must</option>
+                    <option value="nice">Nice</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="row g-2 align-items-center">
+                <div class="col">
+                  <div class="form-check">
+                    <input class="form-check-input criterion" type="checkbox" id="finition_bril" data-section="aesthetic">
+                    <label class="form-check-label" for="finition_bril">Finition brillante</label>
+                  </div>
+                </div>
+                <div class="col-auto">
+                  <select class="form-select form-select-sm priority" data-for="finition_bril">
+                    <option value="should">Should</option>
+                    <option value="must">Must</option>
+                    <option value="nice">Nice</option>
+                  </select>
+                </div>
+              </div>
+            </fieldset>
+
+            <!-- ===== Réglementaire (déclarations) ===== -->
+            <fieldset class="mb-2">
+              <legend class="fs-6 mb-2">Réglementaire (déclarations)</legend>
+              <div class="row g-3">
+                <div class="col-6 col-md-3">
+                  <div class="form-check">
+                    <input class="form-check-input criterion" type="checkbox" id="contact_alimentaire" data-section="regulatory">
+                    <label class="form-check-label" for="contact_alimentaire">Contact alimentaire</label>
+                  </div>
+                </div>
+                <div class="col-6 col-md-3">
+                  <div class="form-check">
+                    <input class="form-check-input criterion" type="checkbox" id="qualite_medicale" data-section="regulatory">
+                    <label class="form-check-label" for="qualite_medicale">Qualité médicale</label>
+                  </div>
+                </div>
+                <div class="col-6 col-md-3">
+                  <div class="form-check">
+                    <input class="form-check-input criterion" type="checkbox" id="retardateur_flamme" data-section="regulatory">
+                    <label class="form-check-label" for="retardateur_flamme">Retardateur de flamme</label>
+                  </div>
+                </div>
+                <div class="col-6 col-md-3">
+                  <div class="form-check">
+                    <input class="form-check-input criterion" type="checkbox" id="proprietes_elec" data-section="regulatory">
+                    <label class="form-check-label" for="proprietes_elec">Propriétés électriques</label>
+                  </div>
+                </div>
+              </div>
+            </fieldset>
+          </form>
+
+          <!-- Alerte conflits -->
+          <div id="criteriaConflicts" class="alert alert-warning d-none small mb-3">
+            <i class="bi bi-exclamation-triangle me-2"></i>
+            Certains choix semblent en conflit (ex. Transparence stricte + charge GF). Ajuste les priorités.
+          </div>
+
+          <!-- Shortlist -->
+          <div id="materialShortlist" class="d-none">
+            <hr class="my-3">
+            <h6 class="mb-2">Top 3 matières recommandées</h6>
+            <div id="shortlistCards" class="row g-3"></div>
+            <details class="mt-2">
+              <summary class="small">Pourquoi ces recommandations ?</summary>
+              <div id="whyReco" class="small text-muted mt-2"></div>
+            </details>
           </div>
         </div>
 
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
-      </div>
-
-      <!-- Body -->
-      <div class="modal-body">
-        <form id="materialQuestionnaireForm" class="pb-2">
-
-          <!-- Résumé dynamique -->
-          <div id="criteriaSummary" class="small text-muted mb-3">
-            <span class="me-3"><span class="badge bg-success-subtle border text-success" id="critOK">Validés: 0</span></span>
-            <span class="me-3"><span class="badge bg-warning-subtle border text-warning" id="critWARN">Avertissements: 0</span></span>
-            <span><span class="badge bg-danger-subtle border text-danger" id="critBLOCK">Bloquants: 0</span></span>
-          </div>
-
-          <!-- ===== Contexte d’usage ===== -->
-          <fieldset class="mb-4">
-            <legend class="fs-6 mb-2">Contexte d’usage</legend>
-
-            <div class="row g-3">
-              <!-- Température service -->
-              <div class="col-12 col-md-6">
-                <label for="tempServiceMax" class="form-label mb-1">Température service max (°C)</label>
-                <div class="d-flex align-items-center gap-2">
-                  <input type="range" class="form-range" id="tempServiceMax" min="20" max="200" step="5" value="60">
-                  <span class="badge bg-light border text-muted" id="tempServiceMaxVal">60°C</span>
-                </div>
-              </div>
-
-              <!-- Exposition UV -->
-              <div class="col-6 col-md-3">
-                <div class="form-check form-switch mt-4">
-                  <input class="form-check-input" type="checkbox" id="expoUV">
-                  <label class="form-check-label" for="expoUV">Exposition UV / extérieur</label>
-                </div>
-              </div>
-
-              <!-- Humidité / immersion -->
-              <div class="col-6 col-md-3">
-                <div class="form-check form-switch mt-4">
-                  <input class="form-check-input" type="checkbox" id="expoHumidite">
-                  <label class="form-check-label" for="expoHumidite">Humidité / immersion</label>
-                </div>
-              </div>
-
-              <!-- Chimie -->
-              <div class="col-12">
-                <label class="form-label mb-1">Exposition chimique</label>
-                <div class="d-flex flex-wrap gap-2" id="chimieTags">
-                  <input type="checkbox" class="btn-check" id="chem_huiles" autocomplete="off">
-                  <label class="btn btn-sm btn-outline-secondary" for="chem_huiles">Huiles</label>
-
-                  <input type="checkbox" class="btn-check" id="chem_solvents" autocomplete="off">
-                  <label class="btn btn-sm btn-outline-secondary" for="chem_solvents">Solvants</label>
-
-                  <input type="checkbox" class="btn-check" id="chem_alcool" autocomplete="off">
-                  <label class="btn btn-sm btn-outline-secondary" for="chem_alcool">Alcool</label>
-
-                  <input type="checkbox" class="btn-check" id="chem_detergents" autocomplete="off">
-                  <label class="btn btn-sm btn-outline-secondary" for="chem_detergents">Détergents</label>
-
-                  <input type="checkbox" class="btn-check" id="chem_eausalee" autocomplete="off">
-                  <label class="btn btn-sm btn-outline-secondary" for="chem_eausalee">Eau salée</label>
-                </div>
-              </div>
-            </div>
-          </fieldset>
-
-          <!-- ===== Réglementaire & coût ===== -->
-          <fieldset class="mb-4">
-            <legend class="fs-6 mb-2">Réglementaire & coût</legend>
-            <div class="row g-3">
-              <div class="col-12 col-md-4">
-                <label for="ul94" class="form-label mb-1">UL94 (inflammabilité)</label>
-                <select id="ul94" class="form-select form-select-sm">
-                  <option value="">Indifférent</option>
-                  <option value="HB">HB</option>
-                  <option value="V-2">V-2</option>
-                  <option value="V-1">V-1</option>
-                  <option value="V-0">V-0</option>
-                </select>
-              </div>
-
-              <div class="col-12 col-md-4">
-                <label for="prixCible" class="form-label mb-1">Prix cible (€/kg)</label>
-                <div class="d-flex align-items-center gap-2">
-                  <input type="range" class="form-range" id="prixCible" min="2" max="60" step="1" value="8">
-                  <span class="badge bg-light border text-muted" id="prixCibleVal">8 €/kg</span>
-                </div>
-              </div>
-
-              <div class="col-12 col-md-4">
-                <label for="regionConformite" class="form-label mb-1">Zone / Conformité</label>
-                <select id="regionConformite" class="form-select form-select-sm">
-                  <option value="">Indifférent</option>
-                  <option value="UE">UE (REACH/ROHS, EU 10/2011)</option>
-                  <option value="US">US (FDA, UL, Prop65)</option>
-                </select>
-              </div>
-            </div>
-          </fieldset>
-
-          <!-- ===== Process & pièce ===== -->
-          <fieldset class="mb-4">
-            <legend class="fs-6 mb-2">Process & pièce</legend>
-            <div class="row g-3">
-              <div class="col-12 col-md-4">
-                <label for="process" class="form-label mb-1">Process envisagé</label>
-                <select id="process" class="form-select form-select-sm">
-                  <option value="injection">Injection plastique</option>
-                  <option value="usinage">Usinage</option>
-                  <option value="impression3d">Impression 3D</option>
-                </select>
-              </div>
-              <div class="col-12 col-md-4">
-                <label for="epMin" class="form-label mb-1">Épaisseur pièce (min, mm)</label>
-                <input id="epMin" type="number" step="0.1" min="0" class="form-control form-control-sm" placeholder="ex. 0.8">
-              </div>
-              <div class="col-12 col-md-4">
-                <label for="features" class="form-label mb-1">Spécificités</label>
-                <select id="features" class="form-select form-select-sm" multiple>
-                  <option value="snapfits">Encliquetages</option>
-                  <option value="hinge">Charnière film</option>
-                  <option value="overmold">Surmoulage</option>
-                  <option value="transparent">Zone transparente</option>
-                  <option value="inserts">Inserts laiton</option>
-                </select>
-              </div>
-            </div>
-          </fieldset>
-
-          <!-- ===== Contraintes mécaniques ===== -->
-          <fieldset class="mb-3">
-            <legend class="fs-6 mb-2">Contraintes mécaniques</legend>
-
-            <div class="row g-2 align-items-center mb-1">
-              <div class="col">
-                <div class="form-check">
-                  <input class="form-check-input criterion" type="checkbox" id="rigidite_elevee" data-section="meca">
-                  <label class="form-check-label" for="rigidite_elevee">Rigidité élevée</label>
-                </div>
-              </div>
-              <div class="col-auto">
-                <select class="form-select form-select-sm priority" data-for="rigidite_elevee">
-                  <option value="should">Should</option>
-                  <option value="must">Must</option>
-                  <option value="nice">Nice</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="row g-2 align-items-center mb-1">
-              <div class="col">
-                <div class="form-check">
-                  <input class="form-check-input criterion" type="checkbox" id="flexibilite" data-section="meca">
-                  <label class="form-check-label" for="flexibilite">Flexibilité</label>
-                </div>
-              </div>
-              <div class="col-auto">
-                <select class="form-select form-select-sm priority" data-for="flexibilite">
-                  <option value="should">Should</option>
-                  <option value="must">Must</option>
-                  <option value="nice">Nice</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="row g-2 align-items-center mb-1">
-              <div class="col">
-                <div class="form-check">
-                  <input class="form-check-input criterion" type="checkbox" id="resistance_chocs" data-section="meca">
-                  <label class="form-check-label" for="resistance_chocs">Résistance aux chocs</label>
-                </div>
-              </div>
-              <div class="col-auto">
-                <select class="form-select form-select-sm priority" data-for="resistance_chocs">
-                  <option value="should">Should</option>
-                  <option value="must">Must</option>
-                  <option value="nice">Nice</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="row g-2 align-items-center mb-1">
-              <div class="col">
-                <div class="form-check">
-                  <input class="form-check-input criterion" type="checkbox" id="flexion" data-section="meca">
-                  <label class="form-check-label" for="flexion">Flexion</label>
-                </div>
-              </div>
-              <div class="col-auto">
-                <select class="form-select form-select-sm priority" data-for="flexion">
-                  <option value="should">Should</option>
-                  <option value="must">Must</option>
-                  <option value="nice">Nice</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="row g-2 align-items-center mb-1">
-              <div class="col">
-                <div class="form-check">
-                  <input class="form-check-input criterion" type="checkbox" id="traction" data-section="meca">
-                  <label class="form-check-label" for="traction">Traction</label>
-                </div>
-              </div>
-              <div class="col-auto">
-                <select class="form-select form-select-sm priority" data-for="traction">
-                  <option value="should">Should</option>
-                  <option value="must">Must</option>
-                  <option value="nice">Nice</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="row g-2 align-items-center mb-1">
-              <div class="col">
-                <div class="form-check">
-                  <input class="form-check-input criterion" type="checkbox" id="usure" data-section="meca">
-                  <label class="form-check-label" for="usure">Usure / frottement</label>
-                </div>
-              </div>
-              <div class="col-auto">
-                <select class="form-select form-select-sm priority" data-for="usure">
-                  <option value="should">Should</option>
-                  <option value="must">Must</option>
-                  <option value="nice">Nice</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="row g-2 align-items-center">
-              <div class="col">
-                <div class="form-check">
-                  <input class="form-check-input criterion" type="checkbox" id="fatigue" data-section="meca">
-                  <label class="form-check-label" for="fatigue">Fatigue</label>
-                </div>
-              </div>
-              <div class="col-auto">
-                <select class="form-select form-select-sm priority" data-for="fatigue">
-                  <option value="should">Should</option>
-                  <option value="must">Must</option>
-                  <option value="nice">Nice</option>
-                </select>
-              </div>
-            </div>
-          </fieldset>
-
-          <!-- ===== Esthétique ===== -->
-          <fieldset class="mb-4">
-            <legend class="fs-6 mb-2">Esthétique</legend>
-
-            <div class="row g-2 align-items-center mb-1">
-              <div class="col">
-                <div class="form-check">
-                  <input class="form-check-input criterion" type="checkbox" id="transparence" data-section="aesthetic">
-                  <label class="form-check-label" for="transparence">Transparence</label>
-                </div>
-              </div>
-              <div class="col-auto">
-                <select class="form-select form-select-sm priority" data-for="transparence">
-                  <option value="should">Should</option>
-                  <option value="must">Must</option>
-                  <option value="nice">Nice</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="row g-2 align-items-center mb-1">
-              <div class="col">
-                <div class="form-check">
-                  <input class="form-check-input criterion" type="checkbox" id="qualite_surface" data-section="aesthetic">
-                  <label class="form-check-label" for="qualite_surface">Qualité de surface</label>
-                </div>
-              </div>
-              <div class="col-auto">
-                <select class="form-select form-select-sm priority" data-for="qualite_surface">
-                  <option value="should">Should</option>
-                  <option value="must">Must</option>
-                  <option value="nice">Nice</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="row g-2 align-items-center mb-1">
-              <div class="col">
-                <div class="form-check">
-                  <input class="form-check-input criterion" type="checkbox" id="texture_possible" data-section="aesthetic">
-                  <label class="form-check-label" for="texture_possible">Texture possible</label>
-                </div>
-              </div>
-              <div class="col-auto">
-                <select class="form-select form-select-sm priority" data-for="texture_possible">
-                  <option value="should">Should</option>
-                  <option value="must">Must</option>
-                  <option value="nice">Nice</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="row g-2 align-items-center">
-              <div class="col">
-                <div class="form-check">
-                  <input class="form-check-input criterion" type="checkbox" id="finition_bril" data-section="aesthetic">
-                  <label class="form-check-label" for="finition_bril">Finition brillante</label>
-                </div>
-              </div>
-              <div class="col-auto">
-                <select class="form-select form-select-sm priority" data-for="finition_bril">
-                  <option value="should">Should</option>
-                  <option value="must">Must</option>
-                  <option value="nice">Nice</option>
-                </select>
-              </div>
-            </div>
-          </fieldset>
-
-          <!-- ===== Réglementaire (déclarations) ===== -->
-          <fieldset class="mb-2">
-            <legend class="fs-6 mb-2">Réglementaire (déclarations)</legend>
-            <div class="row g-3">
-              <div class="col-6 col-md-3">
-                <div class="form-check">
-                  <input class="form-check-input criterion" type="checkbox" id="contact_alimentaire" data-section="regulatory">
-                  <label class="form-check-label" for="contact_alimentaire">Contact alimentaire</label>
-                </div>
-              </div>
-              <div class="col-6 col-md-3">
-                <div class="form-check">
-                  <input class="form-check-input criterion" type="checkbox" id="qualite_medicale" data-section="regulatory">
-                  <label class="form-check-label" for="qualite_medicale">Qualité médicale</label>
-                </div>
-              </div>
-              <div class="col-6 col-md-3">
-                <div class="form-check">
-                  <input class="form-check-input criterion" type="checkbox" id="retardateur_flamme" data-section="regulatory">
-                  <label class="form-check-label" for="retardateur_flamme">Retardateur de flamme</label>
-                </div>
-              </div>
-              <div class="col-6 col-md-3">
-                <div class="form-check">
-                  <input class="form-check-input criterion" type="checkbox" id="proprietes_elec" data-section="regulatory">
-                  <label class="form-check-label" for="proprietes_elec">Propriétés électriques</label>
-                </div>
-              </div>
-            </div>
-          </fieldset>
-        </form>
-
-        <!-- Alerte conflits -->
-        <div id="criteriaConflicts" class="alert alert-warning d-none small mb-3">
-          <i class="bi bi-exclamation-triangle me-2"></i>
-          Certains choix semblent en conflit (ex. Transparence stricte + charge GF). Ajuste les priorités.
+        <!-- Footer -->
+        <div class="modal-footer">
+          <button id="materialConfirmBtn" type="button" class="btn btn-primary">
+            <i class="bi bi-magic me-2"></i>Analyser et recommander
+          </button>
         </div>
 
-        <!-- Shortlist / Pourquoi -->
-        <div id="materialShortlist" class="d-none">
-          <hr class="my-3">
-          <h6 class="mb-2">Top 3 matières recommandées</h6>
-          <div id="shortlistCards" class="row g-3"></div>
-          <details class="mt-2">
-            <summary class="small">Pourquoi ces recommandations ?</summary>
-            <div id="whyReco" class="small text-muted mt-2"></div>
-          </details>
-        </div>
       </div>
-
-      <!-- Footer -->
-      <div class="modal-footer">
-        <button id="materialConfirmBtn" type="button" class="btn btn-primary">
-          <i class="bi bi-magic me-2"></i>Analyser et recommander
-        </button>
-      </div>
-
     </div>
   </div>
-</div>
-<!-- ===================================================================== -->
-
   <!-- ===================================================================== -->
 
-  <!-- Bootstrap JS (bundle avec Popper) -->
+  <!-- Bootstrap JS -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
   <!-- Moteur de critères / reco -->
@@ -890,9 +883,9 @@
   <!-- Orchestrateur (module) -->
   <script type="module" src="/static/js/DFMOrchestrator.js"></script>
 
-  <!-- Ouverture universelle + câblage bouton "Analyser" -->
+  <!-- Ouverture universelle + câblage bouton "Analyser" (sans écraser si déjà fourni) -->
   <script>
-    window.openMaterialModal = function () {
+    window.openMaterialModal = window.openMaterialModal || function () {
       const el = document.getElementById('materialModal') || document.querySelector('[data-material-modal]');
       if (!el) return alert('Modale matière introuvable');
       bootstrap.Modal.getOrCreateInstance(el, { backdrop: 'static' }).show();
@@ -906,223 +899,156 @@
     });
   </script>
 
-<script>
-(function(){
-  const host   = document.getElementById('demouldHost');
-  const confMsg= document.getElementById('demouldConfMsg');
+  <!-- Zone démoulage : intégration aux events -->
+  <script>
+    (function(){
+      const host   = document.getElementById('demouldHost');
+      const confMsg= document.getElementById('demouldConfMsg');
 
-  function showDemouldPanel(msg, hasConf){
-    if (!host) return;
-    host.style.display = 'block';
-    confMsg.textContent = hasConf
-      ? `Des conflits ont été détectés : ${msg || 'voir détails'}`
-      : 'Aucun conflit bloquant détecté.';
-  }
-
-  // Apparition de la zone après analyse
-  window.addEventListener('cadlytics:material-analysis-done', (ev) => {
-    const conflicts = ev.detail?.conflicts || [];
-    showDemouldPanel(conflicts[0] || '', conflicts.length > 0);
-    console.log('[demould] event received', ev.detail);
-  });
-
-  // AUTO et VALIDER (inchangé)
-  document.getElementById('btnAutoDemAxis')?.addEventListener('click', () => {
-    const z = document.querySelector('input[name="demAxis"][value="Z"]');
-    if (z) { z.checked = true; }
-    window.dispatchEvent(new CustomEvent('cadlytics:demould-axis-auto', { detail: { axis: 'Z' } }));
-  });
-
-  document.getElementById('btnSetDemAxis')?.addEventListener('click', () => {
-    const val = document.querySelector('input[name="demAxis"]:checked')?.value || 'Z';
-    const proj = document.querySelector(`input[name="projAxis"][value="${val}"]`);
-    if (proj) {
-      proj.checked = true;
-      proj.dispatchEvent(new Event('change', { bubbles:true }));
-    }
-    window.dispatchEvent(new CustomEvent('cadlytics:demould-axis-selected', { detail: { axis: val } }));
-    if (confMsg) confMsg.textContent = `Axe de démoulage défini sur ${val}.`;
-  });
-})();
-</script>
-
-<script>
-  console.log('[dfm ui] quick listener loaded');
-window.addEventListener('cadlytics:dfm:report', (e)=>console.log('[dfm ui] report evt', e.detail));
-window.addEventListener('cadlytics:demould-axis-selected', (e)=>console.log('[dfm ui] axis evt', e.detail));
-
-(function(){
-  const sec = document.getElementById('dfmQuickSection');
-  if (!sec) return;
-
-  // util rendu simple
-  function badge(el, severity){
-    const map = { ok:'bg-success', warn:'bg-warning text-dark', fail:'bg-danger', neutral:'bg-secondary' };
-    el.className = 'badge ' + (map[severity] || map.neutral);
-    el.textContent = severity === 'ok' ? 'OK' : severity === 'fail' ? 'KO' : (severity === 'warn' ? 'À surveiller' : '—');
-  }
-  function list(el, arr){
-    el.innerHTML = '';
-    (arr && arr.length ? arr : [{label:'—',value:'—'}]).forEach(m=>{
-      const li = document.createElement('li');
-      const val = (m.unit && m.value!=null) ? `${m.value} ${m.unit}` : (m.value ?? '—');
-      li.innerHTML = `<span class="text-muted">${m.label||m.key||''}</span> : <strong>${val}</strong>`;
-      if (Array.isArray(m.tips) && m.tips.length){
-        const tips = document.createElement('div'); tips.className = 'text-muted';
-        tips.style.fontSize='11px'; tips.textContent = '• ' + m.tips[0];
-        li.appendChild(tips);
+      function showDemouldPanel(msg, hasConf){
+        if (!host) return;
+        host.style.display = 'block';
+        confMsg.textContent = hasConf
+          ? `Des conflits ont été détectés : ${msg || 'voir détails'}`
+          : 'Aucun conflit bloquant détecté.';
       }
-      el.appendChild(li);
-    });
-  }
-  function pickSeverity(metrics){
-    // si l’un est fail -> fail ; sinon warn si au moins un warn ; sinon ok si au moins un pass false? ; par défaut neutral
-    if (!Array.isArray(metrics)) return 'neutral';
-    if (metrics.some(m=>m.severity==='fail'||m.pass===false)) return 'fail';
-    if (metrics.some(m=>m.severity==='warn')) return 'warn';
-    if (metrics.some(m=>m.pass===true || m.severity==='ok')) return 'ok';
-    return 'neutral';
-  }
 
-  function updateCard(section, metrics){
-    const map = {
-      draft:     { badge:'#dfmBadgeDraft',     list:'#dfmListDraft' },
-      undercut:  { badge:'#dfmBadgeUndercut',  list:'#dfmListUndercut' },
-      tonnage:   { badge:'#dfmBadgeTonnage',   list:'#dfmListTonnage' },
-      thickness: { badge:'#dfmBadgeThickness', list:'#dfmListThickness' }
-    };
-    const cfg = map[section]; if (!cfg) return;
-    const b = document.querySelector(cfg.badge);
-    const l = document.querySelector(cfg.list);
-    badge(b, pickSeverity(metrics));
-    list(l, metrics);
-    sec.style.display = ''; // assure visible
-  }
-
-  // 1) Quand l’utilisateur choisit l’axe -> reset & affiche la section
-  window.addEventListener('cadlytics:demould-axis-selected', ()=>{
-    sec.style.display = '';
-    document.getElementById('dfmQuickProgress').style.width = '0%';
-    ['Draft','Undercut','Tonnage','Thickness'].forEach(k=>{
-      const b = document.getElementById('dfmBadge'+k); if (b) { b.className='badge bg-secondary'; b.textContent='—'; }
-      const l = document.getElementById('dfmList'+k); if (l) { l.innerHTML = '<li class="text-muted">Calcul en cours…</li>'; }
-    });
-  });
-
-  // 2) Brancher sur la progression déjà émise par l’orchestrateur
-  window.addEventListener('cadlytics:dfm:progress', (ev)=>{
-    const pct = Math.max(0, Math.min(100, ev.detail?.pct ?? 0));
-    const bar = document.getElementById('dfmQuickProgress');
-    if (bar) bar.style.width = pct + '%';
-  });
-
-  // 3) Quand le rapport serveur arrive (DFMOrchestrator -> renderDFMResults)
-  window.addEventListener('cadlytics:dfm:report', (ev)=>{
-    const m = ev.detail?.metrics || {};
-    // On supporte deux formats :
-    //  - m.draft / m.undercut / m.tonnage / m.thickness : tableaux de métriques (notre format conseillé)
-    //  - sinon, on tente des clés "simples" (fallback)
-    updateCard('draft',     m.draft     || m.DRAFT      || m.dépouille   || []);
-    updateCard('undercut',  m.undercut  || m.UNDERCUT   || m.contredep   || []);
-    updateCard('tonnage',   m.tonnage   || m.TONNAGE    || m.clamp       || []);
-    updateCard('thickness', m.thickness || m.THICKNESS  || m.epaisseurs  || []);
-
-    // Si aucune métrique reconnue, on laisse l’aperçu en "—" et l’utilisateur lit le panneau détaillé.
-  });
-})();
-    // === HEATMAP DÉPOUILLE (via orchestrateur) ============================
-  async function applyDraftHeatmapLocal() {
-    // on passe null pour laisser l’orchestrateur utiliser __quickDraftMap
-    // et tryBuild:true pour construire un map si vide
-    await (window.DFMOrchestrator?.applyDraftHeatmap?.(null, { tryBuild: true }) || Promise.resolve());
-  }
-document.getElementById('dfmBtnHeatmapDraft')
-  ?.addEventListener('click', async () => {
-    await (window.DFMOrchestrator?.applyDraftHeatmap?.(null, { tryBuild: true }) || Promise.resolve());
-  });
-
-  // === PANNEAU CONSEILS ================================================
-  const tipsPanel = document.getElementById('dfmTipsPanel');
-  const tipsList  = document.getElementById('dfmTipsList');
-  const btnTips   = document.getElementById('dfmBtnToggleTips');
-
-  function collectTipsFromMetrics(metrics) {
-    // agrège les tips des métriques warn/fail en priorité
-    const items = [];
-    const sections = ['draft','undercut','tonnage','thickness'];
-    sections.forEach(sec=>{
-      const arr = metrics?.[sec] || [];
-      arr.forEach(m=>{
-        const sev = (m.severity || (m.pass===false?'fail':'ok'));
-        if (sev === 'ok') return;
-        if (Array.isArray(m.tips)) {
-          m.tips.forEach(t => items.push({ text: t, section: sec, sev }));
-        }
+      // Apparaît après analyse matière
+      window.addEventListener('cadlytics:material-analysis-done', (ev) => {
+        const conflicts = ev.detail?.conflicts || [];
+        showDemouldPanel(conflicts[0] || '', conflicts.length > 0);
       });
-    });
-    return items;
-  }
 
-  function renderTips(items){
-    tipsList.innerHTML = '';
-    if (!items.length) {
-      tipsList.innerHTML = '<li class="text-muted">Aucun conseil pour l’instant.</li>';
-      return;
-    }
-    items.forEach(it=>{
-      const li = document.createElement('li');
-      const badge = it.sev==='fail' ? 'danger' : (it.sev==='warn' ? 'warning text-dark' : 'secondary');
-      li.innerHTML = `<span class="badge bg-${badge} me-1">${it.section}</span>${it.text}`;
-      tipsList.appendChild(li);
-    });
-  }
+      // AUTO et VALIDER
+      document.getElementById('btnAutoDemAxis')?.addEventListener('click', () => {
+        const z = document.querySelector('input[name="demAxis"][value="Z"]');
+        if (z) { z.checked = true; }
+        window.dispatchEvent(new CustomEvent('cadlytics:demould-axis-auto', { detail: { axis: 'Z' } }));
+      });
 
-  btnTips?.addEventListener('click', ()=>{
-    tipsPanel.style.display = (tipsPanel.style.display==='none'||!tipsPanel.style.display) ? 'block' : 'none';
-  });
+      document.getElementById('btnSetDemAxis')?.addEventListener('click', () => {
+        const val = document.querySelector('input[name="demAxis"]:checked')?.value || 'Z';
+        const proj = document.querySelector(`input[name="projAxis"][value="${val}"]`);
+        if (proj) {
+          proj.checked = true;
+          proj.dispatchEvent(new Event('change', { bubbles:true }));
+        }
+        window.dispatchEvent(new CustomEvent('cadlytics:demould-axis-selected', { detail: { axis: val } }));
+        if (confMsg) confMsg.textContent = `Axe de démoulage défini sur ${val}.`;
+      });
+    })();
+  </script>
 
-  // A chaque rapport (local ou serveur), on met à jour les conseils
-  window.addEventListener('cadlytics:dfm:report', (ev)=>{
-    const items = collectTipsFromMetrics(ev.detail?.metrics || {});
-    renderTips(items);
-  });
+  <!-- Hooks UI rapides (progress & cartes Phase A) -->
+  <script>
+    (function(){
+      const sec = document.getElementById('dfmQuickSection');
+      if (!sec) return;
 
-</script>
-<script>
-/* Branche la barre "Progression" (#progressBar) sur les events DFM */
-(function(){
-  window.addEventListener('cadlytics:dfm:progress', function(ev){
-    const pct = Math.max(0, Math.min(100, ev.detail?.pct ?? 0));
-    const bar = document.getElementById('progressBar');
-    if (bar) bar.style.width = pct + '%';
-  });
-})();
-</script>
-<script>
-/* Rafraîchit les métriques de base depuis le viewer et les expose en helpers */
+      function badge(el, severity){
+        const map = { ok:'bg-success', warn:'bg-warning text-dark', fail:'bg-danger', neutral:'bg-secondary' };
+        el.className = 'badge ' + (map[severity] || map.neutral);
+        el.textContent = severity === 'ok' ? 'OK' : severity === 'fail' ? 'KO' : (severity === 'warn' ? 'À surveiller' : '—');
+      }
+      function list(el, arr){
+        el.innerHTML = '';
+        (arr && arr.length ? arr : [{label:'—',value:'—'}]).forEach(m=>{
+          const li = document.createElement('li');
+          const val = (m.unit && m.value!=null) ? `${m.value} ${m.unit}` : (m.value ?? '—');
+          li.innerHTML = `<span class="text-muted">${m.label||m.key||''}</span> : <strong>${val}</strong>`;
+          if (Array.isArray(m.tips) && m.tips.length){
+            const tips = document.createElement('div'); tips.className = 'text-muted';
+            tips.style.fontSize='11px'; tips.textContent = '• ' + m.tips[0];
+            li.appendChild(tips);
+          }
+          el.appendChild(li);
+        });
+      }
+      function pickSeverity(metrics){
+        if (!Array.isArray(metrics)) return 'neutral';
+        if (metrics.some(m=>m.severity==='fail'||m.pass===false)) return 'fail';
+        if (metrics.some(m=>m.severity==='warn')) return 'warn';
+        if (metrics.some(m=>m.pass===true || m.severity==='ok')) return 'ok';
+        return 'neutral';
+      }
+      function updateCard(section, metrics){
+        const map = {
+          draft:     { badge:'#dfmBadgeDraft',     list:'#dfmListDraft' },
+          undercut:  { badge:'#dfmBadgeUndercut',  list:'#dfmListUndercut' },
+          tonnage:   { badge:'#dfmBadgeTonnage',   list:'#dfmListTonnage' },
+          thickness: { badge:'#dfmBadgeThickness', list:'#dfmListThickness' }
+        };
+        const cfg = map[section]; if (!cfg) return;
+        const b = document.querySelector(cfg.badge);
+        const l = document.querySelector(cfg.list);
+        badge(b, pickSeverity(metrics));
+        list(l, metrics);
+        sec.style.display = '';
+      }
+
+      window.addEventListener('cadlytics:demould-axis-selected', ()=>{
+        sec.style.display = '';
+        document.getElementById('dfmQuickProgress').style.width = '0%';
+        ['Draft','Undercut','Tonnage','Thickness'].forEach(k=>{
+          const b = document.getElementById('dfmBadge'+k); if (b) { b.className='badge bg-secondary'; b.textContent='—'; }
+          const l = document.getElementById('dfmList'+k); if (l) { l.innerHTML = '<li class="text-muted">Calcul en cours…</li>'; }
+        });
+      });
+
+      window.addEventListener('cadlytics:dfm:progress', (ev)=>{
+        const pct = Math.max(0, Math.min(100, ev.detail?.pct ?? 0));
+        const bar = document.getElementById('dfmQuickProgress');
+        if (bar) bar.style.width = pct + '%';
+      });
+
+      window.addEventListener('cadlytics:dfm:report', (ev)=>{
+        const m = ev.detail?.metrics || {};
+        updateCard('draft',     m.draft     || m.DRAFT      || m.dépouille   || []);
+        updateCard('undercut',  m.undercut  || m.UNDERCUT   || m.contredep   || []);
+        updateCard('tonnage',   m.tonnage   || m.TONNAGE    || m.clamp       || []);
+        updateCard('thickness', m.thickness || m.THICKNESS  || m.epaisseurs  || []);
+      });
+    })();
+
+    // === Heatmap dépouille (via orchestrateur) ===
+    document.getElementById('dfmBtnHeatmapDraft')
+      ?.addEventListener('click', async () => {
+        await (window.DFMOrchestrator?.applyDraftHeatmap?.(null, { tryBuild: true }) || Promise.resolve());
+      });
+  </script>
+
+  <!-- Barre progression globale (liée à cadlytics:dfm:progress) -->
+  <script>
+    (function(){
+      window.addEventListener('cadlytics:dfm:progress', function(ev){
+        const pct = Math.max(0, Math.min(100, ev.detail?.pct ?? 0));
+        const bar = document.getElementById('progressBar');
+        if (bar) bar.style.width = pct + '%';
+      });
+    })();
+  </script>
+
+  <!-- Helpers métriques de base pour l’orchestrateur -->
+  <script>
     function setText(id, val){
       const el = document.getElementById(id);
       if (!el) return;
       el.textContent = (val ?? '—');
     }
 
-    // ---- Helpers exposés (utilisés par l'orchestrateur) ----
     window.__getBasicStats = async function(){
-      // 1) Si ton viewerAdapter expose déjà des stats, on les utilise
       if (typeof window.viewerAdapter?.getBasicStats === 'function') {
-        const s = await window.viewerAdapter.getBasicStats(); // {volume_cm3,tmin_mm,tmax_mm}
+        const s = await window.viewerAdapter.getBasicStats();
         return {
           volume_cm3: Number(s?.volume_cm3) || 0,
           tmin_mm:    Number(s?.tmin_mm)    || 0,
           tmax_mm:    Number(s?.tmax_mm)    || 0
         };
       }
-      // 2) Fallback léger via la bounding box (approx)
       const aabb = window.viewerAdapter?.viewer?.scene?.aabb;
       if (aabb && aabb.length === 6) {
         const dx = aabb[3]-aabb[0], dy = aabb[4]-aabb[1], dz = aabb[5]-aabb[2]; // mm
         const volume_cm3 = Math.max(0, (dx*dy*dz) / 1000); // mm^3 -> cm^3
-        // épaisseurs min/max très approximatives
         const tmin_mm = Math.max(0, Math.min(dx,dy,dz) * 0.05);
         const tmax_mm = Math.max(dx,dy,dz) * 0.5;
         return { volume_cm3, tmin_mm, tmax_mm };
@@ -1130,18 +1056,12 @@ document.getElementById('dfmBtnHeatmapDraft')
       return { volume_cm3:0, tmin_mm:0, tmax_mm:0 };
     };
 
-
-    // --- Aire projetée
     window.__getProjectedArea = async function(axisLetter){
       const ax = (axisLetter || 'Z').toUpperCase();
-
-      // 1) Implémentation native (si dispo)
       if (typeof window.viewerAdapter?.getProjectedArea === 'function') {
         try { return await window.viewerAdapter.getProjectedArea(ax); }
         catch (e) { console.warn('[projArea native failed]', e); }
       }
-
-      // 2) Fallback via AABB (rectangle projeté)
       const aabb = window.viewerAdapter?.viewer?.scene?.aabb;
       if (!aabb || aabb.length !== 6) return 0;
       const dx = aabb[3]-aabb[0], dy = aabb[4]-aabb[1], dz = aabb[5]-aabb[2]; // mm
@@ -1149,7 +1069,6 @@ document.getElementById('dfmBtnHeatmapDraft')
       return Math.max(0, mm2/100); // mm² -> cm²
     };
 
-    // --- Rafraîchissement UI (après fileReady)
     (function(){
       async function refreshBasicUI(){
         const s = await window.__getBasicStats();
@@ -1166,14 +1085,10 @@ document.getElementById('dfmBtnHeatmapDraft')
         if (el) el.textContent = a ? a.toFixed(1) : '—';
       }
 
-      // 1) uniquement quand le fichier est prêt (évite le “flash” de valeurs)
       window.addEventListener('dfm:fileReady', ()=>{ refreshBasicUI(); refreshProjUI(); });
-
-      // 2) recalcule quand on change l’axe
       document.addEventListener('change', (ev)=>{ if (ev.target?.name === 'projAxis') refreshProjUI(); });
     })();
-</script>
-
+  </script>
 
 </body>
 </html>

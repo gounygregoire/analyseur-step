@@ -1,7 +1,7 @@
 // /static/js/main.js — UTF-8 (NO BOM)
 console.log("main.js loaded ✅");
-// force l’ID de la vraie modale matière
-window.DFM_MATERIAL_MODAL_SELECTOR = '#materialQuestionnaireModal';
+// force l’ID de la vraie modale matière (utilisé par DFMOrchestrator & app.html)
+window.DFM_MATERIAL_MODAL_SELECTOR = window.DFM_MATERIAL_MODAL_SELECTOR || '#materialQuestionnaireModal';
 
 import {
   Viewer,
@@ -54,32 +54,29 @@ const clipButtons  = $$(".clipAxis");
 const clipRange    = $("#clipRange");
 const btnShot      = $("#btnShot");
 
-/* ===== FIX: ouverture fiable de la VRAIE modale matière ===== */
-const ANALYZE_SEL =
-  '#btnAnalyser, #analyzeBtn, #btn-analyser, #btnAnalyse, #analyser, .btn-analyser, [data-action="analyze"], [data-act="analyze"]';
-
-// ta modale d’hier :
-const MATERIAL_MODAL_SEL =
-  '#materialQuestionnaireModal, #materialModal, [data-material-modal], .modal[data-role="material"]';
-
-function getMaterialModalEl() {
-  const list = Array.from(document.querySelectorAll(MATERIAL_MODAL_SEL));
-  if (!list.length) return null;
-  // priorité à celle qui contient le formulaire
-  return (
-    list.find(el => el.querySelector('#materialQuestionnaireForm, [data-material-form]')) ||
-    list[0]
-  );
-}
-
-function openMaterialModalHard() {
-  const el = getMaterialModalEl();
-  if (!el) { console.warn('[main] Modale matière introuvable'); return; }
-
-  if (window.bootstrap?.Modal) {
-    window.bootstrap.Modal.getOrCreateInstance(el, { backdrop: 'static' }).show();
-  } else {
-    // fallback vanilla (sans Bootstrap)
+/* ===== FIX modal matière (fallback non bloquant) =====
+   NB: DFMOrchestrator et app.html fournissent déjà leur propre openMaterialModal.
+   Ici on expose UNIQUEMENT si absent pour éviter les conflits. */
+(function ensureMaterialModalAPI(){
+  function getMaterialModalEl() {
+    const sel = window.DFM_MATERIAL_MODAL_SELECTOR && document.querySelector(window.DFM_MATERIAL_MODAL_SELECTOR)
+      ? window.DFM_MATERIAL_MODAL_SELECTOR
+      : '#materialQuestionnaireModal, #materialModal, [data-material-modal], .modal[data-role="material"]';
+    const list = Array.from(document.querySelectorAll(sel));
+    if (!list.length) return null;
+    return (
+      list.find(el => el.querySelector('#materialQuestionnaireForm, [data-material-form]')) ||
+      list[0]
+    );
+  }
+  function openMaterialModalHard() {
+    const el = getMaterialModalEl();
+    if (!el) { console.warn('[main] Modale matière introuvable'); return; }
+    if (window.bootstrap?.Modal) {
+      window.bootstrap.Modal.getOrCreateInstance(el, { backdrop: 'static' }).show();
+      return;
+    }
+    // fallback vanilla
     let bd = document.getElementById('__mm_backdrop__');
     if (!bd) {
       bd = document.createElement('div');
@@ -98,42 +95,43 @@ function openMaterialModalHard() {
       if (ev.target.matches('.btn-close,[data-bs-dismiss="modal"],[data-dismiss="modal"]')) closeMaterialModalHard();
     });
   }
-}
-function closeMaterialModalHard() {
-  const el = getMaterialModalEl();
-  const bd = document.getElementById('__mm_backdrop__');
-  if (el) {
-    el.classList.remove('show');
-    el.style.display = 'none';
-    el.style.visibility = 'hidden';
-    el.style.opacity = '0';
+  function closeMaterialModalHard() {
+    const el = getMaterialModalEl();
+    const bd = document.getElementById('__mm_backdrop__');
+    if (el) {
+      el.classList.remove('show');
+      el.style.display = 'none';
+      el.style.visibility = 'hidden';
+      el.style.opacity = '0';
+    }
+    if (bd) bd.remove();
   }
-  if (bd) bd.remove();
-}
+  // n’expose que si personne ne l’a fait
+  if (!window.openMaterialModal) window.openMaterialModal = openMaterialModalHard;
+  if (!window.showMaterialModal) window.showMaterialModal = openMaterialModalHard;
 
-// expose pour les autres scripts (DFMOrchestrator l’utilise si présent)
-window.openMaterialModal = window.openMaterialModal || openMaterialModalHard;
-window.showMaterialModal = window.showMaterialModal || openMaterialModalHard;
-
-// sécurité : si aucun autre script n’a ouvert la modale après le clic, on la force
-function wireAnalyzeButtons() {
-  document.querySelectorAll(ANALYZE_SEL).forEach((btn) => {
-    if (btn.__wiredAnalyzeMain) return;
-    btn.__wiredAnalyzeMain = true;
-    btn.addEventListener('click', (ev) => {
-      if (ev.defaultPrevented) return;
-      setTimeout(() => {
-        const open =
-          document.querySelector('.modal.show') ||
-          document.querySelector('#materialQuestionnaireModal.show') ||
-          document.querySelector('[data-material-modal].show, [data-material-modal].open');
-        if (!open) openMaterialModalHard();
-      }, 250);
+  // sécurité : si aucun autre script n’a ouvert la modale après clic, on la force
+  const ANALYZE_SEL =
+    '#btnAnalyser, #analyzeBtn, #btn-analyser, #btnAnalyse, #analyser, .btn-analyser, [data-action="analyze"], [data-act="analyze"]';
+  function wireAnalyzeButtons() {
+    document.querySelectorAll(ANALYZE_SEL).forEach((btn) => {
+      if (btn.__wiredAnalyzeMain) return;
+      btn.__wiredAnalyzeMain = true;
+      btn.addEventListener('click', (ev) => {
+        if (ev.defaultPrevented) return;
+        setTimeout(() => {
+          const open =
+            document.querySelector('.modal.show') ||
+            document.querySelector('#materialQuestionnaireModal.show') ||
+            document.querySelector('[data-material-modal].show, [data-material-modal].open');
+          if (!open) window.openMaterialModal?.();
+        }, 250);
+      });
     });
-  });
-}
-wireAnalyzeButtons();
-new MutationObserver(wireAnalyzeButtons).observe(document.body, { childList:true, subtree:true });
+  }
+  wireAnalyzeButtons();
+  new MutationObserver(wireAnalyzeButtons).observe(document.body, { childList:true, subtree:true });
+})();
 /* ===== FIN FIX ===== */
 
 /* ====== Analyse: sélecteurs panneau (DYNAMIQUES) ====== */
@@ -228,9 +226,10 @@ function drawAxes(selected='Z'){
   arrow(cx,cy, cx-0.7*L,cy+0.7*L, 'Z', cZ);
 }
 drawAxes('Z');
+// 🔧 Harmonisé: on écoute maintenant le groupe “projAxis” (comme app.html)
 document.addEventListener('change', (ev)=>{
   const tgt = ev.target;
-  if (tgt && tgt.name === 'axis') drawAxes(tgt.value);
+  if (tgt && tgt.name === 'projAxis') drawAxes(tgt.value);
 });
 
 /* ---------- NavCube ---------- */
@@ -539,8 +538,13 @@ async function loadXKT(url, nameHint){
   return id;
 }
 
-/* ====================== PROBE SAFE: __getFaces via échantillonnage écran ====================== */
+/* ====================== PROBE SAFE ======================
+   IMPORTANT: n’écrase PAS une version déjà fournie (app.html) */
 (function installProbeSafe(){
+  if (typeof window.__getFaces === 'function') {
+    console.log('[probe safe] __getFaces déjà présent (app.html), skip.');
+    return;
+  }
   const sleep = (ms)=> new Promise(r=>setTimeout(r,ms));
   const norm  = (v)=>{ const L = Math.hypot(v[0],v[1],v[2]) || 1; return [v[0]/L, v[1]/L, v[2]/L]; };
 
@@ -609,7 +613,7 @@ async function loadXKT(url, nameHint){
         const hit = viewer.scene.pick({ canvasPos:[x,y], pickSurface:true });
         if (hit && hit.worldNormal){
           const n = norm(hit.worldNormal);
-          faces.push({ normal:n, area: sampleArea }); // aire approximative
+          faces.push({ normal:n, area: sampleArea });
         }
       }
     }
@@ -618,17 +622,19 @@ async function loadXKT(url, nameHint){
     return faces;
   };
 
-  // petite API utilitaire que ton DFM peut consommer si besoin
-  window.__getProjectedArea = function(axisLetter='Z'){
-    const ax = String(axisLetter||'Z').toUpperCase();
-    const a = viewer.scene?.aabb;
-    if (!a) return 0;
-    const dx=a[3]-a[0], dy=a[4]-a[1], dz=a[5]-a[2];
-    const mm2 = (ax==='X') ? dy*dz : (ax==='Y') ? dx*dz : dx*dy;
-    return Math.max(0, mm2/100); // mm² -> cm²
-  };
+  // Ne définir __getProjectedArea ici QUE si aucune version n’existe (app.html en fournit une aussi)
+  if (typeof window.__getProjectedArea !== 'function') {
+    window.__getProjectedArea = function(axisLetter='Z'){
+      const ax = String(axisLetter||'Z').toUpperCase();
+      const a = viewer.scene?.aabb;
+      if (!a) return 0;
+      const dx=a[3]-a[0], dy=a[4]-a[1], dz=a[5]-a[2];
+      const mm2 = (ax==='X') ? dy*dz : (ax==='Y') ? dx*dz : dx*dy;
+      return Math.max(0, mm2/100); // mm² -> cm²
+    };
+  }
 
-  console.log('[probe safe] installed');
+  console.log('[probe safe] installed (main.js)');
 })();
 
 /* ---------- FICHIERS / upload ---------- */
@@ -763,7 +769,7 @@ btnSearch?.addEventListener("click",()=>{
   if (!found.length){ resultsBox.textContent="Aucun résultat"; return; }
   found.slice(0,200).forEach(({id,meta})=>{
     const div=document.createElement("div");
-    div.className="row mini"; div.style.justifyContent="space-between";
+    div.className = "row mini"; div.style.justifyContent="space-between";
     div.innerHTML=`<span style="font-size:12px">${meta?.name||meta?.displayName||meta?.type||id}</span>
       <button class="btn btn-outline mini" data-id="${id}">Voir</button>`;
     resultsBox.appendChild(div);
@@ -1041,10 +1047,24 @@ function renderStats(json){
     updateUnitsFromBBox(window.__bbox_mm);
   }
 
+  // Volume / épaisseurs : source serveur
   StatsSafe.setMetric('volume',         f3(json.volume_cm3));
-  StatsSafe.setMetric('projected_area', f3(json.projected_area_cm2));
   StatsSafe.setMetric('tmin',           f3(json.thickness_min_mm));
   StatsSafe.setMetric('tmax',           f3(json.thickness_max_mm));
+
+  // Surface projetée : source serveur si dispo, sinon fallback local immédiat pour cohérence visuelle
+  const projServer = json.projected_area_cm2;
+  if (projServer != null && isFinite(+projServer)) {
+    StatsSafe.setMetric('projected_area', f3(+projServer));
+  } else {
+    try {
+      const ax = getSelectedAxis();
+      const local = (typeof window.__getProjectedArea === 'function') ? window.__getProjectedArea(ax) : 0;
+      StatsSafe.setMetric('projected_area', f3(local));
+    } catch {
+      StatsSafe.setMetric('projected_area', f3(null));
+    }
+  }
 }
 
 function clearStatsUI(force=false){
