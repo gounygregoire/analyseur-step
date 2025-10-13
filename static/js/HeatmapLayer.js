@@ -1,46 +1,119 @@
-// /static/js/modules/HeatmapLayer.js
-// Shim minimal : agrège faceId -> entityId puis colorise chaque entité selon sa valeur.
-// Fonctionne avec xeokit: entity.colorize = [r,g,b,a] (0..1). Fallbacks prévus.
+// Shim HeatmapLayer — colorise les entités selon une map faceId -> valeur.
+// Compatible avec deux formats de faceId :
+//   1) "<entityId>:<triIndex>"
+//   2) "<triIndex>" (index global, tel que renvoyé par __getFaces SAFE)
+// Supporte xeokit: node.colorize = [r,g,b,a] (0..1), + fallbacks (scene.setObjectsColorize / adapter.colorizeEntity)
 
 export default class HeatmapLayer {
   constructor(viewerAdapter) {
     this.adapter = viewerAdapter;
     this.viewer  = viewerAdapter?.viewer;
     this.scene   = this.viewer?.scene;
-    this._original = new Map(); // sauvegarde des colorize pour reset éventuel
+
+    // sauvegarde des colorize initiales pour reset()
+    this._original = new Map();
+
+    // cache pour la résolution "<triIndex>" -> "<entityId>"
+    this._triToEntity = null;
   }
 
-  // Applique et retourne le nombre d'entités colorisées
+  /**
+   * Applique la heatmap.
+   * @param {Object} map - { faceKey -> value }
+   * @param {Object} opts - { min, max, mode, idResolver, debug }
+   *  - mode: "max" | "avg" (aggrégation per-entity)
+   *  - idResolver(faceKey): optionnel, renvoie un entityId à partir d'un faceKey
+   * @returns {number} nb d'entités colorisées
+   */
   apply(map, opts = {}) {
-    const { min = 0, max = 5, mode = "max" } = opts;
-    const perEntity = {};
+    if (!map || !this.scene) {
+      this.debugAppliedCount = 0;
+      return 0;
+    }
+    const { mode = "max", idResolver = null, debug = false } = opts;
 
-    // 1) regrouper par entité (clé "entityId:triIndex" -> "entityId")
-    for (const [faceKey, raw] of Object.entries(map || {})) {
-      const eid = String(faceKey).split(":")[0];
-      const v = Number(raw) || 0;
-      if (!(eid in perEntity)) perEntity[eid] = { sum: 0, n: 0, max: -Infinity };
-      perEntity[eid].sum += v; perEntity[eid].n += 1; if (v > perEntity[eid].max) perEntity[eid].max = v;
+    // borne min/max auto si non fournis
+    const values = Object.values(map).map(Number).filter(v => Number.isFinite(v));
+    let min = (typeof opts.min === "number") ? opts.min : (values.length ? Math.min(...values) : 0);
+    let max = (typeof opts.max === "number") ? opts.max : (values.length ? Math.max(...values) : 1);
+    if (min === max) { max = min + 1; } // évite division par zéro
+
+    // 1) Première passe: séparer par type de faceKey
+    const perEntityAgg = {};            // eid -> { sum, n, max }
+    const triOnlyKeysNeeded = new Set();// triIndex => à résoudre
+    const pending = [];                 // { triIndex, value }
+
+    const note = (eid, v) => {
+      if (!(eid in perEntityAgg)) perEntityAgg[eid] = { sum: 0, n: 0, max: -Infinity };
+      perEntityAgg[eid].sum += v;
+      perEntityAgg[eid].n   += 1;
+      if (v > perEntityAgg[eid].max) perEntityAgg[eid].max = v;
+    };
+
+    for (const [faceKey, raw] of Object.entries(map)) {
+      const v = Number(raw);
+      if (!Number.isFinite(v)) continue;
+
+      // priorité: resolver externe si fourni
+      if (typeof idResolver === "function") {
+        const eid = idResolver(faceKey);
+        if (eid) { note(String(eid), v); continue; }
+      }
+
+      // format "<entityId>:<triIndex>"
+      const parts = String(faceKey).split(":");
+      if (parts.length >= 2 && parts[0]) {
+        note(parts[0], v);
+        continue;
+      }
+
+      // format "<triIndex>"
+      const tri = parseInt(String(faceKey), 10);
+      if (Number.isFinite(tri)) {
+        triOnlyKeysNeeded.add(tri);
+        pending.push({ triIndex: tri, value: v });
+      }
     }
 
-    // 2) valoriser une métrique par entité
-    const valOf = (obj) => (mode === "avg" ? obj.sum / Math.max(1, obj.n) : obj.max);
+    // 2) Si on a des indexes "tri" simples, construire (ou réutiliser) le mapping tri -> entity
+    if (triOnlyKeysNeeded.size > 0) {
+      if (!this._triToEntity) {
+        this._triToEntity = this._buildTriToEntityIndex(triOnlyKeysNeeded, { debug });
+      } else {
+        // Compléter le cache si de nouveaux indexes dépassent ceux déjà connus
+        const unknown = Array.from(triOnlyKeysNeeded).filter(t => !(t in this._triToEntity));
+        if (unknown.length) {
+          const extraSet = new Set(unknown);
+          const more = this._buildTriToEntityIndex(extraSet, { debug, append: true });
+          Object.assign(this._triToEntity, more);
+        }
+      }
 
+      for (const { triIndex, value } of pending) {
+        const eid = this._triToEntity[triIndex];
+        if (eid) note(String(eid), value);
+      }
+    }
+
+    // 3) Appliquer la colorisation par entité
+    const valOf = (obj) => (mode === "avg" ? obj.sum / Math.max(1, obj.n) : obj.max);
     let applied = 0;
-    for (const [eid, agg] of Object.entries(perEntity)) {
+
+    for (const [eid, agg] of Object.entries(perEntityAgg)) {
       const val = valOf(agg);
-      const t = (val - min) / (max - min || 1);  // 0..1
+      const t = (val - min) / (max - min || 1); // 0..1
       const rgba = HeatmapLayer.colorFromT(t);
 
       const node =
         this.scene?.objects?.[eid] ||
         this.scene?.meshes?.[eid]  ||
         this.scene?.components?.[eid] ||
+        this.viewer?.scene?.objects?.[eid] ||
         null;
 
-      if (!node) continue;
+      if (!node) { if (debug) console.debug("[HeatmapLayer] entity introuvable:", eid); continue; }
 
-      // Sauvegarde la couleur initiale une seule fois
+      // sauvegarder couleur d'origine une seule fois
       if (!this._original.has(eid)) {
         try {
           const cur = node.colorize || node._colorize || null;
@@ -48,10 +121,9 @@ export default class HeatmapLayer {
         } catch {}
       }
 
-      // 3) appliquer la colorisation (différentes APIs possibles selon build)
       try {
         if ("colorize" in node) {
-          node.colorize = rgba;                     // xeokit standard
+          node.colorize = rgba;             // xeokit standard
           applied++;
         } else if (typeof this.scene?.setObjectsColorize === "function") {
           this.scene.setObjectsColorize([eid], rgba);
@@ -61,21 +133,118 @@ export default class HeatmapLayer {
           applied++;
         }
       } catch (e) {
-        // ignore
+        if (debug) console.debug("[HeatmapLayer] échec colorize", eid, e);
       }
     }
 
-    // compteur diag pour l'orchestrateur
     this.debugAppliedCount = applied;
+    if (debug) console.debug("[HeatmapLayer] applied", applied, "entities");
     return applied;
   }
 
-  // Même API que ci-dessus mais renvoie appliqués
+  // Alias compté (API attendue par l’orchestrateur)
   applyWithCount(map, opts) {
     return this.apply(map, opts);
   }
 
-  // Palette: bleu -> vert -> jaune -> rouge (via HSL)
+  /**
+   * Restaure les colorisations d'origine des entités modifiées.
+   */
+  reset() {
+    let restored = 0;
+    for (const [eid, rgba] of this._original.entries()) {
+      const node =
+        this.scene?.objects?.[eid] ||
+        this.scene?.meshes?.[eid]  ||
+        this.scene?.components?.[eid] ||
+        null;
+      try {
+        if (node && "colorize" in node) {
+          node.colorize = rgba;
+          restored++;
+        } else if (node && typeof this.scene?.setObjectsColorize === "function") {
+          this.scene.setObjectsColorize([eid], rgba);
+          restored++;
+        } else if (node && typeof this.adapter?.colorizeEntity === "function") {
+          this.adapter.colorizeEntity(eid, rgba);
+          restored++;
+        }
+      } catch {}
+    }
+    this._original.clear();
+    return restored;
+  }
+
+  // ====== Mapping triIndex -> entityId (copie des heuristiques de la probe SAFE) ======
+
+  _buildTriToEntityIndex(targetSet, { debug = false, append = false } = {}) {
+    const scene = this.viewer?.scene;
+    if (!scene) return {};
+
+    const need = new Set(targetSet || []);
+    const out = append ? (this._triToEntity || {}) : {};
+
+    const arr = (x) => x?.data || x?.array || x || null;
+
+    const collectMeshes = (sc) => {
+      const ms = [];
+      if (!sc) return ms;
+      if (sc.meshes)  ms.push(...Object.values(sc.meshes));
+      if (sc.objects) ms.push(...Object.values(sc.objects));
+      if (sc._objects)ms.push(...Object.values(sc._objects));
+      if (typeof sc.iterate === 'function') sc.iterate(o => ms.push(o));
+      return ms.filter(Boolean);
+    };
+
+    const getGeomArrays = (m) => {
+      const G = [
+        m.geometry, m._geometry, m._mesh?.geometry, m._rendererMesh?.geometry,
+        m._rendererNode?.geometry, m._state?.geometry
+      ].filter(Boolean);
+      for (const g of G) {
+        let P = arr(g.positions || g._positions || g.vertexPositions || g._vertexPositions ||
+                    g.decompressedPositions || g.positionsDecompressed || g._state?.positions);
+        let I = arr(g.indices   || g._indices   || g.triangles       || g._triangles       || g._state?.indices);
+        if (!P && typeof g.getPositions === 'function') { try { P = g.getPositions(); } catch {} }
+        if (!I && typeof g.getIndices   === 'function') { try { I = g.getIndices();   } catch {} }
+        P = arr(P); I = arr(I);
+        if (P && I && P.length && I.length) return { P, I };
+      }
+      return null;
+    };
+
+    // On reconstruit le même comptage de triangles que __getFaces SAFE
+    const meshes = collectMeshes(scene);
+    let triCounter = 0;
+    const maxNeeded = need.size ? Math.max(...need) : -1;
+    const resolved = new Set();
+
+    outer:
+    for (const m of meshes) {
+      const gi = getGeomArrays(m);
+      if (!gi) continue;
+      const { I } = gi;
+      const eid = String(m.id || m._id || m.entity?.id || m.objectId || m.nodeId || "");
+
+      for (let i = 0; i < I.length - 2; i += 3) {
+        // __getFaces poussait triCounter de 1 par triangle
+        triCounter++;
+        if (need.has(triCounter)) {
+          out[triCounter] = eid;
+          resolved.add(triCounter);
+          if (resolved.size === need.size) break outer;
+        }
+        // micro-optim: si on a dépassé tous les indexes demandés, on peut quitter tôt
+        if (triCounter > maxNeeded && resolved.size === need.size) break outer;
+      }
+    }
+
+    if (debug) console.debug("[HeatmapLayer] tri->entity built:", resolved.size, "/", need.size);
+    return out;
+  }
+
+  // ====== Palette: bleu -> vert -> jaune -> rouge (HSL) ======
+
   static colorFromT(t) {
     const tt = Math.max(0, Math.min(1, t));
     const hue = (1 - tt) * 240; // 240 (bleu) -> 0 (rouge)
