@@ -370,6 +370,16 @@ class DFMOrchestrator {
     if (Array.isArray(window.CAD?.materialShortlist) && window.CAD.materialShortlist.length) {
       renderMaterialsShortlistUI(window.CAD.materialShortlist);
     }
+        // ...dans init(), après les autres window.addEventListener(...)
+    window.addEventListener('cadlytics:materials-shortlist', (e) => {
+      try {
+        const list = e?.detail?.shortlist || [];
+        this._renderShortlistBar(list);
+      } catch (err) {
+        console.warn('[DFM] render shortlist bar failed', err);
+      }
+    });
+
   }
 
   setState(next){ this.phase = next; dbg("state →", next); }
@@ -506,6 +516,70 @@ class DFMOrchestrator {
         this.state.running = false;
       }
     );
+  }
+  // --- Barre shortlist matières (persistante) ---
+  _ensureRecoBar() {
+    if (this._recoEl && document.body.contains(this._recoEl)) return this._recoEl;
+
+    const host = document.createElement('div');
+    host.id = 'materialRecoBar';
+    Object.assign(host.style, {
+      position: 'fixed',
+      right: '16px',
+      top: '16px',
+      zIndex: '1060',
+      display: 'flex',
+      gap: '8px',
+      flexWrap: 'wrap',
+      maxWidth: '40vw'
+    });
+    document.body.appendChild(host);
+
+    // style léger (pils)
+    const style = document.createElement('style');
+    style.textContent = `
+      #materialRecoBar .mat-pill{
+        display:inline-flex; align-items:center; gap:6px;
+        background:rgba(255,255,255,.9);
+        border:1px solid rgba(0,0,0,.08);
+        border-radius:16px; padding:6px 10px;
+        box-shadow:0 6px 18px rgba(0,0,0,.08);
+        font:500 12px/1.2 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+        backdrop-filter:saturate(1.1) blur(4px);
+      }
+      #materialRecoBar .mat-pill .pct{
+        font-weight:700; padding:2px 6px; border-radius:10px;
+        background:#eef2ff; color:#1e3a8a;
+      }
+      #materialRecoBar .mat-pill .id{
+        color:#111827;
+      }
+    `;
+    document.head.appendChild(style);
+
+    this._recoEl = host;
+    return host;
+  }
+
+  _renderShortlistBar(shortlist = []) {
+    const host = this._ensureRecoBar();
+    host.innerHTML = ''; // réécrit le contenu, mais la barre reste
+
+    if (!Array.isArray(shortlist) || !shortlist.length) {
+      host.style.display = 'none';
+      return;
+    }
+    host.style.display = 'flex';
+
+    shortlist.slice(0, 3).forEach(item => {
+      const div = document.createElement('div');
+      div.className = 'mat-pill';
+      div.innerHTML = `
+        <span class="id">${item.name || item.id}</span>
+        <span class="pct">${(item.match_pct ?? Math.round(item.score || 0))}%</span>
+      `;
+      host.appendChild(div);
+    });
   }
 
   // --- Heatmap dépouille locale/serveur ---
