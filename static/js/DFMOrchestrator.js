@@ -67,7 +67,6 @@ function normalizeShortlist(list) {
   }));
 }
 
-
 const MAT_RULES_QUICK = {
   ABS:{draftExt:1.0,draftInt:0.5,P_inj_bar:600,tmin:1.2},
   PC:{draftExt:1.5,draftInt:1.0,P_inj_bar:800,tmin:1.8},
@@ -151,7 +150,6 @@ async function runLocalPhaseA(axisLetter){
 if (typeof window !== 'undefined') {
   window.__runLocalPhaseA = runLocalPhaseA;
 }
-
 
 /* ---------------------- Status polling ---------------------- */
 async function pollJobStatus(jobId, onUpdate, onDone, onError) {
@@ -294,7 +292,6 @@ function renderMaterialsShortlistUI(shortlist = []) {
       const found = shortlist.find(x => x.id === id);
       if (found) {
         window.selectedMaterial = { id: found.id, name: found.name };
-        // visuel : active la pill choisie
         box.querySelectorAll(".dfm-mat-pill").forEach(b=>{
           b.classList.remove("btn-primary");
           b.classList.add("btn-outline-primary");
@@ -302,7 +299,6 @@ function renderMaterialsShortlistUI(shortlist = []) {
         btn.classList.remove("btn-outline-primary");
         btn.classList.add("btn-primary");
 
-        // notifier les autres scripts (compat)
         window.dispatchEvent(new CustomEvent('material:selected', {
           detail: { materialProfile: window.selectedMaterial }
         }));
@@ -328,13 +324,21 @@ class DFMOrchestrator {
   }
 
   init(){
+    // ❶ Shortlist envoyée par la modale → sauvegarder + afficher (dédupliqué)
+    window.addEventListener('cadlytics:materials-shortlist', (e) => {
+      const list = normalizeShortlist(e?.detail?.shortlist || []);
+      window.CAD.materialShortlist = list;
+      this._persistShortlist(list);
+      this._renderShortlistBar(list);
+      renderMaterialsShortlistUI(list);
+    });
+
     // ❷ Fallback : si seule la matière “best” est connue, afficher au moins 1 pill à 100%
     window.addEventListener('material:selected', (e) => {
       const mp = e?.detail?.materialProfile || window.selectedMaterial;
       if (!mp) return;
       const existing = this._loadPersistedShortlist();
       if (Array.isArray(existing) && existing.length) {
-        // déjà une shortlist : ne pas l’écraser
         this._renderShortlistBar(existing);
       } else {
         const one = [{ id: mp.id, name: mp.name, match_pct: 100, score: 100 }];
@@ -345,13 +349,6 @@ class DFMOrchestrator {
 
     window.addEventListener('material:confirmed', () => {
       this.setState(DFM_STATES.MATERIAL_CONFIRMED);
-    });
-
- // ❶ Shortlist envoyée par la modale → sauvegarder + afficher
-    window.addEventListener('cadlytics:materials-shortlist', (e) => {
-      const list = e?.detail?.shortlist || [];
-      this._persistShortlist(list);
-      this._renderShortlistBar(list);
     });
 
     // Compat: si un autre UI publie axis:confirmed (ex: ancien panel)
@@ -367,11 +364,12 @@ class DFMOrchestrator {
     // Intégration demouldHost (app.html) -> lettre X/Y/Z
     window.addEventListener('cadlytics:demould-axis-selected', (e) => {
       const letter = (e?.detail?.axis || 'Z').toUpperCase();
-      this.selectedAxis = (() => letter==='X'?{x:1,y:0,z:0}:letter==='Y'?{x:0,y:1,z:0}:{x:0,y:0,z:1})();
+      this.selectedAxis = (letter==='X'?{x:1,y:0,z:0}:letter==='Y'?{x:0,y:1,z:0}:{x:0,y:0,z:1});
       this.state.axisConfirmed = true;
 
-      // Lancer la Phase A locale instantanée et, si tout est prêt, l’analyse serveur
-window.__runLocalPhaseA?.(letter)?.catch?.(()=>{});      const fid = this.resolveFileId();
+      // Phase A locale + éventuel lancement serveur
+      window.__runLocalPhaseA?.(letter)?.catch?.(()=>{});
+      const fid = this.resolveFileId();
       if (fid && materialIsConfirmed()) {
         this.setFileId(fid);
         this._renderLoading();
@@ -379,7 +377,7 @@ window.__runLocalPhaseA?.(letter)?.catch?.(()=>{});      const fid = this.resolv
       }
     });
 
-    // Bouton Analyser → workflow unique (capture pour éviter fallbacks)
+    // Bouton Analyser → workflow unique
     const btnAnalyser = document.querySelector('#btnAnalyser, #analyzeBtn, #btn-analyser');
     if (btnAnalyser) {
       btnAnalyser.addEventListener('click', (e) => {
@@ -393,35 +391,27 @@ window.__runLocalPhaseA?.(letter)?.catch?.(()=>{});      const fid = this.resolv
     if (Array.isArray(window.CAD?.materialShortlist) && window.CAD.materialShortlist.length) {
       renderMaterialsShortlistUI(window.CAD.materialShortlist);
     }
-        // ...dans init(), après les autres window.addEventListener(...)
-    window.addEventListener('cadlytics:materials-shortlist', (e) => {
-  const list = normalizeShortlist(e?.detail?.shortlist || []);
-  window.CAD.materialShortlist = list;
-  this._persistShortlist(list);
-  this._renderShortlistBar(list);
-  renderMaterialsShortlistUI(list);
-});
 
     // ❸ Initialiser la barre au chargement avec la dernière shortlist connue
     requestAnimationFrame(() => {
       const last = this._loadPersistedShortlist();
       if (last && last.length) this._renderShortlistBar(last);
       else this._renderShortlistBar([]); // crée la barre (cachée) pour éviter tout “flash”
-    })
-    // La modale envoie cet évènement -> on persiste + on affiche
+    });
+
+    // La modale “analyse matière” legacy
     window.addEventListener('cadlytics:material-analysis-done', (e) => {
       try {
         const raw = e?.detail?.shortlist || [];
         const list = normalizeShortlist(raw);
-        window.CAD.materialShortlist = list;           // garder en mémoire session
-        this._persistShortlist(list);                  // garder au reload
-        this._renderShortlistBar(list);                // barre flottante persistante
-        renderMaterialsShortlistUI(list);              // bloc dans le panneau résultats
+        window.CAD.materialShortlist = list;
+        this._persistShortlist(list);
+        this._renderShortlistBar(list);
+        renderMaterialsShortlistUI(list);
       } catch (err) {
         console.warn('[DFM] failed to handle material-analysis-done', err);
       }
     });
-
   }
 
   setState(next){ this.phase = next; dbg("state →", next); }
@@ -548,18 +538,19 @@ window.__runLocalPhaseA?.(letter)?.catch?.(()=>{});      const fid = this.resolv
       },
       () => {
         StatusUI.set('Analyse terminée');
-        UI.setLoading(false);
+        UI.setLoading?.(false);
         this.state.running = false;
       },
       () => {
         StatusUI.set('Analyse échouée');
         UI.err('Analyse échouée');
-        UI.setLoading(false);
+        UI.setLoading?.(false);
         this.state.running = false;
       }
     );
   }
-    // --- Barre shortlist matières (persistante) ---
+
+  // --- Barre shortlist matières (persistante) ---
   _ensureRecoBar() {
     if (this._recoEl && document.body.contains(this._recoEl)) return this._recoEl;
 
@@ -640,53 +631,75 @@ window.__runLocalPhaseA?.(letter)?.catch?.(()=>{});      const fid = this.resolv
     } catch { return []; }
   }
 
+  /* ---------- Helpers couleurs & calcul local du draft ---------- */
+  _draftToRGBA(d){
+    // 0° rouge -> 5° vert (simple ramp)
+    const clamp=(x,mn,mx)=>Math.max(mn,Math.min(mx,x));
+    const t = clamp((d-0)/(5-0), 0, 1);
+    const lerp=(a,b,u)=>a+(b-a)*u;
+    const r = t < 0.5 ? 255 : Math.round(lerp(255,  20, (t-0.5)/0.5));
+    const g = t < 0.5 ? Math.round(lerp(0, 255, t/0.5)) : Math.round(lerp(255, 180, (t-0.5)/0.5));
+    const b = t < 0.5 ? 0 : Math.round(lerp(0, 60, (t-0.5)/0.5));
+    return [r/255, g/255, b/255, 1];
+  }
+
+  async _collectLocalDraftSamples(axisLetter){
+    const faces = await (window.__getFaces?.(1200) || []);
+    if (!faces.length) return null;
+    const ax = (axisLetter||'Z').toUpperCase();
+    const axis = ax==='X'?[1,0,0]:ax==='Y'?[0,1,0]:[0,0,1];
+    const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+    const clamp01=(x)=>Math.max(-1,Math.min(1,x));
+    return faces.map(f=>{
+      const cos = Math.abs(dot(f.normal||[0,0,1], axis));
+      const ang = Math.acos(clamp01(cos)) * 180/Math.PI;
+      const draft = 90 - ang; // degrés
+      return { eid: f.eid || null, draft, area: f.area || 1 };
+    });
+  }
+
+  // Fallback entités (moyenne par entityId)
+  async _applyEntityHeatmap(axisLetter){
+    const samples = await this._collectLocalDraftSamples(axisLetter);
+    if (!samples || !samples.length) {
+      alert("Aucun échantillon local pour la heatmap.");
+      return 0;
+    }
+    const v = window.viewerAdapter?.viewer || window.viewer;
+    if (!v?.scene?.objects) { alert("Viewer non initialisé."); return 0; }
+
+    const byE = new Map();
+    for (const s of samples){
+      if (!s.eid) continue;
+      const acc = byE.get(s.eid) || { sum:0, area:0 };
+      acc.sum  += s.draft * s.area;
+      acc.area += s.area;
+      byE.set(s.eid, acc);
+    }
+    let applied = 0;
+    byE.forEach((acc, eid)=>{
+      const obj = v.scene.objects[eid];
+      if (!obj) return;
+      const mean = acc.sum / Math.max(1e-9, acc.area);
+      obj.colorize = this._draftToRGBA(mean);
+      obj.opacity  = 1;
+      applied++;
+    });
+    if (applied) StatusUI.set(`Heatmap dépouille appliquée (fallback entités: ${applied})`);
+    return applied;
+  }
 
   // --- Heatmap dépouille locale/serveur ---
-  async applyDraftHeatmap(draftMap = null, opts = {}) {
+  async applyDraftHeatmap(draftMap = null, opts = {}){
     try {
       const tryBuild = opts.tryBuild !== false;
 
+      // 1) Axis letter depuis l'état courant
       const vec = this.selectedAxis || { x:0, y:0, z:1 };
       const maxAbs = Math.max(Math.abs(vec.x||0), Math.abs(vec.y||0), Math.abs(vec.z||0));
       const letter = (maxAbs===Math.abs(vec.x)) ? 'X' : (maxAbs===Math.abs(vec.y) ? 'Y' : 'Z');
-// Plan A: si possible, (re)échantillonner vite et agréger par entité
-try {
-  const samples = await (window.__getFaces?.() || []);
-  if (Array.isArray(samples) && samples.length) {
-    // déduit l'axe (lettre)
-    const v = this.selectedAxis || {x:0,y:0,z:1};
-    const letter = (Math.abs(v.x)>=Math.abs(v.y) && Math.abs(v.x)>=Math.abs(v.z)) ? 'X'
-                 : (Math.abs(v.y)>=Math.abs(v.x) && Math.abs(v.y)>=Math.abs(v.z)) ? 'Y' : 'Z';
-    const ax = (letter==='X')?[1,0,0]:(letter==='Y')?[0,1,0]:[0,0,1];
-    const clamp = (x,min,max)=>Math.max(min,Math.min(max,x));
 
-    // agrégation per-entity (prend le max de "draft")
-    const perEnt = {}; // eid -> {max, sum, n}
-    for (const s of samples) {
-      if (!s || !s.normal) continue;
-      const n = s.normal;
-      const cos = Math.abs(n[0]*ax[0] + n[1]*ax[1] + n[2]*ax[2]);
-      const ang = Math.acos(clamp(cos,-1,1)) * 180/Math.PI;
-      const draft = 90 - ang;
-      const eid = s.eid || null;
-      if (!eid) continue;
-      const r = perEnt[eid] || (perEnt[eid] = {max:-Infinity, sum:0, n:0});
-      r.sum += draft; r.n += 1; if (draft > r.max) r.max = draft;
-    }
-
-    // transforme en map consommable par HeatmapLayer: "entityId:0" -> valeur
-    const entMap = {};
-    for (const [eid, ag] of Object.entries(perEnt)) {
-      // tu peux choisir ag.max (plus "critique") ou ag.sum/ag.n (moyenne)
-      entMap[`${eid}:0`] = ag.max;
-    }
-
-    if (Object.keys(entMap).length) {
-      draftMap = entMap; // priorise cette map
-    }
-  }
-} catch(e) { console.warn('[heatmap] sampling fallback failed', e); }
-
+      // 2) Map par face (si dispo) sinon tente une construction locale
       let map = draftMap || window.__quickDraftMap || {};
       let mapSize = Object.keys(map).length;
 
@@ -694,7 +707,7 @@ try {
         const faces = await this._computeFacesFromViewer();
         if (faces.length) {
           const ax = (letter==='X')?[1,0,0]:(letter==='Y')?[0,1,0]:[0,0,1];
-          const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
+          const clamp=(v,min,max)=>Math.max(min,Math.min(max,v));
           map = {};
           for (const f of faces) {
             const n = f.normal || [0,0,1];
@@ -708,11 +721,7 @@ try {
         }
       }
 
-      if (mapSize === 0) {
-        alert("Pas de données locales de dépouille encore calculées.");
-        return;
-      }
-
+      // 3) S’assure que le viewer est prêt
       if (!window.viewerAdapter?.viewer) {
         const canvas =
           document.getElementById('xeokit-canvas') ||
@@ -732,30 +741,31 @@ try {
         return;
       }
 
-      if (typeof HeatmapLayer !== 'function') {
-        console.warn('[heatmap] HeatmapLayer indisponible');
-        alert("HeatmapLayer indisponible (module non chargé).");
-        return;
-      }
-      const layer = new HeatmapLayer(window.viewerAdapter);
-
+      // 4) Essai par-face via HeatmapLayer
       let appliedCount = 0;
-      if (typeof layer.applyWithCount === 'function') {
-        appliedCount = layer.applyWithCount(map, { min: 0, max: 5 });
-      } else {
-        layer.apply(map, { min: 0, max: 5 });
-        appliedCount = layer.debugAppliedCount || 0;
+      if (mapSize > 0 && typeof HeatmapLayer === 'function') {
+        const layer = new HeatmapLayer(window.viewerAdapter);
+        if (typeof layer.applyWithCount === 'function') {
+          appliedCount = layer.applyWithCount(map, { min: 0, max: 5 });
+        } else {
+          layer.apply(map, { min: 0, max: 5 });
+          appliedCount = layer.debugAppliedCount || 0;
+        }
       }
 
+      // 5) Si 0 face colorisée -> FALLBACK ENTITÉ automatique
       if (appliedCount === 0) {
-        alert(
-          "Aucune face n’a été colorisée (0 correspondance).\n" +
-          "Schéma d’ID incompatible. Donne-moi modules/HeatmapLayer.js pour adapter la traduction d’IDs."
-        );
-        return;
+        console.warn('[DFM] Heatmap par face: 0 correspondance. Fallback entités…');
+        const n = await this._applyEntityHeatmap(letter);
+        if (!n) {
+          alert(
+            "Aucune face/entité colorisée.\n" +
+            "Schéma d’ID incompatible pour HeatmapLayer. Partage-moi modules/HeatmapLayer.js pour adapter le mapping."
+          );
+        }
+      } else {
+        StatusUI.set("Heatmap dépouille appliquée");
       }
-
-      StatusUI.set("Heatmap dépouille appliquée");
     } catch (e) {
       console.warn("[DFM] applyDraftHeatmap error", e);
       alert("Impossible d'appliquer la heatmap (voir console).");
@@ -911,7 +921,6 @@ try {
       </div>
     </div>`;
 
-    // Conserver la shortlist visible au-dessus du loader si dispo
     if (Array.isArray(window.CAD?.materialShortlist) && window.CAD.materialShortlist.length) {
       renderMaterialsShortlistUI(window.CAD.materialShortlist);
     }

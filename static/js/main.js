@@ -54,9 +54,7 @@ const clipButtons  = $$(".clipAxis");
 const clipRange    = $("#clipRange");
 const btnShot      = $("#btnShot");
 
-/* ===== FIX modal matière (fallback non bloquant) =====
-   NB: DFMOrchestrator et app.html peuvent exposer leur propre openMaterialModal.
-   Ici on expose UNIQUEMENT si absent pour éviter les conflits. */
+/* ===== FIX modal matière (fallback non bloquant) ===== */
 (function ensureMaterialModalAPI(){
   function getMaterialModalEl() {
     const sel =
@@ -73,14 +71,11 @@ const btnShot      = $("#btnShot");
   function openMaterialModalHard() {
     const el = getMaterialModalEl();
     if (!el) { console.warn('[main] Modale matière introuvable'); return; }
-    // Empêche double ouverture si déjà visible
     if (el.classList.contains('show') || el.style.display === 'block') return;
-
     if (window.bootstrap?.Modal) {
       window.bootstrap.Modal.getOrCreateInstance(el, { backdrop: 'static' }).show();
       return;
     }
-    // fallback vanilla
     let bd = document.getElementById('__mm_backdrop__');
     if (!bd) {
       bd = document.createElement('div');
@@ -110,11 +105,9 @@ const btnShot      = $("#btnShot");
     }
     if (bd) bd.remove();
   }
-  // n’expose que si personne ne l’a fait
   if (!window.openMaterialModal) window.openMaterialModal = openMaterialModalHard;
   if (!window.showMaterialModal) window.showMaterialModal = openMaterialModalHard;
 
-  // sécurité : si aucun autre script n’a ouvert la modale après clic, on la force
   const ANALYZE_SEL =
     '#btnAnalyser, #analyzeBtn, #btn-analyser, #btnAnalyse, #analyser, .btn-analyser, [data-action="analyze"], [data-act="analyze"]';
   function wireAnalyzeButtons() {
@@ -123,7 +116,6 @@ const btnShot      = $("#btnShot");
       btn.__wiredAnalyzeMain = true;
       btn.addEventListener('click', (ev) => {
         if (ev.defaultPrevented) return;
-        // Laisse une chance au code métier, puis force si rien n’est ouvert
         setTimeout(() => {
           const open =
             document.querySelector('.modal.show') ||
@@ -529,45 +521,6 @@ async function loadXKT(url, nameHint){
   model.on("error", e=>{ console.error(e); setProgress(0); alert("Erreur chargement XKT."); });
   return id;
 }
-// ---- Hook: capture des buffers pour le probe SAFE ----
-function hookGeometryCapture(viewer) {
-  try {
-    const scene = viewer?.scene;
-    if (!scene) return;
-
-    // essaie plusieurs sources possibles selon build xeokit
-    const geometries = Object.values(
-      scene._geometries || scene.geometries || scene.objects || {}
-    );
-
-    let wired = 0;
-
-    const arr = (x) => x?.data || x?.array || x || null;
-
-    geometries.forEach((node) => {
-      const g = node?.geometry || node?._geometry || node?._state?.geometry || node;
-      if (!g) return;
-
-      // tente d'obtenir positions/indices via diverses API
-      let P = arr(g.positions || g._positions || g.vertexPositions || g._vertexPositions || g.decompressedPositions || g.positionsDecompressed || g._state?.positions);
-      let I = arr(g.indices   || g._indices   || g.triangles       || g._triangles       || g._state?.indices);
-
-      if (!P && typeof g.getPositions === 'function') { try { P = arr(g.getPositions()); } catch{} }
-      if (!I && typeof g.getIndices   === 'function') { try { I = arr(g.getIndices());   } catch{} }
-
-      if (P && I && !g.__dfmPositions && !g.__dfmIndices) {
-        // On stocke sur l'objet geometry (utilisé par le probe)
-        g.__dfmPositions = P;
-        g.__dfmIndices   = I;
-        wired++;
-      }
-    });
-
-    console.log('[geom-capture] buffers câblés pour fallback:', wired);
-  } catch (e) {
-    console.warn('[geom-capture] échec', e);
-  }
-}
 
 /* ====================== PROBE SAFE (faces) ====================== */
 (function installProbeSafe(){
@@ -576,11 +529,8 @@ function hookGeometryCapture(viewer) {
     return;
   }
 
-  // ---- dépendances légères
   const sleep = (ms)=> new Promise(r=>setTimeout(r,ms));
-  const norm  = (v)=>{ const L = Math.hypot(v[0],v[1],v[2]) || 1; return [v[0]/L, v[1]/L, v[2]/L]; };
 
-  // ---- viewer & canvas (robuste)
   const viewer = window.viewerAdapter?.viewer || window.viewer;
   const canvasEl =
     document.getElementById('xeokit-canvas') ||
@@ -588,48 +538,10 @@ function hookGeometryCapture(viewer) {
     document.querySelector('canvas');
 
   if (!viewer || !viewer.scene) {
-    console.warn('[probe safe] viewer non prêt, mais on continue: __getFaces attendra le scene.aabb');
+    console.warn('[probe safe] viewer non prêt, la sonde attendra le scene.aabb');
   }
   if (!canvasEl) {
-    console.warn('[probe safe] canvas introuvable – projection écran approximative.');
-  }
-
-  function projectToCanvas(p){ // -> coords en pixels (canvas)
-    const cam = viewer?.camera;
-    const mV  = cam?.viewMatrix;
-    const mP  = cam?.projMatrix || cam?.projectionMatrix;
-    if (!mV || !mP || !canvasEl) return null;
-    const x=p[0], y=p[1], z=p[2];
-    const vx = mV[0]*x + mV[4]*y + mV[8]*z  + mV[12];
-    const vy = mV[1]*x + mV[5]*y + mV[9]*z  + mV[13];
-    const vz = mV[2]*x + mV[6]*y + mV[10]*z + mV[14];
-    const vw = mV[3]*x + mV[7]*y + mV[11]*z + mV[15];
-    const cx = mP[0]*vx + mP[4]*vy + mP[8]*vz  + mP[12]*vw;
-    const cy = mP[1]*vx + mP[5]*vy + mP[9]*vz  + mP[13]*vw;
-    const cw = mP[3]*vx + mP[7]*vy + mP[11]*vz + mP[15]*vw;
-    if (!cw) return null;
-    const nx = cx/cw, ny = cy/cw;
-    const W = canvasEl.clientWidth || canvasEl.width  || 1;
-    const H = canvasEl.clientHeight|| canvasEl.height || 1;
-    return { x:(nx*0.5+0.5)*W, y:(1-(ny*0.5+0.5))*H, W, H };
-  }
-
-  function screenRectFromAABB(){
-    if (!viewer?.scene || !canvasEl) {
-      return { x0:0, y0:0, x1:(canvasEl?.clientWidth||512), y1:(canvasEl?.clientHeight||512) };
-    }
-    const a = viewer.scene.aabb || [0,0,0,0,0,0];
-    const cs = [
-      [a[0],a[1],a[2]],[a[3],a[1],a[2]],[a[0],a[4],a[2]],[a[3],a[4],a[2]],
-      [a[0],a[1],a[5]],[a[3],a[1],a[5]],[a[0],a[4],a[5]],[a[3],a[4],a[5]]
-    ].map(projectToCanvas).filter(Boolean);
-    if (!cs.length) return { x0:0, y0:0, x1:canvasEl.clientWidth, y1:canvasEl.clientHeight };
-    const xs = cs.map(p=>p.x), ys = cs.map(p=>p.y);
-    const x0 = Math.max(0, Math.min(...xs)), y0 = Math.max(0, Math.min(...ys));
-    const x1 = Math.min(canvasEl.clientWidth,  Math.max(...xs));
-    const y1 = Math.min(canvasEl.clientHeight, Math.max(...ys));
-    const pad = 6;
-    return { x0:Math.max(0,x0-pad), y0:Math.max(0,y0-pad), x1:Math.min(canvasEl.clientWidth,x1+pad), y1:Math.min(canvasEl.clientHeight,y1+pad) };
+    console.warn('[probe safe] canvas introuvable – sonde limitée.');
   }
 
   async function waitSceneReady(maxMs=2000){
@@ -639,133 +551,125 @@ function hookGeometryCapture(viewer) {
       if (a && (a[3]-a[0])>1e-6 && (a[4]-a[1])>1e-6 && (a[5]-a[2])>1e-6) return true;
       await sleep(50);
     }
-    return true; // on tente quand même
+    return true;
   }
 
-  // ---- fallback géométrique si aucune face pickée
-  // --- remplace TOUTE ta fonction geometryFallback(...) par celle-ci :
-function geometryFallback(maxSamples = 4000) {
-  try {
-    const scene = viewer?.scene;
-    if (!scene) return [];
-
-    // 1) Récupère une liste de "meshes" selon le build xeokit
-    const meshes = [];
-    if (scene.meshes) {                         // builds récents
-      for (const k in scene.meshes) if (scene.meshes[k]) meshes.push(scene.meshes[k]);
-    } else if (scene.objects) {                 // anciens / alternatifs
-      for (const k in scene.objects) {
-        const o = scene.objects[k];
-        if (o && (o.geometry || o._geometry || o._state?.geometry)) meshes.push(o);
+  // Fallback géométrique : parcourt les meshes et reconstruit des normales
+  function geometryFallback(maxSamples = 4000) {
+    try {
+      const scene = viewer?.scene;
+      if (!scene) return [];
+      const meshes = [];
+      if (scene.meshes) {
+        for (const k in scene.meshes) if (scene.meshes[k]) meshes.push(scene.meshes[k]);
+      } else if (scene.objects) {
+        for (const k in scene.objects) {
+          const o = scene.objects[k];
+          if (o && (o.geometry || o._geometry || o._state?.geometry)) meshes.push(o);
+        }
+      } else if (scene.iterate) {
+        scene.iterate((n) => { if (n?.geometry) meshes.push(n); });
       }
-    } else if (scene.iterate) {                 // API générique
-      scene.iterate((n) => { if (n?.geometry) meshes.push(n); });
-    }
-    if (!meshes.length) return [];
+      if (!meshes.length) return [];
 
-    const arr = (x) => x?.data || x?.array || x || null;
-    const faces = [];
-    const MAX = Math.max(1000, Math.min(maxSamples, 12000));
-    let budget = MAX;
+      const arr = (x) => x?.data || x?.array || x || null;
+      const faces = [];
+      const MAX = Math.max(1000, Math.min(maxSamples, 12000));
+      let budget = MAX;
 
-    // 2) Pour chaque mesh, récupère positions/indices (peu importe la variante)
-    for (const m of meshes) {
-      if (budget <= 0) break;
-      const g = m.geometry || m._geometry || m._state?.geometry || {};
-
-      // Essayez toutes les variantes possibles
-      let P = arr(g.positions || g._positions || g.vertexPositions || g._vertexPositions || g.decompressedPositions || g.positionsDecompressed || g._state?.positions);
-      let I = arr(g.indices   || g._indices   || g.triangles       || g._triangles       || g._state?.indices);
-
-      if (!P && typeof g.getPositions === 'function') { try { P = arr(g.getPositions()); } catch {} }
-      if (!I && typeof g.getIndices   === 'function') { try { I = arr(g.getIndices());   } catch {} }
-
-      if (!P || !I) continue;
-
-      // 3) Matrice monde (selon build)
-      const wm = m.worldMatrix || m.matrix || m.worldTransform?.matrix || m.transform?.matrix || [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
-      const mul4x4 = (mat,[x,y,z]) => [
-        mat[0]*x + mat[4]*y + mat[8]*z + mat[12],
-        mat[1]*x + mat[5]*y + mat[9]*z + mat[13],
-        mat[2]*x + mat[6]*y + mat[10]*z + mat[14]
-      ];
       const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
       const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
       const len=(v)=>Math.hypot(v[0],v[1],v[2])||1;
       const norm=(v)=>{ const L=len(v); return [v[0]/L,v[1]/L,v[2]/L]; };
 
-      // 4) Sous-échantillonnage pour rester rapide
-      const triCount = Math.floor(I.length/3);
-      const step = Math.max(1, Math.ceil(triCount / Math.max(256, Math.min(budget, 4096))));
+      for (const m of meshes) {
+        if (budget <= 0) break;
+        const g = m.geometry || m._geometry || m._state?.geometry || {};
+        let P = arr(g.positions || g._positions || g.vertexPositions || g._vertexPositions || g.decompressedPositions || g.positionsDecompressed || g._state?.positions);
+        let I = arr(g.indices   || g._indices   || g.triangles       || g._triangles       || g._state?.indices);
+        if (!P && typeof g.getPositions === 'function') { try { P = arr(g.getPositions()); } catch {} }
+        if (!I && typeof g.getIndices   === 'function') { try { I = arr(g.getIndices());   } catch {} }
+        if (!P || !I) continue;
 
-      for (let i=0; i<I.length-2 && budget>0; i += 3*step) {
-        const i0 = I[i]*3, i1 = I[i+1]*3, i2 = I[i+2]*3;
-        const p0 = mul4x4(wm, [P[i0], P[i0+1], P[i0+2]]);
-        const p1 = mul4x4(wm, [P[i1], P[i1+1], P[i1+2]]);
-        const p2 = mul4x4(wm, [P[i2], P[i2+1], P[i2+2]]);
-        const u = sub(p1,p0), v = sub(p2,p0);
-        const n = norm(cross(u,v));
-        const area = 0.5 * len(cross(u,v)); // pondération relative
-        faces.push({ normal:n, area, source:"mesh-fallback" });
-        budget--;
+        const wm = m.worldMatrix || m.matrix || m.worldTransform?.matrix || m.transform?.matrix ||
+                   [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
+        const mul4x4 = (mat,[x,y,z]) => [
+          mat[0]*x + mat[4]*y + mat[8]*z + mat[12],
+          mat[1]*x + mat[5]*y + mat[9]*z + mat[13],
+          mat[2]*x + mat[6]*y + mat[10]*z+ mat[14]
+        ];
+
+        const triCount = Math.floor(I.length/3);
+        const step = Math.max(1, Math.ceil(triCount / Math.max(256, Math.min(budget, 4096))));
+        for (let i=0; i<I.length-2 && budget>0; i += 3*step) {
+          const i0 = I[i]*3, i1 = I[i+1]*3, i2 = I[i+2]*3;
+          const p0 = mul4x4(wm, [P[i0], P[i0+1], P[i0+2]]);
+          const p1 = mul4x4(wm, [P[i1], P[i1+1], P[i1+2]]);
+          const p2 = mul4x4(wm, [P[i2], P[i2+1], P[i2+2]]);
+          const u = sub(p1,p0), v = sub(p2,p0);
+          const n = norm(cross(u,v));
+          const area = 0.5 * len(cross(u,v));
+          faces.push({ normal:n, area, source:"mesh-fallback" });
+          budget--;
+        }
       }
+      console.log('[probe safe] faces via MESH fallback =', faces.length);
+      return faces;
+    } catch (e) {
+      console.warn('[probe safe] mesh fallback error', e);
+      return [];
     }
-
-    console.log('[probe safe] faces via MESH fallback =', faces.length);
-    return faces;
-  } catch (e) {
-    console.warn('[probe safe] mesh fallback error', e);
-    return [];
   }
-}
 
-  // ===== API exposée =====
-  window.__getFaces = async function(maxSamples=3500){
+  // Sonde écran : échantillonnage uniforme + identifiant d’entité
+  window.__getFaces = async function(maxSamples = 3500){
     await waitSceneReady(1200);
-    const faces = [];
-    const rect = screenRectFromAABB();
-    const w = Math.max(1, rect.x1-rect.x0), h = Math.max(1, rect.y1-rect.y0);
-    const areaScreen = w*h;
+    if (!viewer || !canvasEl) return [];
 
-    // grille régul.
-    const nx = Math.max(20, Math.round(Math.sqrt(maxSamples * (w/h))));
-    const ny = Math.max(20, Math.round(maxSamples / nx));
-    const stepX = w / nx, stepY = h / ny;
+    const W = canvasEl.clientWidth  || canvasEl.width  || 512;
+    const H = canvasEl.clientHeight || canvasEl.height || 512;
+    const areaScreen = W * H;
+
+    const nx = Math.max(24, Math.round(Math.sqrt(maxSamples * (W/H))));
+    const ny = Math.max(24, Math.round(maxSamples / nx));
+    const stepX = W / nx, stepY = H / ny;
     const sampleArea = areaScreen / (nx*ny);
 
+    const norm = (v)=>{ const L=Math.hypot(v[0],v[1],v[2])||1; return [v[0]/L,v[1]/L,v[2]/L]; };
+    const faces = [];
+
     for (let iy=0; iy<ny; iy++){
-      const y = rect.y0 + (iy+0.5)*stepY;
+      const y = (iy+0.5)*stepY;
       for (let ix=0; ix<nx; ix++){
-        const x = rect.x0 + (ix+0.5)*stepX;
-        const hit = viewer?.scene?.pick && viewer.scene.pick({ canvasPos:[x,y], pickSurface:true });
+        const x = (ix+0.5)*stepX;
+        const hit = viewer.scene.pick?.({ canvasPos:[x,y], pickSurface:true });
         if (hit && hit.worldNormal){
-          const n = norm(hit.worldNormal);
-          const eid = hit.entity?.id || hit.mesh?.id || hit.object?.id || null; // <<< clé pour coloriser
-          faces.push({ normal:n, area: sampleArea, source:"screen-pick", eid });
+          const eid = hit.entity?.id || hit.mesh?.id || hit.object?.id || null;
+          faces.push({ normal: norm(hit.worldNormal), area: sampleArea, source: "screen-pick", eid });
         }
       }
     }
 
-// --- Fallback si rien pické
-if (faces.length === 0){
-  const fb = geometryFallback(Math.max(1000, maxSamples));
-  if (fb.length) {
-    console.log('[probe safe] faces via geometry fallback =', fb.length);
-    return fb;
-  }
-}
+    // Fallback si on n'a rien pické
+    if (!faces.length) {
+      const fb = geometryFallback(Math.max(1000, maxSamples));
+      if (fb.length) {
+        console.log('[probe safe] faces via geometry fallback =', fb.length);
+        return fb;
+      }
+    }
 
-    console.log('[probe safe] faces =', faces.length);
+    console.log('[probe safe] faces(canvas-wide) =', faces.length);
     return faces;
   };
 
-  // surface projetée si absent
+  // surface projetée locale si API serveur absente
   if (typeof window.__getProjectedArea !== 'function') {
     window.__getProjectedArea = function(axisLetter='Z'){
-      const ax = String(axisLetter||'Z').toUpperCase();
       const a = viewer?.scene?.aabb;
       if (!a) return 0;
       const dx=a[3]-a[0], dy=a[4]-a[1], dz=a[5]-a[2];
+      const ax = String(axisLetter||'Z').toUpperCase();
       const mm2 = (ax==='X') ? dy*dz : (ax==='Y') ? dx*dz : dx*dy;
       return Math.max(0, mm2/100); // mm² -> cm²
     };
@@ -773,6 +677,7 @@ if (faces.length === 0){
 
   console.log('[probe safe] installed (main.js)');
 })();
+
 /* ---------- FICHIERS / upload ---------- */
 async function uploadAndShow(file) {
   const f = file || fileInput?.files?.[0];
@@ -959,7 +864,7 @@ function worldToOverlayXY(world){
   const vw = mV[3]*x + mV[7]*y + mV[11]*z + mV[15];
 
   const cx = mP[0]*vx + mP[4]*vy + mP[8]*vz  + mP[12]*vw;
-  const cy = mP[1]*vx + mP[5]*vy + mP[9]*vz  + mP[13]*vw;
+  const cy = mP[1]*vy + mP[5]*vy + mP[9]*vz  + mP[13]*vw;
   const cw = mP[3]*vx + mP[7]*vy + mP[11]*vz + mP[15]*vw;
   if (!cw) return null;
 
