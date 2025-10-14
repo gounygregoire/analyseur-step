@@ -1,9 +1,9 @@
-/* /static/js/criteria-modal.js — logique matériaux + conflits + scoring (robuste) */
+// /static/js/criteria-modal.js — logique matériaux + conflits + scoring
 (function () {
-  const $  = (s, r = document) => r.querySelector(s);
+  const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 
-  /* ---------- base matières (inchangé) ---------- */
+  /* ------------------------- Mini base matières ------------------------- */
   const MATERIALS = [
     { id:"PP", name:"PP (polypropylène)", cat:"semi-cristallin", E_GPa:1.5, izod_kJm2:6, Tg_C:-10, HDT_C:55, CTI:600, UL94:"HB", price_eurkg:2.5, transparent:false, uv_ok:"moyen", chem:["huiles","detergents"], food:true, medical:false, fr_grade:false, min_wall_mm:1.2, elongation_pct:300, hinge_ok:true, snap_ok:true, overmold_ok:true },
     { id:"PP_GF30", name:"PP GF30", cat:"semi-cristallin", E_GPa:4.5, izod_kJm2:5, Tg_C:-10, HDT_C:95, CTI:600, UL94:"HB", price_eurkg:3.6, transparent:false, uv_ok:"moyen", chem:["huiles","detergents"], food:false, medical:false, fr_grade:false, min_wall_mm:1.5, elongation_pct:2, hinge_ok:false, snap_ok:false, overmold_ok:true },
@@ -17,189 +17,263 @@
     { id:"PPSU", name:"PPSU (médical stérilisable)", cat:"amorphe hautes perfs", E_GPa:2.4, izod_kJm2:9, Tg_C:220, HDT_C:200, CTI:250, UL94:"V-0", price_eurkg:22, transparent:false, uv_ok:"moyen", chem:["alcool","detergents"], food:true, medical:true, fr_grade:true, min_wall_mm:2.0, elongation_pct:60, hinge_ok:false, snap_ok:true, overmold_ok:false, sterilize_ok:true },
     { id:"PEEK", name:"PEEK", cat:"semi-cristallin hautes perfs", E_GPa:3.6, izod_kJm2:5, Tg_C:143, HDT_C:250, CTI:600, UL94:"V-0", price_eurkg:45, transparent:false, uv_ok:"moyen", chem:["huiles","solvants","detergents"], food:true, medical:true, fr_grade:true, min_wall_mm:1.0, elongation_pct:20, hinge_ok:false, snap_ok:true, overmold_ok:false, sterilize_ok:true },
   ];
-  function translucide(){ return false; }
 
-  /* ---------- presets / helpers (inchangé) ---------- */
+  function translucide(){ return false; } // placeholder simple
+
+  /* ----------------------------- Presets UI ----------------------------- */
   const PRESETS = {
-    outdoor_uv: (f)=>{ f.expoUV.checked=true; $("#transparence").checked=false; $("#rigidite_elevee").checked=true; setPriority("rigidite_elevee","should"); $("#resistance_chocs").checked=true; setPriority("resistance_chocs","must"); $("#prixCible").value=5; updateRangeLabel("#prixCible","#prixCibleVal","€ /kg"); $("#ul94").value=""; $("#process").value="injection"; $("#epMin").value=2; },
-    clip_flexible: (f)=>{ $("#flexibilite").checked=true; setPriority("flexibilite","must"); $("#resistance_chocs").checked=true; setPriority("resistance_chocs","should"); $("#features").value=["snapfits"]; $("#epMin").value=1.2; $("#prixCible").value=6; updateRangeLabel("#prixCible","#prixCibleVal","€ /kg"); $("#process").value="injection"; },
-    medical_sterile: (f)=>{ $("#qualite_medicale").checked=true; $("#contact_alimentaire").checked=true; $("#ul94").value="V-0"; $("#tempServiceMax").value=120; updateRangeLabel("#tempServiceMax","#tempServiceMaxVal","°C"); $("#prixCible").value=20; updateRangeLabel("#prixCible","#prixCibleVal","€ /kg"); $("#process").value="injection"; },
-    charniere_film: (f)=>{ $("#flexion").checked=true; setPriority("flexion","must"); $("#flexibilite").checked=true; setPriority("flexibilite","must"); $("#epMin").value=0.8; $("#process").value="injection"; $("#prixCible").value=4; updateRangeLabel("#prixCible","#prixCibleVal","€ /kg"); },
-    optique_transparente: (f)=>{ $("#transparence").checked=true; setPriority("transparence","must"); $("#ul94").value=""; $("#resistance_chocs").checked=true; setPriority("resistance_chocs","should"); $("#epMin").value=2; $("#prixCible").value=8; updateRangeLabel("#prixCible","#prixCibleVal","€ /kg"); },
-    electrique_cti: (f)=>{ $("#proprietes_elec").checked=true; $("#ul94").value="V-2"; $("#prixCible").value=5; updateRangeLabel("#prixCible","#prixCibleVal","€ /kg"); $("#process").value="injection"; },
+    outdoor_uv: (f) => { f.expoUV.checked = true; $("#transparence").checked = false; $("#rigidite_elevee").checked = true; setPriority("rigidite_elevee","should"); $("#resistance_chocs").checked = true; setPriority("resistance_chocs","must"); $("#prixCible").value = 5; updateRangeLabel("#prixCible","#prixCibleVal","€ /kg"); $("#ul94").value=""; $("#process").value="injection"; $("#epMin").value=2; },
+    clip_flexible: (f) => { $("#flexibilite").checked = true; setPriority("flexibilite","must"); $("#resistance_chocs").checked = true; setPriority("resistance_chocs","should"); $("#features").value = ["snapfits"]; $("#epMin").value = 1.2; $("#prixCible").value = 6; updateRangeLabel("#prixCible","#prixCibleVal","€ /kg"); $("#process").value="injection"; },
+    medical_sterile: (f) => { $("#qualite_medicale").checked = true; $("#contact_alimentaire").checked = true; $("#ul94").value = "V-0"; $("#tempServiceMax").value = 120; updateRangeLabel("#tempServiceMax","#tempServiceMaxVal","°C"); $("#prixCible").value = 20; updateRangeLabel("#prixCible","#prixCibleVal","€ /kg"); $("#process").value="injection"; },
+    charniere_film: (f) => { $("#flexion").checked = true; setPriority("flexion","must"); $("#flexibilite").checked = true; setPriority("flexibilite","must"); $("#epMin").value = 0.8; $("#process").value="injection"; $("#prixCible").value=4; updateRangeLabel("#prixCible","#prixCibleVal","€ /kg"); },
+    optique_transparente: (f) => { $("#transparence").checked = true; setPriority("transparence","must"); $("#ul94").value=""; $("#resistance_chocs").checked=true; setPriority("resistance_chocs","should"); $("#epMin").value=2; $("#prixCible").value=8; updateRangeLabel("#prixCible","#prixCibleVal","€ /kg"); },
+    electrique_cti: (f) => { $("#proprietes_elec").checked = true; $("#ul94").value = "V-2"; $("#prixCible").value=5; updateRangeLabel("#prixCible","#prixCibleVal","€ /kg"); $("#process").value="injection"; },
   };
-  function setPriority(id,val){ const sel=$(`select.priority[data-for="${id}"]`); if (sel) sel.value=val; }
 
-  /* ---------- lecture form / scoring utilitaires (inchangé) ---------- */
-  function readForm(){ return {
-    tempMax:num($("#tempServiceMax")?.value,60),
-    uv:$("#expoUV")?.checked||false,
-    humid:$("#expoHumidite")?.checked||false,
-    chimie:getChemTags(),
-    ul94:$("#ul94")?.value||"",
-    prix:num($("#prixCible")?.value,8),
-    region:$("#regionConformite")?.value||"",
-    process:$("#process")?.value||"injection",
-    epMin:num($("#epMin")?.value,null),
-    features:Array.from($("#features")?.selectedOptions||[]).map(o=>o.value),
-    criteria:collectCriteria()
-  }; }
-  function num(v,d){ const n=parseFloat(v); return isFinite(n)?n:d; }
+  function setPriority(id, val){ const sel = $(`select.priority[data-for="${id}"]`); if (sel) sel.value = val; }
+
+  /* -------------------------- Lecture du formulaire -------------------------- */
+  function readForm(){
+    const f = {
+      tempMax: num($("#tempServiceMax")?.value, 60),
+      uv: $("#expoUV")?.checked || false,
+      humid: $("#expoHumidite")?.checked || false,
+      chimie: getChemTags(),
+      ul94: $("#ul94")?.value || "",
+      prix: num($("#prixCible")?.value, 8),
+      region: $("#regionConformite")?.value || "",
+      process: $("#process")?.value || "injection",
+      epMin: num($("#epMin")?.value, null),
+      features: Array.from($("#features")?.selectedOptions || []).map(o=>o.value),
+      criteria: collectCriteria()
+    };
+    return f;
+  }
+  function num(v, d){ const n = parseFloat(v); return isFinite(n) ? n : d; }
   function getChemTags(){ const m=[]; if($("#chem_huiles")?.checked)m.push("huiles"); if($("#chem_solvents")?.checked)m.push("solvants"); if($("#chem_alcool")?.checked)m.push("alcool"); if($("#chem_detergents")?.checked)m.push("detergents"); if($("#chem_eausalee")?.checked)m.push("eausalee"); return m; }
-  function collectCriteria(){ const map={}; $$(".criterion").forEach(cb=>{ const id=cb.id; if(!id)return; const pri=$(`select.priority[data-for="${id}"]`)?.value||"should"; map[id]={on:cb.checked,pri}; }); return map; }
+  function collectCriteria(){
+    const map={}; $$(".criterion").forEach(cb=>{ const id=cb.id; if(!id) return; const pri=$(`select.priority[data-for="${id}"]`)?.value||"should"; map[id]={on:cb.checked,pri}; });
+    return map;
+  }
 
+  /* ----------------------- Règles / conflits (UI) ----------------------- */
   function detectConflicts(f){
-    const msg=[]; const rigid=f.criteria["rigidite_elevee"]; const flexi=f.criteria["flexibilite"];
-    if(rigid?.on&&flexi?.on&&rigid.pri==="must"&&flexi.pri==="must") msg.push("Rigidité élevée et Flexibilité ne peuvent pas être Must simultanément.");
-    const transp=f.criteria["transparence"]; if(transp?.on&&transp.pri==="must") msg.push("Transparence stricte : exclut les grades chargés (GF) et fortement pigmentés.");
-    const hinge=f.features.includes("hinge"); if(hinge){ if(!(flexi?.on)) msg.push("Charnière film : active Flexibilité (au moins Should)."); if(f.epMin!==null&&f.epMin>1.0) msg.push("Charnière film : épaisseur min conseillée ≤ 1.0 mm."); }
-    const snap=f.features.includes("snapfits"); if(snap&&rigid?.pri==="must") msg.push("Encliquetages : éviter **rigidité Must** avec grades fibre de verre (cassant).");
-    if(f.ul94==="V-0"&&transp?.on&&transp.pri==="must") msg.push("UL94 V-0 + Transparence Must : combinaisons rares.");
-    if(f.uv) msg.push("Exposition UV : préférer PC UV / ASA / POM stabilisé / PA additivé.");
-    if(f.tempMax>150) msg.push("Température service >150°C : polymers hautes perfs (PPSU, PEEK…).");
+    const msg=[];
+    const rigid=f.criteria["rigidite_elevee"]; const flexi=f.criteria["flexibilite"];
+    if(rigid?.on && flexi?.on && rigid.pri==="must" && flexi.pri==="must"){ msg.push("Rigidité élevée et Flexibilité ne peuvent pas être Must simultanément."); }
+    const transp=f.criteria["transparence"];
+    if(transp?.on && transp.pri==="must"){ msg.push("Transparence stricte : exclut les grades chargés (GF) et fortement pigmentés."); }
+    const hinge=f.features.includes("hinge");
+    if(hinge){ if(!(flexi?.on)) msg.push("Charnière film : active Flexibilité (au moins Should)."); if(f.epMin!==null && f.epMin>1.0) msg.push("Charnière film : épaisseur min conseillée ≤ 1.0 mm."); }
+    const snap=f.features.includes("snapfits");
+    if(snap && rigid?.pri==="must"){ msg.push("Encliquetages : éviter **rigidité Must** avec grades fibre de verre (cassant)."); }
+    if(f.ul94==="V-0" && transp?.on && transp.pri==="must"){ msg.push("UL94 V-0 + Transparence Must : combinaisons rares (PC traité, PSU/PESU/PPSU translucides)."); }
+    if(f.uv) msg.push("Exposition UV : préférer PC UV / ASA / POM stabilisé / PA avec additifs.");
+    if(f.tempMax>150) msg.push("Température service >150°C : restreint aux polymers hautes perfs (PPSU, PEEK…).");
     return msg;
   }
 
-  function satisfiesUL94(matUL,req){ if(!req)return true; const order=["HB","V-2","V-1","V-0"]; const im=order.indexOf(matUL), ir=order.indexOf(req); return im>=0&&ir>=0&&im>=ir; }
-  function scoreMaterial(m,f){
-    if(f.ul94 && !satisfiesUL94(m.UL94,f.ul94)) return {pass:false,why:["UL94 insuffisant"]};
-    if(f.uv && m.uv_ok==="faible") return {pass:false,why:["UV faible"]};
-    if(f.epMin!==null && f.epMin<m.min_wall_mm) return {pass:false,why:[`Epaisseur min ${f.epMin} < ${m.min_wall_mm} mm`]};
-    if(f.region==="US" && m.food===false && f.criteria["contact_alimentaire"]?.on) return {pass:false,why:["Food grade requis (US)"]};
-    if(f.criteria["qualite_medicale"]?.on && !m.medical) return {pass:false,why:["Qualité médicale requise"]};
-    if(f.criteria["retardateur_flamme"]?.on && !m.fr_grade && f.ul94==="") return {pass:false,why:["Grade FR requis"]};
-    if(f.criteria["transparence"]?.pri==="must" && !m.transparent) return {pass:false,why:["Transparence Must non satisfaite"]};
+  /* ------------------------- Scoring & filtrage ------------------------- */
+  function satisfiesUL94(matUL, req){ if(!req) return true; const order=["HB","V-2","V-1","V-0"]; const im=order.indexOf(matUL), ir=order.indexOf(req); return im>=0 && ir>=0 && im>=ir; }
+  function distance(a,b,scale){ return Math.max(0,(a-b)/(scale||1)); }
 
-    const musts=[]; for(const [key,spec] of Object.entries(f.criteria)){ if(!spec.on||spec.pri!=="must")continue;
-      if(key==="rigidite_elevee" && m.E_GPa<2.2) return {pass:false,why:["Rigidité Must non atteinte"]};
-      if(key==="flexibilite"     && m.elongation_pct<50) return {pass:false,why:["Flexibilité Must non atteinte"]};
-      if(key==="resistance_chocs"&& m.izod_kJm2<20) return {pass:false,why:["Choc Must non atteint"]};
-      if(key==="flexion"&&m.hinge_ok===false&&f.features.includes("hinge")) return {pass:false,why:["Charnière film incompatible"]};
-      if(key==="usure" && m.cat==="amorphe" && !m.chem.includes("huiles")) return {pass:false,why:["Usure: préférer semi-cristallin"]};
-      if(key==="fatigue" && m.snap_ok===false) return {pass:false,why:["Fatigue: éviter grades cassants"]};
+  function scoreMaterial(m, f){
+    if (f.ul94 && !satisfiesUL94(m.UL94, f.ul94)) return {pass:false, why:["UL94 insuffisant"]};
+    if (f.uv && m.uv_ok === "faible") return {pass:false, why:["UV faible"]};
+    if (f.epMin !== null && f.epMin < m.min_wall_mm) return {pass:false, why:[`Epaisseur min ${f.epMin} < ${m.min_wall_mm} mm`]};
+    if (f.region === "US" && m.food === false && f.criteria["contact_alimentaire"]?.on) return {pass:false, why:["Food grade requis (US)"]};
+    if (f.criteria["qualite_medicale"]?.on && !m.medical) return {pass:false, why:["Qualité médicale requise"]};
+    if (f.criteria["retardateur_flamme"]?.on && !m.fr_grade && f.ul94==="") return {pass:false, why:["Grade FR requis"]};
+    if (f.criteria["transparence"]?.pri === "must" && !m.transparent) return {pass:false, why:["Transparence Must non satisfaite"]};
+
+    const musts = [];
+    for (const [key, spec] of Object.entries(f.criteria)) {
+      if (!spec.on || spec.pri!=="must") continue;
+      if (key==="rigidite_elevee" && m.E_GPa < 2.2) return {pass:false, why:["Rigidité Must non atteinte"]};
+      if (key==="flexibilite" && m.elongation_pct < 50) return {pass:false, why:["Flexibilité Must non atteinte"]};
+      if (key==="resistance_chocs" && m.izod_kJm2 < 20) return {pass:false, why:["Choc Must non atteint"]};
+      if (key==="flexion" && m.hinge_ok===false && f.features.includes("hinge")) return {pass:false, why:["Charnière film incompatible"]};
+      if (key==="usure" && m.cat==="amorphe" && !m.chem.includes("huiles")) return {pass:false, why:["Usure: préférer semi-cristallin (POM/PA/PBT)"]};
+      if (key==="fatigue" && m.snap_ok===false) return {pass:false, why:["Fatigue: éviter grades cassants"]};
       musts.push(key);
     }
 
-    let score=100, why=[];
-    if(f.tempMax){ if(m.HDT_C<f.tempMax){ score-=25; why.push(`HDT ${m.HDT_C} < Temp req ${f.tempMax}`);} else score+=5; }
-    if(f.uv){ if(m.uv_ok==="fort") score+=10; else if(m.uv_ok==="moyen") score+=2; else { score-=20; why.push("UV faible"); } }
-    for(const c of f.chimie){ if(c==="eausalee"&&m.cat==="amorphe"){ score-=10; why.push("Amorphe & eau salée"); }
-      if(!m.chem.includes(c)){ score-=6; why.push(`Résistance chimie limitée (${c})`); } else score+=2; }
-    if(f.prix){ const ratio=Math.abs(m.price_eurkg-f.prix)/Math.max(f.prix,1); score-=Math.min(20,20*ratio); if(ratio<0.15) score+=5; }
-    if(f.process==="impression3d" && m.id!=="PC" && m.id!=="ABS") { score-=5; why.push("Filière 3D limitée"); }
-    if(f.process==="usinage" && m.cat==="amorphe") { score-=5; why.push("Usinage: préférer semi-cristallin"); }
-    if(f.features.includes("snapfits")){ if(m.snap_ok) score+=6; else { score-=12; why.push("Snap-fit déconseillé"); } if(m.elongation_pct<4){ score-=15; why.push("Allongement <4% pour snap-fit"); } }
-    if(f.features.includes("hinge")){ if(m.hinge_ok) score+=10; else { score-=18; why.push("Charnière film non adaptée"); } }
-    if(f.features.includes("transparent")){ if(m.transparent) score+=10; else { score-=25; why.push("Transparent requis"); } }
-    if(f.features.includes("overmold") && !m.overmold_ok){ score-=10; why.push("Surmoulage délicat"); }
-
-    for (const [key,spec] of Object.entries(f.criteria)){ if(!spec.on) continue; const pen=spec.pri==="should"?6:3;
-      switch(key){
-        case "rigidite_elevee": if(m.E_GPa<2.2) score-=pen; else score+=2; break;
-        case "flexibilite": if(m.elongation_pct<50) score-=pen; else score+=2; break;
-        case "resistance_chocs": if(m.izod_kJm2<20) score-=pen; else score+=2; break;
-        case "flexion": if(!m.hinge_ok && f.features.includes("hinge")) score-=pen; break;
-        case "usure": if(m.cat==="amorphe") score-=pen; else score+=1; break;
-        case "fatigue": if(!m.snap_ok) score-=pen; else score+=1; break;
-        case "qualite_surface": if(m.cat==="semi-cristallin") score-=1; break;
-        case "transparence": if(!m.transparent) score-=pen; break;
-        case "finition_bril": if(m.cat==="semi-cristallin") score-=1; break;
+    let score = 100; const why = [];
+    if (f.tempMax){ if (m.HDT_C < f.tempMax) { score -= 25; why.push(`HDT ${m.HDT_C} < Temp req ${f.tempMax}`); } else { score += 5; } }
+    if (f.uv){ if (m.uv_ok==="fort") score += 10; else if (m.uv_ok==="moyen") score += 2; else { score -= 20; why.push("UV faible"); } }
+    for (const c of f.chimie){ if (c==="eausalee" && m.cat==="amorphe") { score -= 10; why.push("Amorphe & eau salée"); } if (!m.chem.includes(c)) { score -= 6; why.push(`Résistance chimie limitée (${c})`); } else score += 2; }
+    if (f.prix){ const ratio = Math.abs(m.price_eurkg - f.prix) / Math.max(f.prix, 1); score -= Math.min(20, 20*ratio); if (ratio<0.15) score += 5; }
+    if (f.process==="impression3d" && m.id!=="PC" && m.id!=="ABS") { score -= 5; why.push("Filière 3D limitée"); }
+    if (f.process==="usinage" && m.cat==="amorphe") { score -= 5; why.push("Usinage: préférer semi-cristallin"); }
+    if (f.features.includes("snapfits")){ if (m.snap_ok) score += 6; else { score -= 12; why.push("Snap-fit déconseillé"); } if (m.elongation_pct < 4) { score -= 15; why.push("Allongement <4% pour snap-fit"); } }
+    if (f.features.includes("hinge")){ if (m.hinge_ok) score += 10; else { score -= 18; why.push("Charnière film non adaptée"); } }
+    if (f.features.includes("transparent")){ if (m.transparent) score += 10; else { score -= 25; why.push("Transparent requis"); } }
+    if (f.features.includes("overmold") && !m.overmold_ok){ score -= 10; why.push("Surmoulage délicat"); }
+    for (const [key, spec] of Object.entries(f.criteria)) {
+      if (!spec.on) continue; const pen = spec.pri==="should" ? 6 : 3;
+      switch (key){
+        case "rigidite_elevee": if (m.E_GPa < 2.2) score -= pen; else score += 2; break;
+        case "flexibilite": if (m.elongation_pct < 50) score -= pen; else score += 2; break;
+        case "resistance_chocs": if (m.izod_kJm2 < 20) score -= pen; else score += 2; break;
+        case "flexion": if (!m.hinge_ok && f.features.includes("hinge")) score -= pen; break;
+        case "usure": if (m.cat==="amorphe") score -= pen; else score += 1; break;
+        case "fatigue": if (!m.snap_ok) score -= pen; else score += 1; break;
+        case "qualite_surface": if (m.cat==="semi-cristallin") score -= 1; break;
+        case "transparence": if (!m.transparent) score -= pen; break;
+        case "finition_bril": if (m.cat==="semi-cristallin") score -= 1; break;
       }
     }
-    if(f.criteria["contact_alimentaire"]?.on && m.food) score+=5;
-    if(f.criteria["proprietes_elec"]?.on && m.CTI>=600) score+=6;
-    if(f.ul94 && satisfiesUL94(m.UL94,f.ul94)) score+=4;
+    if (f.criteria["contact_alimentaire"]?.on && m.food) score += 5;
+    if (f.criteria["proprietes_elec"]?.on && m.CTI>=600) score += 6;
+    if (f.ul94 && satisfiesUL94(m.UL94, f.ul94)) score += 4;
 
-    return {pass:true, score, why};
+    return { pass:true, score, why };
   }
 
-  function updateSummaryAndConflicts(f){
-    const confs=detectConflicts(f);
-    const warnEl=$("#criteriaConflicts");
-    if(warnEl){
-      if(confs.length){ warnEl.classList.remove("d-none"); warnEl.innerHTML=`<i class="bi bi-exclamation-triangle me-2"></i>${escapeHTML(confs[0])}${confs.length>1?` (+${confs.length-1} autres)`:``}`; }
-      else warnEl.classList.add("d-none");
-      $("#critOK") && ($("#critOK").textContent = `Validés: 0`);
-      $("#critWARN") && ($("#critWARN").textContent = `Avertissements: ${confs.length}`);
-      $("#critBLOCK") && ($("#critBLOCK").textContent = `Bloquants: 0`);
-    }
-  }
-  function updateRangeLabel(rangeSel,labelSel,suffix){ const r=$(rangeSel),lab=$(labelSel); if(r&&lab) lab.textContent=`${r.value}${suffix}`; }
-  function escapeHTML(s){ return String(s).replace(/[&<>"]/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+  /* --------------------------- Rendu shortlist --------------------------- */
+  function renderShortlist(f, results){
+    const cont = $("#materialShortlist");
+    const cards = $("#shortlistCards");
+    const whyDiv = $("#whyReco");
+    cards.innerHTML = "";
 
-  /* ---------- Action “Analyser & recommander” (ROBUSTE) ---------- */
-  const CONFIRM_SEL = [
-    '#materialConfirmBtn',
-    '#primaryMaterialConfirmBtn',
-    '[data-action="material-confirm"]',
-    '[data-act="material-confirm"]',
-    'button[name="analyze_reco"]'
-  ].join(', ');
-
-  function handleConfirmClick(e){
-    e?.preventDefault?.(); e?.stopPropagation?.();
-
-    const f = readForm();
-    updateSummaryAndConflicts(f);
-
-    let results = MATERIALS.map(mat => ({ mat, ...scoreMaterial(mat, f) }))
-                           .filter(r => r.pass)
-                           .sort((a,b)=> b.score - a.score);
-
-    const bestScore = results.length ? Math.max(...results.map(r=>r.score)) : 1;
-    const top3 = results.slice(0,3).map(r => ({
-      id: r.mat.id, name: r.mat.name, score: r.score,
-      match_pct: Math.max(0, Math.min(100, Math.round((r.score / (bestScore||1))*100)))
-    }));
-
-    // Fermer la modale (support des deux IDs)
-    const elA = document.getElementById('materialQuestionnaireModal');
-    const elB = document.getElementById('materialModal');
-    const modalEl = elA || elB;
-    if (modalEl) {
-      if (window.bootstrap?.Modal) {
-        const inst = bootstrap.Modal.getInstance(modalEl) || bootstrap.Modal.getOrCreateInstance(modalEl);
-        inst.hide();
-      } else {
-        modalEl.style.display='none'; modalEl.style.visibility='hidden';
-      }
-    }
-
-    // Exposer la meilleure matière (par défaut)
-    const best = top3[0] || { id:'ABS', name:'ABS', match_pct:100, score:bestScore };
-    window.selectedMaterial = { id: best.id, name: best.name };
-
-    // Notifier l’app (DFMOrchestrator écoute ces events)
-    window.dispatchEvent(new CustomEvent('cadlytics:materials-shortlist', { detail: { shortlist: top3 } }));
-    window.dispatchEvent(new CustomEvent('material:selected', { detail: { materialProfile: window.selectedMaterial } }));
-    window.dispatchEvent(new CustomEvent('material:confirmed'));
-  }
-
-  function wireConfirmButtons(){
-    $$(CONFIRM_SEL).forEach(btn=>{
-      if (btn.__wiredConfirm) return;
-      btn.__wiredConfirm = true;
-      btn.addEventListener('click', handleConfirmClick, true);
+    results.slice(0,3).forEach(r=>{
+      const m = r.mat;
+      const el = document.createElement("div");
+      el.className = "col-12 col-md-4";
+      el.innerHTML = `
+        <div class="card h-100">
+          <div class="card-body">
+            <h6 class="card-title">${m.name}</h6>
+            <div class="small text-muted mb-2">Score: <b>${r.score.toFixed(0)}</b></div>
+            <ul class="small mb-2">
+              <li>E ≈ ${m.E_GPa} GPa • Izod ≈ ${m.izod_kJm2} kJ/m²</li>
+              <li>HDT ≈ ${m.HDT_C} °C • UL94 ${m.UL94}</li>
+              <li>Prix ≈ ${m.price_eurkg} €/kg • CTI ${m.CTI}</li>
+            </ul>
+            <div class="small text-muted">Atouts: ${summarizeMat(m)}</div>
+          </div>
+        </div>`;
+      cards.appendChild(el);
     });
+
+    whyDiv.innerHTML = `
+      <div><b>Règles appliquées :</b></div>
+      <ul class="small">
+        ${detectConflicts(f).map(x=>`<li>${escapeHTML(x)}</li>`).join("")}
+      </ul>
+    `;
+
+    cont.classList.remove("d-none");
   }
 
-  // Délégation globale (si le bouton est injecté plus tard)
-  document.addEventListener('click', (e)=>{
-    if (e.target && e.target.matches?.(CONFIRM_SEL)) handleConfirmClick(e);
-  }, true);
+  function summarizeMat(m){
+    const tags=[]; if(m.transparent)tags.push("transparent"); if(m.uv_ok==="fort")tags.push("UV+");
+    if(m.food)tags.push("alimentaire"); if(m.medical)tags.push("médical"); if(m.fr_grade)tags.push("FR");
+    if(m.snap_ok)tags.push("snap-fit"); if(m.hinge_ok)tags.push("charnière");
+    return tags.join(", ") || "—";
+  }
+  function escapeHTML(s){ return s.replace(/[&<>"]/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
-  // Re-câble si la modale est reconstruite
-  const mo = new MutationObserver(()=> wireConfirmButtons());
-  mo.observe(document.documentElement, { childList:true, subtree:true });
+  /* -------------------------- Résumé / Avertissements -------------------------- */
+  function updateSummaryAndConflicts(f){
+    const confs = detectConflicts(f);
+    const warnEl = $("#criteriaConflicts");
+    if (confs.length){
+      warnEl.classList.remove("d-none");
+      warnEl.innerHTML = `<i class="bi bi-exclamation-triangle me-2"></i>${escapeHTML(confs[0])}${confs.length>1?` (+${confs.length-1} autres)`:``}`;
+    } else { warnEl.classList.add("d-none"); }
+    const counts = {ok:0,warn:confs.length,block:0};
+    $("#critOK").textContent = `Validés: ${counts.ok}`;
+    $("#critWARN").textContent = `Avertissements: ${counts.warn}`;
+    $("#critBLOCK").textContent = `Bloquants: ${counts.block}`;
+  }
 
-  /* ---------- init UI ---------- */
+  /* ------------------------------- Helpers UI ------------------------------- */
+  function updateRangeLabel(rangeSel, labelSel, suffix){
+    const r = $(rangeSel), lab = $(labelSel);
+    if (r && lab) lab.textContent = `${r.value}${suffix}`;
+  }
+
+  /* -------------------------------- Handlers -------------------------------- */
   document.addEventListener("DOMContentLoaded", () => {
-    updateRangeLabel("#tempServiceMax","#tempServiceMaxVal","°C");
-    updateRangeLabel("#prixCible","#prixCibleVal"," €/kg");
-    $("#tempServiceMax")?.addEventListener("input", ()=>updateRangeLabel("#tempServiceMax","#tempServiceMaxVal","°C"));
-    $("#prixCible")?.addEventListener("input", ()=>updateRangeLabel("#prixCible","#prixCibleVal"," €/kg"));
-    $("#materialPreset")?.addEventListener("change",(e)=>{ const f=document.forms.materialQuestionnaireForm; const v=e.target.value; if(PRESETS[v]) PRESETS[v](f); updateSummaryAndConflicts(readForm()); });
-    $("#materialQuestionnaireForm")?.addEventListener("input", ()=>updateSummaryAndConflicts(readForm()));
-    wireConfirmButtons();
+    updateRangeLabel("#tempServiceMax", "#tempServiceMaxVal", "°C");
+    updateRangeLabel("#prixCible", "#prixCibleVal", " €/kg");
+    $("#tempServiceMax")?.addEventListener("input", ()=>updateRangeLabel("#tempServiceMax", "#tempServiceMaxVal", "°C"));
+    $("#prixCible")?.addEventListener("input", ()=>updateRangeLabel("#prixCible", "#prixCibleVal", " €/kg"));
+
+    $("#materialPreset")?.addEventListener("change", (e)=>{
+      const f = document.forms.materialQuestionnaireForm;
+      const v = e.target.value;
+      if (PRESETS[v]) PRESETS[v](f);
+      updateSummaryAndConflicts(readForm());
+    });
+
+    $("#materialQuestionnaireForm")?.addEventListener("input", ()=>{
+      updateSummaryAndConflicts(readForm());
+    });
+
+    // === Bouton principal : ANALYSER & RECOMMANDER ===
+    document.getElementById('materialConfirmBtn')?.addEventListener('click', () => {
+      try {
+        const f = readForm();
+        updateSummaryAndConflicts(f);
+
+        let results = MATERIALS.map(mat => {
+          const r = scoreMaterial(mat, f);
+          return { mat, ...r };
+        }).filter(r => r.pass)
+          .sort((a, b) => b.score - a.score);
+
+        // Rendu côté modale (cartes)
+        const shortlist3 = results.slice(0, 3);
+        if (!shortlist3.length) {
+          document.getElementById('materialShortlist')?.classList.remove('d-none');
+          document.getElementById('shortlistCards').innerHTML =
+            `<div class="col-12"><div class="alert alert-danger small">
+               Aucune matière ne satisfait les contraintes. Allège les Must ou ajuste les seuils.
+             </div></div>`;
+          document.getElementById('whyReco').innerHTML =
+            `<div class="small text-muted">
+               Essaie de réduire les Must et/ou d’augmenter le prix cible / baisser Température service.
+             </div>`;
+        } else {
+          renderShortlist(f, results);
+        }
+
+        // Normalisation pour l’orchestrateur
+        const shortlistPayload = shortlist3.map((r, i) => ({
+          id: r.mat.id,
+          name: r.mat.name,
+          score: Math.max(0, Math.min(100, Math.round(r.score))),
+          match_pct: Math.max(0, Math.min(100, Math.round(r.score)))
+        }));
+
+        // Expose un "best" par défaut
+        const best = shortlistPayload[0] || { id:'ABS', name:'ABS', match_pct:100, score:100 };
+        window.selectedMaterial = { id: best.id, name: best.name };
+
+        // Evènements pour l’orchestrateur (nouveau + compat)
+        window.dispatchEvent(new CustomEvent('cadlytics:material-analysis-done', {
+          detail: { conflicts: detectConflicts(f), hasConflicts: detectConflicts(f).length > 0, shortlist: shortlistPayload }
+        }));
+        window.dispatchEvent(new CustomEvent('cadlytics:materials-shortlist', {
+          detail: { shortlist: shortlistPayload }
+        }));
+        // Compat encore plus vieux
+        window.dispatchEvent(new CustomEvent('material:selected', { detail: { materialProfile: window.selectedMaterial } }));
+        window.dispatchEvent(new CustomEvent('material:confirmed'));
+
+        // Fermer la modale proprement
+        const modalEl = document.getElementById('materialModal');
+        if (modalEl && window.bootstrap?.Modal) {
+          (window.bootstrap.Modal.getInstance(modalEl) || window.bootstrap.Modal.getOrCreateInstance(modalEl)).hide();
+        } else if (modalEl) {
+          modalEl.style.display='none'; modalEl.style.visibility='hidden'; modalEl.style.opacity='0';
+        }
+      } catch (err) {
+        console.error('[criteria-modal] analyse failed:', err);
+      }
+    });
   });
 })();
