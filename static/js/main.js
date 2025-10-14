@@ -643,42 +643,81 @@ function hookGeometryCapture(viewer) {
   }
 
   // ---- fallback géométrique si aucune face pickée
-  function geometryFallback(maxSamples=4000){
-    try {
-      const geoms = Object.values(viewer?.scene?._geometries || {});
-      let positions = null, indices = null;
-      for (const g of geoms){
-        if (g?.__dfmPositions && g?.__dfmIndices){
-          positions = g.__dfmPositions; indices = g.__dfmIndices; break;
-        }
-      }
-      if (!positions || !indices) return [];
+  // --- remplace TOUTE ta fonction geometryFallback(...) par celle-ci :
+function geometryFallback(maxSamples = 4000) {
+  try {
+    const scene = viewer?.scene;
+    if (!scene) return [];
 
-      const faces = [];
-      const triCount = Math.floor(indices.length/3);
-      const step = Math.max(1, Math.floor(triCount / Math.max(256, Math.min(maxSamples, 4096))));
-      for (let i=0; i<indices.length-2; i+=3*step){
-        const i0 = indices[i]*3, i1 = indices[i+1]*3, i2 = indices[i+2]*3;
-        const ax = positions[i0], ay = positions[i0+1], az = positions[i0+2];
-        const bx = positions[i1], by = positions[i1+1], bz = positions[i1+2];
-        const cx = positions[i2], cy = positions[i2+1], cz = positions[i2+2];
-        const ux = bx-ax, uy = by-ay, uz = bz-az;
-        const vx = cx-ax, vy = cy-ay, vz = cz-az;
-        // n = u x v
-        let nx = uy*vz - uz*vy;
-        let ny = uz*vx - ux*vz;
-        let nz = ux*vy - uy*vx;
-        const L = Math.hypot(nx,ny,nz) || 1;
-        nx/=L; ny/=L; nz/=L;
-        const area = 0.5 * L;
-        faces.push({ normal:[nx,ny,nz], area, source:"geometry-fallback", eid:null });
+    // 1) Récupère une liste de "meshes" selon le build xeokit
+    const meshes = [];
+    if (scene.meshes) {                         // builds récents
+      for (const k in scene.meshes) if (scene.meshes[k]) meshes.push(scene.meshes[k]);
+    } else if (scene.objects) {                 // anciens / alternatifs
+      for (const k in scene.objects) {
+        const o = scene.objects[k];
+        if (o && (o.geometry || o._geometry || o._state?.geometry)) meshes.push(o);
       }
-      return faces;
-    } catch(e){
-      console.warn('[probe safe] geometry fallback error', e);
-      return [];
+    } else if (scene.iterate) {                 // API générique
+      scene.iterate((n) => { if (n?.geometry) meshes.push(n); });
     }
+    if (!meshes.length) return [];
+
+    const arr = (x) => x?.data || x?.array || x || null;
+    const faces = [];
+    const MAX = Math.max(1000, Math.min(maxSamples, 12000));
+    let budget = MAX;
+
+    // 2) Pour chaque mesh, récupère positions/indices (peu importe la variante)
+    for (const m of meshes) {
+      if (budget <= 0) break;
+      const g = m.geometry || m._geometry || m._state?.geometry || {};
+
+      // Essayez toutes les variantes possibles
+      let P = arr(g.positions || g._positions || g.vertexPositions || g._vertexPositions || g.decompressedPositions || g.positionsDecompressed || g._state?.positions);
+      let I = arr(g.indices   || g._indices   || g.triangles       || g._triangles       || g._state?.indices);
+
+      if (!P && typeof g.getPositions === 'function') { try { P = arr(g.getPositions()); } catch {} }
+      if (!I && typeof g.getIndices   === 'function') { try { I = arr(g.getIndices());   } catch {} }
+
+      if (!P || !I) continue;
+
+      // 3) Matrice monde (selon build)
+      const wm = m.worldMatrix || m.matrix || m.worldTransform?.matrix || m.transform?.matrix || [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
+      const mul4x4 = (mat,[x,y,z]) => [
+        mat[0]*x + mat[4]*y + mat[8]*z + mat[12],
+        mat[1]*x + mat[5]*y + mat[9]*z + mat[13],
+        mat[2]*x + mat[6]*y + mat[10]*z + mat[14]
+      ];
+      const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+      const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+      const len=(v)=>Math.hypot(v[0],v[1],v[2])||1;
+      const norm=(v)=>{ const L=len(v); return [v[0]/L,v[1]/L,v[2]/L]; };
+
+      // 4) Sous-échantillonnage pour rester rapide
+      const triCount = Math.floor(I.length/3);
+      const step = Math.max(1, Math.ceil(triCount / Math.max(256, Math.min(budget, 4096))));
+
+      for (let i=0; i<I.length-2 && budget>0; i += 3*step) {
+        const i0 = I[i]*3, i1 = I[i+1]*3, i2 = I[i+2]*3;
+        const p0 = mul4x4(wm, [P[i0], P[i0+1], P[i0+2]]);
+        const p1 = mul4x4(wm, [P[i1], P[i1+1], P[i1+2]]);
+        const p2 = mul4x4(wm, [P[i2], P[i2+1], P[i2+2]]);
+        const u = sub(p1,p0), v = sub(p2,p0);
+        const n = norm(cross(u,v));
+        const area = 0.5 * len(cross(u,v)); // pondération relative
+        faces.push({ normal:n, area, source:"mesh-fallback" });
+        budget--;
+      }
+    }
+
+    console.log('[probe safe] faces via MESH fallback =', faces.length);
+    return faces;
+  } catch (e) {
+    console.warn('[probe safe] mesh fallback error', e);
+    return [];
   }
+}
 
   // ===== API exposée =====
   window.__getFaces = async function(maxSamples=3500){
@@ -707,14 +746,14 @@ function hookGeometryCapture(viewer) {
       }
     }
 
-    // fallback si rien
-    if (faces.length === 0){
-      const fb = geometryFallback(Math.max(1000, maxSamples));
-      if (fb.length) {
-        console.log('[probe safe] faces via geometry fallback =', fb.length);
-        return fb;
-      }
-    }
+// --- Fallback si rien pické
+if (faces.length === 0){
+  const fb = geometryFallback(Math.max(1000, maxSamples));
+  if (fb.length) {
+    console.log('[probe safe] faces via geometry fallback =', fb.length);
+    return fb;
+  }
+}
 
     console.log('[probe safe] faces =', faces.length);
     return faces;
