@@ -568,9 +568,6 @@ function hookGeometryCapture(viewer) {
     console.warn('[geom-capture] échec', e);
   }
 }
-viewerAdapter.loadFromFileId(fileId).then(() => {
-  hookGeometryCapture(viewerAdapter.viewer); // <= AJOUT ICI
-});
 
 /* ====================== PROBE SAFE (faces) ====================== */
 (function installProbeSafe(){
