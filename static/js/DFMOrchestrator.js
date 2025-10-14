@@ -24,6 +24,7 @@ if (typeof window !== "undefined") {
     materialProfile: window.CAD?.materialProfile ?? null,
     axis: window.CAD?.axis ?? { x: 0, y: 0, z: 1 },
     currentJobId: window.CAD?.currentJobId ?? null,
+    materialShortlist: window.CAD?.materialShortlist ?? null,
   };
 }
 
@@ -41,7 +42,6 @@ const UI = {
   progress(pct){
     const bar = document.getElementById("dfmProgressBar");
     if (bar) bar.style.width = `${pct}%`;
-    // NB: cet event est “feu et oublie”, aucun listener interne ne rappelle UI.progress
     window.dispatchEvent(new CustomEvent('cadlytics:dfm:progress', {
       detail: { pct: Math.max(0, Math.min(100, pct)), phase: 'server', label: 'Analyse DFM' }
     }));
@@ -63,7 +63,6 @@ const MAT_RULES_QUICK = {
 };
 const dot3=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
 const axisLetterToVec=(A)=>A==='X'?[1,0,0]:A==='Y'?[0,1,0]:[0,0,1];
-const getQuickMatRules=(m)=>MAT_RULES_QUICK[(m?.id||m?.name||'ABS')]||MAT_RULES_QUICK.ABS;
 
 async function __quickProjectedArea(axis){ try{return await window.__getProjectedArea?.(axis)??0;}catch{return 0;} }
 async function __quickBasicStats(){ try{return await window.__getBasicStats?.()??{volume_cm3:0,tmin_mm:null,tmax_mm:null};}catch{return {volume_cm3:0,tmin_mm:null,tmax_mm:null};} }
@@ -107,7 +106,8 @@ async function quickUndercuts(axis){
   return [{key:'undercut_pct',label:'% surfaces en contre-dépouille',value:pct.toFixed(1),unit:'%',pass:pct<3,severity:pct>8?'fail':(pct>3?'warn':'ok'),tips:['Prévoir tiroir / split','Modifier plan de joint']}];
 }
 async function quickTonnage(axis,material){
-  const rules=getQuickMatRules(material), area_cm2=await __quickProjectedArea(axis);
+  const rules=MAT_RULES_QUICK[(material?.id||material?.name||'ABS')]||MAT_RULES_QUICK.ABS;
+  const area_cm2=await __quickProjectedArea(axis);
   const F_kN=(rules.P_inj_bar*1e5)*(area_cm2*1e-4)/1000; const tonnage=Math.ceil(F_kN/9.81); const pass=tonnage<=150;
   return [
     {key:'proj_area',label:'Surface projetée',value:area_cm2.toFixed(1),unit:'cm²',pass:true},
@@ -115,7 +115,8 @@ async function quickTonnage(axis,material){
   ];
 }
 async function quickMaterialVsThickness(material){
-  const rules=getQuickMatRules(material), s=await __quickBasicStats();
+  const rules=MAT_RULES_QUICK[(material?.id||material?.name||'ABS')]||MAT_RULES_QUICK.ABS;
+  const s=await __quickBasicStats();
   const okT=(s.tmin_mm??0)>=rules.tmin;
   return [
     {key:'mat_tmin_req',label:'Épaisseur mini matière',value:rules.tmin,unit:'mm',pass:true},
@@ -124,7 +125,7 @@ async function quickMaterialVsThickness(material){
 }
 async function runLocalPhaseA(axisLetter){
   try{
-    // ⚠️ IMPORTANT: ne PAS réémettre cadlytics:demould-axis-selected ici (boucle infinie)
+    window.dispatchEvent(new CustomEvent('cadlytics:demould-axis-selected',{detail:{axis:axisLetter}}));
     UI.progress(5);
     const material=window.selectedMaterial||{id:'ABS',name:'ABS'};
     const draft=await quickCheckDraft(axisLetter);    UI.progress(15);
@@ -169,6 +170,11 @@ function renderDFMResults(report = {}) {
   if (!panel) return;
   panel.innerHTML = '';
 
+  // Ré-injecte la shortlist si déjà connue
+  if (Array.isArray(window.CAD?.materialShortlist) && window.CAD.materialShortlist.length) {
+    renderMaterialsShortlistUI(window.CAD.materialShortlist);
+  }
+
   const scoreEl = document.createElement('div');
   scoreEl.textContent = `Score: ${score}`;
   panel.appendChild(scoreEl);
@@ -189,7 +195,6 @@ function renderDFMResults(report = {}) {
     panel.appendChild(pre);
   }
 
-  // notifier l’UI d’aperçu
   try {
     window.dispatchEvent(new CustomEvent('cadlytics:dfm:report', { detail: { score, recommendations, metrics } }));
   } catch {}
@@ -228,6 +233,69 @@ function vectorToAxisLetter(v = {x:0,y:0,z:1}) {
   return ax;
 }
 
+/* ---------- UI: shortlist matières (Top 3) ---------- */
+function ensureResultsSection() {
+  const section = document.getElementById("dfmResultsSection");
+  if (section) section.style.display = "block";
+  return document.getElementById("dfmAnalysisPanel");
+}
+
+function renderMaterialsShortlistUI(shortlist = []) {
+  const panel = ensureResultsSection();
+  if (!panel) return;
+
+  let box = document.getElementById("dfmMatShortlistUI");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "dfmMatShortlistUI";
+    panel.prepend(box);
+  }
+  if (!Array.isArray(shortlist) || !shortlist.length) {
+    box.innerHTML = "";
+    return;
+  }
+
+  const pills = shortlist.map((m,i) => `
+    <button type="button"
+            class="btn btn-sm ${i===0?'btn-primary':'btn-outline-primary'} me-2 mb-2 dfm-mat-pill"
+            data-mid="${m.id}">
+      <span class="fw-semibold">${m.name}</span>
+      <span class="badge ${i===0?'bg-light text-primary':'bg-primary'} ms-2">${m.match_pct}%</span>
+    </button>`).join("");
+
+  box.innerHTML = `
+    <div class="card border-0 shadow-sm mb-2">
+      <div class="card-body py-2">
+        <div class="small text-muted mb-1">Meilleurs candidats matière :</div>
+        <div class="d-flex flex-wrap">${pills}</div>
+        <div class="small text-muted mt-1">Clique sur un candidat pour le sélectionner, puis “Analyser”.</div>
+      </div>
+    </div>`;
+
+  box.querySelectorAll(".dfm-mat-pill").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.mid;
+      const found = shortlist.find(x => x.id === id);
+      if (found) {
+        window.selectedMaterial = { id: found.id, name: found.name };
+        // visuel : active la pill choisie
+        box.querySelectorAll(".dfm-mat-pill").forEach(b=>{
+          b.classList.remove("btn-primary");
+          b.classList.add("btn-outline-primary");
+        });
+        btn.classList.remove("btn-outline-primary");
+        btn.classList.add("btn-primary");
+
+        // notifier les autres scripts (compat)
+        window.dispatchEvent(new CustomEvent('material:selected', {
+          detail: { materialProfile: window.selectedMaterial }
+        }));
+        window.dispatchEvent(new CustomEvent('material:confirmed'));
+      }
+    });
+  });
+}
+
 class DFMOrchestrator {
   constructor(){
     this.phase = DFM_STATES.IDLE;
@@ -253,6 +321,13 @@ class DFMOrchestrator {
 
     window.addEventListener('material:confirmed', () => {
       this.setState(DFM_STATES.MATERIAL_CONFIRMED);
+    });
+
+    // Shortlist “% match” émise par criteria-modal.js
+    window.addEventListener('cadlytics:materials-shortlist', (e) => {
+      const list = e?.detail?.shortlist || [];
+      window.CAD.materialShortlist = list;
+      renderMaterialsShortlistUI(list);
     });
 
     // Compat: si un autre UI publie axis:confirmed (ex: ancien panel)
@@ -283,13 +358,17 @@ class DFMOrchestrator {
 
     // Bouton Analyser → workflow unique (capture pour éviter fallbacks)
     const btnAnalyser = document.querySelector('#btnAnalyser, #analyzeBtn, #btn-analyser');
-    if (btnAnalyser && !btnAnalyser.__wiredDFM) {
-      btnAnalyser.__wiredDFM = true;
+    if (btnAnalyser) {
       btnAnalyser.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopImmediatePropagation();
         this.handleAnalyzeClick();
       }, true);
+    }
+
+    // Si une shortlist existe déjà (ex: modale fermée avant load), l’afficher
+    if (Array.isArray(window.CAD?.materialShortlist) && window.CAD.materialShortlist.length) {
+      renderMaterialsShortlistUI(window.CAD.materialShortlist);
     }
   }
 
@@ -339,13 +418,11 @@ class DFMOrchestrator {
   async handleAnalyzeClick(){
     const fileId = this.resolveFileId();
     if (!fileId || !materialIsConfirmed()) {
-      // Ne pas écraser une éventuelle implémentation
       if (typeof window.openMaterialModal === 'function') window.openMaterialModal();
       else this._openMaterialModalFallback();
       return;
     }
     if (!this.selectedAxis) {
-      // laisser l’UI demouldHost guider l’utilisateur
       const dem = document.getElementById('demouldHost');
       if (dem) { dem.style.display = ''; dem.scrollIntoView({ behavior:'smooth', block:'center' }); }
       return;
@@ -436,16 +513,13 @@ class DFMOrchestrator {
     try {
       const tryBuild = opts.tryBuild !== false;
 
-      // Axe validé -> lettre
       const vec = this.selectedAxis || { x:0, y:0, z:1 };
       const maxAbs = Math.max(Math.abs(vec.x||0), Math.abs(vec.y||0), Math.abs(vec.z||0));
       const letter = (maxAbs===Math.abs(vec.x)) ? 'X' : (maxAbs===Math.abs(vec.y) ? 'Y' : 'Z');
 
-      // 1) récupérer la map locale
       let map = draftMap || window.__quickDraftMap || {};
       let mapSize = Object.keys(map).length;
 
-      // 2) si vide -> construire un fallback depuis la géométrie
       if (mapSize === 0 && tryBuild) {
         const faces = await this._computeFacesFromViewer();
         if (faces.length) {
@@ -469,7 +543,6 @@ class DFMOrchestrator {
         return;
       }
 
-      // 3) Assurer viewer + modèle chargé
       if (!window.viewerAdapter?.viewer) {
         const canvas =
           document.getElementById('xeokit-canvas') ||
@@ -502,24 +575,6 @@ class DFMOrchestrator {
       } else {
         layer.apply(map, { min: 0, max: 5 });
         appliedCount = layer.debugAppliedCount || 0;
-      }
-
-      // Fallback si 0 entité colorisée : reconstruire la map depuis le viewer et réessayer
-      if (appliedCount === 0 && tryBuild) {
-        const faces = await this._computeFacesFromViewer();
-        if (faces.length) {
-          const ax = (letter==='X')?[1,0,0]:(letter==='Y')?[0,1,0]:[0,0,1];
-          const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
-          const rebuilt = {};
-          for (const f of faces) {
-            const n = f.normal || [0,0,1];
-            const cos = Math.abs(n[0]*ax[0] + n[1]*ax[1] + n[2]*ax[2]);
-            const ang = Math.acos(clamp(cos,-1,1)) * 180/Math.PI;
-            rebuilt[f.id ?? `f${Object.keys(rebuilt).length}`] = 90 - ang;
-          }
-          const again = layer.applyWithCount ? layer.applyWithCount(rebuilt, { min: 0, max: 5 }) : (layer.apply(rebuilt, {min:0, max:5}), layer.debugAppliedCount||0);
-          appliedCount = again;
-        }
       }
 
       if (appliedCount === 0) {
@@ -598,6 +653,11 @@ class DFMOrchestrator {
     const panel = document.getElementById("dfmAnalysisPanel");
     if (!panel) return;
     panel.innerHTML = "";
+
+    // Réafficher la shortlist si connue
+    if (Array.isArray(window.CAD?.materialShortlist) && window.CAD.materialShortlist.length) {
+      renderMaterialsShortlistUI(window.CAD.materialShortlist);
+    }
 
     if (results.summary){
       const table = document.createElement("table");
@@ -680,6 +740,11 @@ class DFMOrchestrator {
         <div id="dfmProgressBar" class="progress-bar progress-bar-striped" style="width:0%"></div>
       </div>
     </div>`;
+
+    // Conserver la shortlist visible au-dessus du loader si dispo
+    if (Array.isArray(window.CAD?.materialShortlist) && window.CAD.materialShortlist.length) {
+      renderMaterialsShortlistUI(window.CAD.materialShortlist);
+    }
   }
 
   // fallback ouverture modale (si aucun openMaterialModal global)
@@ -703,12 +768,10 @@ if (typeof window !== 'undefined') {
   window.DFMOrchestrator = orchestrator;
   window.orchestrator = orchestrator;
 
-  // startDFM global (compat anciens templates)
   if (typeof orchestrator.startDFM === 'function') {
     window.startDFM = orchestrator.startDFM.bind(orchestrator);
   }
 
-  // Initialisation
   document.addEventListener('DOMContentLoaded', () => {
     orchestrator.setFileId(window.CAD.fileIdStep);
     orchestrator.setMaterialProfile(window.CAD.materialProfile);
@@ -722,7 +785,6 @@ if (typeof window !== 'undefined') {
     orchestrator.init();
   });
 
-  // Self-check
   function dfmSelfCheck() {
     const errors = [];
     if (!document.getElementById("materialModal") && !document.querySelector("[data-material-modal]")) {
