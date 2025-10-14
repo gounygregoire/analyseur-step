@@ -536,14 +536,30 @@ async function loadXKT(url, nameHint){
     console.log('[probe safe] __getFaces déjà présent (app.html), skip.');
     return;
   }
+
+  // ---- dépendances légères
   const sleep = (ms)=> new Promise(r=>setTimeout(r,ms));
   const norm  = (v)=>{ const L = Math.hypot(v[0],v[1],v[2]) || 1; return [v[0]/L, v[1]/L, v[2]/L]; };
 
+  // ---- viewer & canvas (robuste)
+  const viewer = window.viewerAdapter?.viewer || window.viewer;
+  const canvasEl =
+    document.getElementById('xeokit-canvas') ||
+    document.getElementById('xktCanvas') ||
+    document.querySelector('canvas');
+
+  if (!viewer || !viewer.scene) {
+    console.warn('[probe safe] viewer non prêt, mais on continue: __getFaces attendra le scene.aabb');
+  }
+  if (!canvasEl) {
+    console.warn('[probe safe] canvas introuvable – projection écran approximative.');
+  }
+
   function projectToCanvas(p){ // -> coords en pixels (canvas)
-    const cam = viewer.camera;
-    const mV  = cam.viewMatrix;
-    const mP  = cam.projMatrix || cam.projectionMatrix;
-    if (!mV || !mP) return null;
+    const cam = viewer?.camera;
+    const mV  = cam?.viewMatrix;
+    const mP  = cam?.projMatrix || cam?.projectionMatrix;
+    if (!mV || !mP || !canvasEl) return null;
     const x=p[0], y=p[1], z=p[2];
     const vx = mV[0]*x + mV[4]*y + mV[8]*z  + mV[12];
     const vy = mV[1]*x + mV[5]*y + mV[9]*z  + mV[13];
@@ -554,13 +570,16 @@ async function loadXKT(url, nameHint){
     const cw = mP[3]*vx + mP[7]*vy + mP[11]*vz + mP[15]*vw;
     if (!cw) return null;
     const nx = cx/cw, ny = cy/cw;
-    const W = canvasEl.clientWidth || canvasEl.width;
-    const H = canvasEl.clientHeight || canvasEl.height;
+    const W = canvasEl.clientWidth || canvasEl.width  || 1;
+    const H = canvasEl.clientHeight|| canvasEl.height || 1;
     return { x:(nx*0.5+0.5)*W, y:(1-(ny*0.5+0.5))*H, W, H };
   }
 
   function screenRectFromAABB(){
-    const a = viewer.scene?.aabb || [0,0,0,0,0,0];
+    if (!viewer?.scene || !canvasEl) {
+      return { x0:0, y0:0, x1:(canvasEl?.clientWidth||512), y1:(canvasEl?.clientHeight||512) };
+    }
+    const a = viewer.scene.aabb || [0,0,0,0,0,0];
     const cs = [
       [a[0],a[1],a[2]],[a[3],a[1],a[2]],[a[0],a[4],a[2]],[a[3],a[4],a[2]],
       [a[0],a[1],a[5]],[a[3],a[1],a[5]],[a[0],a[4],a[5]],[a[3],a[4],a[5]]
@@ -577,17 +596,17 @@ async function loadXKT(url, nameHint){
   async function waitSceneReady(maxMs=2000){
     const t0 = performance.now();
     while (performance.now()-t0 < maxMs){
-      const a = viewer.scene?.aabb;
+      const a = viewer?.scene?.aabb;
       if (a && (a[3]-a[0])>1e-6 && (a[4]-a[1])>1e-6 && (a[5]-a[2])>1e-6) return true;
       await sleep(50);
     }
     return true; // on tente quand même
   }
 
-  // ---- Fallback géométrique si aucune face pickée
+  // ---- fallback géométrique si aucune face pickée
   function geometryFallback(maxSamples=4000){
     try {
-      const geoms = Object.values(viewer.scene._geometries || {});
+      const geoms = Object.values(viewer?.scene?._geometries || {});
       let positions = null, indices = null;
       for (const g of geoms){
         if (g?.__dfmPositions && g?.__dfmIndices){
@@ -622,9 +641,7 @@ async function loadXKT(url, nameHint){
     }
   }
 
-  // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-  // NOTE IMPORTANTE : ICI on ajoute l'`eid` (entity id) dans chaque sample
-  // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+  // ===== API exposée =====
   window.__getFaces = async function(maxSamples=3500){
     await waitSceneReady(1200);
     const faces = [];
@@ -632,7 +649,7 @@ async function loadXKT(url, nameHint){
     const w = Math.max(1, rect.x1-rect.x0), h = Math.max(1, rect.y1-rect.y0);
     const areaScreen = w*h;
 
-    // grille à peu près carrée
+    // grille régul.
     const nx = Math.max(20, Math.round(Math.sqrt(maxSamples * (w/h))));
     const ny = Math.max(20, Math.round(maxSamples / nx));
     const stepX = w / nx, stepY = h / ny;
@@ -642,16 +659,16 @@ async function loadXKT(url, nameHint){
       const y = rect.y0 + (iy+0.5)*stepY;
       for (let ix=0; ix<nx; ix++){
         const x = rect.x0 + (ix+0.5)*stepX;
-        const hit = viewer.scene.pick({ canvasPos:[x,y], pickSurface:true });
+        const hit = viewer?.scene?.pick && viewer.scene.pick({ canvasPos:[x,y], pickSurface:true });
         if (hit && hit.worldNormal){
           const n = norm(hit.worldNormal);
-          const eid = hit.entity?.id || hit.mesh?.id || hit.object?.id || null; // <-- ICI
+          const eid = hit.entity?.id || hit.mesh?.id || hit.object?.id || null; // <<< clé pour coloriser
           faces.push({ normal:n, area: sampleArea, source:"screen-pick", eid });
         }
       }
     }
 
-    // Fallback si rien trouvé (ex: pick désactivé selon build, matériau non pickable, etc.)
+    // fallback si rien
     if (faces.length === 0){
       const fb = geometryFallback(Math.max(1000, maxSamples));
       if (fb.length) {
@@ -664,21 +681,20 @@ async function loadXKT(url, nameHint){
     return faces;
   };
 
-  // __getProjectedArea fourni si manquant
+  // surface projetée si absent
   if (typeof window.__getProjectedArea !== 'function') {
     window.__getProjectedArea = function(axisLetter='Z'){
       const ax = String(axisLetter||'Z').toUpperCase();
-      const a = viewer.scene?.aabb;
+      const a = viewer?.scene?.aabb;
       if (!a) return 0;
       const dx=a[3]-a[0], dy=a[4]-a[1], dz=a[5]-a[2];
       const mm2 = (ax==='X') ? dy*dz : (ax==='Y') ? dx*dz : dx*dy;
-      return Math.max(0, mm2/100); // mm² -> cm² (cohérence UI)
+      return Math.max(0, mm2/100); // mm² -> cm²
     };
   }
 
   console.log('[probe safe] installed (main.js)');
 })();
-
 /* ---------- FICHIERS / upload ---------- */
 async function uploadAndShow(file) {
   const f = file || fileInput?.files?.[0];
