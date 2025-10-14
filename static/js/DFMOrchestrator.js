@@ -647,6 +647,43 @@ class DFMOrchestrator {
       const vec = this.selectedAxis || { x:0, y:0, z:1 };
       const maxAbs = Math.max(Math.abs(vec.x||0), Math.abs(vec.y||0), Math.abs(vec.z||0));
       const letter = (maxAbs===Math.abs(vec.x)) ? 'X' : (maxAbs===Math.abs(vec.y) ? 'Y' : 'Z');
+// Plan A: si possible, (re)échantillonner vite et agréger par entité
+try {
+  const samples = await (window.__getFaces?.() || []);
+  if (Array.isArray(samples) && samples.length) {
+    // déduit l'axe (lettre)
+    const v = this.selectedAxis || {x:0,y:0,z:1};
+    const letter = (Math.abs(v.x)>=Math.abs(v.y) && Math.abs(v.x)>=Math.abs(v.z)) ? 'X'
+                 : (Math.abs(v.y)>=Math.abs(v.x) && Math.abs(v.y)>=Math.abs(v.z)) ? 'Y' : 'Z';
+    const ax = (letter==='X')?[1,0,0]:(letter==='Y')?[0,1,0]:[0,0,1];
+    const clamp = (x,min,max)=>Math.max(min,Math.min(max,x));
+
+    // agrégation per-entity (prend le max de "draft")
+    const perEnt = {}; // eid -> {max, sum, n}
+    for (const s of samples) {
+      if (!s || !s.normal) continue;
+      const n = s.normal;
+      const cos = Math.abs(n[0]*ax[0] + n[1]*ax[1] + n[2]*ax[2]);
+      const ang = Math.acos(clamp(cos,-1,1)) * 180/Math.PI;
+      const draft = 90 - ang;
+      const eid = s.eid || null;
+      if (!eid) continue;
+      const r = perEnt[eid] || (perEnt[eid] = {max:-Infinity, sum:0, n:0});
+      r.sum += draft; r.n += 1; if (draft > r.max) r.max = draft;
+    }
+
+    // transforme en map consommable par HeatmapLayer: "entityId:0" -> valeur
+    const entMap = {};
+    for (const [eid, ag] of Object.entries(perEnt)) {
+      // tu peux choisir ag.max (plus "critique") ou ag.sum/ag.n (moyenne)
+      entMap[`${eid}:0`] = ag.max;
+    }
+
+    if (Object.keys(entMap).length) {
+      draftMap = entMap; // priorise cette map
+    }
+  }
+} catch(e) { console.warn('[heatmap] sampling fallback failed', e); }
 
       let map = draftMap || window.__quickDraftMap || {};
       let mapSize = Object.keys(map).length;

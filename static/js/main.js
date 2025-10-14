@@ -584,7 +584,7 @@ async function loadXKT(url, nameHint){
     return true; // on tente quand même
   }
 
-  // ---- NEW: fallback géométrique si aucune face pickée
+  // ---- Fallback géométrique si aucune face pickée
   function geometryFallback(maxSamples=4000){
     try {
       const geoms = Object.values(viewer.scene._geometries || {});
@@ -612,9 +612,8 @@ async function loadXKT(url, nameHint){
         let nz = ux*vy - uy*vx;
         const L = Math.hypot(nx,ny,nz) || 1;
         nx/=L; ny/=L; nz/=L;
-        // aire ~ 0.5*|u x v| ; on n’a pas l’échelle mm² -> suffisant pour pondérer
         const area = 0.5 * L;
-        faces.push({ normal:[nx,ny,nz], area, source:"geometry-fallback" });
+        faces.push({ normal:[nx,ny,nz], area, source:"geometry-fallback", eid:null });
       }
       return faces;
     } catch(e){
@@ -623,6 +622,9 @@ async function loadXKT(url, nameHint){
     }
   }
 
+  // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+  // NOTE IMPORTANTE : ICI on ajoute l'`eid` (entity id) dans chaque sample
+  // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
   window.__getFaces = async function(maxSamples=3500){
     await waitSceneReady(1200);
     const faces = [];
@@ -643,7 +645,8 @@ async function loadXKT(url, nameHint){
         const hit = viewer.scene.pick({ canvasPos:[x,y], pickSurface:true });
         if (hit && hit.worldNormal){
           const n = norm(hit.worldNormal);
-          faces.push({ normal:n, area: sampleArea, source:"screen-pick" });
+          const eid = hit.entity?.id || hit.mesh?.id || hit.object?.id || null; // <-- ICI
+          faces.push({ normal:n, area: sampleArea, source:"screen-pick", eid });
         }
       }
     }
