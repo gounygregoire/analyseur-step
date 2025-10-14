@@ -55,13 +55,14 @@ const clipRange    = $("#clipRange");
 const btnShot      = $("#btnShot");
 
 /* ===== FIX modal matière (fallback non bloquant) =====
-   NB: DFMOrchestrator et app.html fournissent déjà leur propre openMaterialModal.
+   NB: DFMOrchestrator et app.html peuvent exposer leur propre openMaterialModal.
    Ici on expose UNIQUEMENT si absent pour éviter les conflits. */
 (function ensureMaterialModalAPI(){
   function getMaterialModalEl() {
-    const sel = window.DFM_MATERIAL_MODAL_SELECTOR && document.querySelector(window.DFM_MATERIAL_MODAL_SELECTOR)
-      ? window.DFM_MATERIAL_MODAL_SELECTOR
-      : '#materialQuestionnaireModal, #materialModal, [data-material-modal], .modal[data-role="material"]';
+    const sel =
+      (window.DFM_MATERIAL_MODAL_SELECTOR && document.querySelector(window.DFM_MATERIAL_MODAL_SELECTOR))
+        ? window.DFM_MATERIAL_MODAL_SELECTOR
+        : '#materialQuestionnaireModal, #materialModal, [data-material-modal], .modal[data-role="material"]';
     const list = Array.from(document.querySelectorAll(sel));
     if (!list.length) return null;
     return (
@@ -72,6 +73,9 @@ const btnShot      = $("#btnShot");
   function openMaterialModalHard() {
     const el = getMaterialModalEl();
     if (!el) { console.warn('[main] Modale matière introuvable'); return; }
+    // Empêche double ouverture si déjà visible
+    if (el.classList.contains('show') || el.style.display === 'block') return;
+
     if (window.bootstrap?.Modal) {
       window.bootstrap.Modal.getOrCreateInstance(el, { backdrop: 'static' }).show();
       return;
@@ -119,13 +123,14 @@ const btnShot      = $("#btnShot");
       btn.__wiredAnalyzeMain = true;
       btn.addEventListener('click', (ev) => {
         if (ev.defaultPrevented) return;
+        // Laisse une chance au code métier, puis force si rien n’est ouvert
         setTimeout(() => {
           const open =
             document.querySelector('.modal.show') ||
             document.querySelector('#materialQuestionnaireModal.show') ||
             document.querySelector('[data-material-modal].show, [data-material-modal].open');
           if (!open) window.openMaterialModal?.();
-        }, 250);
+        }, 220);
       });
     });
   }
@@ -155,7 +160,7 @@ window.viewer = viewer;
 new FastNavPlugin(viewer, { flyToDuration: 0.9, hideEdges:false, autoHideEdges:false });
 
 /* -----------------------------------------------------------------------
-   XKT LOADER — on pousse des flags “garde-fous” (ignorés si non supportés)
+   XKT LOADER — flags
 ------------------------------------------------------------------------ */
 const xktLoader = new XKTLoaderPlugin(viewer, {
   dracoDecompressorPath:
@@ -226,7 +231,6 @@ function drawAxes(selected='Z'){
   arrow(cx,cy, cx-0.7*L,cy+0.7*L, 'Z', cZ);
 }
 drawAxes('Z');
-// 🔧 Harmonisé: on écoute maintenant le groupe “projAxis” (comme app.html)
 document.addEventListener('change', (ev)=>{
   const tgt = ev.target;
   if (tgt && tgt.name === 'projAxis') drawAxes(tgt.value);
@@ -460,7 +464,7 @@ btnMeasure?.addEventListener("click", toggleMeasure);
 window.addEventListener("keydown", (e)=>{ if (e.key==="Escape" && distanceCtrl.active) deactivateMeasure(); }, {passive:true});
 if (btnAnnot) { btnAnnot.style.display = "none"; btnAnnot.disabled = true; }
 
-/* ---- Hook géométrie (optionnel selon version xeokit) ---- */
+/* ---- Hook géométrie (capture positions/indices pour fallback) ---- */
 (function hookGeometryCapture(){
   const sc = viewer.scene;
   const orig = sc.createGeometry?.bind(sc);
@@ -517,18 +521,6 @@ async function loadXKT(url, nameHint){
       }));
     }, 50);
 
-    // info facultative
-    setTimeout(async () => {
-      try {
-        if (typeof window.__getFaces === 'function') {
-          const faces = await window.__getFaces();
-          console.log('[geom] faces available =', Array.isArray(faces) ? faces.length : 0);
-        }
-      } catch (e) {
-        console.warn('[geom] probe error (non-bloquant)', e);
-      }
-    }, 0);
-
     try {
       currentAxis = getSelectedAxis();
       if (currentFileId) { fetchStats(currentFileId, currentAxis); }
@@ -538,8 +530,7 @@ async function loadXKT(url, nameHint){
   return id;
 }
 
-/* ====================== PROBE SAFE ======================
-   IMPORTANT: n’écrase PAS une version déjà fournie (app.html) */
+/* ====================== PROBE SAFE (faces) ====================== */
 (function installProbeSafe(){
   if (typeof window.__getFaces === 'function') {
     console.log('[probe safe] __getFaces déjà présent (app.html), skip.');
@@ -593,6 +584,45 @@ async function loadXKT(url, nameHint){
     return true; // on tente quand même
   }
 
+  // ---- NEW: fallback géométrique si aucune face pickée
+  function geometryFallback(maxSamples=4000){
+    try {
+      const geoms = Object.values(viewer.scene._geometries || {});
+      let positions = null, indices = null;
+      for (const g of geoms){
+        if (g?.__dfmPositions && g?.__dfmIndices){
+          positions = g.__dfmPositions; indices = g.__dfmIndices; break;
+        }
+      }
+      if (!positions || !indices) return [];
+
+      const faces = [];
+      const triCount = Math.floor(indices.length/3);
+      const step = Math.max(1, Math.floor(triCount / Math.max(256, Math.min(maxSamples, 4096))));
+      for (let i=0; i<indices.length-2; i+=3*step){
+        const i0 = indices[i]*3, i1 = indices[i+1]*3, i2 = indices[i+2]*3;
+        const ax = positions[i0], ay = positions[i0+1], az = positions[i0+2];
+        const bx = positions[i1], by = positions[i1+1], bz = positions[i1+2];
+        const cx = positions[i2], cy = positions[i2+1], cz = positions[i2+2];
+        const ux = bx-ax, uy = by-ay, uz = bz-az;
+        const vx = cx-ax, vy = cy-ay, vz = cz-az;
+        // n = u x v
+        let nx = uy*vz - uz*vy;
+        let ny = uz*vx - ux*vz;
+        let nz = ux*vy - uy*vx;
+        const L = Math.hypot(nx,ny,nz) || 1;
+        nx/=L; ny/=L; nz/=L;
+        // aire ~ 0.5*|u x v| ; on n’a pas l’échelle mm² -> suffisant pour pondérer
+        const area = 0.5 * L;
+        faces.push({ normal:[nx,ny,nz], area, source:"geometry-fallback" });
+      }
+      return faces;
+    } catch(e){
+      console.warn('[probe safe] geometry fallback error', e);
+      return [];
+    }
+  }
+
   window.__getFaces = async function(maxSamples=3500){
     await waitSceneReady(1200);
     const faces = [];
@@ -601,8 +631,8 @@ async function loadXKT(url, nameHint){
     const areaScreen = w*h;
 
     // grille à peu près carrée
-    const nx = Math.max(16, Math.round(Math.sqrt(maxSamples * (w/h))));
-    const ny = Math.max(16, Math.round(maxSamples / nx));
+    const nx = Math.max(20, Math.round(Math.sqrt(maxSamples * (w/h))));
+    const ny = Math.max(20, Math.round(maxSamples / nx));
     const stepX = w / nx, stepY = h / ny;
     const sampleArea = areaScreen / (nx*ny);
 
@@ -613,8 +643,17 @@ async function loadXKT(url, nameHint){
         const hit = viewer.scene.pick({ canvasPos:[x,y], pickSurface:true });
         if (hit && hit.worldNormal){
           const n = norm(hit.worldNormal);
-          faces.push({ normal:n, area: sampleArea });
+          faces.push({ normal:n, area: sampleArea, source:"screen-pick" });
         }
+      }
+    }
+
+    // Fallback si rien trouvé (ex: pick désactivé selon build, matériau non pickable, etc.)
+    if (faces.length === 0){
+      const fb = geometryFallback(Math.max(1000, maxSamples));
+      if (fb.length) {
+        console.log('[probe safe] faces via geometry fallback =', fb.length);
+        return fb;
       }
     }
 
@@ -622,7 +661,7 @@ async function loadXKT(url, nameHint){
     return faces;
   };
 
-  // Ne définir __getProjectedArea ici QUE si aucune version n’existe (app.html en fournit une aussi)
+  // __getProjectedArea fourni si manquant
   if (typeof window.__getProjectedArea !== 'function') {
     window.__getProjectedArea = function(axisLetter='Z'){
       const ax = String(axisLetter||'Z').toUpperCase();
@@ -630,7 +669,7 @@ async function loadXKT(url, nameHint){
       if (!a) return 0;
       const dx=a[3]-a[0], dy=a[4]-a[1], dz=a[5]-a[2];
       const mm2 = (ax==='X') ? dy*dz : (ax==='Y') ? dx*dz : dx*dy;
-      return Math.max(0, mm2/100); // mm² -> cm²
+      return Math.max(0, mm2/100); // mm² -> cm² (cohérence UI)
     };
   }
 
@@ -1052,7 +1091,7 @@ function renderStats(json){
   StatsSafe.setMetric('tmin',           f3(json.thickness_min_mm));
   StatsSafe.setMetric('tmax',           f3(json.thickness_max_mm));
 
-  // Surface projetée : source serveur si dispo, sinon fallback local immédiat pour cohérence visuelle
+  // Surface projetée : serveur si dispo, sinon fallback local
   const projServer = json.projected_area_cm2;
   if (projServer != null && isFinite(+projServer)) {
     StatsSafe.setMetric('projected_area', f3(+projServer));

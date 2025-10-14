@@ -1,7 +1,10 @@
+// /static/js/modules/HeatmapLayer.js — UTF-8 (NO BOM)
 // Shim HeatmapLayer — colorise les entités selon une map faceId -> valeur.
-// Compatible avec deux formats de faceId :
+// Formats acceptés pour faceId :
 //   1) "<entityId>:<triIndex>"
-//   2) "<triIndex>" (index global, tel que renvoyé par __getFaces SAFE)
+//   2) "<triIndex>" (index global)
+//   3) "f<triIndex>" ou "t<triIndex>" (ex: "f123", "T42")
+//   4) "<entityId>" (valeur directe par entité)
 // Supporte xeokit: node.colorize = [r,g,b,a] (0..1), + fallbacks (scene.setObjectsColorize / adapter.colorizeEntity)
 
 export default class HeatmapLayer {
@@ -50,29 +53,50 @@ export default class HeatmapLayer {
       if (v > perEntityAgg[eid].max) perEntityAgg[eid].max = v;
     };
 
+    const entityExists = (eid) =>
+      !!(this.scene?.objects?.[eid] || this.scene?.meshes?.[eid] || this.scene?.components?.[eid]);
+
     for (const [faceKey, raw] of Object.entries(map)) {
       const v = Number(raw);
       if (!Number.isFinite(v)) continue;
 
+      const key = String(faceKey).trim();
+
       // priorité: resolver externe si fourni
       if (typeof idResolver === "function") {
-        const eid = idResolver(faceKey);
-        if (eid) { note(String(eid), v); continue; }
+        const rid = idResolver(key);
+        if (rid) { note(String(rid), v); continue; }
       }
 
-      // format "<entityId>:<triIndex>"
-      const parts = String(faceKey).split(":");
+      // (4) clé = entityId directe
+      if (entityExists(key)) {
+        note(key, v);
+        continue;
+      }
+
+      // (1) format "<entityId>:<triIndex>"
+      const parts = key.split(":");
       if (parts.length >= 2 && parts[0]) {
+        // on agrège par entité (peu importe le triIndex exact)
         note(parts[0], v);
         continue;
       }
 
-      // format "<triIndex>"
-      const tri = parseInt(String(faceKey), 10);
+      // (2) "<triIndex>" strict
+      // (3) "f<triIndex>" ou "t<triIndex>"
+      let tri = null;
+      if (/^\d+$/.test(key)) {
+        tri = parseInt(key, 10);
+      } else {
+        const m = key.match(/^[ft](\d+)$/i);
+        if (m) tri = parseInt(m[1], 10);
+      }
+
       if (Number.isFinite(tri)) {
         triOnlyKeysNeeded.add(tri);
         pending.push({ triIndex: tri, value: v });
       }
+      // sinon: clé inconnue -> ignorée
     }
 
     // 2) Si on a des indexes "tri" simples, construire (ou réutiliser) le mapping tri -> entity
@@ -90,7 +114,9 @@ export default class HeatmapLayer {
       }
 
       for (const { triIndex, value } of pending) {
-        const eid = this._triToEntity[triIndex];
+        let eid = this._triToEntity[triIndex];
+        // tolérance 0/1-based
+        if (!eid && this._triToEntity[triIndex + 1]) eid = this._triToEntity[triIndex + 1];
         if (eid) note(String(eid), value);
       }
     }
@@ -175,8 +201,7 @@ export default class HeatmapLayer {
     return restored;
   }
 
-  // ====== Mapping triIndex -> entityId (copie des heuristiques de la probe SAFE) ======
-
+  // ====== Mapping triIndex -> entityId (heuristique) ======
   _buildTriToEntityIndex(targetSet, { debug = false, append = false } = {}) {
     const scene = this.viewer?.scene;
     if (!scene) return {};
@@ -213,7 +238,7 @@ export default class HeatmapLayer {
       return null;
     };
 
-    // On reconstruit le même comptage de triangles que __getFaces SAFE
+    // Comptage séquentiel global des triangles (approx. __getFaces historique)
     const meshes = collectMeshes(scene);
     let triCounter = 0;
     const maxNeeded = need.size ? Math.max(...need) : -1;
@@ -227,14 +252,12 @@ export default class HeatmapLayer {
       const eid = String(m.id || m._id || m.entity?.id || m.objectId || m.nodeId || "");
 
       for (let i = 0; i < I.length - 2; i += 3) {
-        // __getFaces poussait triCounter de 1 par triangle
-        triCounter++;
+        triCounter++; // 1-based
         if (need.has(triCounter)) {
           out[triCounter] = eid;
           resolved.add(triCounter);
           if (resolved.size === need.size) break outer;
         }
-        // micro-optim: si on a dépassé tous les indexes demandés, on peut quitter tôt
         if (triCounter > maxNeeded && resolved.size === need.size) break outer;
       }
     }
@@ -244,7 +267,6 @@ export default class HeatmapLayer {
   }
 
   // ====== Palette: bleu -> vert -> jaune -> rouge (HSL) ======
-
   static colorFromT(t) {
     const tt = Math.max(0, Math.min(1, t));
     const hue = (1 - tt) * 240; // 240 (bleu) -> 0 (rouge)

@@ -289,6 +289,16 @@ class DFMOrchestrator {
         this.handleAnalyzeClick();
       }, true);
     }
+
+    // Bouton Heatmap dépouille (instantanée) — multi-sélecteurs tolérés
+    const btnHeatmap =
+      document.querySelector('#btnHeatmapDraft, #btnHeatmapDepouille, [data-action="heatmap-draft"], [data-act="heatmap-draft"]');
+    if (btnHeatmap) {
+      btnHeatmap.addEventListener('click', (e) => {
+        e.preventDefault();
+        this.applyDraftHeatmap().catch(err => console.warn('[DFM] heatmap click error', err));
+      });
+    }
   }
 
   setState(next){ this.phase = next; dbg("state →", next); }
@@ -337,9 +347,9 @@ class DFMOrchestrator {
   async handleAnalyzeClick(){
     const fileId = this.resolveFileId();
     if (!fileId || !materialIsConfirmed()) {
-      // Ne pas écraser une éventuelle implémentation
-      if (typeof window.openMaterialModal === 'function') window.openMaterialModal();
-      else this._openMaterialModalFallback();
+      // Ouvre la modale matière de manière fiable
+      if (typeof window.openMaterialModal === 'function') { window.openMaterialModal(); }
+      else { this._openMaterialModalFallback(); }
       return;
     }
     if (!this.selectedAxis) {
@@ -664,7 +674,8 @@ class DFMOrchestrator {
 
   // fallback ouverture modale (si aucun openMaterialModal global)
   _openMaterialModalFallback(){
-    const el = document.getElementById('materialModal') || document.querySelector('[data-material-modal]');
+    const sel = window.DFM_MATERIAL_MODAL_SELECTOR || '#materialQuestionnaireModal';
+    const el = document.querySelector(sel) || document.getElementById('materialModal') || document.querySelector('[data-material-modal]');
     if (!el) return alert('Modale matière introuvable');
     if (window.bootstrap?.Modal) window.bootstrap.Modal.getOrCreateInstance(el, { backdrop: 'static' }).show();
     else {
@@ -705,7 +716,8 @@ if (typeof window !== 'undefined') {
   // Self-check
   function dfmSelfCheck() {
     const errors = [];
-    if (!document.getElementById("materialModal") && !document.querySelector("[data-material-modal]")) {
+    const modalSel = window.DFM_MATERIAL_MODAL_SELECTOR || '#materialQuestionnaireModal';
+    if (!document.querySelector(modalSel) && !document.getElementById("materialModal") && !document.querySelector("[data-material-modal]")) {
       errors.push("modal matière absente");
     }
     if (!document.querySelector("#btnAnalyser, #analyzeBtn, #btn-analyser")) {
