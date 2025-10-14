@@ -19,6 +19,25 @@ export default class HeatmapLayer {
     // cache pour la résolution "<triIndex>" -> "<entityId>"
     this._triToEntity = null;
   }
+  // Essaie de résoudre triOnlyKeysNeeded avec un offset (pour 0-based vs 1-based)
+_tryResolveWithOffset(triOnlyKeysNeeded, offset, pending) {
+  // construit un cache temporaire si besoin
+  const map = this._buildTriToEntityIndex(new Set(
+    Array.from(triOnlyKeysNeeded).map(t => t + offset).filter(t => t > 0)
+  ), { debug: false, append: false });
+
+  let hits = 0;
+  for (const p of pending) {
+    const eid = map[p.triIndex + offset];
+    if (eid) { 
+      if (!this._triToEntity) this._triToEntity = {};
+      this._triToEntity[p.triIndex] = eid; // on stocke au vrai index demandé
+      hits++;
+    }
+  }
+  return hits;
+}
+
 
   /**
    * Applique la heatmap.
@@ -100,26 +119,39 @@ export default class HeatmapLayer {
     }
 
     // 2) Si on a des indexes "tri" simples, construire (ou réutiliser) le mapping tri -> entity
-    if (triOnlyKeysNeeded.size > 0) {
-      if (!this._triToEntity) {
-        this._triToEntity = this._buildTriToEntityIndex(triOnlyKeysNeeded, { debug });
-      } else {
-        // Compléter le cache si de nouveaux indexes dépassent ceux déjà connus
-        const unknown = Array.from(triOnlyKeysNeeded).filter(t => !(t in this._triToEntity));
-        if (unknown.length) {
-          const extraSet = new Set(unknown);
-          const more = this._buildTriToEntityIndex(extraSet, { debug, append: true });
-          Object.assign(this._triToEntity, more);
-        }
-      }
-
-      for (const { triIndex, value } of pending) {
-        let eid = this._triToEntity[triIndex];
-        // tolérance 0/1-based
-        if (!eid && this._triToEntity[triIndex + 1]) eid = this._triToEntity[triIndex + 1];
-        if (eid) note(String(eid), value);
-      }
+if (triOnlyKeysNeeded.size > 0) {
+  if (!this._triToEntity) {
+    this._triToEntity = this._buildTriToEntityIndex(triOnlyKeysNeeded, { debug });
+  } else {
+    const unknown = Array.from(triOnlyKeysNeeded).filter(t => !(t in this._triToEntity));
+    if (unknown.length) {
+      const extraSet = new Set(unknown);
+      const more = this._buildTriToEntityIndex(extraSet, { debug, append: true });
+      Object.assign(this._triToEntity, more);
     }
+  }
+
+  // Compte initial de résolutions
+  let resolved = 0;
+  for (const { triIndex } of pending) if (this._triToEntity[triIndex]) resolved++;
+
+  // Si on a très peu de correspondances → on tente offset -1, puis +1
+  if (resolved < Math.ceil(pending.length * 0.1)) {
+    const hitNeg = this._tryResolveWithOffset(triOnlyKeysNeeded, -1, pending);
+    resolved += hitNeg;
+    if (resolved < Math.ceil(pending.length * 0.1)) {
+      const hitPos = this._tryResolveWithOffset(triOnlyKeysNeeded, +1, pending);
+      resolved += hitPos;
+    }
+    if (debug) console.debug("[HeatmapLayer] fallback offset: resolved =", resolved, "/", pending.length);
+  }
+
+  for (const { triIndex, value } of pending) {
+    const eid = this._triToEntity[triIndex];
+    if (eid) note(String(eid), value);
+  }
+}
+
 
     // 3) Appliquer la colorisation par entité
     const valOf = (obj) => (mode === "avg" ? obj.sum / Math.max(1, obj.n) : obj.max);
