@@ -213,67 +213,68 @@
       updateSummaryAndConflicts(readForm());
     });
 
-    // === Bouton principal : ANALYSER & RECOMMANDER ===
-    document.getElementById('materialConfirmBtn')?.addEventListener('click', () => {
-      try {
-        const f = readForm();
-        updateSummaryAndConflicts(f);
+// --- Bouton "Analyser & recommander" (remplace ton handler actuel) ---
+document.getElementById('materialConfirmBtn')?.addEventListener('click', () => {
+  try {
+    const f = readForm();
+    updateSummaryAndConflicts(f);
 
-        let results = MATERIALS.map(mat => {
-          const r = scoreMaterial(mat, f);
-          return { mat, ...r };
-        }).filter(r => r.pass)
-          .sort((a, b) => b.score - a.score);
+    // 1) Scoring
+    let results = MATERIALS.map(mat => {
+      const r = scoreMaterial(mat, f);
+      return { mat, ...r };
+    })
+    .filter(r => r.pass)
+    .sort((a, b) => b.score - a.score);
 
-        // Rendu côté modale (cartes)
-        const shortlist3 = results.slice(0, 3);
-        if (!shortlist3.length) {
-          document.getElementById('materialShortlist')?.classList.remove('d-none');
-          document.getElementById('shortlistCards').innerHTML =
-            `<div class="col-12"><div class="alert alert-danger small">
-               Aucune matière ne satisfait les contraintes. Allège les Must ou ajuste les seuils.
-             </div></div>`;
-          document.getElementById('whyReco').innerHTML =
-            `<div class="small text-muted">
-               Essaie de réduire les Must et/ou d’augmenter le prix cible / baisser Température service.
-             </div>`;
-        } else {
-          renderShortlist(f, results);
-        }
+    // 2) Construire une shortlist top 3 (id, name, match_pct)
+    const shortlist = results.slice(0, 3).map(r => ({
+      id: r.mat.id,
+      name: r.mat.name,
+      score: r.score,
+      match_pct: Math.max(0, Math.min(100, Math.round(r.score))) // borne 0..100
+    }));
 
-        // Normalisation pour l’orchestrateur
-        const shortlistPayload = shortlist3.map((r, i) => ({
-          id: r.mat.id,
-          name: r.mat.name,
-          score: Math.max(0, Math.min(100, Math.round(r.score))),
-          match_pct: Math.max(0, Math.min(100, Math.round(r.score)))
-        }));
+    // 3) Affichage local si besoin
+    if (!shortlist.length) {
+      document.getElementById('materialShortlist')?.classList.remove('d-none');
+      document.getElementById('shortlistCards').innerHTML =
+        `<div class="col-12"><div class="alert alert-danger small">
+           Aucune matière ne satisfait les contraintes. Allège les Must ou ajuste les seuils.
+         </div></div>`;
+      document.getElementById('whyReco').innerHTML =
+        `<div class="small text-muted">
+           Essaie de réduire les Must et/ou d’augmenter le prix cible / baisser Température service.
+         </div>`;
+    } else {
+      renderShortlist(f, results);
+    }
 
-        // Expose un "best" par défaut
-        const best = shortlistPayload[0] || { id:'ABS', name:'ABS', match_pct:100, score:100 };
-        window.selectedMaterial = { id: best.id, name: best.name };
+    // 4) Fermer la modale
+    const modalEl = document.getElementById('materialModal');
+    const modal = bootstrap.Modal.getInstance(modalEl) || bootstrap.Modal.getOrCreateInstance(modalEl);
+    modal.hide();
 
-        // Evènements pour l’orchestrateur (nouveau + compat)
-        window.dispatchEvent(new CustomEvent('cadlytics:material-analysis-done', {
-          detail: { conflicts: detectConflicts(f), hasConflicts: detectConflicts(f).length > 0, shortlist: shortlistPayload }
-        }));
-        window.dispatchEvent(new CustomEvent('cadlytics:materials-shortlist', {
-          detail: { shortlist: shortlistPayload }
-        }));
-        // Compat encore plus vieux
-        window.dispatchEvent(new CustomEvent('material:selected', { detail: { materialProfile: window.selectedMaterial } }));
-        window.dispatchEvent(new CustomEvent('material:confirmed'));
+    // 5) Exposer la "meilleure" matière (première de la shortlist si dispo)
+    const best = shortlist[0] || results[0]?.mat || { id: 'ABS', name: 'ABS', score: 100, match_pct: 100 };
+    window.selectedMaterial = { id: best.id, name: best.name };
 
-        // Fermer la modale proprement
-        const modalEl = document.getElementById('materialModal');
-        if (modalEl && window.bootstrap?.Modal) {
-          (window.bootstrap.Modal.getInstance(modalEl) || window.bootstrap.Modal.getOrCreateInstance(modalEl)).hide();
-        } else if (modalEl) {
-          modalEl.style.display='none'; modalEl.style.visibility='hidden'; modalEl.style.opacity='0';
-        }
-      } catch (err) {
-        console.error('[criteria-modal] analyse failed:', err);
-      }
-    });
+    // 6) Persister la shortlist pour l’orchestrateur (et pour reload)
+    window.CAD = window.CAD || {};
+    window.CAD.materialShortlist = shortlist;
+
+    // 7) Émettre les events attendus par l’orchestrateur
+    window.dispatchEvent(new CustomEvent('cadlytics:materials-shortlist', {
+      detail: { shortlist }
+    }));
+    window.dispatchEvent(new CustomEvent('material:selected', {
+      detail: { materialProfile: window.selectedMaterial }
+    }));
+    window.dispatchEvent(new CustomEvent('material:confirmed'));
+
+  } catch (err) {
+    console.error('[criteria-modal] analyse failed:', err);
+  }
+});
   });
 })();

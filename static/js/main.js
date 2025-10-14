@@ -529,6 +529,48 @@ async function loadXKT(url, nameHint){
   model.on("error", e=>{ console.error(e); setProgress(0); alert("Erreur chargement XKT."); });
   return id;
 }
+// ---- Hook: capture des buffers pour le probe SAFE ----
+function hookGeometryCapture(viewer) {
+  try {
+    const scene = viewer?.scene;
+    if (!scene) return;
+
+    // essaie plusieurs sources possibles selon build xeokit
+    const geometries = Object.values(
+      scene._geometries || scene.geometries || scene.objects || {}
+    );
+
+    let wired = 0;
+
+    const arr = (x) => x?.data || x?.array || x || null;
+
+    geometries.forEach((node) => {
+      const g = node?.geometry || node?._geometry || node?._state?.geometry || node;
+      if (!g) return;
+
+      // tente d'obtenir positions/indices via diverses API
+      let P = arr(g.positions || g._positions || g.vertexPositions || g._vertexPositions || g.decompressedPositions || g.positionsDecompressed || g._state?.positions);
+      let I = arr(g.indices   || g._indices   || g.triangles       || g._triangles       || g._state?.indices);
+
+      if (!P && typeof g.getPositions === 'function') { try { P = arr(g.getPositions()); } catch{} }
+      if (!I && typeof g.getIndices   === 'function') { try { I = arr(g.getIndices());   } catch{} }
+
+      if (P && I && !g.__dfmPositions && !g.__dfmIndices) {
+        // On stocke sur l'objet geometry (utilisé par le probe)
+        g.__dfmPositions = P;
+        g.__dfmIndices   = I;
+        wired++;
+      }
+    });
+
+    console.log('[geom-capture] buffers câblés pour fallback:', wired);
+  } catch (e) {
+    console.warn('[geom-capture] échec', e);
+  }
+}
+viewerAdapter.loadFromFileId(fileId).then(() => {
+  hookGeometryCapture(viewerAdapter.viewer); // <= AJOUT ICI
+});
 
 /* ====================== PROBE SAFE (faces) ====================== */
 (function installProbeSafe(){
