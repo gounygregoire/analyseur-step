@@ -312,22 +312,30 @@ class DFMOrchestrator {
   }
 
   init(){
-    // matière sélectionnée (criteria-modal.js)
+    // ❷ Fallback : si seule la matière “best” est connue, afficher au moins 1 pill à 100%
     window.addEventListener('material:selected', (e) => {
-      this.setMaterialProfile(e.detail.materialProfile);
-      window.CAD.materialProfile = this.materialProfile;
-      window.dispatchEvent(new CustomEvent('material:confirmed'));
+      const mp = e?.detail?.materialProfile || window.selectedMaterial;
+      if (!mp) return;
+      const existing = this._loadPersistedShortlist();
+      if (Array.isArray(existing) && existing.length) {
+        // déjà une shortlist : ne pas l’écraser
+        this._renderShortlistBar(existing);
+      } else {
+        const one = [{ id: mp.id, name: mp.name, match_pct: 100, score: 100 }];
+        this._persistShortlist(one);
+        this._renderShortlistBar(one);
+      }
     });
 
     window.addEventListener('material:confirmed', () => {
       this.setState(DFM_STATES.MATERIAL_CONFIRMED);
     });
 
-    // Shortlist “% match” émise par criteria-modal.js
+ // ❶ Shortlist envoyée par la modale → sauvegarder + afficher
     window.addEventListener('cadlytics:materials-shortlist', (e) => {
       const list = e?.detail?.shortlist || [];
-      window.CAD.materialShortlist = list;
-      renderMaterialsShortlistUI(list);
+      this._persistShortlist(list);
+      this._renderShortlistBar(list);
     });
 
     // Compat: si un autre UI publie axis:confirmed (ex: ancien panel)
@@ -379,6 +387,13 @@ class DFMOrchestrator {
         console.warn('[DFM] render shortlist bar failed', err);
       }
     });
+
+    // ❸ Initialiser la barre au chargement avec la dernière shortlist connue
+    requestAnimationFrame(() => {
+      const last = this._loadPersistedShortlist();
+      if (last && last.length) this._renderShortlistBar(last);
+      else this._renderShortlistBar([]); // crée la barre (cachée) pour éviter tout “flash”
+    })
 
   }
 
@@ -517,7 +532,7 @@ class DFMOrchestrator {
       }
     );
   }
-  // --- Barre shortlist matières (persistante) ---
+    // --- Barre shortlist matières (persistante) ---
   _ensureRecoBar() {
     if (this._recoEl && document.body.contains(this._recoEl)) return this._recoEl;
 
@@ -535,27 +550,31 @@ class DFMOrchestrator {
     });
     document.body.appendChild(host);
 
-    // style léger (pils)
-    const style = document.createElement('style');
-    style.textContent = `
-      #materialRecoBar .mat-pill{
-        display:inline-flex; align-items:center; gap:6px;
-        background:rgba(255,255,255,.9);
-        border:1px solid rgba(0,0,0,.08);
-        border-radius:16px; padding:6px 10px;
-        box-shadow:0 6px 18px rgba(0,0,0,.08);
-        font:500 12px/1.2 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-        backdrop-filter:saturate(1.1) blur(4px);
-      }
-      #materialRecoBar .mat-pill .pct{
-        font-weight:700; padding:2px 6px; border-radius:10px;
-        background:#eef2ff; color:#1e3a8a;
-      }
-      #materialRecoBar .mat-pill .id{
-        color:#111827;
-      }
-    `;
-    document.head.appendChild(style);
+    const styleId = '__matRecoStyle__';
+    if (!document.getElementById(styleId)) {
+      const style = document.createElement('style');
+      style.id = styleId;
+      style.textContent = `
+        #materialRecoBar .mat-pill{
+          display:inline-flex; align-items:center; gap:6px;
+          background:rgba(255,255,255,.92);
+          border:1px solid rgba(0,0,0,.08);
+          border-radius:16px; padding:6px 10px;
+          box-shadow:0 6px 18px rgba(0,0,0,.08);
+          font:500 12px/1.2 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+          backdrop-filter:saturate(1.1) blur(4px);
+          cursor:default; user-select:none;
+        }
+        #materialRecoBar .mat-pill .pct{
+          font-weight:700; padding:2px 6px; border-radius:10px;
+          background:#eef2ff; color:#1e3a8a;
+        }
+        #materialRecoBar .mat-pill .id{
+          color:#111827;
+        }
+      `;
+      (document.head || document.documentElement).appendChild(style);
+    }
 
     this._recoEl = host;
     return host;
@@ -563,7 +582,7 @@ class DFMOrchestrator {
 
   _renderShortlistBar(shortlist = []) {
     const host = this._ensureRecoBar();
-    host.innerHTML = ''; // réécrit le contenu, mais la barre reste
+    host.innerHTML = '';
 
     if (!Array.isArray(shortlist) || !shortlist.length) {
       host.style.display = 'none';
@@ -572,15 +591,28 @@ class DFMOrchestrator {
     host.style.display = 'flex';
 
     shortlist.slice(0, 3).forEach(item => {
-      const div = document.createElement('div');
-      div.className = 'mat-pill';
-      div.innerHTML = `
+      const pill = document.createElement('div');
+      pill.className = 'mat-pill';
+      pill.innerHTML = `
         <span class="id">${item.name || item.id}</span>
         <span class="pct">${(item.match_pct ?? Math.round(item.score || 0))}%</span>
       `;
-      host.appendChild(div);
+      host.appendChild(pill);
     });
   }
+
+  _persistShortlist(list) {
+    try { localStorage.setItem('cad_material_shortlist', JSON.stringify(list || [])); } catch {}
+  }
+  _loadPersistedShortlist() {
+    try {
+      const raw = localStorage.getItem('cad_material_shortlist');
+      if (!raw) return [];
+      const list = JSON.parse(raw);
+      return Array.isArray(list) ? list : [];
+    } catch { return []; }
+  }
+
 
   // --- Heatmap dépouille locale/serveur ---
   async applyDraftHeatmap(draftMap = null, opts = {}) {
