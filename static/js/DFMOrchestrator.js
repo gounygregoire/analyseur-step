@@ -41,6 +41,7 @@ const UI = {
   progress(pct){
     const bar = document.getElementById("dfmProgressBar");
     if (bar) bar.style.width = `${pct}%`;
+    // NB: cet event est “feu et oublie”, aucun listener interne ne rappelle UI.progress
     window.dispatchEvent(new CustomEvent('cadlytics:dfm:progress', {
       detail: { pct: Math.max(0, Math.min(100, pct)), phase: 'server', label: 'Analyse DFM' }
     }));
@@ -123,7 +124,7 @@ async function quickMaterialVsThickness(material){
 }
 async function runLocalPhaseA(axisLetter){
   try{
-    window.dispatchEvent(new CustomEvent('cadlytics:demould-axis-selected',{detail:{axis:axisLetter}}));
+    // ⚠️ IMPORTANT: ne PAS réémettre cadlytics:demould-axis-selected ici (boucle infinie)
     UI.progress(5);
     const material=window.selectedMaterial||{id:'ABS',name:'ABS'};
     const draft=await quickCheckDraft(axisLetter);    UI.progress(15);
@@ -282,22 +283,13 @@ class DFMOrchestrator {
 
     // Bouton Analyser → workflow unique (capture pour éviter fallbacks)
     const btnAnalyser = document.querySelector('#btnAnalyser, #analyzeBtn, #btn-analyser');
-    if (btnAnalyser) {
+    if (btnAnalyser && !btnAnalyser.__wiredDFM) {
+      btnAnalyser.__wiredDFM = true;
       btnAnalyser.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopImmediatePropagation();
         this.handleAnalyzeClick();
       }, true);
-    }
-
-    // Bouton Heatmap dépouille (instantanée) — multi-sélecteurs tolérés
-    const btnHeatmap =
-      document.querySelector('#btnHeatmapDraft, #btnHeatmapDepouille, [data-action="heatmap-draft"], [data-act="heatmap-draft"]');
-    if (btnHeatmap) {
-      btnHeatmap.addEventListener('click', (e) => {
-        e.preventDefault();
-        this.applyDraftHeatmap().catch(err => console.warn('[DFM] heatmap click error', err));
-      });
     }
   }
 
@@ -347,9 +339,9 @@ class DFMOrchestrator {
   async handleAnalyzeClick(){
     const fileId = this.resolveFileId();
     if (!fileId || !materialIsConfirmed()) {
-      // Ouvre la modale matière de manière fiable
-      if (typeof window.openMaterialModal === 'function') { window.openMaterialModal(); }
-      else { this._openMaterialModalFallback(); }
+      // Ne pas écraser une éventuelle implémentation
+      if (typeof window.openMaterialModal === 'function') window.openMaterialModal();
+      else this._openMaterialModalFallback();
       return;
     }
     if (!this.selectedAxis) {
@@ -510,6 +502,24 @@ class DFMOrchestrator {
       } else {
         layer.apply(map, { min: 0, max: 5 });
         appliedCount = layer.debugAppliedCount || 0;
+      }
+
+      // Fallback si 0 entité colorisée : reconstruire la map depuis le viewer et réessayer
+      if (appliedCount === 0 && tryBuild) {
+        const faces = await this._computeFacesFromViewer();
+        if (faces.length) {
+          const ax = (letter==='X')?[1,0,0]:(letter==='Y')?[0,1,0]:[0,0,1];
+          const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
+          const rebuilt = {};
+          for (const f of faces) {
+            const n = f.normal || [0,0,1];
+            const cos = Math.abs(n[0]*ax[0] + n[1]*ax[1] + n[2]*ax[2]);
+            const ang = Math.acos(clamp(cos,-1,1)) * 180/Math.PI;
+            rebuilt[f.id ?? `f${Object.keys(rebuilt).length}`] = 90 - ang;
+          }
+          const again = layer.applyWithCount ? layer.applyWithCount(rebuilt, { min: 0, max: 5 }) : (layer.apply(rebuilt, {min:0, max:5}), layer.debugAppliedCount||0);
+          appliedCount = again;
+        }
       }
 
       if (appliedCount === 0) {
@@ -674,8 +684,7 @@ class DFMOrchestrator {
 
   // fallback ouverture modale (si aucun openMaterialModal global)
   _openMaterialModalFallback(){
-    const sel = window.DFM_MATERIAL_MODAL_SELECTOR || '#materialQuestionnaireModal';
-    const el = document.querySelector(sel) || document.getElementById('materialModal') || document.querySelector('[data-material-modal]');
+    const el = document.getElementById('materialModal') || document.querySelector('[data-material-modal]');
     if (!el) return alert('Modale matière introuvable');
     if (window.bootstrap?.Modal) window.bootstrap.Modal.getOrCreateInstance(el, { backdrop: 'static' }).show();
     else {
@@ -716,8 +725,7 @@ if (typeof window !== 'undefined') {
   // Self-check
   function dfmSelfCheck() {
     const errors = [];
-    const modalSel = window.DFM_MATERIAL_MODAL_SELECTOR || '#materialQuestionnaireModal';
-    if (!document.querySelector(modalSel) && !document.getElementById("materialModal") && !document.querySelector("[data-material-modal]")) {
+    if (!document.getElementById("materialModal") && !document.querySelector("[data-material-modal]")) {
       errors.push("modal matière absente");
     }
     if (!document.querySelector("#btnAnalyser, #analyzeBtn, #btn-analyser")) {
