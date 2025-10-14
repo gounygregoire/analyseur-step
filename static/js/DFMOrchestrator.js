@@ -55,6 +55,19 @@ const StatusUI = {
 };
 
 /* ---------------------- Phase A rapide (locale) ---------------------- */
+function normalizeShortlist(list) {
+  if (!Array.isArray(list)) return [];
+  return list.slice(0, 3).map((x) => ({
+    id: String(x.id || x.name || 'MAT'),
+    name: String(x.name || x.id || 'MAT'),
+    match_pct: typeof x.match_pct === 'number'
+      ? Math.round(x.match_pct)
+      : (typeof x.score === 'number' ? Math.round(Math.max(0, Math.min(100, x.score))) : 100),
+    score: (typeof x.score === 'number' ? x.score : 100)
+  }));
+}
+
+
 const MAT_RULES_QUICK = {
   ABS:{draftExt:1.0,draftInt:0.5,P_inj_bar:600,tmin:1.2},
   PC:{draftExt:1.5,draftInt:1.0,P_inj_bar:800,tmin:1.8},
@@ -380,13 +393,12 @@ class DFMOrchestrator {
     }
         // ...dans init(), après les autres window.addEventListener(...)
     window.addEventListener('cadlytics:materials-shortlist', (e) => {
-      try {
-        const list = e?.detail?.shortlist || [];
-        this._renderShortlistBar(list);
-      } catch (err) {
-        console.warn('[DFM] render shortlist bar failed', err);
-      }
-    });
+  const list = normalizeShortlist(e?.detail?.shortlist || []);
+  window.CAD.materialShortlist = list;
+  this._persistShortlist(list);
+  this._renderShortlistBar(list);
+  renderMaterialsShortlistUI(list);
+});
 
     // ❸ Initialiser la barre au chargement avec la dernière shortlist connue
     requestAnimationFrame(() => {
@@ -394,6 +406,19 @@ class DFMOrchestrator {
       if (last && last.length) this._renderShortlistBar(last);
       else this._renderShortlistBar([]); // crée la barre (cachée) pour éviter tout “flash”
     })
+    // La modale envoie cet évènement -> on persiste + on affiche
+    window.addEventListener('cadlytics:material-analysis-done', (e) => {
+      try {
+        const raw = e?.detail?.shortlist || [];
+        const list = normalizeShortlist(raw);
+        window.CAD.materialShortlist = list;           // garder en mémoire session
+        this._persistShortlist(list);                  // garder au reload
+        this._renderShortlistBar(list);                // barre flottante persistante
+        renderMaterialsShortlistUI(list);              // bloc dans le panneau résultats
+      } catch (err) {
+        console.warn('[DFM] failed to handle material-analysis-done', err);
+      }
+    });
 
   }
 
