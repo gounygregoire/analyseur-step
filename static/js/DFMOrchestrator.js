@@ -136,19 +136,6 @@ async function quickMaterialVsThickness(material){
     {key:'part_tmin',label:'Épaisseur mini pièce',value:s.tmin_mm,unit:'mm',pass:okT,severity:okT?'ok':'fail',tips:okT?[]:[`Augmenter t_min à ≥ ${rules.tmin} mm`] }
   ];
 }
-async function runLocalPhaseA(axisLetter){
-  try{
-    window.dispatchEvent(new CustomEvent('cadlytics:demould-axis-selected',{detail:{axis:axisLetter}}));
-    UI.progress(5);
-    const material=window.selectedMaterial||{id:'ABS',name:'ABS'};
-    const draft=await quickCheckDraft(axisLetter);    UI.progress(15);
-    const under=await quickUndercuts(axisLetter);     UI.progress(25);
-    const ton=await quickTonnage(axisLetter,material);UI.progress(35);
-    const thk=await quickMaterialVsThickness(material); UI.progress(45);
-    const payload={detail:{metrics:{draft,undercut:under,tonnage:ton,thickness:thk}}};
-    window.dispatchEvent(new CustomEvent('cadlytics:dfm:report', payload));
-  }catch(e){ console.warn('[dfm quick] error', e); }
-}
 
 /* ---------------------- Status polling ---------------------- */
 async function pollJobStatus(jobId, onUpdate, onDone, onError) {
