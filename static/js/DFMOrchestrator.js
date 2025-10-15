@@ -632,124 +632,155 @@ class DFMOrchestrator {
   }
 
   /* ---------- Helpers couleurs & calcul local du draft ---------- */
-// 0° = jaune, <0° (contre-dépouille) = rouge, >0° = vert (rampe 0→5°)
-_draftToRGBA(d /* degrés, SIGNÉ */){
-  // Bande jaune élargie autour de 0° pour éviter que le bruit ne passe au vert
-  const ZERO_BAND = 1.0;    // ← tu peux monter à 1.5 si besoin
-  const UNDERCUT_THR = -0.2; // petite marge négative pour classer rouge
+  // 0° = jaune, <0° (contre-dépouille) = rouge, >0° = vert (rampe 0→5°)
+  _draftToRGBA(d){
+    const ZERO_BAND = 1.0;     // largeur de la zone "≈0°" rendue jaune
+    const UNDERCUT_THR = -0.2; // petite marge négative pour classer en rouge
 
-  if (d <= UNDERCUT_THR) return [1, 0.22, 0.22, 1];     // rouge (contre-dépouille)
-  if (Math.abs(d) <= ZERO_BAND) return [1, 0.92, 0.12, 1]; // jaune (≈ 0°)
+    if (d <= UNDERCUT_THR) return [1, 0.22, 0.22, 1];        // rouge
+    if (Math.abs(d) <= ZERO_BAND) return [1, 0.92, 0.12, 1]; // jaune
 
-  // d > ZERO_BAND : dégradé jaune → vert jusqu'à ~5°
-  const span = 5 - ZERO_BAND;
-  const t = Math.max(0, Math.min(1, (d - ZERO_BAND) / (span > 0 ? span : 1)));
-  const lerp = (a,b,u)=>a+(b-a)*u;
-  const r = lerp(1.00, 0.20, t);
-  const g = lerp(0.92, 0.80, t);
-  const b = lerp(0.12, 0.24, t);
-  return [r, g, b, 1];
-}
+    const span = 5 - ZERO_BAND;
+    const t = Math.max(0, Math.min(1, (d - ZERO_BAND) / (span > 0 ? span : 1)));
+    const lerp = (a,b,u)=>a+(b-a)*u;
+    const r = lerp(1.00, 0.20, t);
+    const g = lerp(0.92, 0.80, t);
+    const b = lerp(0.12, 0.24, t);
+    return [r, g, b, 1];
+  }
 
-async _collectLocalDraftSamples(axisLetter){
-  const faces = await (window.__getFaces?.(1800) || []);
-  if (!faces.length) return null;
+  async _collectLocalDraftSamples(axisLetter){
+    const faces = await (window.__getFaces?.(1800) || []);
+    if (!faces.length) return null;
 
-  const axL = (axisLetter||'Z').toUpperCase();
-  const axis = axL==='X'?[1,0,0]:axL==='Y'?[0,1,0]:[0,0,1];
-  const dot  = (a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
-  const clamp=(x)=>Math.max(-1,Math.min(1,x));
-  const round1=(x)=>Math.round(x*10)/10; // lissage à 0.1°
+    const axL = (axisLetter||'Z').toUpperCase();
+    const axis = axL==='X'?[1,0,0]:axL==='Y'?[0,1,0]:[0,0,1];
+    const dot  = (a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+    const clamp=(x)=>Math.max(-1,Math.min(1,x));
+    const round1=(x)=>Math.round(x*10)/10; // lissage à 0.1°
 
-  return faces.map(f=>{
-    const n = f.normal || [0,0,1];
-    const cos   = clamp(dot(n, axis));      // SIGNÉ : <0 → contre-dépouille
-    const angle = Math.acos(cos) * 180/Math.PI;
-    let draft  = 90 - angle;                // 0° si paroi // axe ; <0° si sous-dépouille
+    return faces.map(f=>{
+      const n = f.normal || [0,0,1];
+      const cos   = clamp(dot(n, axis));      // SIGNÉ : <0 → contre-dépouille
+      const angle = Math.acos(cos) * 180/Math.PI;
+      let draft  = 90 - angle;                // 0° si paroi // axe ; <0° si sous-dépouille
 
-    // Respecte l’inversion d’axe éventuelle
-    if (this.selectedInvert) draft = -draft;
+      if (this.selectedInvert) draft = -draft; // inversion éventuelle
 
-    // Lissage et petit clamp pour éviter des spikes absurdes
-    draft = Math.max(-15, Math.min(15, round1(draft)));
-    return { eid: f.eid || null, draft, area: f.area || 1 };
-  });
-}
+      draft = Math.max(-15, Math.min(15, round1(draft)));
+      return { eid: f.eid || null, draft, area: f.area || 1 };
+    });
+  }
+
+  /**
+   * Échantillonne l'écran pour récupérer (eid, triIndex) + draft signé.
+   * Retourne un objet mapping: { `${eid}:${tri}` : draftDeg }
+   */
+  async _buildPerFaceDraftMapFromScreen(axisLetter='Z', maxSamples=2500){
+    const viewer = window.viewerAdapter?.viewer || window.viewer;
+    const canvas =
+      document.getElementById('xeokit-canvas') ||
+      document.getElementById('xktCanvas') ||
+      document.querySelector('canvas');
+
+    if (!viewer?.scene?.pick || !canvas) return {};
+
+    const W = canvas.clientWidth  || canvas.width  || 512;
+    const H = canvas.clientHeight || canvas.height || 512;
+    const nx = Math.max(24, Math.round(Math.sqrt(maxSamples * (W/H))));
+    const ny = Math.max(24, Math.round(maxSamples / nx));
+    const stepX = W / nx, stepY = H / ny;
+
+    const ax = (axisLetter||'Z').toUpperCase();
+    const axis = ax==='X'?[1,0,0]:ax==='Y'?[0,1,0]:[0,0,1];
+    const dot  = (a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+    const clamp=(x)=>Math.max(-1,Math.min(1,x));
+    const round1 = (x)=>Math.round(x*10)/10;
+
+    const sum   = new Map();
+    const count = new Map();
+
+    for (let iy=0; iy<ny; iy++){
+      const y = (iy + 0.5) * stepY;
+      for (let ix=0; ix<nx; ix++){
+        const x = (ix + 0.5) * stepX;
+        const hit = viewer.scene.pick({ canvasPos:[x,y], pickSurface:true });
+        if (!hit?.worldNormal) continue;
+
+        const eid = hit.entity?.id || hit.mesh?.id || hit.object?.id;
+        const tri = hit.primIndex ?? hit.triangleIndex ?? hit.primIndicesIndex ?? hit.indicesIndex;
+        if (eid == null || tri == null) continue;
+
+        const n = hit.worldNormal;
+        const L = Math.hypot(n[0],n[1],n[2]) || 1;
+        let draft = 90 - (Math.acos(clamp(dot([n[0]/L,n[1]/L,n[2]/L], axis))) * 180/Math.PI);
+        if (this.selectedInvert) draft = -draft;
+        draft = Math.max(-15, Math.min(15, round1(draft)));
+
+        const key = `${eid}:${tri}`;
+        sum.set(key, (sum.get(key) || 0) + draft);
+        count.set(key, (count.get(key) || 0) + 1);
+      }
+    }
+
+    const mapping = {};
+    sum.forEach((s, key) => { mapping[key] = s / count.get(key); });
+    return mapping;
+  }
+
+  /** Petite aide : nombre d'entrées dans un objet simple */
+  _countKeys(obj){
+    try { return Object.keys(obj||{}).length; } catch { return 0; }
+  }
 
   // Fallback entités (moyenne par entityId)
-async _applyEntityHeatmap(axisLetter){
-  const samples = await this._collectLocalDraftSamples(axisLetter);
-  if (!samples || !samples.length) {
-    alert("Aucun échantillon local pour la heatmap.");
-    return 0;
+  async _applyEntityHeatmap(axisLetter){
+    const samples = await this._collectLocalDraftSamples(axisLetter);
+    if (!samples || !samples.length) {
+      alert("Aucun échantillon local pour la heatmap.");
+      return 0;
+    }
+    const v = window.viewerAdapter?.viewer || window.viewer;
+    if (!v?.scene?.objects) { alert("Viewer non initialisé."); return 0; }
+
+    const byE = new Map();
+    for (const s of samples){
+      if (!s.eid) continue;
+      const acc = byE.get(s.eid) || { sum:0, area:0 };
+      acc.sum  += s.draft * s.area;
+      acc.area += s.area;
+      byE.set(s.eid, acc);
+    }
+
+    let applied = 0;
+    byE.forEach((acc, eid)=>{
+      const obj = v.scene.objects[eid];
+      if (!obj) return;
+      const mean = acc.sum / Math.max(1e-9, acc.area);
+
+      obj.colorize = this._draftToRGBA(mean);
+      obj.opacity  = 1;
+      if ("xrayed" in obj) obj.xrayed = false;
+      if ("ghosted" in obj) obj.ghosted = false;
+
+      applied++;
+    });
+
+    if (applied) StatusUI.set(`Heatmap dépouille appliquée (fallback entités: ${applied})`);
+    return applied;
   }
-  const v = window.viewerAdapter?.viewer || window.viewer;
-  if (!v?.scene?.objects) { alert("Viewer non initialisé."); return 0; }
-
-  // Moyenne pondérée par l'aire par entité
-  const byE = new Map();
-  for (const s of samples){
-    if (!s.eid) continue;
-    const acc = byE.get(s.eid) || { sum:0, area:0 };
-    acc.sum  += s.draft * s.area;
-    acc.area += s.area;
-    byE.set(s.eid, acc);
-  }
-
-  let applied = 0;
-  byE.forEach((acc, eid)=>{
-    const obj = v.scene.objects[eid];
-    if (!obj) return;
-    const mean = acc.sum / Math.max(1e-9, acc.area);
-
-    // Couleur finale selon la règle rouge (<0), jaune (≈0), vert (>0)
-    obj.colorize = this._draftToRGBA(mean);
-    obj.opacity  = 1;
-
-    // optionnel : s'assurer qu'on voit bien la couleur même si ghost/xray sont actifs
-    if ("xrayed" in obj) obj.xrayed = false;
-    if ("ghosted" in obj) obj.ghosted = false;
-
-    applied++;
-  });
-
-  if (applied) StatusUI.set(`Heatmap dépouille appliquée (fallback entités: ${applied})`);
-  return applied;
-}
 
   // --- Heatmap dépouille locale/serveur ---
+  // 1) on tente "par face" (HeatmapLayer) via pick écran (clé `${eid}:${tri}`)
+  // 2) si aucune correspondance -> fallback entités (moyenne par eid)
   async applyDraftHeatmap(draftMap = null, opts = {}){
     try {
       const tryBuild = opts.tryBuild !== false;
 
-      // 1) Axis letter depuis l'état courant
       const vec = this.selectedAxis || { x:0, y:0, z:1 };
       const maxAbs = Math.max(Math.abs(vec.x||0), Math.abs(vec.y||0), Math.abs(vec.z||0));
       const letter = (maxAbs===Math.abs(vec.x)) ? 'X' : (maxAbs===Math.abs(vec.y) ? 'Y' : 'Z');
 
-      // 2) Map par face (si dispo) sinon tente une construction locale
-      let map = draftMap || window.__quickDraftMap || {};
-      let mapSize = Object.keys(map).length;
-
-      if (mapSize === 0 && tryBuild) {
-        const faces = await this._computeFacesFromViewer();
-        if (faces.length) {
-          const ax = (letter==='X')?[1,0,0]:(letter==='Y')?[0,1,0]:[0,0,1];
-          const clamp=(v,min,max)=>Math.max(min,Math.min(max,v));
-          map = {};
-          for (const f of faces) {
-            const n = f.normal || [0,0,1];
-            const cos = (n[0]*ax[0] + n[1]*ax[1] + n[2]*ax[2]); // signé
-            const ang = Math.acos(clamp(cos,-1,1)) * 180/Math.PI;
-            const draft = 90 - ang;
-            map[f.id ?? `f${Object.keys(map).length}`] = draft;
-          }
-          window.__quickDraftMap = map;
-          mapSize = Object.keys(map).length;
-        }
-      }
-
-      // 3) S’assure que le viewer est prêt
       if (!window.viewerAdapter?.viewer) {
         const canvas =
           document.getElementById('xeokit-canvas') ||
@@ -764,35 +795,37 @@ async _applyEntityHeatmap(axisLetter){
         await window.viewerAdapter?.convert?.(fileId);
         await window.viewerAdapter?.loadFromFileId?.(fileId);
       }
-      if (!window.viewerAdapter?.viewer) {
-        alert("Viewer non initialisé.");
-        return;
-      }
+      if (!window.viewerAdapter?.viewer) { alert("Viewer non initialisé."); return; }
 
-      // 4) Essai par-face via HeatmapLayer
       let appliedCount = 0;
-      if (mapSize > 0 && typeof HeatmapLayer === 'function') {
-        const layer = new HeatmapLayer(window.viewerAdapter);
-        if (typeof layer.applyWithCount === 'function') {
-          appliedCount = layer.applyWithCount(map, { min: -5, max: 5 });
-        } else {
-          layer.apply(map, { min: -5, max: 5 }); // ⚠️ bug corrigé: utiliser 'map'
-          appliedCount = layer.debugAppliedCount || 0;
+      if (typeof HeatmapLayer === 'function') {
+        let map = draftMap || window.__quickDraftMap || {};
+        if (!this._countKeys(map) && tryBuild) {
+          map = await this._buildPerFaceDraftMapFromScreen(letter, 2400);
+        }
+
+        if (this._countKeys(map)) {
+          const layer = new HeatmapLayer(window.viewerAdapter);
+          if (typeof layer.applyWithCount === 'function') {
+            appliedCount = layer.applyWithCount(map, { min: -5, max: 5 });
+          } else {
+            layer.apply(map, { min: -5, max: 5 });
+            appliedCount = layer.debugAppliedCount || 0;
+          }
         }
       }
 
-      // 5) Si 0 face colorisée -> FALLBACK ENTITÉ automatique
-      if (appliedCount === 0) {
+      if (!appliedCount) {
         console.warn('[DFM] Heatmap par face: 0 correspondance. Fallback entités…');
         const n = await this._applyEntityHeatmap(letter);
         if (!n) {
           alert(
             "Aucune face/entité colorisée.\n" +
-            "Schéma d’ID incompatible pour HeatmapLayer. Partage-moi modules/HeatmapLayer.js pour adapter le mapping."
+            "Le mapping par-face n'a pas matché. Si besoin, partage modules/HeatmapLayer.js pour ajuster le format des clés."
           );
         }
       } else {
-        StatusUI.set("Heatmap dépouille appliquée");
+        StatusUI.set("Heatmap dépouille appliquée (par face)");
       }
     } catch (e) {
       console.warn("[DFM] applyDraftHeatmap error", e);
@@ -862,7 +895,6 @@ async _applyEntityHeatmap(axisLetter){
     if (!panel) return;
     panel.innerHTML = "";
 
-    // Réafficher la shortlist si connue
     if (Array.isArray(window.CAD?.materialShortlist) && window.CAD.materialShortlist.length) {
       renderMaterialsShortlistUI(window.CAD.materialShortlist);
     }
@@ -954,7 +986,6 @@ async _applyEntityHeatmap(axisLetter){
     }
   }
 
-  // fallback ouverture modale (si aucun openMaterialModal global)
   _openMaterialModalFallback(){
     const el = document.getElementById('materialModal') || document.querySelector('[data-material-modal]');
     if (!el) return alert('Modale matière introuvable');
