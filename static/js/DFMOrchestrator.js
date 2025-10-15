@@ -632,68 +632,90 @@ class DFMOrchestrator {
   }
 
   /* ---------- Helpers couleurs & calcul local du draft ---------- */
-  // 0° = jaune, <0° (contre-dépouille) = rouge, >0° = vert (rampe 0→5°)
-  _draftToRGBA(d /* degrés, signé */){
-    const eps = 0.15;        // bande "≈0°" en ±0.15°
-    if (d < -eps)   return [1, 0.22, 0.22, 1];           // rouge
-    if (Math.abs(d) <= eps) return [1, 0.92, 0.12, 1];   // jaune
+// 0° = jaune, <0° (contre-dépouille) = rouge, >0° = vert (rampe 0→5°)
+_draftToRGBA(d /* degrés, SIGNÉ */){
+  // Bande jaune élargie autour de 0° pour éviter que le bruit ne passe au vert
+  const ZERO_BAND = 1.0;    // ← tu peux monter à 1.5 si besoin
+  const UNDERCUT_THR = -0.2; // petite marge négative pour classer rouge
 
-    // d > 0 : dégradé jaune → vert jusqu’à 5°
-    const t = Math.max(0, Math.min(1, d / 5));
-    const lerp = (a,b,u)=>a+(b-a)*u;
-    const r = lerp(1.00, 0.20, t);
-    const g = lerp(0.92, 0.80, t);
-    const b = lerp(0.12, 0.24, t);
-    return [r, g, b, 1];
-  }
+  if (d <= UNDERCUT_THR) return [1, 0.22, 0.22, 1];     // rouge (contre-dépouille)
+  if (Math.abs(d) <= ZERO_BAND) return [1, 0.92, 0.12, 1]; // jaune (≈ 0°)
 
-  async _collectLocalDraftSamples(axisLetter){
-    const faces = await (window.__getFaces?.(1500) || []);
-    if (!faces.length) return null;
+  // d > ZERO_BAND : dégradé jaune → vert jusqu'à ~5°
+  const span = 5 - ZERO_BAND;
+  const t = Math.max(0, Math.min(1, (d - ZERO_BAND) / (span > 0 ? span : 1)));
+  const lerp = (a,b,u)=>a+(b-a)*u;
+  const r = lerp(1.00, 0.20, t);
+  const g = lerp(0.92, 0.80, t);
+  const b = lerp(0.12, 0.24, t);
+  return [r, g, b, 1];
+}
 
-    const axL = (axisLetter||'Z').toUpperCase();
-    const axis = axL==='X'?[1,0,0]:axL==='Y'?[0,1,0]:[0,0,1];
-    const dot  = (a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
-    const clamp=(x)=>Math.max(-1,Math.min(1,x));
+async _collectLocalDraftSamples(axisLetter){
+  const faces = await (window.__getFaces?.(1800) || []);
+  if (!faces.length) return null;
 
-    return faces.map(f=>{
-      const cos   = clamp(dot(f.normal||[0,0,1], axis));      // signé
-      const angle = Math.acos(cos) * 180/Math.PI;             // 0..180
-      const draft = 90 - angle;                               // <0 : contre-dépouille
-      return { eid: f.eid || null, draft, area: f.area || 1 };
-    });
-  }
+  const axL = (axisLetter||'Z').toUpperCase();
+  const axis = axL==='X'?[1,0,0]:axL==='Y'?[0,1,0]:[0,0,1];
+  const dot  = (a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+  const clamp=(x)=>Math.max(-1,Math.min(1,x));
+  const round1=(x)=>Math.round(x*10)/10; // lissage à 0.1°
+
+  return faces.map(f=>{
+    const n = f.normal || [0,0,1];
+    const cos   = clamp(dot(n, axis));      // SIGNÉ : <0 → contre-dépouille
+    const angle = Math.acos(cos) * 180/Math.PI;
+    let draft  = 90 - angle;                // 0° si paroi // axe ; <0° si sous-dépouille
+
+    // Respecte l’inversion d’axe éventuelle
+    if (this.selectedInvert) draft = -draft;
+
+    // Lissage et petit clamp pour éviter des spikes absurdes
+    draft = Math.max(-15, Math.min(15, round1(draft)));
+    return { eid: f.eid || null, draft, area: f.area || 1 };
+  });
+}
 
   // Fallback entités (moyenne par entityId)
-  async _applyEntityHeatmap(axisLetter){
-    const samples = await this._collectLocalDraftSamples(axisLetter);
-    if (!samples || !samples.length) {
-      alert("Aucun échantillon local pour la heatmap.");
-      return 0;
-    }
-    const v = window.viewerAdapter?.viewer || window.viewer;
-    if (!v?.scene?.objects) { alert("Viewer non initialisé."); return 0; }
-
-    const byE = new Map();
-    for (const s of samples){
-      if (!s.eid) continue;
-      const acc = byE.get(s.eid) || { sum:0, area:0 };
-      acc.sum  += s.draft * s.area;
-      acc.area += s.area;
-      byE.set(s.eid, acc);
-    }
-    let applied = 0;
-    byE.forEach((acc, eid)=>{
-      const obj = v.scene.objects[eid];
-      if (!obj) return;
-      const mean = acc.sum / Math.max(1e-9, acc.area);
-      obj.colorize = this._draftToRGBA(mean);
-      obj.opacity  = 1;
-      applied++;
-    });
-    if (applied) StatusUI.set(`Heatmap dépouille appliquée (fallback entités: ${applied})`);
-    return applied;
+async _applyEntityHeatmap(axisLetter){
+  const samples = await this._collectLocalDraftSamples(axisLetter);
+  if (!samples || !samples.length) {
+    alert("Aucun échantillon local pour la heatmap.");
+    return 0;
   }
+  const v = window.viewerAdapter?.viewer || window.viewer;
+  if (!v?.scene?.objects) { alert("Viewer non initialisé."); return 0; }
+
+  // Moyenne pondérée par l'aire par entité
+  const byE = new Map();
+  for (const s of samples){
+    if (!s.eid) continue;
+    const acc = byE.get(s.eid) || { sum:0, area:0 };
+    acc.sum  += s.draft * s.area;
+    acc.area += s.area;
+    byE.set(s.eid, acc);
+  }
+
+  let applied = 0;
+  byE.forEach((acc, eid)=>{
+    const obj = v.scene.objects[eid];
+    if (!obj) return;
+    const mean = acc.sum / Math.max(1e-9, acc.area);
+
+    // Couleur finale selon la règle rouge (<0), jaune (≈0), vert (>0)
+    obj.colorize = this._draftToRGBA(mean);
+    obj.opacity  = 1;
+
+    // optionnel : s'assurer qu'on voit bien la couleur même si ghost/xray sont actifs
+    if ("xrayed" in obj) obj.xrayed = false;
+    if ("ghosted" in obj) obj.ghosted = false;
+
+    applied++;
+  });
+
+  if (applied) StatusUI.set(`Heatmap dépouille appliquée (fallback entités: ${applied})`);
+  return applied;
+}
 
   // --- Heatmap dépouille locale/serveur ---
   async applyDraftHeatmap(draftMap = null, opts = {}){
