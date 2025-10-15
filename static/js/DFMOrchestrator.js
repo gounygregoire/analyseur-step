@@ -676,6 +676,22 @@ class DFMOrchestrator {
    * Échantillonne l'écran pour récupérer (eid, triIndex) + draft signé.
    * Retourne un objet mapping: { `${eid}:${tri}` : draftDeg }
    */
+    // Génère plusieurs variantes de clés pour maximiser les correspondances avec HeatmapLayer
+  _faceKeyVariants(eid, tri){
+    const e = String(eid ?? "");
+    const t = String(tri ?? "");
+    // variantes fréquentes rencontrées selon versions/adaptateurs
+    return [
+      `${e}:${t}`,
+      `${e}#${t}`,
+      `${e}|${t}`,
+      `${e}/${t}`,
+      `${e}_${t}`,
+      // parfois HeatmapLayer ne garde que tri quand il travaille au sein d'un mesh
+      `${t}`
+    ];
+  }
+
   async _buildPerFaceDraftMapFromScreen(axisLetter='Z', maxSamples=2500){
     const viewer = window.viewerAdapter?.viewer || window.viewer;
     const canvas =
@@ -697,9 +713,9 @@ class DFMOrchestrator {
     const clamp=(x)=>Math.max(-1,Math.min(1,x));
     const round1 = (x)=>Math.round(x*10)/10;
 
-    const sum   = new Map();
-    const count = new Map();
-
+    // on remplit directement l'objet (pas besoin d'accumuler par clé ici,
+    // la grille est déjà dense et on écrase avec la dernière valeur lissée)
+    const mapping = {};
     for (let iy=0; iy<ny; iy++){
       const y = (iy + 0.5) * stepY;
       for (let ix=0; ix<nx; ix++){
@@ -707,8 +723,8 @@ class DFMOrchestrator {
         const hit = viewer.scene.pick({ canvasPos:[x,y], pickSurface:true });
         if (!hit?.worldNormal) continue;
 
-        const eid = hit.entity?.id || hit.mesh?.id || hit.object?.id;
-        const tri = hit.primIndex ?? hit.triangleIndex ?? hit.primIndicesIndex ?? hit.indicesIndex;
+        const eid = hit.entity?.id ?? hit.mesh?.id ?? hit.object?.id ?? hit.id;
+        const tri = hit.primIndex ?? hit.triangleIndex ?? hit.primIndicesIndex ?? hit.indicesIndex ?? hit.uvTriangleIndex;
         if (eid == null || tri == null) continue;
 
         const n = hit.worldNormal;
@@ -717,14 +733,12 @@ class DFMOrchestrator {
         if (this.selectedInvert) draft = -draft;
         draft = Math.max(-15, Math.min(15, round1(draft)));
 
-        const key = `${eid}:${tri}`;
-        sum.set(key, (sum.get(key) || 0) + draft);
-        count.set(key, (count.get(key) || 0) + 1);
+        // renseigne toutes les variantes de clés possibles
+        for (const key of this._faceKeyVariants(eid, tri)) {
+          mapping[key] = draft;
+        }
       }
     }
-
-    const mapping = {};
-    sum.forEach((s, key) => { mapping[key] = s / count.get(key); });
     return mapping;
   }
 
@@ -770,68 +784,79 @@ class DFMOrchestrator {
     return applied;
   }
 
-  // --- Heatmap dépouille locale/serveur ---
-  // 1) on tente "par face" (HeatmapLayer) via pick écran (clé `${eid}:${tri}`)
-  // 2) si aucune correspondance -> fallback entités (moyenne par eid)
-  async applyDraftHeatmap(draftMap = null, opts = {}){
-    try {
-      const tryBuild = opts.tryBuild !== false;
+// --- Heatmap dépouille locale/serveur ---
+// 1) on tente "par face" (HeatmapLayer) via pick écran (clé `${eid}:${tri}`)
+// 2) si aucune correspondance -> fallback entités (moyenne par eid)
+async applyDraftHeatmap(draftMap = null, opts = {}) {
+  try {
+    const tryBuild = opts.tryBuild !== false;
 
-      const vec = this.selectedAxis || { x:0, y:0, z:1 };
-      const maxAbs = Math.max(Math.abs(vec.x||0), Math.abs(vec.y||0), Math.abs(vec.z||0));
-      const letter = (maxAbs===Math.abs(vec.x)) ? 'X' : (maxAbs===Math.abs(vec.y) ? 'Y' : 'Z');
+    // Lettre d’axe depuis l’état courant
+    const vec = this.selectedAxis || { x: 0, y: 0, z: 1 };
+    const maxAbs = Math.max(Math.abs(vec.x || 0), Math.abs(vec.y || 0), Math.abs(vec.z || 0));
+    const letter = (maxAbs === Math.abs(vec.x)) ? 'X' : (maxAbs === Math.abs(vec.y) ? 'Y' : 'Z');
 
-      if (!window.viewerAdapter?.viewer) {
-        const canvas =
-          document.getElementById('xeokit-canvas') ||
-          document.getElementById('xktCanvas') ||
-          document.querySelector('canvas');
-        if (typeof window.initViewer === 'function' && canvas) {
-          await window.initViewer({ canvasElement: canvas });
-        }
+    // S’assure que le viewer est prêt
+    if (!window.viewerAdapter?.viewer) {
+      const canvas =
+        document.getElementById('xeokit-canvas') ||
+        document.getElementById('xktCanvas') ||
+        document.querySelector('canvas');
+      if (typeof window.initViewer === 'function' && canvas) {
+        await window.initViewer({ canvasElement: canvas });
       }
-      const fileId = this.resolveFileId?.() || window.currentFileId || window.CAD?.fileIdStep;
-      if (fileId && window.viewerAdapter?.loadFromFileId) {
-        await window.viewerAdapter?.convert?.(fileId);
-        await window.viewerAdapter?.loadFromFileId?.(fileId);
-      }
-      if (!window.viewerAdapter?.viewer) { alert("Viewer non initialisé."); return; }
-
-      let appliedCount = 0;
-      if (typeof HeatmapLayer === 'function') {
-        let map = draftMap || window.__quickDraftMap || {};
-        if (!this._countKeys(map) && tryBuild) {
-          map = await this._buildPerFaceDraftMapFromScreen(letter, 2400);
-        }
-
-        if (this._countKeys(map)) {
-          const layer = new HeatmapLayer(window.viewerAdapter);
-          if (typeof layer.applyWithCount === 'function') {
-            appliedCount = layer.applyWithCount(map, { min: -5, max: 5 });
-          } else {
-            layer.apply(map, { min: -5, max: 5 });
-            appliedCount = layer.debugAppliedCount || 0;
-          }
-        }
-      }
-
-      if (!appliedCount) {
-        console.warn('[DFM] Heatmap par face: 0 correspondance. Fallback entités…');
-        const n = await this._applyEntityHeatmap(letter);
-        if (!n) {
-          alert(
-            "Aucune face/entité colorisée.\n" +
-            "Le mapping par-face n'a pas matché. Si besoin, partage modules/HeatmapLayer.js pour ajuster le format des clés."
-          );
-        }
-      } else {
-        StatusUI.set("Heatmap dépouille appliquée (par face)");
-      }
-    } catch (e) {
-      console.warn("[DFM] applyDraftHeatmap error", e);
-      alert("Impossible d'appliquer la heatmap (voir console).");
     }
+    const fileId = this.resolveFileId?.() || window.currentFileId || window.CAD?.fileIdStep;
+    if (fileId && window.viewerAdapter?.loadFromFileId) {
+      await window.viewerAdapter?.convert?.(fileId);
+      await window.viewerAdapter?.loadFromFileId?.(fileId);
+    }
+    if (!window.viewerAdapter?.viewer) {
+      alert("Viewer non initialisé.");
+      return;
+    }
+
+    // 1) TENTER PAR FACE (HeatmapLayer)
+    let appliedCount = 0;
+    if (typeof HeatmapLayer === 'function') {
+      let map = draftMap || window.__quickDraftMap || {};
+      if (!this._countKeys(map) && tryBuild) {
+        // construit une map par face depuis l'écran
+        map = await this._buildPerFaceDraftMapFromScreen(letter, 3000);
+      }
+
+      if (this._countKeys(map)) {
+        const layer = new HeatmapLayer(window.viewerAdapter);
+        const hmOpts = { min: -10, max: 10 }; // bornes signées pour voir rouge (<0), jaune (~0), vert (>0)
+
+        if (typeof layer.applyWithCount === 'function') {
+          appliedCount = layer.applyWithCount(map, hmOpts);
+        } else {
+          layer.apply(map, hmOpts);
+          appliedCount = layer.debugAppliedCount || 0;
+        }
+        console.info('[DFM] heatmap par face → appliquées =', appliedCount, '/ clés =', this._countKeys(map));
+      }
+    }
+
+    // 2) FALLBACK ENTITÉS si rien n'a été colorisé
+    if (!appliedCount) {
+      console.warn('[DFM] Heatmap par face: 0 correspondance. Fallback entités…');
+      const n = await this._applyEntityHeatmap(letter);
+      if (!n) {
+        alert(
+          "Aucune face/entité colorisée.\n" +
+          "Le mapping par-face n'a pas matché. Si besoin, partage modules/HeatmapLayer.js pour ajuster le format des clés."
+        );
+      }
+    } else {
+      StatusUI.set("Heatmap dépouille appliquée (par face)");
+    }
+  } catch (e) {
+    console.warn("[DFM] applyDraftHeatmap error", e);
+    alert("Impossible d'appliquer la heatmap (voir console).");
   }
+}
 
   // --- Fallback: extraction approx depuis le viewer ---
   async _computeFacesFromViewer() {
