@@ -524,8 +524,9 @@ async function loadXKT(url, nameHint){
 
 /* ====================== PROBE SAFE (faces) ====================== */
 (function installProbeSafe(){
-  if (typeof window.__getFaces === 'function') {
-    console.log('[probe safe] __getFaces déjà présent (app.html), skip.');
+  // Si une version "hard" est déjà installée, on ne touche pas.
+  if (typeof window.__getFaces === 'function' && window.__getFaces.__dfmPatch === 'hard') {
+    console.log('[probe safe] déjà patché (hard), skip.');
     return;
   }
 
@@ -622,7 +623,7 @@ async function loadXKT(url, nameHint){
   }
 
   // Sonde écran : échantillonnage uniforme + identifiant d’entité
-  window.__getFaces = async function(maxSamples = 3500){
+  const hardImpl = async function __getFaces_impl(maxSamples = 3500){
     await waitSceneReady(1200);
     if (!viewer || !canvasEl) return [];
 
@@ -662,20 +663,36 @@ async function loadXKT(url, nameHint){
     console.log('[probe safe] faces(canvas-wide) =', faces.length);
     return faces;
   };
+  // tag interne (utile si un autre script checke)
+  Object.defineProperty(hardImpl, '__dfmPatch', { value: 'hard', enumerable:false });
 
-  // surface projetée locale si API serveur absente
-  if (typeof window.__getProjectedArea !== 'function') {
-    window.__getProjectedArea = function(axisLetter='Z'){
-      const a = viewer?.scene?.aabb;
-      if (!a) return 0;
-      const dx=a[3]-a[0], dy=a[4]-a[1], dz=a[5]-a[2];
-      const ax = String(axisLetter||'Z').toUpperCase();
-      const mm2 = (ax==='X') ? dy*dz : (ax==='Y') ? dx*dz : dx*dy;
-      return Math.max(0, mm2/100); // mm² -> cm²
-    };
+  // Soft-lock : si la propriété existe et est reconfigurable → on la remplace,
+  // sinon on crée un getter/setter qui ignore les overrides futurs (sans erreur).
+  try {
+    const desc = Object.getOwnPropertyDescriptor(window, '__getFaces');
+    if (desc && desc.configurable !== false) {
+      try { delete window.__getFaces; } catch {}
+      Object.defineProperty(window, '__getFaces', {
+        configurable: true,
+        get(){ return hardImpl; },
+        set(v){ console.warn('[probe safe] override __getFaces ignoré'); },
+      });
+    } else if (!desc) {
+      Object.defineProperty(window, '__getFaces', {
+        configurable: true,
+        get(){ return hardImpl; },
+        set(v){ console.warn('[probe safe] override __getFaces ignoré'); },
+      });
+    } else {
+      // non reconfigurable : on ne jette pas d’erreur, on laisse l’existante
+      console.warn('[probe safe] __getFaces non reconfigurable, conservation de la version existante');
+    }
+    console.log('[probe safe] installed (main.js)');
+  } catch (e) {
+    // Dernier filet: simple assign (ne jette pas si propriété simple writable)
+    try { window.__getFaces = hardImpl; console.log('[probe safe] installed (assign)'); }
+    catch (err){ console.warn('[probe safe] install failed', err); }
   }
-
-  console.log('[probe safe] installed (main.js)');
 })();
 
 /* ---------- FICHIERS / upload ---------- */
@@ -864,7 +881,7 @@ function worldToOverlayXY(world){
   const vw = mV[3]*x + mV[7]*y + mV[11]*z + mV[15];
 
   const cx = mP[0]*vx + mP[4]*vy + mP[8]*vz  + mP[12]*vw;
-  const cy = mP[1]*vy + mP[5]*vy + mP[9]*vz  + mP[13]*vw;
+  const cy = mP[1]*vx + mP[5]*vy + mP[9]*vz  + mP[13]*vw; // ← FIX (vx pas vy)
   const cw = mP[3]*vx + mP[7]*vy + mP[11]*vz + mP[15]*vw;
   if (!cw) return null;
 
@@ -1190,84 +1207,4 @@ window.addEventListener('dfm:fileReady', (ev)=>{
 });
 
 // Export vide (ESM)
-// --- HARD PATCH __getFaces : sampling plein écran + verrou anti-override ---
-(function hardPatchGetFaces(){
-  // petite aide
-  const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
-
-  async function waitSceneReady(viewer, maxMs=2500){
-    const t0 = performance.now();
-    while (performance.now()-t0 < maxMs){
-      const a = viewer?.scene?.aabb;
-      if (a && (a[3]-a[0])>1e-6 && (a[4]-a[1])>1e-6 && (a[5]-a[2])>1e-6) return true;
-      await sleep(50);
-    }
-    return true;
-  }
-
-  function install(){
-    const viewer = window.viewerAdapter?.viewer || window.viewer;
-    const canvas =
-      document.getElementById('xeokit-canvas') ||
-      document.getElementById('xktCanvas') ||
-      document.querySelector('canvas');
-
-    if (!viewer || !canvas || !viewer.scene?.pick) {
-      // retente plus tard si le viewer n'est pas prêt
-      setTimeout(install, 200);
-      return;
-    }
-
-    async function __getFaces(maxSamples=3500){
-      await waitSceneReady(viewer, 1500);
-
-      const W = canvas.clientWidth  || canvas.width  || 512;
-      const H = canvas.clientHeight || canvas.height || 512;
-      const areaScreen = W * H;
-
-      const nx = Math.max(24, Math.round(Math.sqrt(maxSamples * (W/H))));
-      const ny = Math.max(24, Math.round(maxSamples / nx));
-      const stepX = W / nx, stepY = H / ny;
-      const sampleArea = areaScreen / (nx*ny);
-
-      const faces = [];
-      for (let iy=0; iy<ny; iy++){
-        const y = (iy+0.5)*stepY;
-        for (let ix=0; ix<nx; ix++){
-          const x = (ix+0.5)*stepX;
-          const hit = viewer.scene.pick({ canvasPos:[x,y], pickSurface:true });
-          if (hit?.worldNormal){
-            const n = hit.worldNormal;
-            const L = Math.hypot(n[0],n[1],n[2]) || 1;
-            const eid = hit.entity?.id || hit.mesh?.id || hit.object?.id || null;
-            faces.push({ normal:[n[0]/L,n[1]/L,n[2]/L], area: sampleArea, source:"screen-pick", eid });
-          }
-        }
-      }
-      console.log('[probe safe] faces(canvas-wide) =', faces.length);
-      return faces;
-    }
-    // marqueur + gel pour éviter toute réécriture ultérieure
-    Object.defineProperty(__getFaces, '__dfmPatch', { value: 'hard', enumerable:false });
-    Object.defineProperty(window, '__getFaces', {
-      value: __getFaces,
-      configurable: false, // <- verrou
-      writable:     false  // <- verrou
-    });
-
-    // petit diag manuel : await window.__dfmProbeTest()
-    window.__dfmProbeTest = async function(){
-      const f = await window.__getFaces(1200);
-      console.log('[diag] faces count =', f.length, f.slice(0,3));
-      return f.length;
-    };
-
-    console.log('[probe safe] __getFaces hard-patched & locked');
-  }
-
-  // essaie maintenant puis re-essaie après le load
-  install();
-  window.addEventListener('load', install);
-})();
-
 export {};
