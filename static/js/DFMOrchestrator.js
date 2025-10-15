@@ -598,6 +598,41 @@ class DFMOrchestrator {
     return host;
   }
 
+  // --- À mettre dans class DFMOrchestrator ---
+_getStableKey(axisLetter = 'Z') {
+  const fid = this.resolveFileId?.() || window.currentFileId || window.CAD?.fileIdStep || 'nofile';
+  return `${fid}::${(axisLetter||'Z').toUpperCase()}`;
+}
+
+async _getStableFaces(axisLetter = 'Z') {
+  const key = this._getStableKey(axisLetter);
+  this.__facesCache = this.__facesCache || new Map();
+
+  if (this.__facesCache.has(key)) return this.__facesCache.get(key);
+
+  // 1) Essaye la sonde sûre
+  let faces = [];
+  try {
+    faces = await (window.__getFaces?.(3000) || []);
+  } catch {}
+
+  // 2) Si rien, tente le fallback géométrique interne déjà présent
+  if (!faces || !faces.length) {
+    faces = await this._computeFacesFromViewer?.() || [];
+  }
+
+  // Normalise un peu la structure
+  faces = (faces || []).map((f, i) => ({
+    eid: f.eid || f.entityId || f.id?.split?.(':')?.[0] || f.id || null,
+    normal: f.normal || [0,0,1],
+    area: f.area || 1,
+    _i: i
+  })).filter(f => !!f.eid);
+
+  this.__facesCache.set(key, faces);
+  return faces;
+}
+
   _renderShortlistBar(shortlist = []) {
     const host = this._ensureRecoBar();
     host.innerHTML = '';
@@ -633,21 +668,61 @@ class DFMOrchestrator {
 
   /* ---------- Helpers couleurs & calcul local du draft ---------- */
   // 0° = jaune, <0° (contre-dépouille) = rouge, >0° = vert (rampe 0→5°)
-  _draftToRGBA(d){
-    const ZERO_BAND = 1.0;     // largeur de la zone "≈0°" rendue jaune
-    const UNDERCUT_THR = -0.2; // petite marge négative pour classer en rouge
+// --- À mettre dans class DFMOrchestrator ---
+_draftToRGBA(d) {
+  // d en degrés, SIGNÉ (négatif = contre-dépouille)
+  const eps0 = 0.15;   // bande ~0° → jaune
+  const under = -0.2;  // seuil contre-dépouille → rouge
+  if (d <= under) return [1, 0.22, 0.22, 1];       // rouge
+  if (Math.abs(d) <= eps0) return [1, 0.92, 0.12, 1]; // jaune
+  // d > 0 : dégradé jaune → vert jusqu’à ~5°
+  const t = Math.max(0, Math.min(1, d / 5));
+  const lerp = (a,b,u)=>a+(b-a)*u;
+  return [ lerp(1.00,0.20,t), lerp(0.92,0.80,t), lerp(0.12,0.24,t), 1 ];
+}
 
-    if (d <= UNDERCUT_THR) return [1, 0.22, 0.22, 1];        // rouge
-    if (Math.abs(d) <= ZERO_BAND) return [1, 0.92, 0.12, 1]; // jaune
+// Calcule d° signé par face → agrège par entité → colorise
+async _applyEntityHeatmapStrict(axisLetter = 'Z') {
+  const faces = await this._getStableFaces(axisLetter);
+  const v = window.viewerAdapter?.viewer || window.viewer;
+  if (!faces.length || !v?.scene?.objects) return 0;
 
-    const span = 5 - ZERO_BAND;
-    const t = Math.max(0, Math.min(1, (d - ZERO_BAND) / (span > 0 ? span : 1)));
-    const lerp = (a,b,u)=>a+(b-a)*u;
-    const r = lerp(1.00, 0.20, t);
-    const g = lerp(0.92, 0.80, t);
-    const b = lerp(0.12, 0.24, t);
-    return [r, g, b, 1];
+  const ax = (axisLetter==='X')?[1,0,0]:(axisLetter==='Y')?[0,1,0]:[0,0,1];
+  const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+  const clamp=(x)=>Math.max(-1,Math.min(1,x));
+  const len=(n)=>Math.hypot(n[0],n[1],n[2])||1;
+
+  // agrégation pondérée par aire (on prend la moyenne pondérée)
+  const agg = new Map(); // eid -> {sum, area}
+  for (const f of faces) {
+    const n = f.normal || [0,0,1];
+    const nn = [n[0]/len(n), n[1]/len(n), n[2]/len(n)];
+    let d = 90 - (Math.acos(clamp(dot(nn, ax))) * 180/Math.PI); // SIGNÉ !
+    if (this.selectedInvert) d = -d;
+
+    const a = f.area || 1;
+    const rec = agg.get(f.eid) || { sum:0, area:0 };
+    rec.sum  += d * a;
+    rec.area += a;
+    agg.set(f.eid, rec);
   }
+
+  let applied = 0;
+  agg.forEach((rec, eid) => {
+    const mean = rec.sum / Math.max(1e-9, rec.area);
+    const obj = v.scene.objects[eid];
+    if (!obj) return;
+    obj.colorize = this._draftToRGBA(mean);
+    obj.opacity = 1;
+    if ("xrayed" in obj) obj.xrayed = false;
+    if ("ghosted" in obj) obj.ghosted = false;
+    applied++;
+  });
+
+  if (applied) StatusUI.set(`Heatmap dépouille appliquée (entités: ${applied})`);
+  return applied;
+}
+
 
   async _collectLocalDraftSamples(axisLetter){
 const faces = await window.orchestrator?._getStableFaces() || [];
@@ -797,21 +872,21 @@ async _getStableFaces() {
 // 1) on tente "par face" (HeatmapLayer) via clés reconnues par la couche
 // 2) si aucune correspondance -> fallback entités (moyenne par eid)
 // 3) transformation valeur (°) → t∈[0..1] pour palette rouge/jaune/vert
+// --- À mettre dans class DFMOrchestrator (remplace ta méthode) ---
 async applyDraftHeatmap(draftMap = null, opts = {}) {
   try {
     const tryBuild = opts.tryBuild !== false;
 
-    // --- 1) Axis letter depuis l'état courant
-    const vec = this.selectedAxis || { x: 0, y: 0, z: 1 };
-    const maxAbs = Math.max(Math.abs(vec.x || 0), Math.abs(vec.y || 0), Math.abs(vec.z || 0));
-    const letter = (maxAbs === Math.abs(vec.x)) ? 'X' : (maxAbs === Math.abs(vec.y) ? 'Y' : 'Z');
+    // Lettre d’axe
+    const vec = this.selectedAxis || { x:0, y:0, z:1 };
+    const m = Math.max(Math.abs(vec.x||0), Math.abs(vec.y||0), Math.abs(vec.z||0));
+    const letter = (m===Math.abs(vec.x)) ? 'X' : (m===Math.abs(vec.y) ? 'Y' : 'Z');
 
-    // --- 2) S’assure que le viewer est prêt et le modèle chargé
+    // Viewer prêt
     if (!window.viewerAdapter?.viewer) {
-      const canvas =
-        document.getElementById('xeokit-canvas') ||
-        document.getElementById('xktCanvas') ||
-        document.querySelector('canvas');
+      const canvas = document.getElementById('xeokit-canvas')
+        || document.getElementById('xktCanvas')
+        || document.querySelector('canvas');
       if (typeof window.initViewer === 'function' && canvas) {
         await window.initViewer({ canvasElement: canvas });
       }
@@ -823,75 +898,38 @@ async applyDraftHeatmap(draftMap = null, opts = {}) {
     }
     if (!window.viewerAdapter?.viewer) { alert("Viewer non initialisé."); return; }
 
-    // --- 3) Récupère / construit la map de dépouille signée (en degrés)
+    // Tentative par-face (uniquement si tu as un vrai mapping compatible HeatmapLayer)
+    let appliedCount = 0;
     let mapDeg = draftMap || window.__quickDraftMap || {};
-    const countKeys = (o) => { try { return Object.keys(o || {}).length; } catch { return 0; } };
+    const countKeys = (o)=>{ try { return Object.keys(o||{}).length; } catch { return 0; } };
 
-    if (!countKeys(mapDeg) && tryBuild) {
-      // construit une map "<entityId>:<triIndex>" -> draft(°)
+    if (!countKeys(mapDeg) && tryBuild && typeof this._buildPerFaceDraftMapFromScreen === 'function') {
       mapDeg = await this._buildPerFaceDraftMapFromScreen(letter, 2400);
     }
 
-    if (!countKeys(mapDeg) && tryBuild) {
-      // micro-secours : agrège par entité à partir du snapshot de faces si dispo
-      const faces = await (this._getStableFaces?.() || window.__getFaces?.(1800) || []);
-      if (faces.length) {
-        const ax = (letter === 'X') ? [1, 0, 0] : (letter === 'Y') ? [0, 1, 0] : [0, 0, 1];
-        const dot = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
-        const clamp = (x) => Math.max(-1, Math.min(1, x));
-        const round1 = (x) => Math.round(x * 10) / 10;
-        const tmp = {};
-        for (const f of faces) {
-          const n = f.normal || [0, 0, 1];
-          let d = 90 - (Math.acos(clamp(dot(n, ax))) * 180 / Math.PI);
-          if (this.selectedInvert) d = -d;
-          d = Math.max(-15, Math.min(15, round1(d)));
-          const key = String(f.eid || f.entityId || "");
-          if (key) tmp[key] = (tmp[key] == null) ? d : Math.max(tmp[key], d);
-        }
-        mapDeg = tmp;
+    if (countKeys(mapDeg) && typeof HeatmapLayer === 'function') {
+      // Transforme degré → t in [0..1] pour la palette de HeatmapLayer
+      const degToT = (d)=>{
+        const UNDER=-0.2, ZERO=0.15;
+        if (d<=UNDER) return 1.0;               // rouge
+        if (Math.abs(d)<=ZERO) return 0.75;     // jaune
+        if (d>0) return 0.75 - 0.25*Math.max(0, Math.min(1, d/5));  // → vert
+        return 1.0; // négatif léger → vers rouge (sécurité)
+      };
+      const mapT = {};
+      for (const [k,v] of Object.entries(mapDeg)) {
+        const d = Number(v);
+        if (Number.isFinite(d)) mapT[k] = degToT(d);
       }
-    }
-
-    if (!countKeys(mapDeg)) {
-      console.warn('[DFM] Aucune donnée de dépouille pour la heatmap.');
-      const n = await this._applyEntityHeatmap(letter);
-      if (!n) alert("Aucune face/entité colorisée (pas de données).");
-      return;
-    }
-
-    // --- 3bis) Convertit degrés → t∈[0..1] (impose rouge/jaune/vert)
-    //   d <= -0.2°  → t=1.00  (rouge)
-    //   |d| <= 0.15 → t=0.75  (jaune)
-    //   d > 0       → t 0.75→0.50 quand d 0→5° (jaune→vert)
-    const draftDegToT = (d) => {
-      const UNDER = -0.2, ZERO = 0.15;
-      if (d <= UNDER) return 1.0;
-      if (Math.abs(d) <= ZERO) return 0.75;
-      if (d > 0) { const u = Math.max(0, Math.min(1, d / 5)); return 0.75 - 0.25 * u; }
-      const u = Math.max(0, Math.min(1, (0 - d) / 0.2));
-      return 0.75 + 0.25 * u;
-    };
-
-    const mapT = {};
-    for (const [k, v] of Object.entries(mapDeg)) {
-      const d = Number(v);
-      if (Number.isFinite(d)) mapT[k] = draftDegToT(d);
-    }
-
-    // --- Application via HeatmapLayer (utilise apply, pas applyWithCount)
-    let appliedCount = 0;
-    if (typeof HeatmapLayer === 'function') {
       const layer = new HeatmapLayer(window.viewerAdapter);
-      appliedCount = layer.apply(mapT, { min: 0, max: 1, mode: "avg", debug: false });
+      appliedCount = layer.apply(mapT, { min:0, max:1, mode:"avg", debug:false });
     }
 
+    // Si rien n’a matché par-face → route entité stricte
     if (!appliedCount) {
       console.warn('[DFM] Heatmap par face: 0 correspondance. Fallback entités…');
-      const n = await this._applyEntityHeatmap(letter);
-      if (!n) {
-        alert("Aucune face/entité colorisée. Vérifie les IDs mappés vs le viewer.");
-      }
+      const n = await this._applyEntityHeatmapStrict(letter);
+      if (!n) alert("Aucune face/entité colorisée. Vérifie les IDs mappés vs le viewer.");
     } else {
       StatusUI.set("Heatmap dépouille appliquée");
     }
