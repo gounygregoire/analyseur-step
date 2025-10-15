@@ -1190,4 +1190,84 @@ window.addEventListener('dfm:fileReady', (ev)=>{
 });
 
 // Export vide (ESM)
+// --- HARD PATCH __getFaces : sampling plein écran + verrou anti-override ---
+(function hardPatchGetFaces(){
+  // petite aide
+  const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
+
+  async function waitSceneReady(viewer, maxMs=2500){
+    const t0 = performance.now();
+    while (performance.now()-t0 < maxMs){
+      const a = viewer?.scene?.aabb;
+      if (a && (a[3]-a[0])>1e-6 && (a[4]-a[1])>1e-6 && (a[5]-a[2])>1e-6) return true;
+      await sleep(50);
+    }
+    return true;
+  }
+
+  function install(){
+    const viewer = window.viewerAdapter?.viewer || window.viewer;
+    const canvas =
+      document.getElementById('xeokit-canvas') ||
+      document.getElementById('xktCanvas') ||
+      document.querySelector('canvas');
+
+    if (!viewer || !canvas || !viewer.scene?.pick) {
+      // retente plus tard si le viewer n'est pas prêt
+      setTimeout(install, 200);
+      return;
+    }
+
+    async function __getFaces(maxSamples=3500){
+      await waitSceneReady(viewer, 1500);
+
+      const W = canvas.clientWidth  || canvas.width  || 512;
+      const H = canvas.clientHeight || canvas.height || 512;
+      const areaScreen = W * H;
+
+      const nx = Math.max(24, Math.round(Math.sqrt(maxSamples * (W/H))));
+      const ny = Math.max(24, Math.round(maxSamples / nx));
+      const stepX = W / nx, stepY = H / ny;
+      const sampleArea = areaScreen / (nx*ny);
+
+      const faces = [];
+      for (let iy=0; iy<ny; iy++){
+        const y = (iy+0.5)*stepY;
+        for (let ix=0; ix<nx; ix++){
+          const x = (ix+0.5)*stepX;
+          const hit = viewer.scene.pick({ canvasPos:[x,y], pickSurface:true });
+          if (hit?.worldNormal){
+            const n = hit.worldNormal;
+            const L = Math.hypot(n[0],n[1],n[2]) || 1;
+            const eid = hit.entity?.id || hit.mesh?.id || hit.object?.id || null;
+            faces.push({ normal:[n[0]/L,n[1]/L,n[2]/L], area: sampleArea, source:"screen-pick", eid });
+          }
+        }
+      }
+      console.log('[probe safe] faces(canvas-wide) =', faces.length);
+      return faces;
+    }
+    // marqueur + gel pour éviter toute réécriture ultérieure
+    Object.defineProperty(__getFaces, '__dfmPatch', { value: 'hard', enumerable:false });
+    Object.defineProperty(window, '__getFaces', {
+      value: __getFaces,
+      configurable: false, // <- verrou
+      writable:     false  // <- verrou
+    });
+
+    // petit diag manuel : await window.__dfmProbeTest()
+    window.__dfmProbeTest = async function(){
+      const f = await window.__getFaces(1200);
+      console.log('[diag] faces count =', f.length, f.slice(0,3));
+      return f.length;
+    };
+
+    console.log('[probe safe] __getFaces hard-patched & locked');
+  }
+
+  // essaie maintenant puis re-essaie après le load
+  install();
+  window.addEventListener('load', install);
+})();
+
 export {};
