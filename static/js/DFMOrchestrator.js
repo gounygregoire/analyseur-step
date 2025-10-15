@@ -89,9 +89,9 @@ async function quickCheckDraft(axis){
 
   for (const f of faces){
     const n = f.normal || [0,0,1];
-const cos = dot3(n, ax);                    // ⚠️ signé
-const angDeg = Math.acos(Math.max(-1, Math.min(1, cos))) * 180/Math.PI;
-const draft = 90 - angDeg;                  // <0 => contre-dépouille
+    const cos = dot3(n, ax);                                      // signé
+    const angDeg = Math.acos(Math.max(-1, Math.min(1, cos))) * 180/Math.PI;
+    const draft = 90 - angDeg;                                    // <0 => contre-dépouille
     draftMap[f.id ?? `f${Object.keys(draftMap).length}`] = draft;
 
     areaTot += (f.area||0);
@@ -632,37 +632,37 @@ class DFMOrchestrator {
   }
 
   /* ---------- Helpers couleurs & calcul local du draft ---------- */
-// 0° = jaune, <0° (contre-dépouille) = rouge, >0° = vert (rampe 0→5°)
-_draftToRGBA(d /* degrés, signé */){
-  const eps = 0.15;        // bande "≈0°" en ±0.15°
-  if (d < -eps)   return [1, 0.22, 0.22, 1];           // rouge
-  if (Math.abs(d) <= eps) return [1, 0.92, 0.12, 1];   // jaune
+  // 0° = jaune, <0° (contre-dépouille) = rouge, >0° = vert (rampe 0→5°)
+  _draftToRGBA(d /* degrés, signé */){
+    const eps = 0.15;        // bande "≈0°" en ±0.15°
+    if (d < -eps)   return [1, 0.22, 0.22, 1];           // rouge
+    if (Math.abs(d) <= eps) return [1, 0.92, 0.12, 1];   // jaune
 
-  // d > 0 : dégradé jaune → vert jusqu’à 5°
-  const t = Math.max(0, Math.min(1, d / 5));
-  const lerp = (a,b,u)=>a+(b-a)*u;
-  const r = lerp(1.00, 0.20, t);
-  const g = lerp(0.92, 0.80, t);
-  const b = lerp(0.12, 0.24, t);
-  return [r, g, b, 1];
-}
+    // d > 0 : dégradé jaune → vert jusqu’à 5°
+    const t = Math.max(0, Math.min(1, d / 5));
+    const lerp = (a,b,u)=>a+(b-a)*u;
+    const r = lerp(1.00, 0.20, t);
+    const g = lerp(0.92, 0.80, t);
+    const b = lerp(0.12, 0.24, t);
+    return [r, g, b, 1];
+  }
 
-async _collectLocalDraftSamples(axisLetter){
-  const faces = await (window.__getFaces?.(1500) || []);
-  if (!faces.length) return null;
+  async _collectLocalDraftSamples(axisLetter){
+    const faces = await (window.__getFaces?.(1500) || []);
+    if (!faces.length) return null;
 
-  const axL = (axisLetter||'Z').toUpperCase();
-  const axis = axL==='X'?[1,0,0]:axL==='Y'?[0,1,0]:[0,0,1];
-  const dot  = (a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
-  const clamp=(x)=>Math.max(-1,Math.min(1,x));
+    const axL = (axisLetter||'Z').toUpperCase();
+    const axis = axL==='X'?[1,0,0]:axL==='Y'?[0,1,0]:[0,0,1];
+    const dot  = (a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+    const clamp=(x)=>Math.max(-1,Math.min(1,x));
 
-  return faces.map(f=>{
-    const cos   = clamp(dot(f.normal||[0,0,1], axis));      // ⚠️ PAS de Math.abs
-    const angle = Math.acos(cos) * 180/Math.PI;             // 0..180
-    const draft = 90 - angle;                                // négatif = contre-dépouille
-    return { eid: f.eid || null, draft, area: f.area || 1 };
-  });
-}
+    return faces.map(f=>{
+      const cos   = clamp(dot(f.normal||[0,0,1], axis));      // signé
+      const angle = Math.acos(cos) * 180/Math.PI;             // 0..180
+      const draft = 90 - angle;                               // <0 : contre-dépouille
+      return { eid: f.eid || null, draft, area: f.area || 1 };
+    });
+  }
 
   // Fallback entités (moyenne par entityId)
   async _applyEntityHeatmap(axisLetter){
@@ -717,7 +717,7 @@ async _collectLocalDraftSamples(axisLetter){
           map = {};
           for (const f of faces) {
             const n = f.normal || [0,0,1];
-            const cos = Math.abs(n[0]*ax[0] + n[1]*ax[1] + n[2]*ax[2]);
+            const cos = (n[0]*ax[0] + n[1]*ax[1] + n[2]*ax[2]); // signé
             const ang = Math.acos(clamp(cos,-1,1)) * 180/Math.PI;
             const draft = 90 - ang;
             map[f.id ?? `f${Object.keys(map).length}`] = draft;
@@ -752,10 +752,9 @@ async _collectLocalDraftSamples(axisLetter){
       if (mapSize > 0 && typeof HeatmapLayer === 'function') {
         const layer = new HeatmapLayer(window.viewerAdapter);
         if (typeof layer.applyWithCount === 'function') {
-          appliedCount = layer.applyWithCount(map, { min: 0, max: 5 });
+          appliedCount = layer.applyWithCount(map, { min: -5, max: 5 });
         } else {
-// quand tu fais layer.apply(...) ou applyWithCount(...)
-layer.apply(mapping, { min: -5, max: 5 }); // par ex.
+          layer.apply(map, { min: -5, max: 5 }); // ⚠️ bug corrigé: utiliser 'map'
           appliedCount = layer.debugAppliedCount || 0;
         }
       }
