@@ -1,4 +1,6 @@
 # web.py
+print("[env] XEOKIT_ARGS =", os.getenv("XEOKIT_ARGS"))
+
 import os, uuid, pathlib, json, requests, re, glob, socket, time
 from urllib.parse import urlparse, urlunparse, unquote
 
@@ -926,6 +928,8 @@ def __diag():
         "http_connect_timeout_sec": HTTP_CONNECT_TIMEOUT_SEC,
         "http_read_timeout_sec": HTTP_READ_TIMEOUT_SEC,
         "rq_job_timeout_sec": RQ_JOB_TIMEOUT_SEC,
+        "XEOKIT_ARGS": os.getenv("XEOKIT_ARGS"),
+
     }
     try:
         r = requests.get(f"{CONVERTER_URL}/healthz", timeout=_http_timeout())

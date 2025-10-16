@@ -1,4 +1,5 @@
 # app.py
+print("[env] XEOKIT_ARGS =", os.getenv("XEOKIT_ARGS"))
 import os, uuid, shlex, subprocess, pathlib
 import sys
 import shutil
@@ -33,17 +34,11 @@ def _with_node_path(env: dict) -> dict:
     return env
 
 def _resolve_converter_cmd(step_path: str, xkt_path: str) -> str:
-    """
-    Versions récentes de xeokit-convert :
-    usage: xeokit-convert <INPUT> --output <OUTPUT>
-    (INPUT en positionnel, pas de --input)
-    """
+    extra = os.getenv("XEOKIT_ARGS", "").strip()  # ex: "--no-merge --keep-hierarchy"
     local_bin = Path(app.root_path) / "node_modules" / ".bin" / "xeokit-convert"
     if local_bin.exists():
-        # input en positionnel
-        return f"{shlex.quote(str(local_bin))} {shlex.quote(step_path)} --output {shlex.quote(xkt_path)}"
-    # fallback npx
-    return f"npx -y @xeokit/xeokit-convert@latest {shlex.quote(step_path)} --output {shlex.quote(xkt_path)}"
+        return f"{shlex.quote(str(local_bin))} {extra} {shlex.quote(step_path)} --output {shlex.quote(xkt_path)}"
+    return f"npx -y @xeokit/xeokit-convert@latest {extra} {shlex.quote(step_path)} --output {shlex.quote(xkt_path)}"
 
 def run_xkt_convert(step_path: str, xkt_path: str):
     cmd = _resolve_converter_cmd(step_path, xkt_path)
@@ -97,5 +92,7 @@ def __diag():
         "local_xeokit": str(Path(app.root_path) / "node_modules" / ".bin" / "xeokit-convert"),
         "UPLOAD_FOLDER": UPLOAD_FOLDER,
         "OUTPUT_FOLDER": OUTPUT_FOLDER,
+        "XEOKIT_ARGS": os.getenv("XEOKIT_ARGS"),
+
     }
     return jsonify(info)
