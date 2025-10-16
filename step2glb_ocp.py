@@ -1,4 +1,4 @@
-# step2glb_ocp.py  — OCP 7.7.x -> GLB (un mesh par face)
+# step2glb_ocp.py — OCP 7.7.x -> GLB (un mesh par face)
 import sys, os
 import numpy as np
 import trimesh
@@ -7,24 +7,23 @@ from OCP.STEPControl import STEPControl_Reader
 from OCP.IFSelect import IFSelect_RetDone
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopAbs import TopAbs_FACE
-from OCP.TopoDS import topods_Face
+from OCP.TopoDS import TopoDS
 from OCP.TopLoc import TopLoc_Location
-from OCP.gp import gp_Pnt
 from OCP.BRep import BRep_Tool
 
 def triangulate_shape_to_scene(shape, unit_scale=1.0, mesh_purpose=0):
     """
     Construit un trimesh.Scene avec un mesh par face STEP.
-    unit_scale: facteur d’échelle (mm=1.0, m=1000, etc.)
+    unit_scale: 1.0 = mm (mets 1000.0 si tes STEP sont en m)
     """
     scene = trimesh.Scene()
     exp = TopExp_Explorer(shape, TopAbs_FACE)
-
     idx = 0
+
     while exp.More():
-        face = topods_Face(exp.Current())           # 👈 downcast
+        face = TopoDS.Face_s(exp.Current())              # 👈 downcast correct en OCP
         loc = TopLoc_Location()
-        tri_h = BRep_Tool.Triangulation_s(face, loc, mesh_purpose)  # 👈 OCP 7.7.x signature
+        tri_h = BRep_Tool.Triangulation_s(face, loc, mesh_purpose)  # 👈 signature OCP 7.7.x
         if tri_h is None or tri_h.IsNull():
             exp.Next()
             continue
@@ -38,18 +37,12 @@ def triangulate_shape_to_scene(shape, unit_scale=1.0, mesh_purpose=0):
 
         nodes = tri.Nodes()
         tris  = tri.Triangles()
-
-        # Appliquer la transformation de la location (si présente)
-        trsf = loc.Transformation()
+        trsf  = loc.Transformation()
 
         V = np.empty((npts, 3), dtype=float)
         for i in range(1, npts + 1):
-            p = nodes.Value(i)
-            # transformer le point par la location
-            P = p.Transformed(trsf) if loc else p
-            V[i-1, 0] = float(P.X()) * unit_scale
-            V[i-1, 1] = float(P.Y()) * unit_scale
-            V[i-1, 2] = float(P.Z()) * unit_scale
+            p = nodes.Value(i).Transformed(trsf)
+            V[i-1] = (float(p.X())*unit_scale, float(p.Y())*unit_scale, float(p.Z())*unit_scale)
 
         F = np.empty((ntri, 3), dtype=np.int32)
         for i in range(1, ntri + 1):
@@ -73,7 +66,6 @@ def main():
     inp = os.path.abspath(sys.argv[1])
     out = os.path.abspath(sys.argv[2])
 
-    # 1) Lire le STEP
     reader = STEPControl_Reader()
     if reader.ReadFile(inp) != IFSelect_RetDone:
         print("STEP read failed", file=sys.stderr); sys.exit(1)
@@ -81,13 +73,11 @@ def main():
         print("STEP transfer failed", file=sys.stderr); sys.exit(1)
     shape = reader.OneShape()
 
-    # 2) Trianguler toutes les faces -> Scene
-    # unit_scale=1.0 pour mm (adapter si besoin)
+    # Ajuste unit_scale si besoin (1.0 = mm, 1000.0 = m -> mm)
     scene = triangulate_shape_to_scene(shape, unit_scale=1.0, mesh_purpose=0)
 
-    # 3) Export GLB
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    scene.export(out)   # trimesh exporte GLB/GLTF selon extension
+    scene.export(out)
     print(f"[ok] GLB écrit: {out}")
 
 if __name__ == "__main__":
