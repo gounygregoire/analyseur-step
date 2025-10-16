@@ -57,6 +57,7 @@ if (!window.__XE_VIEWER_BOOT__) {
 
     async function pickUrl(id) {
       const urls = [
+        `/xkt/${id}.xkt`,
         `/models/${id}.xkt`,
         `/static/converted/${id}.xkt`
       ];
