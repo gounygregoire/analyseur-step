@@ -1,5 +1,4 @@
 # web.py
-print("[env] XEOKIT_ARGS =", os.getenv("XEOKIT_ARGS"))
 
 import os, uuid, pathlib, json, requests, re, glob, socket, time
 from urllib.parse import urlparse, urlunparse, unquote
