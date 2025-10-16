@@ -8,6 +8,7 @@ import trimesh
 from OCP.STEPControl import STEPControl_Reader
 from OCP.IFSelect import IFSelect_RetDone
 from OCP.BRep import BRep_Tool
+from OCP.TopoDS import topods_Face
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopAbs import TopAbs_FACE
@@ -21,44 +22,43 @@ def triangulate_shape_to_scene(shape, lin_tol=0.05, ang_rad=0.25, unit_scale=1.0
         BRepMesh_IncrementalMesh(shape, max(lin_tol * unit_scale, 0.5), False, max(ang_rad, 0.5), True)
 
     scene = trimesh.Scene()
-    exp = TopExp_Explorer(shape, TopAbs_FACE)
-    idx = 0
-    while exp.More():
-        face = exp.Current()
-        loc = TopLoc_Location()
-        # ⚠️ OCP 7.7.x : utiliser Triangulation_s → Handle_Poly_Triangulation
-        htri = BRep_Tool.Triangulation_s(face, loc)
-        if (not htri) or htri.IsNull():
-            exp.Next(); continue
-        tri = htri.GetObject()  # Poly_Triangulation
-        npts = tri.NbNodes()
-        ntri = tri.NbTriangles()
-        if npts == 0 or ntri == 0:
-            exp.Next(); continue
+exp = TopExp_Explorer(shape, TopAbs_FACE)
+idx = 0
+while exp.More():
+    # ❗ downcast en TopoDS_Face
+    face = topods_Face(exp.Current())
+    loc = TopLoc_Location()
 
-        # Récupérer noeuds/triangles
-        nodes = tri.Nodes()
-        tris  = tri.Triangles()
+    # OCP 7.7.x : Triangulation_s(face, loc, meshPurpose=0)
+    htri = BRep_Tool.Triangulation_s(face, loc, 0)
+    if (not htri) or htri.IsNull():
+        exp.Next(); continue
 
-        V = np.zeros((npts, 3), dtype=float)
-        for i in range(1, npts + 1):
-            p = nodes.Value(i)
-            V[i-1, 0] = float(p.X()) * unit_scale
-            V[i-1, 1] = float(p.Y()) * unit_scale
-            V[i-1, 2] = float(p.Z()) * unit_scale
+    tri = htri.GetObject()  # Poly_Triangulation
+    npts = tri.NbNodes()
+    ntri = tri.NbTriangles()
+    if npts == 0 or ntri == 0:
+        exp.Next(); continue
 
-        F = np.zeros((ntri, 3), dtype=np.int32)
-        for i in range(1, ntri + 1):
-            t = tris.Value(i)
-            a, b, c = t.Get()
-            F[i-1] = [a-1, b-1, c-1]
+    nodes = tri.Nodes()
+    tris  = tri.Triangles()
 
-        tm = trimesh.Trimesh(vertices=V, faces=F, process=False)
-        if not tm.is_empty:
-            scene.add_geometry(tm, node_name=f"face_{idx:06d}")
-            idx += 1
+    V = np.zeros((npts, 3), dtype=float)
+    for i in range(1, npts + 1):
+        p = nodes.Value(i)
+        V[i-1] = [float(p.X())*unit_scale, float(p.Y())*unit_scale, float(p.Z())*unit_scale]
 
-        exp.Next()
+    F = np.zeros((ntri, 3), dtype=np.int32)
+    for i in range(1, ntri + 1):
+        a, b, c = tris.Value(i).Get()
+        F[i-1] = [a-1, b-1, c-1]
+
+    tm = trimesh.Trimesh(vertices=V, faces=F, process=False)
+    if not tm.is_empty:
+        scene.add_geometry(tm, node_name=f"face_{idx:06d}")
+        idx += 1
+
+    exp.Next()
 
     if len(scene.geometry) == 0:
         raise RuntimeError("Triangulation vide (aucune face valide)")
