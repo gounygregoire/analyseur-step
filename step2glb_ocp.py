@@ -1,5 +1,3 @@
-cd /opt/render/project/src
-cat > step2glb_ocp.py << 'PY'
 # step2glb_ocp.py — STEP -> GLB (1 mesh par solide) avec OCP (CadQuery OCP) + trimesh
 import sys, numpy as np, trimesh
 from OCP.STEPControl import STEPControl_Reader
