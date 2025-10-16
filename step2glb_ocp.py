@@ -1,84 +1,100 @@
-# step2glb_ocp.py — OCP 7.7.x -> GLB (un mesh par face)
-import sys, os
+# step2glb_ocp.py — OCC 7.7.x (cadquery-ocp) → GLB par faces
+import sys, math
 import numpy as np
 import trimesh
 
 from OCP.STEPControl import STEPControl_Reader
 from OCP.IFSelect import IFSelect_RetDone
+from OCP.BRepMesh import BRepMesh_IncrementalMesh
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopAbs import TopAbs_FACE
-from OCP.TopoDS import TopoDS
-from OCP.TopLoc import TopLoc_Location
 from OCP.BRep import BRep_Tool
+from OCP.TopLoc import TopLoc_Location
+from OCP.gp import gp_Pnt
 
-def triangulate_shape_to_scene(shape, unit_scale=1.0, mesh_purpose=0):
-    """
-    Construit un trimesh.Scene avec un mesh par face STEP.
-    unit_scale: 1.0 = mm (mets 1000.0 si tes STEP sont en m)
-    """
+def triangulate_shape_faces(shape, lin_defl=0.05, ang_rad=0.25, unit_scale=1.0):
+    # Tessellation globale (important, sinon Triangulation_s retourne None)
+    BRepMesh_IncrementalMesh(shape, float(lin_defl), False, float(ang_rad), True)
+
     scene = trimesh.Scene()
     exp = TopExp_Explorer(shape, TopAbs_FACE)
-    idx = 0
+
+    face_idx = 0
+    any_geom = False
 
     while exp.More():
-        face = TopoDS.Face_s(exp.Current())              # 👈 downcast correct en OCP
-        loc = TopLoc_Location()
-        tri_h = BRep_Tool.Triangulation_s(face, loc, mesh_purpose)  # 👈 signature OCP 7.7.x
-        if tri_h is None or tri_h.IsNull():
-            exp.Next()
-            continue
+        face = exp.Current()
+        loc  = TopLoc_Location()
 
-        tri = tri_h.GetObject()
-        npts = tri.NbNodes()
-        ntri = tri.NbTriangles()
-        if npts == 0 or ntri == 0:
+        # OCC 7.7.x: Triangulation_s(face, loc, meshPurpose=0)
+        tri = BRep_Tool.Triangulation_s(face, loc, 0)
+        if tri is None:
             exp.Next()
             continue
 
         nodes = tri.Nodes()
         tris  = tri.Triangles()
-        trsf  = loc.Transformation()
+        npts  = nodes.Size()
+        ntri  = tris.Size()
+        if npts == 0 or ntri == 0:
+            exp.Next()
+            continue
 
-        V = np.empty((npts, 3), dtype=float)
+        # Transformation locale -> monde
+        trsf = loc.Transformation()
+
+        verts = np.zeros((npts, 3), dtype=np.float64)
         for i in range(1, npts + 1):
-            p = nodes.Value(i).Transformed(trsf)
-            V[i-1] = (float(p.X())*unit_scale, float(p.Y())*unit_scale, float(p.Z())*unit_scale)
+            p = nodes.Value(i)           # gp_Pnt
+            p = gp_Pnt(p.X(), p.Y(), p.Z())
+            p.Transform(trsf)
+            verts[i-1, 0] = p.X() * unit_scale
+            verts[i-1, 1] = p.Y() * unit_scale
+            verts[i-1, 2] = p.Z() * unit_scale
 
-        F = np.empty((ntri, 3), dtype=np.int32)
+        faces = np.zeros((ntri, 3), dtype=np.int64)
         for i in range(1, ntri + 1):
-            a, b, c = tris.Value(i).Get()
-            F[i-1] = (a-1, b-1, c-1)
+            t = tris.Value(i)
+            a, b, c = t.Get()           # 1-based
+            faces[i-1, :] = (a-1, b-1, c-1)
 
-        mesh = trimesh.Trimesh(vertices=V, faces=F, process=False)
-        if not mesh.is_empty:
-            scene.add_geometry(mesh, node_name=f"face_{idx:06d}")
-            idx += 1
+        # Nettoyage & sécurisation trimesh
+        mesh = trimesh.Trimesh(vertices=verts, faces=faces, process=True)
+        if mesh.is_empty or len(mesh.faces) == 0:
+            exp.Next()
+            continue
 
+        # Ajoute une géométrie par face (idéal pour la heatmap/entités)
+        scene.add_geometry(mesh, node_name=f"face_{face_idx}")
+        any_geom = True
+        face_idx += 1
         exp.Next()
 
-    return scene
+    return scene, any_geom
 
 def main():
     if len(sys.argv) < 3:
-        print("Usage: python step2glb_ocp.py <in.step> <out.glb>", file=sys.stderr)
+        print("Usage: python step2glb_ocp.py <in.step> <out.glb>")
         sys.exit(2)
 
-    inp = os.path.abspath(sys.argv[1])
-    out = os.path.abspath(sys.argv[2])
+    src = sys.argv[1]
+    dst = sys.argv[2]
 
-    reader = STEPControl_Reader()
-    if reader.ReadFile(inp) != IFSelect_RetDone:
-        print("STEP read failed", file=sys.stderr); sys.exit(1)
-    if not reader.TransferRoots():
-        print("STEP transfer failed", file=sys.stderr); sys.exit(1)
-    shape = reader.OneShape()
+    r = STEPControl_Reader()
+    st = r.ReadFile(src)
+    if st != IFSelect_RetDone:
+        print("STEP read failed")
+        sys.exit(2)
+    r.TransferRoots()
+    shape = r.OneShape()
 
-    # Ajuste unit_scale si besoin (1.0 = mm, 1000.0 = m -> mm)
-    scene = triangulate_shape_to_scene(shape, unit_scale=1.0, mesh_purpose=0)
+    scene, ok = triangulate_shape_faces(shape, lin_defl=0.05, ang_rad=0.25, unit_scale=1.0)
+    if not ok:
+        print("No triangulated faces -> empty scene")
+        sys.exit(3)
 
-    os.makedirs(os.path.dirname(out), exist_ok=True)
-    scene.export(out)
-    print(f"[ok] GLB écrit: {out}")
+    scene.export(dst)
+    print("GLB written:", dst)
 
 if __name__ == "__main__":
     main()
