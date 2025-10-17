@@ -420,73 +420,35 @@ function getActiveMeshes() {
   return meshes;
 }
 
+
+async function waitMeshesReady(maxMs = 4000) {
+  const t0 = performance.now();
+  while (performance.now() - t0 < maxMs) {
+    const m = getActiveMeshes();
+    if (m.length) return m;
+    await new Promise(r => setTimeout(r, 60));
+  }
+  return getActiveMeshes();
+}
+
 let __lastDraftMode = null;
 
 /** Calcule et affiche un bucket: "ok" | "zero" | "undercut" */
-function applyDraftHeatmap(mode, opts = {}) {
+async function applyDraftHeatmap(mode, opts = {}) {
   __lastDraftMode = mode;
+  __clearAnyGlobalColorize?.(); // si tu as ajouté le neutraliseur de colorize
 
-  __clearAnyGlobalColorize();   // empêche la coloration globale de masquer l’overlay
   const axis = getSelectedAxisVector();
-  const meshes = getActiveMeshes();
+  let meshes = getActiveMeshes();
+
+  // 👇 AJOUT : si trop tôt, on attend que les meshes apparaissent
+  if (!meshes.length) meshes = await waitMeshesReady(4000);
   if (!meshes.length) {
     console.warn("[draft] aucun mesh trouvé – modèle non chargé ?");
     return;
   }
 
-  const cfg = {
-    okMinDeg:    opts.okMinDeg    ?? 1.0,
-    zeroTolDeg:  opts.zeroTolDeg  ?? 0.5,
-    undercutMin: opts.undercutMin ?? -0.5
-  };
-
-  console.time("[draft] classify+render");
-  heatmapLayer.clear();
-
-  const triBuckets = [];
-  const usedMeshes = [];
-
-  for (const m of meshes) {
-    const g = m.geometry;
-    const positions = g?.positions;
-    const indices   = g?.indices;
-    if (!positions || !indices) continue;
-
-    let normals = null;
-    try { normals = g.normals || null; } catch(e) {}
-
-    const buckets = classifyDraft(
-      { positions, indices, normals },
-      axis,
-      cfg
-    );
-
-    const tris =
-      mode === "ok"       ? buckets.ok.tris :
-      mode === "zero"     ? buckets.zero.tris :
-      mode === "undercut" ? buckets.undercut.tris :
-      new Uint32Array();
-
-    if (tris.length) {
-      triBuckets.push(tris);
-      usedMeshes.push(m);
-    }
-  }
-
-  if (!usedMeshes.length) {
-    console.warn(`[draft] aucun triangle pour le bucket "${mode}"`);
-    console.timeEnd("[draft] classify+render");
-    return;
-  }
-
-  heatmapLayer.showDraftMasksBatch({
-    meshes: usedMeshes,
-    triBuckets,
-    mode
-  });
-
-  console.timeEnd("[draft] classify+render");
-  console.log(`[draft] bucket="${mode}" affiché sur ${usedMeshes.length} mesh(es)`);
+  // ... reste inchangé (classifyDraft, overlays, etc.)
 }
 
 /* ---------- Binding boutons ---------- */
@@ -745,13 +707,17 @@ async function loadLocalXKT(file) {
   const model = xktLoader.load({ id, src: blobURL });
   currentModel = model;
 
-  model.on("loaded", () => {
-    console.log("[viewer] XKT local chargé ✓");
-    // Option 1 (recommandé) : garder le blob tant que le modèle vit
-    // Option 2 : révoquer au loaded (OK aussi si tu ne recharges pas derrière)
-    // URL.revokeObjectURL(blobURL); currentBlobURL = null;
-    viewer.cameraFlight.flyTo(model); // bonus: cadrer
-  });
+model.on("loaded", ()=>{
+  // ... ton code existant ...
+  viewer.cameraFlight.flyTo(model);
+  models.set(id,{model,name:nameHint||id,src:url}); lastModelId=id;
+
+  // 👇 AJOUT : expose le modèle courant pour getActiveMeshes()
+  window.currentModel   = model;
+  window.lastLoadedModel = model;
+
+  // ... la suite (units, events, etc.)
+});
 
   model.on("error", (err) => {
     console.error("[viewer] XKT load error :", err);
