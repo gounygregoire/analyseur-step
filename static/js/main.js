@@ -165,6 +165,7 @@ const xktLoader = new XKTLoaderPlugin(viewer, {
   decompressGeometry: true
 });
 
+
 const sections = new SectionPlanesPlugin(viewer);
 new AnnotationsPlugin(viewer, { container: overlayHost });
 
@@ -330,6 +331,158 @@ function updateUnitsFromBBox(bboxMM) {
     }
   } catch {}
 }
+
+/* =====================  HEATMAP DÉPOUILLE — START  ===================== */
+import HeatmapLayer from "./modules/HeatmapLayer.js";
+import { classifyDraft } from "./dfm/DraftClassifier.js";
+
+/** Instance overlay */
+const heatmapLayer = new HeatmapLayer(viewer);
+window.__draftHeatmap = heatmapLayer; // debug
+
+/** helpers DOM : on réutilise le $ déjà défini en haut */
+
+/** Axe sélectionné (X/Y/Z) — robuste à plusieurs implémentations possibles */
+function getSelectedAxisVector() {
+  // 1) radios type <input name="axis" value="x|y|z">
+  const r = document.querySelector('input[name="axis"]:checked');
+  const val = r?.value?.toLowerCase();
+  if (val === "x") return { x:1, y:0, z:0 };
+  if (val === "y") return { x:0, y:1, z:0 };
+  if (val === "z") return { x:0, y:0, z:1 };
+
+  // 2) ids classiques #axisX|#axisY|#axisZ
+  if ($("#axisX")?.checked) return { x:1, y:0, z:0 };
+  if ($("#axisY")?.checked) return { x:0, y:1, z:0 };
+  if ($("#axisZ")?.checked) return { x:0, y:0, z:1 };
+
+  // 3) fallback : Z
+  return { x:0, y:0, z:1 };
+}
+
+/** Récupère les meshes actifs du modèle courant */
+function getActiveMeshes() {
+  const scene = viewer.scene;
+  const meshes = [];
+
+  const candidateModels = [
+    window.currentModel,
+    window.xktModel,
+    window.model,
+    window.lastLoadedModel
+  ].filter(Boolean);
+
+  if (candidateModels.length && candidateModels[0]?.meshes) {
+    try {
+      candidateModels[0].meshes.forEach((m) => {
+        if (m && !m.destroyed && m.geometry) meshes.push(m);
+      });
+      if (meshes.length) return meshes;
+    } catch (e) {}
+  }
+
+  try {
+    const map = scene.meshes || {};
+    for (const id of Object.keys(map)) {
+      const m = map[id];
+      if (m && !m.destroyed && m.geometry && m.visible) meshes.push(m);
+    }
+  } catch (e) {}
+  return meshes;
+}
+
+let __lastDraftMode = null;
+
+/** Calcule et affiche un bucket: "ok" | "zero" | "undercut" */
+function applyDraftHeatmap(mode, opts = {}) {
+  __lastDraftMode = mode;
+
+  const axis = getSelectedAxisVector();
+  const meshes = getActiveMeshes();
+  if (!meshes.length) {
+    console.warn("[draft] aucun mesh trouvé – modèle non chargé ?");
+    return;
+  }
+
+  const cfg = {
+    okMinDeg:    opts.okMinDeg    ?? 1.0,
+    zeroTolDeg:  opts.zeroTolDeg  ?? 0.5,
+    undercutMin: opts.undercutMin ?? -0.5
+  };
+
+  console.time("[draft] classify+render");
+  heatmapLayer.clear();
+
+  const triBuckets = [];
+  const usedMeshes = [];
+
+  for (const m of meshes) {
+    const g = m.geometry;
+    const positions = g?.positions;
+    const indices   = g?.indices;
+    if (!positions || !indices) continue;
+
+    let normals = null;
+    try { normals = g.normals || null; } catch(e) {}
+
+    const buckets = classifyDraft(
+      { positions, indices, normals },
+      axis,
+      cfg
+    );
+
+    const tris =
+      mode === "ok"       ? buckets.ok.tris :
+      mode === "zero"     ? buckets.zero.tris :
+      mode === "undercut" ? buckets.undercut.tris :
+      new Uint32Array();
+
+    if (tris.length) {
+      triBuckets.push(tris);
+      usedMeshes.push(m);
+    }
+  }
+
+  if (!usedMeshes.length) {
+    console.warn(`[draft] aucun triangle pour le bucket "${mode}"`);
+    console.timeEnd("[draft] classify+render");
+    return;
+  }
+
+  heatmapLayer.showDraftMasksBatch({
+    meshes: usedMeshes,
+    triBuckets,
+    mode
+  });
+
+  console.timeEnd("[draft] classify+render");
+  console.log(`[draft] bucket="${mode}" affiché sur ${usedMeshes.length} mesh(es)`);
+}
+
+/* ---------- Binding boutons ---------- */
+function bindClick(sel, cb) {
+  const el = document.querySelector(sel);
+  if (!el) return false;
+  el.addEventListener("click", (e) => { e.preventDefault(); cb(e); });
+  console.log("[draft] bouton lié:", sel);
+  return true;
+}
+
+bindClick("#btnHeatmapOK",       () => applyDraftHeatmap("ok"));
+bindClick("#btnHeatmapZero",     () => applyDraftHeatmap("zero"));
+bindClick("#btnHeatmapUndercut", () => applyDraftHeatmap("undercut"));
+bindClick("#btnHeatmapDepouille",() => applyDraftHeatmap("ok")); // si absent, noop
+
+/* Recalcul auto quand l’axe change */
+document.querySelectorAll('input[name="axis"], #axisX, #axisY, #axisZ')
+  .forEach(inp => {
+    inp.addEventListener("change", () => {
+      if (__lastDraftMode) applyDraftHeatmap(__lastDraftMode);
+    });
+  });
+/* =====================  HEATMAP DÉPOUILLE — END  ===================== */
+
+
 
 /* ---- Distance plugin ---- */
 const distancePlugin = new DistanceMeasurementsPlugin(viewer, {
