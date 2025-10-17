@@ -333,6 +333,35 @@ function updateUnitsFromBBox(bboxMM) {
 }
 
 /* =====================  HEATMAP DÉPOUILLE — START  ===================== */
+
+// --- Neutralise tout colorize global avant d'afficher les overlays ---
+const __savedColorize = new Map();
+function __clearAnyGlobalColorize() {
+  try {
+    const objs = viewer.scene?.objects || {};
+    for (const id in objs) {
+      const o = objs[id];
+      if (!o || o.destroyed) continue;
+      const cz = o.colorize;
+      // si alpha > 0, on mémorise et on éteint
+      if (cz && (cz[3] ?? 0) > 0) {
+        __savedColorize.set(id, cz.slice ? cz.slice() : [cz[0],cz[1],cz[2],cz[3]]);
+        o.colorize = [0,0,0,0];
+      }
+    }
+  } catch {}
+}
+function __restoreGlobalColorize() {
+  try {
+    const objs = viewer.scene?.objects || {};
+    for (const [id, cz] of __savedColorize) {
+      const o = objs[id];
+      if (o && !o.destroyed) o.colorize = cz;
+    }
+    __savedColorize.clear();
+  } catch {}
+}
+
 import HeatmapLayer from "./modules/HeatmapLayer.js";
 import { classifyDraft } from "./dfm/DraftClassifier.js";
 
@@ -397,6 +426,7 @@ let __lastDraftMode = null;
 function applyDraftHeatmap(mode, opts = {}) {
   __lastDraftMode = mode;
 
+  __clearAnyGlobalColorize();   // empêche la coloration globale de masquer l’overlay
   const axis = getSelectedAxisVector();
   const meshes = getActiveMeshes();
   if (!meshes.length) {
@@ -480,6 +510,14 @@ document.querySelectorAll('input[name="axis"], #axisX, #axisY, #axisZ')
       if (__lastDraftMode) applyDraftHeatmap(__lastDraftMode);
     });
   });
+  // Pont public pour DFMOrchestrator
+window.applyDraftHeatmap = (mode='ok', opts) => applyDraftHeatmap(mode, opts);
+
+// Écoute éventuelle d’un événement
+document.addEventListener('dfm:heatmap-draft', (ev) => {
+  applyDraftHeatmap(ev?.detail?.mode || 'ok', ev?.detail?.opts || {});
+});
+
 /* =====================  HEATMAP DÉPOUILLE — END  ===================== */
 
 

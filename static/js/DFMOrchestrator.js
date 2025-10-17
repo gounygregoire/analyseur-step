@@ -5,7 +5,6 @@
  * Compatible avec app.html (demouldHost) + main.js (viewerAdapter & probes)
  */
 
-import HeatmapLayer from "./modules/HeatmapLayer.js";
 
 /* ---------------------- helpers/fallbacks ---------------------- */
 async function loadCameraPresetOptional(url) {
@@ -873,71 +872,25 @@ async _getStableFaces() {
 // 2) si aucune correspondance -> fallback entités (moyenne par eid)
 // 3) transformation valeur (°) → t∈[0..1] pour palette rouge/jaune/vert
 // --- À mettre dans class DFMOrchestrator (remplace ta méthode) ---
+// --- DANS class DFMOrchestrator ---
 async applyDraftHeatmap(draftMap = null, opts = {}) {
   try {
-    const tryBuild = opts.tryBuild !== false;
-
-    // Lettre d’axe
-    const vec = this.selectedAxis || { x:0, y:0, z:1 };
+    const mode = (opts?.mode || 'ok'); // "ok" | "zero" | "undercut"
+    if (typeof window.applyDraftHeatmap === 'function') {
+      window.applyDraftHeatmap(mode, opts);   // délégation vers main.js (overlays par triangles)
+      return;
+    }
+    // Hook absent → tout petit filet de sécurité (moyenne par entité)
+    console.warn('[DFM] applyDraftHeatmap: hook main.js absent → fallback entités');
+    const vec = this.selectedAxis || {x:0,y:0,z:1};
     const m = Math.max(Math.abs(vec.x||0), Math.abs(vec.y||0), Math.abs(vec.z||0));
-    const letter = (m===Math.abs(vec.x)) ? 'X' : (m===Math.abs(vec.y) ? 'Y' : 'Z');
-
-    // Viewer prêt
-    if (!window.viewerAdapter?.viewer) {
-      const canvas = document.getElementById('xeokit-canvas')
-        || document.getElementById('xktCanvas')
-        || document.querySelector('canvas');
-      if (typeof window.initViewer === 'function' && canvas) {
-        await window.initViewer({ canvasElement: canvas });
-      }
-    }
-    const fileId = this.resolveFileId?.() || window.currentFileId || window.CAD?.fileIdStep;
-    if (fileId && window.viewerAdapter?.loadFromFileId) {
-      await window.viewerAdapter?.convert?.(fileId);
-      await window.viewerAdapter?.loadFromFileId?.(fileId);
-    }
-    if (!window.viewerAdapter?.viewer) { alert("Viewer non initialisé."); return; }
-
-    // Tentative par-face (uniquement si tu as un vrai mapping compatible HeatmapLayer)
-    let appliedCount = 0;
-    let mapDeg = draftMap || window.__quickDraftMap || {};
-    const countKeys = (o)=>{ try { return Object.keys(o||{}).length; } catch { return 0; } };
-
-    if (!countKeys(mapDeg) && tryBuild && typeof this._buildPerFaceDraftMapFromScreen === 'function') {
-      mapDeg = await this._buildPerFaceDraftMapFromScreen(letter, 2400);
-    }
-
-    if (countKeys(mapDeg) && typeof HeatmapLayer === 'function') {
-      // Transforme degré → t in [0..1] pour la palette de HeatmapLayer
-      const degToT = (d)=>{
-        const UNDER=-0.2, ZERO=0.15;
-        if (d<=UNDER) return 1.0;               // rouge
-        if (Math.abs(d)<=ZERO) return 0.75;     // jaune
-        if (d>0) return 0.75 - 0.25*Math.max(0, Math.min(1, d/5));  // → vert
-        return 1.0; // négatif léger → vers rouge (sécurité)
-      };
-      const mapT = {};
-      for (const [k,v] of Object.entries(mapDeg)) {
-        const d = Number(v);
-        if (Number.isFinite(d)) mapT[k] = degToT(d);
-      }
-      const layer = new HeatmapLayer(window.viewerAdapter);
-      appliedCount = layer.apply(mapT, { min:0, max:1, mode:"avg", debug:false });
-    }
-
-    // Si rien n’a matché par-face → route entité stricte
-    if (!appliedCount) {
-      console.warn('[DFM] Heatmap par face: 0 correspondance. Fallback entités…');
-      const n = await this._applyEntityHeatmapStrict(letter);
-      if (!n) alert("Aucune face/entité colorisée. Vérifie les IDs mappés vs le viewer.");
-    } else {
-      StatusUI.set("Heatmap dépouille appliquée");
-    }
+    const letter = (m===Math.abs(vec.x))?'X':(m===Math.abs(vec.y)?'Y':'Z');
+    await this._applyEntityHeatmapStrict(letter);
   } catch (e) {
-    console.warn("[DFM] applyDraftHeatmap error", e);
-    alert("Impossible d'appliquer la heatmap (voir console).");
+    console.warn('[DFM] applyDraftHeatmap error', e);
   }
 }
+
 
 
   // --- Fallback: extraction approx depuis le viewer ---
@@ -1034,12 +987,10 @@ async applyDraftHeatmap(draftMap = null, opts = {}) {
       hmBtn.className = "btn btn-outline-primary btn-sm mt-2";
       hmBtn.textContent = "Afficher heatmap (beta)";
       if (!window.viewerAdapter?.viewer) hmBtn.disabled = true;
-      hmBtn.addEventListener("click", () => {
-        const mapping = {};
-        results.heatmap.per_face.forEach(({ face_id, value }) => { mapping[face_id] = value; });
-        const layer = new HeatmapLayer(window.viewerAdapter);
-        layer.apply(mapping);
-      });
+hmBtn.addEventListener("click", () => {
+  // on affiche le bucket "ok" par défaut (tu peux mettre 'zero' ou 'undercut')
+  window.applyDraftHeatmap?.('ok');
+});
       panel.appendChild(hmBtn);
     }
 
