@@ -522,6 +522,68 @@ async function loadXKT(url, nameHint){
   return id;
 }
 
+// --- FIX XKT local via blob: garder l'URL jusqu'à la fin, éviter double-load ---
+let currentBlobURL = null;
+let currentModel   = null;
+
+async function loadLocalXKT(file) {
+  if (!file || !file.name.toLowerCase().endsWith(".xkt")) {
+    console.warn("[viewer] Fichier ignoré (pas .xkt) :", file?.name);
+    return;
+  }
+
+  // 1) Nettoyage éventuel du précédent blob
+  if (currentModel && !currentModel.destroyed) {
+    try { currentModel.destroy(); } catch(e) {}
+  }
+  if (currentBlobURL) {
+    try { URL.revokeObjectURL(currentBlobURL); } catch(e) {}
+    currentBlobURL = null;
+  }
+
+  // 2) Créer un blob URL et NE PAS le révoquer tout de suite
+  const blobURL = URL.createObjectURL(file);
+  currentBlobURL = blobURL;
+
+  console.log("[viewer] loading XKT (local) :", blobURL);
+
+  // 3) Charger UNE SEULE FOIS via XKTLoader
+  //    Assure-toi d'avoir ton instance déjà créée :
+  //    const xktLoader = new XKTLoaderPlugin(viewer);
+  const id = `local_xkt_${Date.now()}`;
+  const model = xktLoader.load({ id, src: blobURL });
+  currentModel = model;
+
+  model.on("loaded", () => {
+    console.log("[viewer] XKT local chargé ✓");
+    // Option 1 (recommandé) : garder le blob tant que le modèle vit
+    // Option 2 : révoquer au loaded (OK aussi si tu ne recharges pas derrière)
+    // URL.revokeObjectURL(blobURL); currentBlobURL = null;
+    viewer.cameraFlight.flyTo(model); // bonus: cadrer
+  });
+
+  model.on("error", (err) => {
+    console.error("[viewer] XKT load error :", err);
+    // NE PAS révoquer ici : laisse la possibilité de réessayer
+  });
+
+  model.on("destroyed", () => {
+    // Ici on peut enfin libérer l'URL blob en toute sécurité
+    if (currentBlobURL) {
+      try { URL.revokeObjectURL(currentBlobURL); } catch(e) {}
+      currentBlobURL = null;
+    }
+  });
+}
+
+// Exemple d’intégration :
+// input[type=file].onchange = (e) => loadLocalXKT(e.target.files[0]);
+// zoneDrop.onDrop = (file) => loadLocalXKT(file);
+
+// IMPORTANT : si tu utilises aussi un chargement par URL HTTP (.xkt sur ton serveur),
+// entoure ce code d’un guard pour ne PAS appeler en plus le chargement HTTP
+// lorsqu’un File est présent.
+
 /* ====================== PROBE SAFE (faces) ====================== */
 (function installProbeSafe(){
   // Si une version "hard" est déjà installée, on ne touche pas.
