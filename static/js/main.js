@@ -13,10 +13,33 @@ import {
   DistanceMeasurementsPlugin,
   DistanceMeasurementsMouseControl
 } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
+import {
+  registerModelInstance,
+  markModelReady,
+  clearModelRegistry,
+  onModelChange,
+  getCurrentMeshes
+} from "./modules/ModelRegistry.js";
+import {
+  applyDraftHeatmap as runDraftHeatmap,
+  clearDraftHeatmap as releaseDraftHeatmap
+} from "./modules/DraftHeatmap.js";
 
 /* ---------- utils DOM ---------- */
 const $  = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
+
+window.CAD = (typeof window !== 'undefined' && window.CAD && typeof window.CAD === 'object')
+  ? window.CAD
+  : {};
+if (!window.CAD.heatmap || typeof window.CAD.heatmap !== 'object') {
+  window.CAD.heatmap = { ready: false };
+} else if (typeof window.CAD.heatmap.ready !== 'boolean') {
+  window.CAD.heatmap.ready = !!window.CAD.heatmap.ready;
+}
+if (typeof window.CAD.viewer === 'undefined') window.CAD.viewer = null;
+if (typeof window.CAD.model === 'undefined') window.CAD.model = null;
+if (typeof window.CAD.modelId === 'undefined') window.CAD.modelId = null;
 
 /* ---------- sélecteurs ---------- */
 const fileInput     = $("#fileInput");
@@ -148,6 +171,7 @@ window.viewerAdapter = window.viewerAdapter || {};
 window.viewerAdapter.viewer = viewer;
 document.dispatchEvent(new Event('dfm:viewer-ready'));
 window.viewer = viewer;
+window.CAD.viewer = viewer;
 
 new FastNavPlugin(viewer, { flyToDuration: 0.9, hideEdges:false, autoHideEdges:false });
 
@@ -333,7 +357,6 @@ function updateUnitsFromBBox(bboxMM) {
 }
 
 /* =====================  HEATMAP DÉPOUILLE — START  ===================== */
-
 // --- Neutralise tout colorize global avant d'afficher les overlays ---
 const __savedColorize = new Map();
 function __clearAnyGlobalColorize() {
@@ -362,14 +385,47 @@ function __restoreGlobalColorize() {
   } catch {}
 }
 
-import HeatmapLayer from "./modules/HeatmapLayer.js";
-import { classifyDraft } from "./dfm/DraftClassifier.js";
+let __cadHeatmapToken = 0;
 
-/** Instance overlay */
-const heatmapLayer = new HeatmapLayer(viewer);
-window.__draftHeatmap = heatmapLayer; // debug
+onModelChange((entry) => {
+  const token = ++__cadHeatmapToken;
+  const sceneModel = entry?.model?.sceneModel || entry?.model || null;
+  const metaId = entry?.meta?.id || sceneModel?.id || null;
 
-/** helpers DOM : on réutilise le $ déjà défini en haut */
+  window.CAD.viewer = viewer;
+  window.CAD.model = sceneModel;
+  window.CAD.modelId = metaId;
+  window.CAD.heatmap.ready = false;
+
+  if (!sceneModel) {
+    return;
+  }
+
+  if (!entry?.ready) {
+    return;
+  }
+
+  let attempts = 0;
+  const maxAttempts = 20;
+  const tryMarkReady = () => {
+    if (token !== __cadHeatmapToken) return;
+    const meshes = getCurrentMeshes({ includeHidden: true });
+    if (meshes.length) {
+      if (!window.CAD.heatmap.ready) {
+        window.CAD.heatmap.ready = true;
+        console.log(`[loader] model set {id: ${metaId || sceneModel?.id || 'unknown'}}`);
+      }
+      return;
+    }
+    if (attempts++ < maxAttempts) {
+      setTimeout(tryMarkReady, 80);
+    } else {
+      console.warn('[loader] geometry not ready for heatmap', { id: metaId || sceneModel?.id || 'unknown' });
+    }
+  };
+
+  tryMarkReady();
+});
 
 /** Axe sélectionné (X/Y/Z) — robuste à plusieurs implémentations possibles */
 function getSelectedAxisVector() {
@@ -389,97 +445,248 @@ function getSelectedAxisVector() {
   return { x:0, y:0, z:1 };
 }
 
-/** Récupère les meshes actifs du modèle courant */
-function getActiveMeshes() {
-  const scene = viewer.scene;
-  const meshes = [];
-
-  const candidateModels = [
-    window.currentModel,
-    window.xktModel,
-    window.model,
-    window.lastLoadedModel
-  ].filter(Boolean);
-
-  if (candidateModels.length && candidateModels[0]?.meshes) {
-    try {
-      candidateModels[0].meshes.forEach((m) => {
-        if (m && !m.destroyed && m.geometry) meshes.push(m);
-      });
-      if (meshes.length) return meshes;
-    } catch (e) {}
-  }
-
-  try {
-    const map = scene.meshes || {};
-    for (const id of Object.keys(map)) {
-      const m = map[id];
-      if (m && !m.destroyed && m.geometry && m.visible) meshes.push(m);
-    }
-  } catch (e) {}
-  return meshes;
-}
-
-
-async function waitMeshesReady(maxMs = 4000) {
-  const t0 = performance.now();
-  while (performance.now() - t0 < maxMs) {
-    const m = getActiveMeshes();
-    if (m.length) return m;
-    await new Promise(r => setTimeout(r, 60));
-  }
-  return getActiveMeshes();
-}
+const DEFAULT_DRAFT_THRESHOLD_DEG = 2;
+const DEFAULT_DRAFT_MODE = 'ok';
+const DRAFT_COLORS = Object.freeze({
+  ok: [0.20, 0.80, 0.20],
+  zero: [0.98, 0.80, 0.15],
+  undercut: [0.90, 0.25, 0.25]
+});
+const DRAFT_MODE_LABELS = Object.freeze({
+  ok: 'Dépouille suffisante',
+  zero: 'Sous le seuil',
+  undercut: 'Contre-dépouille'
+});
+const VALID_DRAFT_MODES = new Set(['ok', 'zero', 'undercut']);
 
 let __lastDraftMode = null;
+let __draftState = null;
+let __draftHeatmapActive = false;
+let __draftLegendEl = null;
 
-/** Calcule et affiche un bucket: "ok" | "zero" | "undercut" */
-async function applyDraftHeatmap(mode, opts = {}) {
-  __lastDraftMode = mode;
-  __clearAnyGlobalColorize?.(); // si tu as ajouté le neutraliseur de colorize
+function destroyDraftLegend() {
+  if (__draftLegendEl && __draftLegendEl.parentElement) {
+    __draftLegendEl.parentElement.removeChild(__draftLegendEl);
+  }
+  __draftLegendEl = null;
+}
 
-  const axis = getSelectedAxisVector();
-  let meshes = getActiveMeshes();
+function formatCount(val) {
+  return Number(val || 0).toLocaleString('fr-FR');
+}
 
-  // 👇 AJOUT : si trop tôt, on attend que les meshes apparaissent
-  if (!meshes.length) meshes = await waitMeshesReady(4000);
-  if (!meshes.length) {
-    console.warn("[draft] aucun mesh trouvé – modèle non chargé ?");
+function axisVectorLabel(axis) {
+  const comps = [
+    { label: 'X', value: axis.x || 0 },
+    { label: 'Y', value: axis.y || 0 },
+    { label: 'Z', value: axis.z || 0 }
+  ];
+  const dominant = comps.reduce((best, cur) => (Math.abs(cur.value) > Math.abs(best.value) ? cur : best), comps[0]);
+  const sign = dominant.value >= 0 ? '+' : '-';
+  return `${dominant.label}${sign}`;
+}
+
+function ensureLegendElement() {
+  if (!viewerContainer) return null;
+  if (__draftLegendEl) return __draftLegendEl;
+  const el = document.createElement('div');
+  el.id = 'draftHeatmapLegend';
+  Object.assign(el.style, {
+    position: 'absolute',
+    right: '16px',
+    top: '16px',
+    zIndex: '30',
+    background: 'rgba(15,23,42,0.88)',
+    color: '#fff',
+    padding: '12px 14px',
+    borderRadius: '10px',
+    boxShadow: '0 12px 28px rgba(0,0,0,0.45)',
+    fontSize: '12px',
+    lineHeight: '1.45',
+    maxWidth: '260px',
+    backdropFilter: 'blur(2px)'
+  });
+  el.addEventListener('click', (ev) => {
+    const resetBtn = ev.target.closest('[data-act="reset"]');
+    if (resetBtn) {
+      ev.preventDefault();
+      resetDraftHeatmap();
+      return;
+    }
+    const modeBtn = ev.target.closest('[data-mode]');
+    if (modeBtn) {
+      ev.preventDefault();
+      const targetMode = modeBtn.dataset.mode;
+      const state = el.__state;
+      if (targetMode && state?.applyMode) {
+        const applied = state.applyMode(targetMode);
+        __lastDraftMode = applied;
+        __draftHeatmapActive = true;
+        renderDraftLegend(state, applied);
+      }
+    }
+  });
+  viewerContainer.appendChild(el);
+  __draftLegendEl = el;
+  return el;
+}
+
+function renderDraftLegend(state, activeMode) {
+  if (!viewerContainer) return;
+  const el = ensureLegendElement();
+  if (!el) return;
+  el.__state = state;
+  const toCss = (rgb) => `rgb(${rgb.map(v => Math.round(Math.max(0, Math.min(1, v)) * 255)).join(',')})`;
+  const axis = state?.axis?.vector || state?.axis || { x: 0, y: 0, z: 1 };
+  const threshold = Number(state?.thresholdDeg || DEFAULT_DRAFT_THRESHOLD_DEG);
+  const counts = state?.totals || {};
+  const total = state?.totalFaces || 0;
+  const axisLabel = axisVectorLabel(axis);
+  const axisVectorStr = `(${(axis.x || 0).toFixed(2)}, ${(axis.y || 0).toFixed(2)}, ${(axis.z || 0).toFixed(2)})`;
+
+  const item = (mode) => {
+    const label = DRAFT_MODE_LABELS[mode] || mode;
+    const color = toCss(DRAFT_COLORS[mode] || [0.6, 0.6, 0.6]);
+    const active = mode === activeMode;
+    const opacity = active ? '1' : '0.72';
+    const weight = active ? '600' : '400';
+    const count = counts[mode] || 0;
+    return `<div class="draft-legend-item" data-mode="${mode}" style="display:flex;align-items:center;gap:8px;cursor:pointer;opacity:${opacity};margin-top:6px;">
+      <span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:${color};box-shadow:0 0 0 1px rgba(255,255,255,0.25);"></span>
+      <span style="flex:1;font-weight:${weight};">${label}</span>
+      <span style="font-weight:${weight};">${formatCount(count)}</span>
+    </div>`;
+  };
+
+  const otherBlock = (counts.other || 0) > 0
+    ? `<div style="display:flex;align-items:center;gap:8px;opacity:0.6;margin-top:6px;">
+         <span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:rgba(148,163,184,0.6);"></span>
+         <span style="flex:1;">Autres faces</span>
+         <span>${formatCount(counts.other)}</span>
+       </div>`
+    : '';
+
+  el.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+      <strong style="font-size:13px;">Heatmap dépouille</strong>
+      <button type="button" class="btn btn-sm btn-link p-0" data-act="reset" style="color:#93c5fd;">Réinitialiser</button>
+    </div>
+    <div style="margin-top:4px;font-weight:500;">Axe ${axisLabel} ${axisVectorStr}</div>
+    <div style="margin-top:2px;opacity:0.8;">
+      OK ≥ ${threshold.toFixed(1)}° — Sous seuil 0° à &lt; ${threshold.toFixed(1)}° — Contre < 0°
+    </div>
+    <div style="margin-top:6px;">
+      ${item('ok')}
+      ${item('zero')}
+      ${item('undercut')}
+      ${otherBlock}
+    </div>
+    <div style="margin-top:8px;opacity:0.75;">Faces analysées : ${formatCount(total)}</div>
+  `;
+}
+
+function resetDraftHeatmap({ clearCache = false } = {}) {
+  try { releaseDraftHeatmap(window.CAD); } catch (err) { console.warn('[heatmap] clear error', err); }
+  __restoreGlobalColorize();
+  destroyDraftLegend();
+  __draftHeatmapActive = false;
+  __draftState = null;
+  __lastDraftMode = null;
+  if (clearCache && window.CAD?.heatmap?.cache instanceof Map) {
+    window.CAD.heatmap.cache.clear();
+  }
+}
+
+async function applyDraftHeatmap(mode = DEFAULT_DRAFT_MODE, opts = {}) {
+  if (mode === 'reset' || opts.reset) {
+    resetDraftHeatmap({ clearCache: !!opts.clearCache });
     return;
   }
 
-  // ... reste inchangé (classifyDraft, overlays, etc.)
+  const registry = window.CAD || {};
+  if (!registry?.model) {
+    console.warn('[heatmap] model not ready');
+    throw new Error('MODEL_NOT_READY');
+  }
+  if (!registry?.heatmap?.ready) {
+    console.warn('[heatmap] geometry not ready');
+    throw new Error('MODEL_NOT_READY');
+  }
+
+  const axis = opts.axisVector || opts.axis || getSelectedAxisVector();
+  const thresholdInput = opts.thresholdDeg ?? opts.threshold ?? opts.okMinDeg;
+  const thresholdDeg = Number.isFinite(Number(thresholdInput)) && Number(thresholdInput) > 0
+    ? Number(thresholdInput)
+    : DEFAULT_DRAFT_THRESHOLD_DEG;
+
+  try {
+    registry.axis = axis;
+    const state = await runDraftHeatmap({ registry, axis, thresholdDeg });
+    __draftState = state;
+    const requestedMode = VALID_DRAFT_MODES.has(mode) ? mode : (state.mode || DEFAULT_DRAFT_MODE);
+    const appliedMode = state.applyMode ? state.applyMode(requestedMode) : requestedMode;
+    __lastDraftMode = appliedMode;
+    __draftHeatmapActive = true;
+    renderDraftLegend(state, appliedMode);
+    return state;
+  } catch (err) {
+    const raw = err?.message || err;
+    console.error('[heatmap] apply failed', raw);
+    throw err;
+  }
 }
 
 /* ---------- Binding boutons ---------- */
 function bindClick(sel, cb) {
   const el = document.querySelector(sel);
   if (!el) return false;
-  el.addEventListener("click", (e) => { e.preventDefault(); cb(e); });
+  el.addEventListener("click", (e) => {
+    e.preventDefault();
+    try {
+      const res = cb(e);
+      if (res && typeof res.then === 'function') {
+        res.catch(err => console.error('[heatmap] bouton error', err));
+      }
+    } catch (err) {
+      console.error('[heatmap] bouton error', err);
+    }
+  });
   console.log("[draft] bouton lié:", sel);
   return true;
 }
 
-bindClick("#btnHeatmapOK",       () => applyDraftHeatmap("ok"));
-bindClick("#btnHeatmapZero",     () => applyDraftHeatmap("zero"));
-bindClick("#btnHeatmapUndercut", () => applyDraftHeatmap("undercut"));
-bindClick("#btnHeatmapDepouille",() => applyDraftHeatmap("ok")); // si absent, noop
+bindClick("#btnHeatmapOK",       () => applyDraftHeatmap('ok'));
+bindClick("#btnHeatmapZero",     () => applyDraftHeatmap('zero'));
+bindClick("#btnHeatmapUndercut", () => applyDraftHeatmap('undercut'));
+bindClick("#btnHeatmapDepouille",() => applyDraftHeatmap('ok')); // si absent, noop
 
 /* Recalcul auto quand l’axe change */
 document.querySelectorAll('input[name="axis"], #axisX, #axisY, #axisZ')
   .forEach(inp => {
     inp.addEventListener("change", () => {
-      if (__lastDraftMode) applyDraftHeatmap(__lastDraftMode);
+      if (__lastDraftMode && __draftState) {
+        const res = applyDraftHeatmap(__lastDraftMode, { thresholdDeg: __draftState.thresholdDeg });
+        if (res && typeof res.then === 'function') {
+          res.catch(err => console.warn('[heatmap] axis change apply failed', err));
+        }
+      }
     });
   });
-  // Pont public pour DFMOrchestrator
+// Pont public pour DFMOrchestrator
 window.applyDraftHeatmap = (mode='ok', opts) => applyDraftHeatmap(mode, opts);
+window.resetDraftHeatmap = (opts) => resetDraftHeatmap(opts || {});
+
+onModelChange(() => {
+  resetDraftHeatmap({ clearCache: true });
+});
 
 // Écoute éventuelle d’un événement
 document.addEventListener('dfm:heatmap-draft', (ev) => {
-  applyDraftHeatmap(ev?.detail?.mode || 'ok', ev?.detail?.opts || {});
+  const res = applyDraftHeatmap(ev?.detail?.mode || DEFAULT_DRAFT_MODE, ev?.detail?.opts || {});
+  if (res && typeof res.then === 'function') {
+    res.catch(err => console.error('[heatmap] event apply failed', err));
+  }
 });
-
 /* =====================  HEATMAP DÉPOUILLE — END  ===================== */
 
 
@@ -629,6 +836,10 @@ if (btnAnnot) { btnAnnot.style.display = "none"; btnAnnot.disabled = true; }
 /* ---------- chargement XKT ---------- */
 async function loadXKT(url, nameHint){
   const id="m"+Date.now();
+  window.CAD.heatmap.ready = false;
+  window.CAD.model = null;
+  window.CAD.modelId = null;
+  clearModelRegistry();
   const model = xktLoader.load({
     id,
     src: url,
@@ -641,6 +852,8 @@ async function loadXKT(url, nameHint){
     decompressGeometry: true
   });
 
+  registerModelInstance(model, { id, src: url, viewer });
+
   setProgress(8);
   model.on("progress", p=> setProgress(8+Math.round(p*84)));
   model.on("loaded", ()=>{
@@ -648,6 +861,8 @@ async function loadXKT(url, nameHint){
     viewer.cameraFlight.flyTo(model);
     models.set(id,{model,name:nameHint||id,src:url}); lastModelId=id;
     if (chkEdges?.checked) viewer.scene.edgeMaterial.edgesEnabled=true;
+
+    markModelReady(model, { id, src: url, name: nameHint || id });
 
     // init unités + heuristique AABB
     MM_PER_WU = 0.001;
@@ -685,6 +900,11 @@ async function loadLocalXKT(file) {
     return;
   }
 
+  window.CAD.heatmap.ready = false;
+  window.CAD.model = null;
+  window.CAD.modelId = null;
+  clearModelRegistry();
+
   // 1) Nettoyage éventuel du précédent blob
   if (currentModel && !currentModel.destroyed) {
     try { currentModel.destroy(); } catch(e) {}
@@ -707,17 +927,15 @@ async function loadLocalXKT(file) {
   const model = xktLoader.load({ id, src: blobURL });
   currentModel = model;
 
-model.on("loaded", ()=>{
-  // ... ton code existant ...
-  viewer.cameraFlight.flyTo(model);
-  models.set(id,{model,name:nameHint||id,src:url}); lastModelId=id;
+  registerModelInstance(model, { id, src: blobURL, viewer, fileName: file.name });
 
-  // 👇 AJOUT : expose le modèle courant pour getActiveMeshes()
-  window.currentModel   = model;
-  window.lastLoadedModel = model;
+  model.on("loaded", () => {
+    viewer.cameraFlight.flyTo(model);
+    models.set(id, { model, name: file?.name || id, src: blobURL });
+    lastModelId = id;
 
-  // ... la suite (units, events, etc.)
-});
+    markModelReady(model, { id, src: blobURL, name: file?.name || id });
+  });
 
   model.on("error", (err) => {
     console.error("[viewer] XKT load error :", err);
@@ -931,6 +1149,7 @@ async function uploadAndShow(file) {
       if (!chkAdditive?.checked) {
         for (const [, i] of models) { try { i.model.destroy(); } catch {} }
         models.clear(); selectedIds.clear();
+        clearModelRegistry();
       }
       console.log("[viewer] loading XKT (local):", fileURL);
       StatsPoller.cancel();
@@ -958,6 +1177,7 @@ async function uploadAndShow(file) {
     if (!chkAdditive?.checked) {
       for (const [, i] of models) { try { i.model.destroy(); } catch {} }
       models.clear(); selectedIds.clear();
+      clearModelRegistry();
     }
 
     console.log("[viewer] loading XKT]:", xktUrl);

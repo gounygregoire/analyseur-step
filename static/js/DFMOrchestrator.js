@@ -5,6 +5,11 @@
  * Compatible avec app.html (demouldHost) + main.js (viewerAdapter & probes)
  */
 
+import {
+  applyDraftHeatmap as applyDraftHeatmapFromRegistry,
+  clearDraftHeatmap as clearDraftHeatmapFromRegistry
+} from "./modules/DraftHeatmap.js";
+
 
 /* ---------------------- helpers/fallbacks ---------------------- */
 async function loadCameraPresetOptional(url) {
@@ -18,12 +23,24 @@ async function loadCameraPresetOptional(url) {
 }
 
 if (typeof window !== "undefined") {
+  const base = (window.CAD && typeof window.CAD === "object") ? window.CAD : {};
+  const heatmapState = (base.heatmap && typeof base.heatmap === "object")
+    ? base.heatmap
+    : { ready: false };
+  if (typeof heatmapState.ready !== "boolean") {
+    heatmapState.ready = !!heatmapState.ready;
+  }
   window.CAD = {
-    fileIdStep: window.CAD?.fileIdStep ?? null,
-    materialProfile: window.CAD?.materialProfile ?? null,
-    axis: window.CAD?.axis ?? { x: 0, y: 0, z: 1 },
-    currentJobId: window.CAD?.currentJobId ?? null,
-    materialShortlist: window.CAD?.materialShortlist ?? null,
+    viewer: base.viewer ?? null,
+    model: base.model ?? null,
+    modelId: base.modelId ?? null,
+    heatmap: heatmapState,
+    fileIdStep: base.fileIdStep ?? null,
+    materialProfile: base.materialProfile ?? null,
+    axis: base.axis ?? { x: 0, y: 0, z: 1 },
+    currentJobId: base.currentJobId ?? null,
+    materialShortlist: base.materialShortlist ?? null,
+    ui: base.ui ?? undefined
   };
 }
 
@@ -873,11 +890,14 @@ async _getStableFaces() {
 // 3) transformation valeur (°) → t∈[0..1] pour palette rouge/jaune/vert
 // --- À mettre dans class DFMOrchestrator (remplace ta méthode) ---
 // --- DANS class DFMOrchestrator ---
-async applyDraftHeatmap(draftMap = null, opts = {}) {
+async applyDraftHeatmap(configOrDraftMap = null, opts = {}) {
+  if (configOrDraftMap && typeof configOrDraftMap === 'object' && !Array.isArray(configOrDraftMap) && 'registry' in configOrDraftMap) {
+    return this._applyDraftHeatmapWithRegistry(configOrDraftMap);
+  }
   try {
     const mode = (opts?.mode || 'ok'); // "ok" | "zero" | "undercut"
     if (typeof window.applyDraftHeatmap === 'function') {
-      window.applyDraftHeatmap(mode, opts);   // délégation vers main.js (overlays par triangles)
+      await window.applyDraftHeatmap(mode, { ...opts, registry: window.CAD });
       return;
     }
     // Hook absent → tout petit filet de sécurité (moyenne par entité)
@@ -888,6 +908,85 @@ async applyDraftHeatmap(draftMap = null, opts = {}) {
     await this._applyEntityHeatmapStrict(letter);
   } catch (e) {
     console.warn('[DFM] applyDraftHeatmap error', e);
+    throw e;
+  }
+}
+
+_normalizeAxisInput(axis){
+  if (typeof axis === 'string') {
+    const letter = axis.toUpperCase();
+    if (letter === 'X' || letter === 'Y' || letter === 'Z') {
+      const vec = { x:0, y:0, z:0 };
+      vec[letter.toLowerCase()] = 1;
+      return { letter, vector: vec };
+    }
+  }
+  if (axis && typeof axis === 'object') {
+    const vec = {
+      x: Number(axis.x) || 0,
+      y: Number(axis.y) || 0,
+      z: Number(axis.z) || 0,
+    };
+    const abs = [
+      { letter: 'X', value: Math.abs(vec.x) },
+      { letter: 'Y', value: Math.abs(vec.y) },
+      { letter: 'Z', value: Math.abs(vec.z) },
+    ].sort((a,b)=> b.value - a.value);
+    const best = abs[0] && abs[0].value > 0 ? abs[0] : { letter: 'Z', value: 1 };
+    const sign = Math.sign(vec[best.letter.toLowerCase()]) || 1;
+    const canonical = { x:0, y:0, z:0 };
+    canonical[best.letter.toLowerCase()] = sign;
+    return { letter: best.letter, vector: canonical };
+  }
+  return { letter: 'Z', vector: { x:0, y:0, z:1 } };
+}
+
+async _applyDraftHeatmapWithRegistry(params = {}) {
+  const registry = params.registry || window.CAD || {};
+  if (!registry?.model) {
+    console.warn('[heatmap] model not ready');
+    throw 'MODEL_NOT_READY';
+  }
+  if (!registry?.heatmap?.ready) {
+    console.warn('[heatmap] geometry not ready');
+    throw 'MODEL_NOT_READY';
+  }
+
+  const axisInfo = this._normalizeAxisInput(params.axis || registry.axis || this.selectedAxis);
+  const thrInput = Number(params.thresholdDeg);
+  const threshold = Number.isFinite(thrInput) && thrInput > 0 ? thrInput : 2;
+
+  try {
+    await applyDraftHeatmapFromRegistry({
+      registry,
+      axis: axisInfo.vector,
+      thresholdDeg: threshold
+    });
+    document.dispatchEvent(new CustomEvent('dfm:heatmap-draft:applied', {
+      detail: { axis: axisInfo.letter, thresholdDeg: threshold }
+    }));
+    return true;
+  } catch (err) {
+    const raw = err?.message || err;
+    console.error('[heatmap] apply failed', raw);
+    if (raw === 'MODEL_NOT_READY') {
+      throw 'MODEL_NOT_READY';
+    }
+    throw (raw || 'Heatmap indisponible');
+  }
+}
+
+clearDraftHeatmap(registry = window.CAD) {
+  try {
+    clearDraftHeatmapFromRegistry(registry);
+    if (registry?.heatmap && typeof registry.heatmap === 'object') {
+      registry.heatmap.visible = false;
+    }
+    document.dispatchEvent(new CustomEvent('dfm:heatmap-draft:cleared'));
+    return true;
+  } catch (err) {
+    console.error('[heatmap] clear failed', err?.message || err);
+    throw (err?.message || 'Impossible de masquer la heatmap');
   }
 }
 

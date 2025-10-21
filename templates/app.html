@@ -1011,10 +1011,129 @@
     })();
 
     // === Heatmap dépouille (via orchestrateur) ===
-    document.getElementById('dfmBtnHeatmapDraft')
-      ?.addEventListener('click', async () => {
-        await (window.DFMOrchestrator?.applyDraftHeatmap?.(null, { tryBuild: true }) || Promise.resolve());
+    (function(){
+      const btn = document.getElementById('dfmBtnHeatmapDraft');
+      if (!btn || btn.__wiredHeatmap) return;
+      btn.__wiredHeatmap = true;
+
+      const baseLabel = (btn.textContent || '').trim() || 'Heatmap dépouille (instantané)';
+      const hideLabel = 'Masquer heatmap';
+      let active = false;
+
+      const setState = (flag) => {
+        active = !!flag;
+        btn.textContent = active ? hideLabel : baseLabel;
+      };
+
+      const readAxis = () => {
+        const selectors = [
+          'input[name="demAxis"]:checked',
+          'input[name="axis"]:checked',
+          'input[name="projAxis"]:checked'
+        ];
+        for (const sel of selectors) {
+          const el = document.querySelector(sel);
+          if (el && el.value) return el.value.toUpperCase();
+        }
+        if (document.getElementById('axisX')?.checked) return 'X';
+        if (document.getElementById('axisY')?.checked) return 'Y';
+        if (document.getElementById('axisZ')?.checked) return 'Z';
+        return null;
+      };
+
+      const readThreshold = () => {
+        const selectors = [
+          '[data-draft-threshold]',
+          '[data-role="draft-threshold"]',
+          'input[name="draftThreshold"]',
+          '#draftThreshold',
+          'input[name="draft-threshold"]'
+        ];
+        for (const sel of selectors) {
+          const el = document.querySelector(sel);
+          if (!el) continue;
+          const candidates = [
+            el.dataset?.threshold,
+            el.dataset?.value,
+            el.value,
+            el.textContent
+          ];
+          for (const cand of candidates) {
+            const num = Number(cand);
+            if (Number.isFinite(num) && num > 0) return num;
+          }
+        }
+        return 2;
+      };
+
+      const shouldFallbackAlert = window.__HEATMAP_ALERT_FALLBACK__ === true
+        || window.CAD?.ui?.allowHeatmapAlerts === true;
+      const showToastSafe = (msg, type = 'warn') => {
+        if (window.showToast) {
+          showToast(msg, { type });
+          return;
+        }
+        if (shouldFallbackAlert) {
+          alert(msg);
+        }
+      };
+
+      const resetState = () => setState(false);
+
+      btn.addEventListener('click', async () => {
+        if (!window.DFMOrchestrator) return;
+
+        if (active) {
+          try {
+            await (window.DFMOrchestrator.clearDraftHeatmap?.(window.CAD) || Promise.resolve());
+            resetState();
+          } catch (err) {
+            const message = typeof err === 'string' ? err : (err?.message || 'Impossible de masquer la heatmap');
+            showToastSafe(message.replace(/^[^:]+:\s*/, ''), 'error');
+          }
+          return;
+        }
+
+        if (!window.CAD?.model) {
+          console.warn('[heatmap] model not ready');
+          showToastSafe('Le modèle s’initialise, réessaie dans 1 seconde.', 'info');
+          return;
+        }
+        if (!window.CAD?.heatmap?.ready) {
+          console.warn('[heatmap] geometry not ready');
+          showToastSafe('Géométrie en cours de préparation…', 'warn');
+          return;
+        }
+
+        const axis = readAxis();
+        if (!axis) {
+          console.warn('[heatmap] axis not selected');
+          showToastSafe('Choisis un axe de dépouille (X, Y ou Z).', 'warn');
+          return;
+        }
+        const thresholdDeg = readThreshold();
+
+        btn.disabled = true;
+        try {
+          await (window.DFMOrchestrator.applyDraftHeatmap?.({
+            registry: window.CAD,
+            axis,
+            thresholdDeg
+          }) || Promise.resolve());
+          setState(true);
+        } catch (err) {
+          const raw = typeof err === 'string' ? err : (err?.message || 'Heatmap indisponible');
+          const clean = raw.replace(/^\[heatmap\]\s*/i, '').trim() || 'Heatmap indisponible';
+          showToastSafe(clean, 'error');
+        } finally {
+          btn.disabled = false;
+        }
       });
+
+      document.addEventListener('dfm:fileReady', resetState);
+      document.addEventListener('dfm:heatmap-draft:cleared', resetState);
+      document.addEventListener('dfm:heatmap-draft:applied', () => setState(true));
+    })();
   </script>
 
   <!-- Barre progression globale (liée à cadlytics:dfm:progress) -->

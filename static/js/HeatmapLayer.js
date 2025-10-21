@@ -1,7 +1,6 @@
-// /static/js/modules/HeatmapLayer.js — UTF-8 (NO BOM)
-// Affiche des "overlays" de triangles pour la heatmap dépouille (masques par bucket).
-// Utilise des meshes temporaires (overlays) construits à partir d'un sous-ensemble de triangles.
-// Dépendances: xeokit SDK (TrianglesGeometry, Mesh, PhongMaterial)
+// /static/js/HeatmapLayer.js — UTF-8 (NO BOM)
+// Gestionnaire d'overlays pour la heatmap dépouille basé sur le registry CAD.
+// Crée des meshes temporaires qui ne modifient pas les matériaux d'origine.
 
 import {
   TrianglesGeometry,
@@ -10,93 +9,151 @@ import {
 } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
 
 export class HeatmapLayer {
-  constructor(viewer) {
-    this.viewer = viewer;
-    this.scene = viewer.scene;
-    this._overlays = [];   // { mesh, geom }
+  constructor(registry) {
+    this.registry = registry || {};
+    this._overlays = [];
     this._visible = true;
-    // couleurs par bucket
+    this._signature = null;
+    this._seq = 0;
     this.colors = {
-      ok:        [0.20, 0.80, 0.20],   // vert
-      zero:      [0.98, 0.80, 0.15],   // jaune
-      undercut:  [0.90, 0.25, 0.25],   // rouge
+      ok: [0.20, 0.80, 0.20],       // vert
+      zero: [0.98, 0.80, 0.15],     // jaune
+      undercut: [0.90, 0.25, 0.25]  // rouge
     };
     this.opacity = 0.85;
   }
 
-  setVisible(flag) {
-    this._visible = !!flag;
-    for (const o of this._overlays) {
-      if (o.mesh && !o.mesh.destroyed) o.mesh.visible = this._visible;
+  get viewer() {
+    return this.registry?.viewer || null;
+  }
+
+  get scene() {
+    const viewer = this.viewer;
+    if (viewer?.scene) return viewer.scene;
+    const modelScene = this.registry?.model?.scene;
+    if (modelScene) return modelScene;
+    return null;
+  }
+
+  renderDraft({ axis, thresholdDeg, entries, mode } = {}) {
+    const scene = this.scene;
+    const viewer = this.viewer;
+    if (!scene || !viewer) {
+      throw new Error("MODEL_NOT_READY");
     }
+
+    const axisKey = this._normalizeAxisKey(axis);
+    const thrKey = Number.isFinite(Number(thresholdDeg))
+      ? Number(thresholdDeg).toFixed(3)
+      : "auto";
+    const resolvedMode = typeof mode === "string" ? mode : (this.registry?.heatmap?.mode || "ok");
+    const signature = `${this._currentModelId()}|${resolvedMode}|${axisKey}|${thrKey}`;
+
+    if (this._signature === signature) {
+      this._setVisible(this._overlays.length > 0);
+      return this._overlays.length > 0;
+    }
+
+    this.clear();
+
+    const sourceEntries = Array.isArray(entries)
+      ? entries
+      : Array.isArray(this.registry?.heatmap?.state?.entries)
+        ? this.registry.heatmap.state.entries
+        : [];
+
+    let created = 0;
+    for (const entry of sourceEntries) {
+      const mesh = entry?.mesh;
+      if (!mesh || mesh.destroyed) continue;
+      const bucket = entry?.buckets?.[resolvedMode];
+      if (!bucket || !bucket.count || !bucket.tris) continue;
+      if (this._createOverlay(scene, mesh, bucket.tris, resolvedMode)) {
+        created++;
+      }
+    }
+
+    this._signature = signature;
+    this._setVisible(created > 0);
+    return created > 0;
   }
 
   clear() {
-    for (const o of this._overlays) {
-      try { o.mesh?.destroy(); } catch(e) {}
-      try { o.geom?.destroy(); } catch(e) {}
+    for (const handle of this._overlays) {
+      try { handle.mesh?.destroy(); } catch {}
+      try { handle.geom?.destroy(); } catch {}
+      try { handle.material?.destroy?.(); } catch {}
     }
     this._overlays.length = 0;
+    this._signature = null;
+    this._visible = false;
   }
 
-  /**
-   * Construit et affiche un overlay avec uniquement les triangles fournis.
-   * @param {Object} params
-   * @param {Object} params.mesh   - Mesh xeokit d'origine (celui qui porte la géométrie complète)
-   * @param {Uint32Array|Uint16Array|Array<number>} params.triIndices - index de triangles (dans le buffer indices du mesh d'origine)
-   * @param {"ok"|"zero"|"undercut"} params.mode
-   * @returns {Mesh|null}
-   */
-  showDraftMask({ mesh, triIndices, mode }) {
+  setVisible(flag) {
+    this._setVisible(!!flag);
+  }
+
+  _setVisible(flag) {
+    this._visible = !!flag;
+    for (const handle of this._overlays) {
+      if (handle.mesh && !handle.mesh.destroyed) {
+        handle.mesh.visible = this._visible;
+      }
+    }
+  }
+
+  _createOverlay(scene, mesh, triIndices, mode) {
     if (!mesh || mesh.destroyed) return null;
     if (!triIndices || triIndices.length === 0) return null;
 
     const geom0 = mesh.geometry;
     if (!geom0 || !geom0.positions || !geom0.indices) {
-      console.warn("[HeatmapLayer] géométrie manquante sur mesh:", mesh.id);
+      console.warn("[heatmap] missing geometry on mesh", mesh.id);
       return null;
     }
 
-    const pos0 = geom0.positions;   // Float32Array
-    const idx0 = geom0.indices;     // Uint16/32
-    const nTris0 = (idx0.length / 3) | 0;
+    const positions = geom0.positions;
+    const indices = geom0.indices;
+    const triCount = (indices.length / 3) | 0;
 
-    // Sanity
-    const triList = Array.from(triIndices).filter(t => t >= 0 && t < nTris0);
-    if (triList.length === 0) return null;
+    const triList = Array.from(triIndices).filter((t) => t >= 0 && t < triCount);
+    if (!triList.length) return null;
 
-    // Construit une nouvelle géométrie avec uniquement ces triangles.
-    const outPositions = [];
-    const outIndices = [];
+    const matrix = this._resolveWorldMatrix(mesh);
+    const hasMatrix = !!matrix;
+
+    const vertexCount = triList.length * 3;
+    const outPositions = new Float32Array(vertexCount * 3);
+    const outIndices = new (vertexCount > 0xFFFF ? Uint32Array : Uint16Array)(vertexCount);
     let v = 0;
 
-    for (let k = 0; k < triList.length; k++) {
-      const t = triList[k];
-      const i0 = idx0[t*3]   * 3;
-      const i1 = idx0[t*3+1] * 3;
-      const i2 = idx0[t*3+2] * 3;
+    for (const triIndex of triList) {
+      const i0 = indices[triIndex * 3] * 3;
+      const i1 = indices[triIndex * 3 + 1] * 3;
+      const i2 = indices[triIndex * 3 + 2] * 3;
 
-      // copie positions (duplique pour isoler la face)
-      outPositions.push(
-        pos0[i0],   pos0[i0+1],   pos0[i0+2],
-        pos0[i1],   pos0[i1+1],   pos0[i1+2],
-        pos0[i2],   pos0[i2+1],   pos0[i2+2]
-      );
-      outIndices.push(v, v+1, v+2);
+      this._writePosition(outPositions, v * 3, positions, i0, matrix, hasMatrix);
+      this._writePosition(outPositions, (v + 1) * 3, positions, i1, matrix, hasMatrix);
+      this._writePosition(outPositions, (v + 2) * 3, positions, i2, matrix, hasMatrix);
+
+      outIndices[v] = v;
+      outIndices[v + 1] = v + 1;
+      outIndices[v + 2] = v + 2;
       v += 3;
     }
 
-    const idSuffix = `${mesh.id}_${mode}_${Date.now()}`;
-    const overlayGeom = new TrianglesGeometry(this.scene, {
+    if (!v) return null;
+
+    const idSuffix = `${mesh.id || "mesh"}_${mode}_${this._seq++}`;
+    const overlayGeom = new TrianglesGeometry(scene, {
       id: `draftGeom_${idSuffix}`,
-      positions: new Float32Array(outPositions),
-      indices:   (outPositions.length/3 > 65535) ? new Uint32Array(outIndices) : new Uint16Array(outIndices),
-      // backfaces true pour voir les faces quelle que soit l'orientation des normales
+      positions: outPositions,
+      indices: outIndices,
       backfaces: true
     });
 
     const color = this.colors[mode] || [0.6, 0.6, 0.6];
-    const mat = new PhongMaterial(this.scene, {
+    const material = new PhongMaterial(scene, {
       id: `draftMat_${idSuffix}`,
       diffuse: color,
       opacity: this.opacity,
@@ -104,31 +161,78 @@ export class HeatmapLayer {
       backfaces: true
     });
 
-    const overlayMesh = new Mesh(this.scene, {
+    const overlayMesh = new Mesh(scene, {
       id: `draftMesh_${idSuffix}`,
       geometry: overlayGeom,
-      material: mat,
+      material,
       pickable: false,
       visible: this._visible,
       collidable: false
     });
 
-    this._overlays.push({ mesh: overlayMesh, geom: overlayGeom });
+    this._overlays.push({ mesh: overlayMesh, geom: overlayGeom, material });
     return overlayMesh;
   }
 
-  /**
-   * Confort : applique un bucket sur un tableau de meshes.
-   * @param {Object} params
-   * @param {Array<Object>} params.meshes
-   * @param {Array<Uint32Array|Uint16Array|Array<number>>} params.triBuckets - même longueur que meshes
-   * @param {"ok"|"zero"|"undercut"} params.mode
-   */
-  showDraftMasksBatch({ meshes, triBuckets, mode }) {
-    if (!meshes || !triBuckets) return;
-    for (let i = 0; i < meshes.length; i++) {
-      this.showDraftMask({ mesh: meshes[i], triIndices: triBuckets[i], mode });
+  _resolveWorldMatrix(mesh) {
+    if (!mesh) return null;
+    const matrix = (
+      mesh.worldMatrix ||
+      mesh.matrix ||
+      mesh.worldTransform?.matrix ||
+      mesh.transform?.matrix ||
+      null
+    );
+    if (!matrix) return null;
+    if (Array.isArray(matrix) || ArrayBuffer.isView(matrix)) {
+      return matrix;
     }
+    return null;
+  }
+
+  _writePosition(target, offset, source, srcIndex, matrix, hasMatrix) {
+    const x = source[srcIndex];
+    const y = source[srcIndex + 1];
+    const z = source[srcIndex + 2];
+    if (!hasMatrix) {
+      target[offset] = x;
+      target[offset + 1] = y;
+      target[offset + 2] = z;
+      return;
+    }
+    target[offset] = matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12];
+    target[offset + 1] = matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13];
+    target[offset + 2] = matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14];
+  }
+
+  _normalizeAxisKey(axis) {
+    if (!axis) return "Z";
+    if (typeof axis === "string") {
+      return axis.trim().toUpperCase() || "Z";
+    }
+    if (typeof axis === "object") {
+      if (axis.letter) return axis.letter.toUpperCase();
+      if (axis.vector) {
+        return [axis.vector.x || 0, axis.vector.y || 0, axis.vector.z || 0]
+          .map((v) => Number(v).toFixed(4))
+          .join(",");
+      }
+      return [axis.x || 0, axis.y || 0, axis.z || 0]
+        .map((v) => Number(v).toFixed(4))
+        .join(",");
+    }
+    return "Z";
+  }
+
+  _currentModelId() {
+    const model = this.registry?.model;
+    return (
+      model?.id ||
+      model?.modelId ||
+      model?.cfg?.id ||
+      model?.meta?.id ||
+      "model"
+    );
   }
 }
 
