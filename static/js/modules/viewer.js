@@ -1,5 +1,5 @@
 import { Viewer as XEViewer, XKTLoaderPlugin as XEXKTLoaderPlugin }
-  from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@2/dist/xeokit-sdk.es.js";
+  from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@1.9.20/dist/xeokit-sdk.es.js";
 
 // PATCH START: optional camera preset
 export async function loadCameraPresetOptional(u){
