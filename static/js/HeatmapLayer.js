@@ -3,10 +3,10 @@
 // Crée des meshes temporaires qui ne modifient pas les matériaux d'origine.
 
 import {
-  TrianglesGeometry,
+  ReadableGeometry,
   Mesh,
   PhongMaterial
-} from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
+} from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@1.9.20/dist/xeokit-sdk.es.min.js";
 
 export class HeatmapLayer {
   constructor(registry) {
@@ -106,14 +106,13 @@ export class HeatmapLayer {
     if (!mesh || mesh.destroyed) return null;
     if (!triIndices || triIndices.length === 0) return null;
 
-    const geom0 = mesh.geometry;
-    if (!geom0 || !geom0.positions || !geom0.indices) {
-      console.warn("[heatmap] missing geometry on mesh", mesh.id);
+    const geomData = this._resolveGeometry(mesh);
+    if (!geomData) {
+      console.warn("[heatmap] missing geometry on mesh", mesh?.id);
       return null;
     }
 
-    const positions = geom0.positions;
-    const indices = geom0.indices;
+    const { positions, indices } = geomData;
     const triCount = (indices.length / 3) | 0;
 
     const triList = Array.from(triIndices).filter((t) => t >= 0 && t < triCount);
@@ -145,12 +144,19 @@ export class HeatmapLayer {
     if (!v) return null;
 
     const idSuffix = `${mesh.id || "mesh"}_${mode}_${this._seq++}`;
-    const overlayGeom = new TrianglesGeometry(scene, {
-      id: `draftGeom_${idSuffix}`,
-      positions: outPositions,
-      indices: outIndices,
-      backfaces: true
-    });
+    let overlayGeom;
+    try {
+      overlayGeom = new ReadableGeometry(scene, {
+        id: `draftGeom_${idSuffix}`,
+        primitive: "triangles",
+        positions: outPositions,
+        indices: outIndices,
+        backfaces: true
+      });
+    } catch (err) {
+      console.warn("[heatmap] échec création géométrie", err);
+      return null;
+    }
 
     const color = this.colors[mode] || [0.6, 0.6, 0.6];
     const material = new PhongMaterial(scene, {
@@ -203,6 +209,47 @@ export class HeatmapLayer {
     target[offset] = matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12];
     target[offset + 1] = matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13];
     target[offset + 2] = matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14];
+  }
+
+  _resolveGeometry(mesh) {
+    const geom = mesh?.geometry || mesh?._geometry || null;
+    if (!geom) return null;
+
+    const positions = this._pickGeometryArray(
+      geom.positions ||
+      geom._positions ||
+      geom.decompressedPositions ||
+      geom.__dfmPositions ||
+      mesh?.__dfmPositions
+    );
+
+    const indices = this._pickGeometryArray(
+      geom.indices ||
+      geom._indices ||
+      geom.triangles ||
+      geom.__dfmIndices ||
+      mesh?.__dfmIndices
+    );
+
+    if (!positions || !indices || !positions.length || !indices.length) {
+      return null;
+    }
+    return { positions, indices };
+  }
+
+  _pickGeometryArray(src) {
+    if (!src) return null;
+    if (ArrayBuffer.isView(src)) return src;
+    if (Array.isArray(src)) return src;
+    if (src.data && src.data !== src) {
+      const data = this._pickGeometryArray(src.data);
+      if (data) return data;
+    }
+    if (src.array && src.array !== src) {
+      const arr = this._pickGeometryArray(src.array);
+      if (arr) return arr;
+    }
+    return null;
   }
 
   _normalizeAxisKey(axis) {
