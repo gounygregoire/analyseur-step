@@ -11,6 +11,45 @@ function notify() {
   }
 }
 
+function pickGeometryArray(src) {
+  if (!src) return null;
+  if (ArrayBuffer.isView(src)) return src;
+  if (Array.isArray(src)) return src;
+  if (src.data && src.data !== src) {
+    const data = pickGeometryArray(src.data);
+    if (data) return data;
+  }
+  if (src.array && src.array !== src) {
+    const arr = pickGeometryArray(src.array);
+    if (arr) return arr;
+  }
+  return null;
+}
+
+export function meshHasGeometry(mesh) {
+  if (!mesh || mesh.destroyed) return false;
+  const geom = mesh.geometry || mesh._geometry || mesh._state?.geometry || null;
+  if (!geom) return false;
+
+  const positions = pickGeometryArray(
+    geom.positions ||
+    geom._positions ||
+    geom.decompressedPositions ||
+    geom.__dfmPositions ||
+    mesh.__dfmPositions
+  );
+
+  const indices = pickGeometryArray(
+    geom.indices ||
+    geom._indices ||
+    geom.triangles ||
+    geom.__dfmIndices ||
+    mesh.__dfmIndices
+  );
+
+  return !!(positions && indices && positions.length >= 3 && indices.length >= 3);
+}
+
 function pushUnique(out, seen, mesh) {
   if (!mesh || seen.has(mesh) || mesh.destroyed) return;
   seen.add(mesh);
@@ -122,17 +161,28 @@ export function getCurrentMeshes(options = {}) {
   return collectMeshes(currentEntry, options);
 }
 
-export async function waitForModelReady({ timeoutMs = 6000, pollMs = 80, includeHidden = true } = {}) {
+export async function waitForModelReady({ timeoutMs = 6000, pollMs = 80, includeHidden = true, requireGeometry = false } = {}) {
   const start = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   while (true) {
     const model = getCurrentModel();
     const meshes = getCurrentMeshes({ includeHidden });
     if (model && meshes.length) {
-      return model;
+      if (!requireGeometry) {
+        return model;
+      }
+      if (meshes.some(meshHasGeometry)) {
+        return model;
+      }
     }
     const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     if (now - start >= timeoutMs) {
-      return model;
+      if (requireGeometry) {
+        return null;
+      }
+      if (model && meshes.length) {
+        return model;
+      }
+      return null;
     }
     await new Promise(res => setTimeout(res, pollMs));
   }
@@ -159,5 +209,6 @@ export default {
   getCurrentMeshes,
   waitForModelReady,
   onModelChange,
-  getCurrentMeta
+  getCurrentMeta,
+  meshHasGeometry
 };

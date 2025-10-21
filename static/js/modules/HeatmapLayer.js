@@ -11,7 +11,9 @@ import {
 export default class HeatmapLayer {
   constructor(viewerAdapter) {
     this.viewerAdapter = viewerAdapter;
-    this.viewer = viewerAdapter?.viewer || viewerAdapter;
+    const registry = viewerAdapter?.registry || viewerAdapter;
+    this.registry = registry;
+    this.viewer = registry?.viewer || viewerAdapter?.viewer || viewerAdapter;
     this._overlays = [];
     this._visible = true;
     this._seq = 0;
@@ -19,21 +21,30 @@ export default class HeatmapLayer {
   }
 
   get scene() {
+    const registryScene = this.registry?.model?.scene;
+    if (registryScene) return registryScene;
     const viewerScene = this.viewer?.scene;
     if (viewerScene) return viewerScene;
-    const registryScene = this.viewerAdapter?.app?.model?.scene;
-    if (registryScene) return registryScene;
     return null;
   }
 
   clear() {
+    let cleared = false;
     for (const handle of this._overlays) {
-      try { handle.mesh?.destroy(); } catch {}
-      try { handle.geom?.destroy?.(); } catch {}
-      try { handle.material?.destroy?.(); } catch {}
+      try {
+        if (handle?.dispose) {
+          handle.dispose();
+        } else {
+          try { handle?.mesh?.destroy?.(); } catch {}
+          try { handle?.geom?.destroy?.(); } catch {}
+          try { handle?.material?.destroy?.(); } catch {}
+        }
+        cleared = true;
+      } catch {}
     }
     this._overlays.length = 0;
     this._seq = 0;
+    return cleared;
   }
 
   setVisible(flag) {
@@ -46,11 +57,11 @@ export default class HeatmapLayer {
   }
 
   apply(mapping = {}) {
-    const model = this.viewerAdapter?.app?.model || this.viewer?.scene?.models?.[0];
+    const model = this.registry?.model;
     const scene = this.scene;
     if (!model || !scene) {
       this.clear();
-      return;
+      return [];
     }
 
     const values = Object.values(mapping)
@@ -58,7 +69,7 @@ export default class HeatmapLayer {
       .filter((value) => Number.isFinite(value));
     if (!values.length) {
       this.clear();
-      return;
+      return [];
     }
 
     const min = Math.min(...values);
@@ -175,12 +186,28 @@ export default class HeatmapLayer {
         continue;
       }
 
-      this._overlays.push({ mesh: overlayMesh, geom: overlayGeom, material });
+      const handle = {
+        mesh: overlayMesh,
+        geom: overlayGeom,
+        material,
+        managedByLayer: true,
+        dispose() {
+          try { overlayMesh?.destroy?.(); } catch {}
+          try { overlayGeom?.destroy?.(); } catch {}
+          try { material?.destroy?.(); } catch {}
+        }
+      };
+      this._overlays.push(handle);
     }
 
     if (!this._overlays.length) {
       this.clear();
     }
+    return this.getHandles();
+  }
+
+  getHandles() {
+    return this._overlays.slice();
   }
 
   _pickGeometryArray(src) {

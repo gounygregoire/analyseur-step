@@ -4,15 +4,18 @@ import { AnnotationsPlugin } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-s
 export class DFMViewerAdapter {
   constructor(viewerApp) {
     this.app = viewerApp;
-    this.viewer = viewerApp.viewer || viewerApp;
-    this.annotations = viewerApp.annotations || new AnnotationsPlugin(this.viewer, {});
+    this.registry = viewerApp?.registry || viewerApp;
+    const viewer = this.registry?.viewer || viewerApp?.viewer || viewerApp;
+    this.viewer = viewer;
+    this.annotations = viewerApp?.annotations || new AnnotationsPlugin(this.viewer, {});
+    this.measure = this.registry?.measure || viewerApp?.measure || null;
     this._annotIds = [];
     this._coloredMeshes = [];
   }
 
   // Applique une heatmap. Préfère le per-vertex, fallback sur per-face.
   applyHeatmap(heatmap) {
-    const model = this.app.model;
+    const model = this.registry?.model;
     if (!model || !heatmap) return;
     this._coloredMeshes = [];
     model.meshes.forEach(m => {
@@ -75,7 +78,7 @@ export class DFMViewerAdapter {
 
   // Affiche une flèche simple représentant l'axe de démoulage
   previewDemouldAxis({ axis = "X", direction = 1, vector = null } = {}) {
-    if (!this.viewer || !this.app.measure) return;
+    if (!this.viewer || !this.measure) return;
     this.clearAxisPreview();
 
     const aabb = this.viewer.scene.getAABB();
@@ -94,7 +97,7 @@ export class DFMViewerAdapter {
     dir = dir.map((v) => v * (direction >= 0 ? 1 : -1));
     const end = [cx + dir[0] * size, cy + dir[1] * size, cz + dir[2] * size];
 
-    this._axisMeasurement = this.app.measure.createMeasurement({
+    this._axisMeasurement = this.measure.createMeasurement({
       positions: [cx, cy, cz, ...end],
       labelsShown: false
     });

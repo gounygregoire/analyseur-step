@@ -9,6 +9,341 @@ import {
   applyDraftHeatmap as applyDraftHeatmapFromRegistry,
   clearDraftHeatmap as clearDraftHeatmapFromRegistry
 } from "./modules/DraftHeatmap.js";
+import { meshHasGeometry } from "./modules/ModelRegistry.js";
+
+const __geometryPromises = new WeakMap();
+
+function ensureHeatmapHandleArray(registry) {
+  if (!registry || typeof registry !== "object") {
+    return null;
+  }
+  const heatmapState = registry.heatmap || (registry.heatmap = {});
+  if (!Array.isArray(heatmapState._handles)) {
+    heatmapState._handles = [];
+  }
+  return heatmapState._handles;
+}
+
+function registerHeatmapHandle(registry, handle) {
+  const handles = ensureHeatmapHandleArray(registry);
+  if (!handles || !handle) {
+    return;
+  }
+  handles.push(handle);
+}
+
+function releaseHeatmapHandles(registry) {
+  const handles = Array.isArray(registry?.heatmap?._handles)
+    ? registry.heatmap._handles
+    : null;
+  if (!handles?.length) {
+    return false;
+  }
+  while (handles.length) {
+    const handle = handles.pop();
+    try {
+      if (handle?.managedByLayer) {
+        continue;
+      }
+      if (handle?.dispose) {
+        handle.dispose();
+      } else if (typeof handle === "function") {
+        handle();
+      } else {
+        try { handle?.mesh?.destroy?.(); } catch {}
+        try { handle?.geom?.destroy?.(); } catch {}
+        try { handle?.material?.destroy?.(); } catch {}
+      }
+    } catch (err) {
+      console.warn("[heatmap] handle dispose failed", err);
+    }
+  }
+  return true;
+}
+
+function cloneColorize(value) {
+  if (!value) return null;
+  if (Array.isArray(value)) {
+    return value.slice();
+  }
+  if (ArrayBuffer.isView(value)) {
+    return Array.from(value);
+  }
+  if (typeof value.length === "number") {
+    try { return Array.prototype.slice.call(value); } catch {}
+  }
+  return null;
+}
+
+function pickArrayBufferLike(src) {
+  if (!src) return null;
+  if (ArrayBuffer.isView(src)) return src;
+  if (Array.isArray(src)) return src;
+  if (typeof src.length === "number") return src;
+  if (src.data && src.data !== src) return pickArrayBufferLike(src.data);
+  if (src.array && src.array !== src) return pickArrayBufferLike(src.array);
+  return null;
+}
+
+function hasRenderableTriangles(meshOrGeom) {
+  if (!meshOrGeom || meshOrGeom.destroyed) return false;
+  if (meshOrGeom.visible === false) return false;
+
+  const nestedMesh = meshOrGeom.mesh || meshOrGeom._mesh;
+  if (nestedMesh && nestedMesh !== meshOrGeom) {
+    if (hasRenderableTriangles(nestedMesh)) {
+      return true;
+    }
+  }
+
+  const geom = meshOrGeom.geometry || meshOrGeom._geometry || meshOrGeom;
+  if (!geom) return false;
+
+  const primitive = geom.primitive || geom._primitive;
+  if (primitive === "triangles") {
+    const triCount = Number(
+      geom.numTriangles ??
+      geom.numTriangle ??
+      geom.triangleCount ??
+      geom.trianglesCount ??
+      geom.numFaces ??
+      0
+    );
+    if (Number.isFinite(triCount) && triCount > 0) {
+      return true;
+    }
+  }
+
+  if (meshHasGeometry(meshOrGeom)) {
+    return true;
+  }
+
+  const positions = pickArrayBufferLike(
+    geom.positions ??
+    geom._positions ??
+    geom.decompressedPositions ??
+    geom.__dfmPositions ??
+    meshOrGeom.positions ??
+    meshOrGeom._positions
+  );
+
+  const indices = pickArrayBufferLike(
+    geom.indices ??
+    geom._indices ??
+    geom.triangles ??
+    geom.__dfmIndices ??
+    meshOrGeom.indices ??
+    meshOrGeom._indices ??
+    meshOrGeom.triangles
+  );
+
+  if ((positions?.length ?? 0) >= 9 && (indices?.length ?? 0) >= 3) {
+    return true;
+  }
+
+  const stateCandidates = [
+    geom._state,
+    geom._geometryState,
+    geom._bucket,
+    geom.bucket,
+    geom.handle,
+    meshOrGeom._state,
+    meshOrGeom._geometryState,
+    meshOrGeom._bucket,
+    meshOrGeom.bucket
+  ];
+
+  return stateCandidates.some((candidate) => (
+    candidate &&
+    typeof candidate === "object" &&
+    !Array.isArray(candidate) &&
+    !ArrayBuffer.isView(candidate) &&
+    Object.keys(candidate).length > 0
+  ));
+}
+
+function iterateCollection(collection, visit) {
+  if (!collection) return false;
+  if (Array.isArray(collection)) {
+    for (const item of collection) {
+      if (visit(item)) return true;
+    }
+    return false;
+  }
+  if (typeof collection.forEach === "function") {
+    let found = false;
+    try {
+      collection.forEach((item) => {
+        if (!found && visit(item)) {
+          found = true;
+        }
+      });
+    } catch {}
+    return found;
+  }
+  if (typeof collection === "object") {
+    for (const key in collection) {
+      if (Object.prototype.hasOwnProperty.call(collection, key)) {
+        if (visit(collection[key])) return true;
+      }
+    }
+    return false;
+  }
+  return false;
+}
+
+function findMeshInScene(scene, seen, limit, counter) {
+  if (!scene) return false;
+  const tryMesh = (mesh) => {
+    if (!mesh || seen.has(mesh)) return false;
+    if (counter.count >= limit) return false;
+    seen.add(mesh);
+    counter.count += 1;
+    return hasRenderableTriangles(mesh);
+  };
+
+  if (iterateCollection(scene.objects, tryMesh)) return true;
+  if (iterateCollection(scene.meshes, tryMesh)) return true;
+
+  if (typeof scene.iterate === "function") {
+    let found = false;
+    try {
+      scene.iterate((node) => {
+        if (found || counter.count >= limit) {
+          return;
+        }
+        if (node && !seen.has(node) && hasRenderableTriangles(node)) {
+          seen.add(node);
+          counter.count += 1;
+          found = true;
+        }
+      });
+    } catch {}
+    if (found) return true;
+  }
+  return false;
+}
+
+function findReadyMesh(registry, limit = 50) {
+  const sceneModel = registry?.model?.sceneModel || registry?.model || null;
+  if (!sceneModel) return false;
+  const seen = new Set();
+  const counter = { count: 0 };
+
+  const tryMesh = (mesh) => {
+    if (!mesh || seen.has(mesh)) return false;
+    if (counter.count >= limit) return false;
+    seen.add(mesh);
+    counter.count += 1;
+    return hasRenderableTriangles(mesh);
+  };
+
+  const tryEntity = (entity) => {
+    if (!entity || entity.destroyed) return false;
+    if (entity.visible === false) return false;
+    if (tryMesh(entity.mesh || entity._mesh)) return true;
+    if (Array.isArray(entity.meshes)) {
+      for (const mesh of entity.meshes) {
+        if (tryMesh(mesh)) return true;
+      }
+    }
+    const meshId = entity.meshId || entity.meshID || entity.objectId || entity.id;
+    if (meshId) {
+      const collections = [sceneModel.meshes, sceneModel.scene?.meshes, sceneModel.scene?.objects];
+      for (const col of collections) {
+        if (col && col[meshId] && tryMesh(col[meshId])) return true;
+      }
+    }
+    return false;
+  };
+
+  const visibleSources = [];
+  if (sceneModel.visibleEntityIds) visibleSources.push(sceneModel.visibleEntityIds);
+  if (typeof sceneModel.listVisibleEntityIds === "function") {
+    try { visibleSources.push(sceneModel.listVisibleEntityIds()); } catch {}
+  }
+  if (!visibleSources.length && typeof sceneModel.listEntityIds === "function") {
+    try { visibleSources.push(sceneModel.listEntityIds()); } catch {}
+  }
+
+  for (const src of visibleSources) {
+    if (!src) continue;
+    const ids = Array.isArray(src) ? src : (typeof src === "object" ? Object.values(src) : []);
+    for (const id of ids) {
+      const entity = (typeof sceneModel.getEntity === "function")
+        ? (() => { try { return sceneModel.getEntity(id); } catch { return null; } })()
+        : (sceneModel.entities && sceneModel.entities[id]) || (sceneModel.scene?.entities && sceneModel.scene.entities[id]);
+      if (tryEntity(entity)) return true;
+    }
+  }
+
+  if (iterateCollection(sceneModel.entities, tryEntity)) return true;
+  if (iterateCollection(sceneModel.scene?.entities, tryEntity)) return true;
+
+  const contexts = [sceneModel.scene, registry?.viewer?.scene, sceneModel.viewer?.scene];
+  for (const ctx of contexts) {
+    if (findMeshInScene(ctx, seen, limit, counter)) return true;
+  }
+
+  const meshCollections = [sceneModel.meshes, sceneModel.meshList, sceneModel.meshArray];
+  for (const col of meshCollections) {
+    if (iterateCollection(col, tryMesh)) return true;
+  }
+
+  return false;
+}
+
+function nowMs() {
+  if (typeof performance !== "undefined" && typeof performance.now === "function") {
+    return performance.now();
+  }
+  return Date.now();
+}
+
+export async function ensureGeometryReady(registry, { maxWaitMs = 2000, checkEveryMs = 100 } = {}) {
+  const reg = (registry && typeof registry === "object") ? registry : null;
+  if (!reg?.model) return false;
+
+  const heatmapState = reg.heatmap || (reg.heatmap = {});
+  if (heatmapState.ready) return true;
+
+  const existing = __geometryPromises.get(reg);
+  if (existing) return existing;
+
+  const sceneModel = reg.model?.sceneModel || reg.model;
+  if (!sceneModel) return false;
+
+  const maxWait = Math.max(0, Number(maxWaitMs) || 0);
+  const stepDelay = Math.max(10, Number(checkEveryMs) || 0);
+  const modelId = reg.modelId || sceneModel.id || sceneModel.modelId || "unknown";
+
+  const runner = (async () => {
+    if (findReadyMesh(reg)) {
+      heatmapState.ready = true;
+      console.info(`[loader] heatmap geometry ready (id=${modelId})`);
+      return true;
+    }
+
+    const start = nowMs();
+    while (nowMs() - start < maxWait) {
+      await new Promise((resolve) => setTimeout(resolve, stepDelay));
+      if (heatmapState.ready) {
+        return true;
+      }
+      if (findReadyMesh(reg)) {
+        heatmapState.ready = true;
+        console.info(`[loader] heatmap geometry ready (id=${modelId})`);
+        return true;
+      }
+    }
+    return false;
+  })().finally(() => {
+    __geometryPromises.delete(reg);
+  });
+
+  __geometryPromises.set(reg, runner);
+  return runner;
+}
 
 
 /* ---------------------- helpers/fallbacks ---------------------- */
@@ -698,10 +1033,11 @@ _draftToRGBA(d) {
 }
 
 // Calcule d° signé par face → agrège par entité → colorise
-async _applyEntityHeatmapStrict(axisLetter = 'Z') {
+async _applyEntityHeatmapStrict(axisLetter = 'Z', registry = window.CAD || {}) {
   const faces = await this._getStableFaces(axisLetter);
   const v = window.viewerAdapter?.viewer || window.viewer;
   if (!faces.length || !v?.scene?.objects) return 0;
+  const reg = (registry && typeof registry === 'object') ? registry : (window.CAD || {});
 
   const ax = (axisLetter==='X')?[1,0,0]:(axisLetter==='Y')?[0,1,0]:[0,0,1];
   const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
@@ -728,6 +1064,33 @@ async _applyEntityHeatmapStrict(axisLetter = 'Z') {
     const mean = rec.sum / Math.max(1e-9, rec.area);
     const obj = v.scene.objects[eid];
     if (!obj) return;
+    const prev = {
+      colorize: cloneColorize(obj.colorize),
+      opacity: obj.opacity,
+      xrayed: obj.xrayed,
+      ghosted: obj.ghosted
+    };
+    registerHeatmapHandle(reg, {
+      type: 'object-override',
+      id: eid,
+      dispose() {
+        if (!obj || obj.destroyed) return;
+        if (prev.colorize) {
+          obj.colorize = Array.isArray(prev.colorize) ? prev.colorize.slice() : prev.colorize;
+        } else if (Array.isArray(obj.colorize)) {
+          obj.colorize = [0, 0, 0, 0];
+        }
+        if (prev.opacity !== undefined) {
+          obj.opacity = prev.opacity;
+        }
+        if (prev.xrayed !== undefined) {
+          obj.xrayed = prev.xrayed;
+        }
+        if (prev.ghosted !== undefined) {
+          obj.ghosted = prev.ghosted;
+        }
+      }
+    });
     obj.colorize = this._draftToRGBA(mean);
     obj.opacity = 1;
     if ("xrayed" in obj) obj.xrayed = false;
@@ -736,6 +1099,10 @@ async _applyEntityHeatmapStrict(axisLetter = 'Z') {
   });
 
   if (applied) StatusUI.set(`Heatmap dépouille appliquée (entités: ${applied})`);
+  if (reg?.heatmap && typeof reg.heatmap === 'object') {
+    ensureHeatmapHandleArray(reg);
+    reg.heatmap.visible = applied > 0;
+  }
   return applied;
 }
 
@@ -896,8 +1263,14 @@ async applyDraftHeatmap(configOrDraftMap = null, opts = {}) {
   }
   try {
     const mode = (opts?.mode || 'ok'); // "ok" | "zero" | "undercut"
+    const registry = window.CAD || {};
+    try {
+      this.clearDraftHeatmap(registry, { silent: true });
+    } catch (clearErr) {
+      console.warn('[DFM] applyDraftHeatmap: clear previous state failed', clearErr);
+    }
     if (typeof window.applyDraftHeatmap === 'function') {
-      await window.applyDraftHeatmap(mode, { ...opts, registry: window.CAD });
+      await window.applyDraftHeatmap(mode, { ...opts, registry });
       return;
     }
     // Hook absent → tout petit filet de sécurité (moyenne par entité)
@@ -905,7 +1278,7 @@ async applyDraftHeatmap(configOrDraftMap = null, opts = {}) {
     const vec = this.selectedAxis || {x:0,y:0,z:1};
     const m = Math.max(Math.abs(vec.x||0), Math.abs(vec.y||0), Math.abs(vec.z||0));
     const letter = (m===Math.abs(vec.x))?'X':(m===Math.abs(vec.y)?'Y':'Z');
-    await this._applyEntityHeatmapStrict(letter);
+    await this._applyEntityHeatmapStrict(letter, registry);
   } catch (e) {
     console.warn('[DFM] applyDraftHeatmap error', e);
     throw e;
@@ -948,8 +1321,11 @@ async _applyDraftHeatmapWithRegistry(params = {}) {
     throw 'MODEL_NOT_READY';
   }
   if (!registry?.heatmap?.ready) {
-    console.warn('[heatmap] geometry not ready');
-    throw 'MODEL_NOT_READY';
+    const ready = await ensureGeometryReady(registry);
+    if (!ready) {
+      console.warn('[heatmap] geometry not ready');
+      throw 'MODEL_NOT_READY';
+    }
   }
 
   const axisInfo = this._normalizeAxisInput(params.axis || registry.axis || this.selectedAxis);
@@ -957,11 +1333,21 @@ async _applyDraftHeatmapWithRegistry(params = {}) {
   const threshold = Number.isFinite(thrInput) && thrInput > 0 ? thrInput : 2;
 
   try {
+    try {
+      this.clearDraftHeatmap(registry, { silent: true });
+    } catch (clearErr) {
+      console.warn('[heatmap] clear previous state failed', clearErr);
+    }
     await applyDraftHeatmapFromRegistry({
       registry,
       axis: axisInfo.vector,
       thresholdDeg: threshold
     });
+    const overlayHandles = registry?.heatmap?.layer?.getHandles?.();
+    if (Array.isArray(overlayHandles) && overlayHandles.length) {
+      const tracked = ensureHeatmapHandleArray(registry) || [];
+      tracked.push(...overlayHandles);
+    }
     document.dispatchEvent(new CustomEvent('dfm:heatmap-draft:applied', {
       detail: { axis: axisInfo.letter, thresholdDeg: threshold }
     }));
@@ -969,20 +1355,29 @@ async _applyDraftHeatmapWithRegistry(params = {}) {
   } catch (err) {
     const raw = err?.message || err;
     console.error('[heatmap] apply failed', raw);
-    if (raw === 'MODEL_NOT_READY') {
-      throw 'MODEL_NOT_READY';
+    if (raw === 'MODEL_NOT_READY' || raw === 'MODEL_MISSING' || raw === 'GEOMETRY_NOT_READY' || raw === 'AXIS_INVALID') {
+      throw (err instanceof Error ? err : new Error(raw));
     }
-    throw (raw || 'Heatmap indisponible');
+    throw (err instanceof Error ? err : new Error(raw || 'Heatmap indisponible'));
   }
 }
 
-clearDraftHeatmap(registry = window.CAD) {
+clearDraftHeatmap(registry = window.CAD, opts = {}) {
+  const reg = (registry && typeof registry === 'object') ? registry : (window.CAD || {});
+  const silent = !!opts.silent;
   try {
-    clearDraftHeatmapFromRegistry(registry);
-    if (registry?.heatmap && typeof registry.heatmap === 'object') {
-      registry.heatmap.visible = false;
+    releaseHeatmapHandles(reg);
+    const handles = ensureHeatmapHandleArray(reg);
+    if (handles) {
+      handles.length = 0;
     }
-    document.dispatchEvent(new CustomEvent('dfm:heatmap-draft:cleared'));
+    clearDraftHeatmapFromRegistry(reg);
+    if (reg?.heatmap && typeof reg.heatmap === 'object') {
+      reg.heatmap.visible = false;
+    }
+    if (!silent) {
+      document.dispatchEvent(new CustomEvent('dfm:heatmap-draft:cleared'));
+    }
     return true;
   } catch (err) {
     console.error('[heatmap] clear failed', err?.message || err);
