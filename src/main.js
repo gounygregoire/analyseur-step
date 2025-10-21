@@ -36,7 +36,11 @@ state.fileLoaded = false;
 
 // ---------- Initialisation ---------------------------------------------------
 export async function initViewer(modelUrl) {
-  const canvasEl = document.querySelector('#xktCanvas') || document.querySelector('#viewer3d');
+  const canvasEl =
+    document.getElementById('xeokit-canvas') ||
+    document.querySelector('#xeokitCanvas') ||
+    document.querySelector('#xktCanvas') ||
+    document.querySelector('#viewer3d');
   console.log('[viewer] query canvas', canvasEl);
   const containerEl = document.getElementById('viewerContainer');
   console.log('[viewer] container size', containerEl?.offsetWidth, containerEl?.offsetHeight);
