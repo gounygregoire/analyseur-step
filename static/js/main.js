@@ -12,7 +12,7 @@ import {
   AnnotationsPlugin,
   DistanceMeasurementsPlugin,
   DistanceMeasurementsMouseControl
-} from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@1.9.20/dist/xeokit-sdk.es.min.js";
+} from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
 import {
   registerModelInstance,
   markModelReady,
@@ -180,7 +180,7 @@ new FastNavPlugin(viewer, { flyToDuration: 0.9, hideEdges:false, autoHideEdges:f
 ------------------------------------------------------------------------ */
 const xktLoader = new XKTLoaderPlugin(viewer, {
   dracoDecompressorPath:
-    "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@1.9.20/resources/draco/",
+    "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/resources/draco/",
   storeGeometry: true,
   keepGeometry: true,
   parseGeometryStreams: true,

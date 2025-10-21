@@ -1,10 +1,16 @@
+const XEOKIT_CDN_URL = "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
+
 let _viewer, _loader;
 const bus = new EventTarget();
 export function onModelLoaded(cb){ bus.addEventListener('model-loaded', cb); }
 
 async function loadXeokit(){
-  try{ return await import('@xeokit/xeokit-sdk'); }
-  catch{ console.warn('[viewer] fallback CDN ESM'); return await import('https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@1.8.2/+esm'); }
+  try {
+    return await import(XEOKIT_CDN_URL);
+  } catch (err) {
+    console.error('[viewer] impossible de charger Xeokit', err);
+    throw err;
+  }
 }
 
 export async function bootstrapViewer(){

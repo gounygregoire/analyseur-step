@@ -6,7 +6,7 @@ import {
   ReadableGeometry,
   Mesh,
   PhongMaterial
-} from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@1.9.20/dist/xeokit-sdk.es.min.js";
+} from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
 
 export default class HeatmapLayer {
   constructor(viewerAdapter) {
@@ -33,6 +33,7 @@ export default class HeatmapLayer {
       try { handle.material?.destroy?.(); } catch {}
     }
     this._overlays.length = 0;
+    this._seq = 0;
   }
 
   setVisible(flag) {
