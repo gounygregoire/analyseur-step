@@ -43,14 +43,6 @@ function ensureRegistry(registry) {
   return {};
 }
 
-function ensureReady(registry) {
-  const reg = ensureRegistry(registry);
-  if (!reg?.model || !reg?.heatmap?.ready) {
-    throw new Error("MODEL_NOT_READY");
-  }
-  return reg;
-}
-
 function ensureLayer(registry) {
   if (!registry?.viewer) {
     throw new Error("MODEL_NOT_READY");
@@ -435,14 +427,57 @@ function applyMode({ layer, registry, entries, axisInfo, thresholdDeg, requested
 }
 
 export function applyDraftHeatmap({ registry, axis, thresholdDeg } = {}) {
-  const reg = ensureReady(registry);
+  const reg = ensureRegistry(registry);
 
-  if (reg.heatmap && reg.heatmap.modelRef !== reg.model) {
-    reg.heatmap.cache = new Map();
-    reg.heatmap.modelRef = reg.model;
+  if (!reg?.model) {
+    throw new Error("MODEL_MISSING");
   }
 
-  const axisInfo = normalizeAxis(axis || reg.axis || { z: 1 });
+  const heatmapState = reg.heatmap || (reg.heatmap = {});
+  if (!heatmapState.ready) {
+    throw new Error("GEOMETRY_NOT_READY");
+  }
+
+  const axisInput = axis ?? reg.axis ?? { z: 1 };
+  const axisLetter = (() => {
+    if (typeof axisInput === "string") {
+      return axisInput;
+    }
+    if (axisInput && typeof axisInput === "object") {
+      if (typeof axisInput.letter === "string") {
+        return axisInput.letter;
+      }
+      const comps = [
+        { letter: "X", value: Number(axisInput.x) || 0 },
+        { letter: "Y", value: Number(axisInput.y) || 0 },
+        { letter: "Z", value: Number(axisInput.z) || 0 }
+      ];
+      const dominant = comps.reduce((best, cur) => (
+        Math.abs(cur.value) > Math.abs(best.value) ? cur : best
+      ), comps[0]);
+      if (Math.abs(dominant.value) > 0) {
+        return dominant.letter;
+      }
+    }
+    return null;
+  })();
+
+  if (!["X", "Y", "Z", "x", "y", "z"].includes(axisLetter)) {
+    throw new Error("AXIS_INVALID");
+  }
+
+  console.info("[heatmap] apply", {
+    axis: axisLetter.toUpperCase(),
+    thresholdDeg,
+    id: reg.modelId || reg.model?.id || reg.model?.modelId || "unknown"
+  });
+
+  if (heatmapState && heatmapState.modelRef !== reg.model) {
+    heatmapState.cache = new Map();
+    heatmapState.modelRef = reg.model;
+  }
+
+  const axisInfo = normalizeAxis(axisInput);
   const threshold = Number.isFinite(Number(thresholdDeg)) && Number(thresholdDeg) > 0
     ? Number(thresholdDeg)
     : DEFAULT_THRESHOLD_DEG;

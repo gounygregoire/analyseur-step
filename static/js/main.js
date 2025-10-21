@@ -17,17 +17,40 @@ import {
   registerModelInstance,
   markModelReady,
   clearModelRegistry,
-  onModelChange,
-  getCurrentMeshes
+  onModelChange
 } from "./modules/ModelRegistry.js";
 import {
-  applyDraftHeatmap as runDraftHeatmap,
-  clearDraftHeatmap as releaseDraftHeatmap
+  applyDraftHeatmap as applyDraftHeatmapModule,
+  clearDraftHeatmap as clearDraftHeatmapModule
 } from "./modules/DraftHeatmap.js";
+import { ensureGeometryReady } from "./DFMOrchestrator.js";
 
 /* ---------- utils DOM ---------- */
 const $  = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
+
+function showHeatmapToast(message, type = "info") {
+  if (typeof toast === "function") {
+    toast(message);
+    return;
+  }
+  if (typeof window !== "undefined") {
+    if (typeof window.toast === "function") {
+      window.toast(message);
+      return;
+    }
+    if (window.showToast) {
+      window.showToast(message, { type });
+      return;
+    }
+  }
+  const logger = type === "error" ? console.error : (type === "warn" ? console.warn : console.info);
+  try {
+    logger.call(console, message);
+  } catch {
+    console.log(message);
+  }
+}
 
 window.CAD = (typeof window !== 'undefined' && window.CAD && typeof window.CAD === 'object')
   ? window.CAD
@@ -359,6 +382,7 @@ function updateUnitsFromBBox(bboxMM) {
 /* =====================  HEATMAP DÉPOUILLE — START  ===================== */
 // --- Neutralise tout colorize global avant d'afficher les overlays ---
 const __savedColorize = new Map();
+const __loggedModelEntries = new WeakSet();
 function __clearAnyGlobalColorize() {
   try {
     const objs = viewer.scene?.objects || {};
@@ -385,10 +409,7 @@ function __restoreGlobalColorize() {
   } catch {}
 }
 
-let __cadHeatmapToken = 0;
-
 onModelChange((entry) => {
-  const token = ++__cadHeatmapToken;
   const sceneModel = entry?.model?.sceneModel || entry?.model || null;
   const metaId = entry?.meta?.id || sceneModel?.id || null;
 
@@ -397,34 +418,17 @@ onModelChange((entry) => {
   window.CAD.modelId = metaId;
   window.CAD.heatmap.ready = false;
 
-  if (!sceneModel) {
+  if (!sceneModel || !entry?.ready) {
     return;
   }
 
-  if (!entry?.ready) {
-    return;
+  if (!__loggedModelEntries.has(entry)) {
+    __loggedModelEntries.add(entry);
+    const logId = metaId ?? sceneModel?.id ?? "unknown";
+    console.info("[loader] model set", { id: logId });
   }
 
-  let attempts = 0;
-  const maxAttempts = 20;
-  const tryMarkReady = () => {
-    if (token !== __cadHeatmapToken) return;
-    const meshes = getCurrentMeshes({ includeHidden: true });
-    if (meshes.length) {
-      if (!window.CAD.heatmap.ready) {
-        window.CAD.heatmap.ready = true;
-        console.log(`[loader] model set {id: ${metaId || sceneModel?.id || 'unknown'}}`);
-      }
-      return;
-    }
-    if (attempts++ < maxAttempts) {
-      setTimeout(tryMarkReady, 80);
-    } else {
-      console.warn('[loader] geometry not ready for heatmap', { id: metaId || sceneModel?.id || 'unknown' });
-    }
-  };
-
-  tryMarkReady();
+  ensureGeometryReady(window.CAD, { maxWaitMs: 2000, checkEveryMs: 100 }).catch(() => {});
 });
 
 /** Axe sélectionné (X/Y/Z) — robuste à plusieurs implémentations possibles */
@@ -443,6 +447,36 @@ function getSelectedAxisVector() {
 
   // 3) fallback : Z
   return { x:0, y:0, z:1 };
+}
+
+function getDraftThresholdDeg() {
+  const selectors = [
+    '[data-draft-threshold]',
+    '[data-role="draft-threshold"]',
+    'input[name="draftThreshold"]',
+    '#draftThreshold',
+    'input[name="draft-threshold"]'
+  ];
+  for (const sel of selectors) {
+    const el = document.querySelector(sel);
+    if (!el) continue;
+    const candidates = [
+      el.dataset?.threshold,
+      el.dataset?.value,
+      el.value,
+      el.textContent
+    ];
+    for (const cand of candidates) {
+      const num = Number(cand);
+      if (Number.isFinite(num) && num > 0) {
+        return num;
+      }
+    }
+  }
+  if (Number.isFinite(Number(__draftState?.thresholdDeg)) && Number(__draftState.thresholdDeg) > 0) {
+    return Number(__draftState.thresholdDeg);
+  }
+  return DEFAULT_DRAFT_THRESHOLD_DEG;
 }
 
 const DEFAULT_DRAFT_THRESHOLD_DEG = 2;
@@ -586,7 +620,7 @@ function renderDraftLegend(state, activeMode) {
 }
 
 function resetDraftHeatmap({ clearCache = false } = {}) {
-  try { releaseDraftHeatmap(window.CAD); } catch (err) { console.warn('[heatmap] clear error', err); }
+  try { clearDraftHeatmapModule(window.CAD); } catch (err) { console.warn('[heatmap] clear error', err); }
   __restoreGlobalColorize();
   destroyDraftLegend();
   __draftHeatmapActive = false;
@@ -597,19 +631,32 @@ function resetDraftHeatmap({ clearCache = false } = {}) {
   }
 }
 
-async function applyDraftHeatmap(mode = DEFAULT_DRAFT_MODE, opts = {}) {
+async function applyDraftHeatmapUI(mode = DEFAULT_DRAFT_MODE, opts = {}) {
+  const stateOverride = opts?.stateOverride || null;
   if (mode === 'reset' || opts.reset) {
     resetDraftHeatmap({ clearCache: !!opts.clearCache });
     return;
   }
 
   const registry = window.CAD || {};
-  if (!registry?.model) {
-    console.warn('[heatmap] model not ready');
+  if (!registry?.heatmap) {
+    console.warn('[heatmap] registry not ready');
     throw new Error('MODEL_NOT_READY');
   }
-  if (!registry?.heatmap?.ready) {
-    console.warn('[heatmap] geometry not ready');
+
+  if (!registry.heatmap.ready) {
+    const ready = await ensureGeometryReady(registry, {
+      maxWaitMs: opts?.readyTimeoutMs ?? 12000,
+      checkEveryMs: opts?.readyCheckEveryMs ?? 100
+    });
+    if (!ready) {
+      console.warn('[heatmap] geometry not ready (timeout)');
+      throw new Error('MODEL_NOT_READY');
+    }
+  }
+
+  if (!registry?.model) {
+    console.warn('[heatmap] model not ready');
     throw new Error('MODEL_NOT_READY');
   }
 
@@ -621,7 +668,7 @@ async function applyDraftHeatmap(mode = DEFAULT_DRAFT_MODE, opts = {}) {
 
   try {
     registry.axis = axis;
-    const state = await runDraftHeatmap({ registry, axis, thresholdDeg });
+    const state = stateOverride || await applyDraftHeatmapModule({ registry, axis, thresholdDeg });
     __draftState = state;
     const requestedMode = VALID_DRAFT_MODES.has(mode) ? mode : (state.mode || DEFAULT_DRAFT_MODE);
     const appliedMode = state.applyMode ? state.applyMode(requestedMode) : requestedMode;
@@ -655,17 +702,54 @@ function bindClick(sel, cb) {
   return true;
 }
 
-bindClick("#btnHeatmapOK",       () => applyDraftHeatmap('ok'));
-bindClick("#btnHeatmapZero",     () => applyDraftHeatmap('zero'));
-bindClick("#btnHeatmapUndercut", () => applyDraftHeatmap('undercut'));
-bindClick("#btnHeatmapDepouille",() => applyDraftHeatmap('ok')); // si absent, noop
+bindClick("#btnHeatmapOK",       () => applyDraftHeatmapUI('ok'));
+bindClick("#btnHeatmapZero",     () => applyDraftHeatmapUI('zero'));
+bindClick("#btnHeatmapUndercut", () => applyDraftHeatmapUI('undercut'));
+bindClick("#btnHeatmapDepouille", async () => {
+  const registry = window.CAD || null;
+  if (!registry?.model) {
+    showHeatmapToast("Le modèle s'initialise, réessaie dans 1 s.", "info");
+    return;
+  }
+
+  if (!registry?.heatmap?.ready) {
+    const ok = await ensureGeometryReady(registry, { maxWaitMs: 1500, checkEveryMs: 75 });
+    if (!ok) {
+      console.warn("[heatmap] geometry not ready");
+      showHeatmapToast("Le modèle s'initialise, réessaie dans 1 s.", "info");
+      return;
+    }
+  }
+
+  const axis = getSelectedAxisVector();
+  const thresholdDeg = getDraftThresholdDeg();
+  try {
+    const state = await applyDraftHeatmapModule({ registry, axis, thresholdDeg });
+    return applyDraftHeatmapUI('ok', {
+      axisVector: axis,
+      thresholdDeg,
+      stateOverride: state,
+      readyTimeoutMs: 1500,
+      readyCheckEveryMs: 75
+    });
+  } catch (err) {
+    const code = err?.message || err;
+    if (code === 'GEOMETRY_NOT_READY') {
+      console.info('[heatmap] geometry still initializing');
+      showHeatmapToast("Le modèle s'initialise, réessaie dans 1 s.", "info");
+      return;
+    }
+    console.warn('[heatmap] apply error', code);
+    showHeatmapToast("Heatmap indisponible pour le moment.", "error");
+  }
+});
 
 /* Recalcul auto quand l’axe change */
 document.querySelectorAll('input[name="axis"], #axisX, #axisY, #axisZ')
   .forEach(inp => {
     inp.addEventListener("change", () => {
       if (__lastDraftMode && __draftState) {
-        const res = applyDraftHeatmap(__lastDraftMode, { thresholdDeg: __draftState.thresholdDeg });
+        const res = applyDraftHeatmapUI(__lastDraftMode, { thresholdDeg: __draftState.thresholdDeg });
         if (res && typeof res.then === 'function') {
           res.catch(err => console.warn('[heatmap] axis change apply failed', err));
         }
@@ -673,7 +757,7 @@ document.querySelectorAll('input[name="axis"], #axisX, #axisY, #axisZ')
     });
   });
 // Pont public pour DFMOrchestrator
-window.applyDraftHeatmap = (mode='ok', opts) => applyDraftHeatmap(mode, opts);
+window.applyDraftHeatmap = (mode='ok', opts) => applyDraftHeatmapUI(mode, opts);
 window.resetDraftHeatmap = (opts) => resetDraftHeatmap(opts || {});
 
 onModelChange(() => {
@@ -682,7 +766,7 @@ onModelChange(() => {
 
 // Écoute éventuelle d’un événement
 document.addEventListener('dfm:heatmap-draft', (ev) => {
-  const res = applyDraftHeatmap(ev?.detail?.mode || DEFAULT_DRAFT_MODE, ev?.detail?.opts || {});
+  const res = applyDraftHeatmapUI(ev?.detail?.mode || DEFAULT_DRAFT_MODE, ev?.detail?.opts || {});
   if (res && typeof res.then === 'function') {
     res.catch(err => console.error('[heatmap] event apply failed', err));
   }
@@ -864,6 +948,17 @@ async function loadXKT(url, nameHint){
 
     markModelReady(model, { id, src: url, name: nameHint || id });
 
+    window.CAD.viewer = viewer;
+    window.CAD.model = model?.sceneModel || model;
+    window.CAD.modelId = id;
+
+    (async () => {
+      const ok = await ensureGeometryReady(window.CAD, { maxWaitMs: 2500, checkEveryMs: 100 });
+      if (!ok) {
+        console.warn("[loader] geometry still not ready after timeout for heatmap", { id: window.CAD.modelId });
+      }
+    })();
+
     // init unités + heuristique AABB
     MM_PER_WU = 0.001;
     console.log("[units] init forced to µm→mm");
@@ -935,6 +1030,17 @@ async function loadLocalXKT(file) {
     lastModelId = id;
 
     markModelReady(model, { id, src: blobURL, name: file?.name || id });
+
+    window.CAD.viewer = viewer;
+    window.CAD.model = model?.sceneModel || model;
+    window.CAD.modelId = id;
+
+    (async () => {
+      const ok = await ensureGeometryReady(window.CAD, { maxWaitMs: 2500, checkEveryMs: 100 });
+      if (!ok) {
+        console.warn("[loader] geometry still not ready after timeout for heatmap", { id: window.CAD.modelId });
+      }
+    })();
   });
 
   model.on("error", (err) => {
