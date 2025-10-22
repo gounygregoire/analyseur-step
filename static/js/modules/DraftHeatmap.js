@@ -7,6 +7,7 @@ import HeatmapLayer from "../HeatmapLayer.js";
 
 const geometryCache = new WeakMap(); // mesh -> { geom, data }
 const meshResultCache = new WeakMap(); // mesh -> Map(cacheKey, DraftResult)
+const globalWindowRef = typeof window !== "undefined" ? window : null;
 
 const DEFAULT_THRESHOLD_DEG = 2;
 const MODE_OK = "ok";
@@ -152,9 +153,26 @@ function collectMeshesFromRegistry(registry) {
 function pickGeometryArray(src) {
   if (!src) return null;
   if (ArrayBuffer.isView(src)) return src;
-  if (src.data) return src.data;
-  if (src.array) return src.array;
-  return src;
+  if (Array.isArray(src)) return src;
+  if (typeof src.length === "number" && src && src !== globalWindowRef) {
+    try {
+      const ctorName = src.constructor?.name || "";
+      if (ctorName.endsWith("Array")) {
+        return src;
+      }
+    } catch {}
+  }
+  const nestedKeys = ["data", "array", "values", "typedArray", "bufferView"];
+  for (const key of nestedKeys) {
+    if (src && src[key] && src[key] !== src) {
+      const nested = pickGeometryArray(src[key]);
+      if (nested) return nested;
+    }
+  }
+  if (src.buffer && typeof src.byteLength === "number" && typeof src.BYTES_PER_ELEMENT === "number") {
+    return src;
+  }
+  return null;
 }
 
 function toFloat32(arrayLike) {
@@ -202,6 +220,45 @@ function applyMatrixToPositions(positions, matrix) {
   return out;
 }
 
+function resolveGeometryArray(mesh, geom, type) {
+  const state = geom?._state || geom?.state || {};
+  const arrays = geom?.arrays || geom?._arrays || {};
+  const geometryData = geom?.geometryData || geom?.data || {};
+  const nestedGeom = geom?.geometry || geom?._geometry || state.geometry || {};
+
+  const candidates = [
+    type === "positions" ? mesh?.__dfmPositions : mesh?.__dfmIndices,
+    geom?.[`__dfm${type.charAt(0).toUpperCase()}${type.slice(1)}`],
+    geom?.[type],
+    geom?.[`_${type}`],
+    geom?.[`decompressed${type.charAt(0).toUpperCase()}${type.slice(1)}`],
+    geom?.[`compressed${type.charAt(0).toUpperCase()}${type.slice(1)}`],
+    geom?.[`${type}Compressed`],
+    geom?.[`${type}Decompressed`],
+    arrays?.[type],
+    arrays?.[type]?.data,
+    arrays?.[type]?.array,
+    state?.[type],
+    state?.[`${type}Data`],
+    state?.[`${type}Decompressed`],
+    state?.geometry?.[type],
+    geometryData?.[type],
+    geometryData?.[type]?.data,
+    geometryData?.[type]?.array,
+    nestedGeom?.[type],
+    nestedGeom?.[type]?.data,
+    nestedGeom?.[type]?.array
+  ];
+
+  for (const candidate of candidates) {
+    const arr = pickGeometryArray(candidate);
+    if (arr && arr.length) {
+      return arr;
+    }
+  }
+  return null;
+}
+
 function captureGeometry(mesh) {
   if (!mesh || mesh.destroyed) return null;
   const geom = mesh.geometry || mesh._geometry || mesh._state?.geometry || null;
@@ -212,19 +269,8 @@ function captureGeometry(mesh) {
     return cached.data;
   }
 
-  const positionsRaw =
-    pickGeometryArray(geom.positions) ||
-    pickGeometryArray(geom._positions) ||
-    pickGeometryArray(geom.decompressedPositions) ||
-    pickGeometryArray(geom.__dfmPositions) ||
-    pickGeometryArray(mesh.__dfmPositions);
-
-  const indicesRaw =
-    pickGeometryArray(geom.indices) ||
-    pickGeometryArray(geom._indices) ||
-    pickGeometryArray(geom.triangles) ||
-    pickGeometryArray(geom.__dfmIndices) ||
-    pickGeometryArray(mesh.__dfmIndices);
+  const positionsRaw = resolveGeometryArray(mesh, geom, "positions");
+  const indicesRaw = resolveGeometryArray(mesh, geom, "indices") || resolveGeometryArray(mesh, geom, "triangles");
 
   if (!positionsRaw || !indicesRaw) return null;
 

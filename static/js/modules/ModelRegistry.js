@@ -4,6 +4,7 @@
 
 const listeners = new Set();
 let currentEntry = null;
+const globalWindowRef = typeof window !== "undefined" ? window : null;
 
 function notify() {
   for (const cb of Array.from(listeners)) {
@@ -15,13 +16,67 @@ function pickGeometryArray(src) {
   if (!src) return null;
   if (ArrayBuffer.isView(src)) return src;
   if (Array.isArray(src)) return src;
-  if (src.data && src.data !== src) {
-    const data = pickGeometryArray(src.data);
-    if (data) return data;
+  if (typeof src.length === "number" && src && src !== globalWindowRef) {
+    try {
+      const ctorName = src.constructor?.name || "";
+      if (ctorName.endsWith("Array")) {
+        return src;
+      }
+    } catch {}
   }
-  if (src.array && src.array !== src) {
-    const arr = pickGeometryArray(src.array);
-    if (arr) return arr;
+
+  const nestedKeys = ["data", "array", "values", "typedArray", "bufferView"];
+  for (const key of nestedKeys) {
+    if (src && src[key] && src[key] !== src) {
+      const nested = pickGeometryArray(src[key]);
+      if (nested) return nested;
+    }
+  }
+
+  if (src.buffer && typeof src.byteLength === "number" && typeof src.BYTES_PER_ELEMENT === "number") {
+    return src;
+  }
+
+  return null;
+}
+
+function resolveGeometryArray(mesh, geom, type) {
+  const state = geom?._state || geom?.state || {};
+  const arrays = geom?.arrays || geom?._arrays || {};
+  const geometryData = geom?.geometryData || geom?.data || {};
+  const nestedGeom = geom?.geometry || geom?._geometry || state.geometry || {};
+
+  const candidates = [
+    type === "positions"
+      ? mesh?.__dfmPositions
+      : mesh?.__dfmIndices,
+    geom?.[`__dfm${type.charAt(0).toUpperCase()}${type.slice(1)}`],
+    geom?.[type],
+    geom?.[`_${type}`],
+    geom?.[`decompressed${type.charAt(0).toUpperCase()}${type.slice(1)}`],
+    geom?.[`compressed${type.charAt(0).toUpperCase()}${type.slice(1)}`],
+    geom?.[`${type}Compressed`],
+    geom?.[`${type}Decompressed`],
+    arrays?.[type],
+    arrays?.[type]?.data,
+    arrays?.[type]?.array,
+    state?.[type],
+    state?.[`${type}Data`],
+    state?.[`${type}Decompressed`],
+    state?.geometry?.[type],
+    geometryData?.[type],
+    geometryData?.[type]?.data,
+    geometryData?.[type]?.array,
+    nestedGeom?.[type],
+    nestedGeom?.[type]?.data,
+    nestedGeom?.[type]?.array
+  ];
+
+  for (const candidate of candidates) {
+    const arr = pickGeometryArray(candidate);
+    if (arr && arr.length) {
+      return arr;
+    }
   }
   return null;
 }
@@ -31,21 +86,8 @@ export function meshHasGeometry(mesh) {
   const geom = mesh.geometry || mesh._geometry || mesh._state?.geometry || null;
   if (!geom) return false;
 
-  const positions = pickGeometryArray(
-    geom.positions ||
-    geom._positions ||
-    geom.decompressedPositions ||
-    geom.__dfmPositions ||
-    mesh.__dfmPositions
-  );
-
-  const indices = pickGeometryArray(
-    geom.indices ||
-    geom._indices ||
-    geom.triangles ||
-    geom.__dfmIndices ||
-    mesh.__dfmIndices
-  );
+  const positions = resolveGeometryArray(mesh, geom, "positions");
+  const indices = resolveGeometryArray(mesh, geom, "indices") || resolveGeometryArray(mesh, geom, "triangles");
 
   return !!(positions && indices && positions.length >= 3 && indices.length >= 3);
 }
