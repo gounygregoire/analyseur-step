@@ -485,7 +485,6 @@ export function applyDraftHeatmap({ registry, axis, thresholdDeg } = {}) {
   const state = buildDraftState(reg, axisInfo, threshold);
   const appliedMode = state.applyMode(state.mode);
 
-  const heatmapState = reg.heatmap || (reg.heatmap = {});
   heatmapState.state = state;
   heatmapState.mode = appliedMode;
   heatmapState.active = true;
