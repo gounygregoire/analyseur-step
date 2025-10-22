@@ -45,6 +45,8 @@ function resolveGeometryArray(mesh, geom, type) {
   const arrays = geom?.arrays || geom?._arrays || {};
   const geometryData = geom?.geometryData || geom?.data || {};
   const nestedGeom = geom?.geometry || geom?._geometry || state.geometry || {};
+  const geometryState = geom?._geometryState || geom?.geometryState || state?._geometryState || state?.geometryState || {};
+  const meshState = mesh?._geometryState || mesh?.geometryState || {};
 
   const candidates = [
     type === "positions"
@@ -61,9 +63,24 @@ function resolveGeometryArray(mesh, geom, type) {
     arrays?.[type]?.data,
     arrays?.[type]?.array,
     state?.[type],
+    state?.[`_${type}`],
     state?.[`${type}Data`],
     state?.[`${type}Decompressed`],
     state?.geometry?.[type],
+    state?.geometry?.[type]?.data,
+    state?.geometry?.[type]?.array,
+    geometryState?.[type],
+    geometryState?.[`_${type}`],
+    geometryState?.[`${type}Data`],
+    geometryState?.[`${type}Decompressed`],
+    geometryState?.arrays?.[type],
+    geometryState?.arrays?.[type]?.data,
+    geometryState?.arrays?.[type]?.array,
+    meshState?.[type],
+    meshState?.[`_${type}`],
+    meshState?.arrays?.[type],
+    meshState?.arrays?.[type]?.data,
+    meshState?.arrays?.[type]?.array,
     geometryData?.[type],
     geometryData?.[type]?.data,
     geometryData?.[type]?.array,
