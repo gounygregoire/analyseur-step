@@ -21,7 +21,8 @@ import {
 } from "./modules/ModelRegistry.js";
 import {
   applyDraftHeatmap as applyDraftHeatmapModule,
-  clearDraftHeatmap as clearDraftHeatmapModule
+  clearDraftHeatmap as clearDraftHeatmapModule,
+  ensureHeatmapLayer
 } from "./modules/DraftHeatmap.js";
 import { ensureGeometryReady } from "./DFMOrchestrator.js";
 
@@ -52,6 +53,19 @@ function showHeatmapToast(message, type = "info") {
   }
 }
 
+function scheduleMicrotask(cb) {
+  if (typeof cb !== "function") return;
+  if (typeof queueMicrotask === "function") {
+    queueMicrotask(() => {
+      try { cb(); } catch (err) { console.warn("[heatmap] microtask error", err); }
+    });
+    return;
+  }
+  Promise.resolve()
+    .then(() => cb())
+    .catch((err) => console.warn("[heatmap] microtask error", err));
+}
+
 window.CAD = (typeof window !== 'undefined' && window.CAD && typeof window.CAD === 'object')
   ? window.CAD
   : {};
@@ -63,6 +77,164 @@ if (!window.CAD.heatmap || typeof window.CAD.heatmap !== 'object') {
 if (typeof window.CAD.viewer === 'undefined') window.CAD.viewer = null;
 if (typeof window.CAD.model === 'undefined') window.CAD.model = null;
 if (typeof window.CAD.modelId === 'undefined') window.CAD.modelId = null;
+if (typeof window.CAD.heatmap.waiting !== 'boolean') window.CAD.heatmap.waiting = false;
+if (!window.CAD.ui || typeof window.CAD.ui !== 'object') window.CAD.ui = {};
+
+const DEFAULT_HEATMAP_BUTTON_SELECTORS = [
+  "#btnHeatmapDepouille",
+  "#btnHeatmapOK",
+  "#btnHeatmapZero",
+  "#btnHeatmapUndercut",
+  "#heatmapBtn"
+];
+const heatmapButtonMeta = new WeakMap();
+
+function normalizeHeatmapButtonSelectors() {
+  const heatmapState = window.CAD.heatmap || (window.CAD.heatmap = {});
+  const normalized = [];
+  const src = heatmapState.buttonSelectors;
+  if (Array.isArray(src)) {
+    for (const entry of src) {
+      if (typeof entry === "string" && entry.trim()) {
+        const trimmed = entry.trim();
+        if (!normalized.includes(trimmed)) {
+          normalized.push(trimmed);
+        }
+      }
+    }
+  } else if (typeof src === "string" && src.trim()) {
+    normalized.push(src.trim());
+  }
+  for (const sel of DEFAULT_HEATMAP_BUTTON_SELECTORS) {
+    if (!normalized.includes(sel)) {
+      normalized.push(sel);
+    }
+  }
+  heatmapState.buttonSelectors = normalized;
+  return normalized;
+}
+
+function forEachButtonCandidate(candidate, cb) {
+  if (!candidate && candidate !== 0) return;
+  if (typeof candidate === "function") {
+    try { forEachButtonCandidate(candidate(), cb); } catch {}
+    return;
+  }
+  if (typeof candidate === "string") {
+    return;
+  }
+  if (candidate && typeof candidate.nodeType === "number" && candidate.nodeType === 1) {
+    cb(candidate);
+    return;
+  }
+  if (candidate && typeof candidate.length === "number") {
+    try {
+      for (const item of Array.from(candidate)) {
+        forEachButtonCandidate(item, cb);
+      }
+    } catch {}
+    return;
+  }
+  if (candidate && typeof candidate.forEach === "function") {
+    try { candidate.forEach((item) => forEachButtonCandidate(item, cb)); } catch {}
+  }
+}
+
+function getHeatmapButtons() {
+  const heatmapState = window.CAD.heatmap || {};
+  const selectors = normalizeHeatmapButtonSelectors();
+  const out = [];
+  const seen = new Set();
+  const push = (el) => {
+    if (!el || typeof el !== "object") return;
+    if (typeof el.nodeType === "number" && el.nodeType === 1 && !seen.has(el)) {
+      seen.add(el);
+      out.push(el);
+    }
+  };
+
+  forEachButtonCandidate(heatmapState.buttonElement, push);
+  forEachButtonCandidate(heatmapState.buttonElements, push);
+
+  for (const sel of selectors) {
+    try {
+      const list = document.querySelectorAll(sel);
+      for (const el of list) {
+        push(el);
+      }
+    } catch {}
+  }
+
+  return out;
+}
+
+function setHeatmapButtonsDisabled(disabled, reason = "ready") {
+  const lock = reason === "wait" ? "wait" : "ready";
+  const buttons = getHeatmapButtons();
+  for (const btn of buttons) {
+    if (!btn || typeof btn.disabled === "undefined") continue;
+    let meta = heatmapButtonMeta.get(btn);
+    if (!meta) {
+      meta = { prevDisabled: btn.disabled, locks: { ready: false, wait: false } };
+      heatmapButtonMeta.set(btn, meta);
+    }
+    meta.locks[lock] = !!disabled;
+    const shouldDisable = meta.locks.ready || meta.locks.wait;
+    if (shouldDisable) {
+      btn.disabled = true;
+      if (meta.locks.wait) {
+        btn.setAttribute("aria-busy", "true");
+      } else {
+        btn.removeAttribute("aria-busy");
+      }
+    } else {
+      if (meta.prevDisabled === false) {
+        btn.disabled = false;
+      }
+      btn.removeAttribute("aria-busy");
+      heatmapButtonMeta.delete(btn);
+    }
+  }
+}
+
+function getHeatmapLayer() {
+  try {
+    return ensureHeatmapLayer(window.CAD);
+  } catch (err) {
+    return window.CAD?.heatmap?.layer || null;
+  }
+}
+
+function enableHeatmapButtons(enable = true) {
+  setHeatmapButtonsDisabled(!enable, "ready");
+}
+
+window.CAD.ui.enableHeatmapButton = (flag) => enableHeatmapButtons(flag !== false);
+
+function applyInitialHeatmapButtonState() {
+  const ready = !!(window.CAD?.heatmap?.ready);
+  const waiting = !!(window.CAD?.heatmap?.waiting);
+  setHeatmapButtonsDisabled(!ready, "ready");
+  setHeatmapButtonsDisabled(waiting, "wait");
+}
+
+document.addEventListener("dfm:heatmap-ready", (ev) => {
+  const ready = !!(ev?.detail?.ready);
+  setHeatmapButtonsDisabled(!ready, "ready");
+});
+
+document.addEventListener("dfm:heatmap-wait", (ev) => {
+  const waiting = !!(ev?.detail?.waiting);
+  setHeatmapButtonsDisabled(waiting, "wait");
+});
+
+if (typeof document !== "undefined") {
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => applyInitialHeatmapButtonState(), { once: true });
+  } else {
+    applyInitialHeatmapButtonState();
+  }
+}
 
 /* ---------- sélecteurs ---------- */
 const fileInput     = $("#fileInput");
@@ -416,7 +588,10 @@ onModelChange((entry) => {
   window.CAD.viewer = viewer;
   window.CAD.model = sceneModel;
   window.CAD.modelId = metaId;
-  window.CAD.heatmap.ready = false;
+  const heatmapState = window.CAD.heatmap || (window.CAD.heatmap = {});
+  heatmapState.ready = false;
+  heatmapState.waiting = false;
+  enableHeatmapButtons(false);
 
   if (!sceneModel || !entry?.ready) {
     return;
@@ -428,7 +603,34 @@ onModelChange((entry) => {
     console.info("[loader] model set", { id: logId });
   }
 
-  ensureGeometryReady(window.CAD, { maxWaitMs: 2000, checkEveryMs: 100 }).catch(() => {});
+  const loaderModel = entry?.meta?.loaderModel || entry?.meta?.model || entry?.model || sceneModel;
+  window.CAD.loaderModel = loaderModel;
+
+  scheduleMicrotask(() => {
+    const layer = getHeatmapLayer();
+    if (layer && typeof layer.awaitReadyAndMaybeWarmup === "function") {
+      try {
+        const warmup = layer.awaitReadyAndMaybeWarmup({ viewer, model: loaderModel });
+        if (warmup && typeof warmup.then === "function") {
+          warmup
+            .then(() => {
+              window.CAD.ui?.enableHeatmapButton?.(true);
+            })
+            .catch((err) => {
+              console.warn("[heatmap] warmup failed", err);
+            });
+        } else {
+          window.CAD.ui?.enableHeatmapButton?.(true);
+        }
+      } catch (err) {
+        console.warn("[heatmap] warmup start failed", err);
+      }
+    } else {
+      ensureGeometryReady(window.CAD, { maxWaitMs: 2000 }).catch(() => {});
+    }
+  });
+
+  ensureGeometryReady(window.CAD, { maxWaitMs: 2000 }).catch(() => {});
 });
 
 /** Axe sélectionné (X/Y/Z) — robuste à plusieurs implémentations possibles */
@@ -498,8 +700,17 @@ let __draftState = null;
 let __draftHeatmapActive = false;
 let __draftLegendEl = null;
 
-function destroyDraftLegend() {
-  if (__draftLegendEl && __draftLegendEl.parentElement) {
+function destroyDraftLegend({ soft = false } = {}) {
+  if (!__draftLegendEl) {
+    return;
+  }
+  if (soft) {
+    __draftLegendEl.style.display = "none";
+    __draftLegendEl.setAttribute("aria-hidden", "true");
+    __draftLegendEl.__softHidden = true;
+    return;
+  }
+  if (__draftLegendEl.parentElement) {
     __draftLegendEl.parentElement.removeChild(__draftLegendEl);
   }
   __draftLegendEl = null;
@@ -570,6 +781,9 @@ function renderDraftLegend(state, activeMode) {
   const el = ensureLegendElement();
   if (!el) return;
   el.__state = state;
+  el.style.display = "block";
+  el.removeAttribute("aria-hidden");
+  delete el.__softHidden;
   const toCss = (rgb) => `rgb(${rgb.map(v => Math.round(Math.max(0, Math.min(1, v)) * 255)).join(',')})`;
   const axis = state?.axis?.vector || state?.axis || { x: 0, y: 0, z: 1 };
   const threshold = Number(state?.thresholdDeg || DEFAULT_DRAFT_THRESHOLD_DEG);
@@ -619,13 +833,69 @@ function renderDraftLegend(state, activeMode) {
   `;
 }
 
+function axisSignature(axisLike) {
+  if (!axisLike) {
+    return "Z+";
+  }
+  const vector = axisLike.vector || axisLike;
+  let x = Number(vector?.x) || 0;
+  let y = Number(vector?.y) || 0;
+  let z = Number(vector?.z) || 0;
+  const len = Math.hypot(x, y, z);
+  if (len > 0) {
+    x /= len;
+    y /= len;
+    z /= len;
+  } else {
+    x = 0; y = 0; z = 1;
+  }
+  const comps = [
+    { letter: "X", value: x },
+    { letter: "Y", value: y },
+    { letter: "Z", value: z }
+  ];
+  const dominant = comps.reduce((best, cur) => (
+    Math.abs(cur.value) > Math.abs(best.value) ? cur : best
+  ), comps[0]);
+  const sign = dominant.value >= 0 ? "+" : "-";
+  return `${dominant.letter}${sign}`;
+}
+
+function hideDraftHeatmapOverlay({ keepState = true, softLegend } = {}) {
+  const registry = window.CAD || {};
+  const heatmapState = registry.heatmap || (registry.heatmap = {});
+  const layer = getHeatmapLayer();
+  if (layer) {
+    if (keepState && typeof layer.setVisible === "function") {
+      try { layer.setVisible(false); } catch (err) { console.warn("[heatmap] hide overlay failed", err); }
+    } else if (typeof layer.clear === "function") {
+      try { layer.clear(); } catch (err) { console.warn("[heatmap] clear overlay failed", err); }
+    }
+  }
+  const legendSoft = typeof softLegend === "boolean" ? softLegend : keepState;
+  if (legendSoft) {
+    destroyDraftLegend({ soft: true });
+  } else {
+    destroyDraftLegend();
+  }
+  __draftHeatmapActive = false;
+  if (heatmapState && typeof heatmapState === "object") {
+    heatmapState.active = false;
+    if (!keepState) {
+      heatmapState.state = null;
+      heatmapState.mode = null;
+    }
+  }
+  if (!keepState) {
+    __draftState = null;
+    __lastDraftMode = null;
+  }
+}
+
 function resetDraftHeatmap({ clearCache = false } = {}) {
+  hideDraftHeatmapOverlay({ keepState: false, softLegend: false });
   try { clearDraftHeatmapModule(window.CAD); } catch (err) { console.warn('[heatmap] clear error', err); }
   __restoreGlobalColorize();
-  destroyDraftLegend();
-  __draftHeatmapActive = false;
-  __draftState = null;
-  __lastDraftMode = null;
   if (clearCache && window.CAD?.heatmap?.cache instanceof Map) {
     window.CAD.heatmap.cache.clear();
   }
@@ -712,20 +982,51 @@ bindClick("#btnHeatmapDepouille", async () => {
     return;
   }
 
-  if (!registry?.heatmap?.ready) {
-    const ok = await ensureGeometryReady(registry, { maxWaitMs: 1500, checkEveryMs: 75 });
-    if (!ok) {
-      console.warn("[heatmap] geometry not ready");
-      showHeatmapToast("Le modèle s'initialise, réessaie dans 1 s.", "info");
-      return;
+  const layer = getHeatmapLayer();
+  if (!layer) {
+    showHeatmapToast("Heatmap indisponible pour le moment.", "error");
+    return;
+  }
+
+  if (__draftHeatmapActive) {
+    hideDraftHeatmapOverlay({ keepState: true, softLegend: true });
+    return;
+  }
+
+  if (!layer.isReady || !registry?.heatmap?.ready) {
+    showHeatmapToast("Préparation de la géométrie…", "info");
+    if (typeof layer.awaitReadyAndMaybeWarmup === "function") {
+      try {
+        layer.awaitReadyAndMaybeWarmup({ viewer, model: registry.loaderModel || registry.model });
+      } catch (err) {
+        console.warn("[heatmap] warmup restart failed", err);
+      }
     }
+    return;
   }
 
   const axis = getSelectedAxisVector();
   const thresholdDeg = getDraftThresholdDeg();
+  const existingState = __draftState;
+  const sameAxis = existingState && axisSignature(existingState.axis) === axisSignature(axis);
+  const sameThreshold = existingState && Math.abs(Number(existingState.thresholdDeg || 0) - Number(thresholdDeg || 0)) < 1e-3;
+  const hasEntries = Array.isArray(existingState?.entries) && existingState.entries.length > 0;
+  if (existingState && sameAxis && sameThreshold && hasEntries && typeof layer.renderDraft === "function") {
+    try {
+      const reuseMode = __lastDraftMode || existingState.mode || DEFAULT_DRAFT_MODE;
+      return await applyDraftHeatmapUI(reuseMode, {
+        axisVector: axis,
+        thresholdDeg,
+        stateOverride: existingState
+      });
+    } catch (err) {
+      console.warn("[heatmap] reuse failed, fallback to recompute", err);
+    }
+  }
+
   try {
     const state = await applyDraftHeatmapModule({ registry, axis, thresholdDeg });
-    return applyDraftHeatmapUI('ok', {
+    return applyDraftHeatmapUI("ok", {
       axisVector: axis,
       thresholdDeg,
       stateOverride: state,
@@ -734,12 +1035,12 @@ bindClick("#btnHeatmapDepouille", async () => {
     });
   } catch (err) {
     const code = err?.message || err;
-    if (code === 'GEOMETRY_NOT_READY') {
-      console.info('[heatmap] geometry still initializing');
-      showHeatmapToast("Le modèle s'initialise, réessaie dans 1 s.", "info");
+    if (code === "GEOMETRY_NOT_READY") {
+      console.info("[heatmap] geometry still initializing");
+      showHeatmapToast("Préparation de la géométrie…", "info");
       return;
     }
-    console.warn('[heatmap] apply error', code);
+    console.warn("[heatmap] apply error", code);
     showHeatmapToast("Heatmap indisponible pour le moment.", "error");
   }
 });

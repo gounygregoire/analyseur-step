@@ -5,6 +5,320 @@
 
 import HeatmapLayer from "../HeatmapLayer.js";
 
+const MAX_GEOMETRY_WAIT_MS = 5000;
+
+function nowMs() {
+  if (typeof performance !== "undefined" && typeof performance.now === "function") {
+    return performance.now();
+  }
+  return Date.now();
+}
+
+function safeAccess(getter) {
+  if (typeof getter !== "function") return undefined;
+  try {
+    return getter();
+  } catch (err) {
+    return undefined;
+  }
+}
+
+function toFiniteNumber(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function extractAABBArray(aabb) {
+  if (!aabb) return null;
+  if (Array.isArray(aabb)) return aabb;
+  if (ArrayBuffer.isView(aabb)) return Array.from(aabb);
+  if (typeof aabb === "object" && aabb !== null) {
+    const arr = [
+      toFiniteNumber(aabb[0] ?? aabb.xmin ?? aabb.minX),
+      toFiniteNumber(aabb[1] ?? aabb.ymin ?? aabb.minY),
+      toFiniteNumber(aabb[2] ?? aabb.zmin ?? aabb.minZ),
+      toFiniteNumber(aabb[3] ?? aabb.xmax ?? aabb.maxX),
+      toFiniteNumber(aabb[4] ?? aabb.ymax ?? aabb.maxY),
+      toFiniteNumber(aabb[5] ?? aabb.zmax ?? aabb.maxZ)
+    ];
+    if (arr.every((n) => n !== null)) {
+      return arr;
+    }
+  }
+  return null;
+}
+
+function hasPositiveVolume(aabb) {
+  const arr = extractAABBArray(aabb);
+  if (!arr || arr.length < 6) return false;
+  const [xmin, ymin, zmin, xmax, ymax, zmax] = arr;
+  if (![xmin, ymin, zmin, xmax, ymax, zmax].every((n) => Number.isFinite(n))) {
+    return false;
+  }
+  const dx = xmax - xmin;
+  const dy = ymax - ymin;
+  const dz = zmax - zmin;
+  return dx > 0 && dy > 0 && dz > 0;
+}
+
+function collectModelIds(modelLike) {
+  const ids = new Set();
+  const push = (value) => {
+    if (!value && value !== 0) return;
+    const str = String(value);
+    if (str) ids.add(str);
+  };
+  if (!modelLike) return ids;
+  push(modelLike.id);
+  push(modelLike.modelId);
+  push(modelLike.modelID);
+  push(modelLike.cfg?.id);
+  push(modelLike.meta?.id);
+  push(modelLike.meta?.modelId);
+  push(modelLike.meta?.modelID);
+  push(modelLike.sceneModel?.id);
+  push(modelLike.sceneModel?.modelId);
+  push(modelLike.sceneModel?.modelID);
+  return ids;
+}
+
+function belongsToModel(entity, targetModels, targetIds) {
+  if (!entity) return false;
+  const candidates = [
+    entity.model,
+    entity.sceneModel,
+    entity.ownerModel,
+    entity.parent?.model,
+    entity.parent?.sceneModel,
+    entity.mesh?.model,
+    entity.mesh?.sceneModel
+  ];
+  for (const candidate of candidates) {
+    if (candidate && targetModels.has(candidate)) {
+      return true;
+    }
+  }
+  const idCandidates = [
+    entity.model?.id,
+    entity.model?.modelId,
+    entity.sceneModel?.id,
+    entity.sceneModel?.modelId,
+    entity.ownerModel?.id,
+    entity.ownerModel?.modelId,
+    entity.modelId,
+    entity.modelID,
+    entity.parent?.modelId,
+    entity.parent?.model?.id
+  ];
+  for (const id of idCandidates) {
+    if (id || id === 0) {
+      const str = String(id);
+      if (targetIds.has(str)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function gatherEntities({ viewer, sceneModel, targetModels, targetIds }) {
+  const out = [];
+  const seen = new Set();
+  const push = (entity) => {
+    if (!entity || seen.has(entity)) return;
+    if (!belongsToModel(entity, targetModels, targetIds)) return;
+    seen.add(entity);
+    out.push(entity);
+  };
+
+  const collections = [
+    sceneModel?.entities,
+    sceneModel?.scene?.entities,
+    viewer?.scene?.entities,
+    viewer?.scene?.objects,
+    sceneModel?.scene?.objects
+  ];
+
+  for (const col of collections) {
+    if (!col) continue;
+    if (Array.isArray(col)) {
+      for (const entity of col) push(entity);
+      continue;
+    }
+    if (typeof col.forEach === "function") {
+      try { col.forEach(push); } catch {}
+      continue;
+    }
+    if (typeof col === "object") {
+      for (const key in col) {
+        push(col[key]);
+        if (out.length >= 64) return out;
+      }
+    }
+    if (out.length >= 64) break;
+  }
+
+  if (typeof sceneModel?.listEntityIds === "function") {
+    try {
+      const ids = sceneModel.listEntityIds();
+      if (Array.isArray(ids)) {
+        for (const id of ids) {
+          if (sceneModel.entities && sceneModel.entities[id]) {
+            push(sceneModel.entities[id]);
+          }
+          if (out.length >= 64) break;
+        }
+      }
+    } catch {}
+  }
+
+  return out;
+}
+
+function bufferItemCount(buffer) {
+  if (!buffer) return 0;
+  if (typeof buffer.numItems === "number") return buffer.numItems;
+  if (typeof buffer.length === "number") return buffer.length;
+  if (typeof buffer.count === "number") return buffer.count;
+  if (ArrayBuffer.isView(buffer)) return buffer.length;
+  if (Array.isArray(buffer)) return buffer.length;
+  return 0;
+}
+
+function entityHasGeometry(entity) {
+  if (!entity) return false;
+  const mesh = entity.mesh || entity;
+  if (!mesh) return false;
+  const geometry = mesh.geometry;
+  if (!geometry) return false;
+  const positions = geometry.positions;
+  const indices = geometry.indices || geometry.edgeIndices;
+  return bufferItemCount(positions) > 0 && bufferItemCount(indices) > 0;
+}
+
+async function waitForModelLoaded(eventSource) {
+  if (!eventSource || typeof eventSource.on !== "function") {
+    return;
+  }
+  if (eventSource.loaded) {
+    return;
+  }
+  await new Promise((resolve) => {
+    let resolved = false;
+    let handler = null;
+    const done = () => {
+      if (resolved) return;
+      resolved = true;
+      if (typeof eventSource.off === "function") {
+        try { eventSource.off("loaded", handler); } catch {}
+      }
+      resolve();
+    };
+    handler = () => done();
+    try { eventSource.on("loaded", handler); } catch { resolve(); return; }
+    if (eventSource.loaded) {
+      done();
+      return;
+    }
+  });
+}
+
+export async function ensureModelGeometryReady({ viewer, model }) {
+  if (!viewer || !model) {
+    throw new Error("GEOMETRY_WAIT_MISSING_INPUT");
+  }
+
+  const sceneModel = model.sceneModel || model;
+  const eventSource = (typeof model.on === "function") ? model : (sceneModel && typeof sceneModel.on === "function" ? sceneModel : null);
+  if (!sceneModel || !viewer.scene) {
+    throw new Error("GEOMETRY_WAIT_INVALID_STATE");
+  }
+
+  const targetModels = new Set([model, sceneModel].filter(Boolean));
+  const targetIds = collectModelIds(model);
+  for (const id of collectModelIds(sceneModel)) {
+    targetIds.add(id);
+  }
+
+  await waitForModelLoaded(eventSource);
+
+  return new Promise((resolve, reject) => {
+    const start = nowMs();
+    const deadline = start + MAX_GEOMETRY_WAIT_MS;
+    let stopped = false;
+
+    const checkReady = () => {
+      if (stopped) return;
+      if (sceneModel.destroyed || model.destroyed) {
+        stopped = true;
+        reject(new Error("GEOMETRY_MODEL_DESTROYED"));
+        return;
+      }
+
+      if (!hasPositiveVolume(sceneModel.aabb || model.aabb)) {
+        scheduleNext();
+        return;
+      }
+
+      const entities = gatherEntities({ viewer, sceneModel, targetModels, targetIds });
+      const entityCount = entities.length;
+      if (!entityCount) {
+        scheduleNext();
+        return;
+      }
+
+      const sampleCount = Math.min(entityCount, 20);
+      let hasGeom = false;
+      let sampleVertices = 0;
+      for (let i = 0; i < sampleCount; i++) {
+        const entity = entities[i];
+        const mesh = entity?.mesh || entity;
+        const geometry = mesh?.geometry;
+        if (geometry) {
+          const positionsCount = bufferItemCount(geometry.positions);
+          const indicesCount = bufferItemCount(geometry.indices || geometry.edgeIndices);
+          sampleVertices += Math.max(0, Math.trunc(positionsCount / 3));
+          if (positionsCount > 0 && indicesCount > 0) {
+            hasGeom = true;
+          }
+        }
+        if (!hasGeom && entityHasGeometry(entity)) {
+          hasGeom = true;
+          break;
+        }
+      }
+
+      if (hasGeom) {
+        stopped = true;
+        const elapsed = Math.round(nowMs() - start);
+        console.info(`[heatmap] ready after ${elapsed} ms, entities: ${entityCount}, sample vertices: ${sampleVertices}`);
+        resolve();
+        return;
+      }
+
+      scheduleNext();
+    };
+
+    const scheduleNext = () => {
+      if (stopped) return;
+      const now = nowMs();
+      if (now >= deadline) {
+        stopped = true;
+        const err = new Error("GEOMETRY_WAIT_TIMEOUT");
+        reject(err);
+        return;
+      }
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(checkReady);
+      } else {
+        setTimeout(checkReady, 16);
+      }
+    };
+
+    checkReady();
+  });
+}
+
 const geometryCache = new WeakMap(); // mesh -> { geom, data }
 const meshResultCache = new WeakMap(); // mesh -> Map(cacheKey, DraftResult)
 const globalWindowRef = typeof window !== "undefined" ? window : null;
@@ -49,6 +363,12 @@ function ensureLayer(registry) {
     throw new Error("MODEL_NOT_READY");
   }
   const heatmapState = registry.heatmap || (registry.heatmap = {});
+  if (typeof heatmapState.ready !== "boolean") {
+    heatmapState.ready = false;
+  }
+  if (typeof heatmapState.waiting !== "boolean") {
+    heatmapState.waiting = false;
+  }
   if (heatmapState.layer && heatmapState.layer.viewer !== registry.viewer) {
     try { heatmapState.layer.clear(); } catch {}
     heatmapState.layer = null;
@@ -56,7 +376,23 @@ function ensureLayer(registry) {
   if (!heatmapState.layer) {
     heatmapState.layer = new HeatmapLayer(registry);
   }
+  if (typeof heatmapState.layer.setReadyState === "function") {
+    try { heatmapState.layer.setReadyState(heatmapState.ready); } catch {}
+  } else {
+    heatmapState.layer.isReady = !!heatmapState.ready;
+  }
+  if (typeof heatmapState.layer.setWaiting === "function") {
+    try { heatmapState.layer.setWaiting(heatmapState.waiting); } catch {}
+  }
   return heatmapState.layer;
+}
+
+export function ensureHeatmapLayer(registry) {
+  const reg = ensureRegistry(registry);
+  if (!reg?.viewer) {
+    throw new Error("MODEL_NOT_READY");
+  }
+  return ensureLayer(reg);
 }
 
 function normalizeAxis(axis) {
@@ -221,34 +557,55 @@ function applyMatrixToPositions(positions, matrix) {
 }
 
 function resolveGeometryArray(mesh, geom, type) {
-  const state = geom?._state || geom?.state || {};
-  const arrays = geom?.arrays || geom?._arrays || {};
-  const geometryData = geom?.geometryData || geom?.data || {};
-  const nestedGeom = geom?.geometry || geom?._geometry || state.geometry || {};
+  const candidates = [];
+  const push = (value) => {
+    if (value && !candidates.includes(value)) {
+      candidates.push(value);
+    }
+  };
 
-  const candidates = [
-    type === "positions" ? mesh?.__dfmPositions : mesh?.__dfmIndices,
-    geom?.[`__dfm${type.charAt(0).toUpperCase()}${type.slice(1)}`],
-    geom?.[type],
-    geom?.[`_${type}`],
-    geom?.[`decompressed${type.charAt(0).toUpperCase()}${type.slice(1)}`],
-    geom?.[`compressed${type.charAt(0).toUpperCase()}${type.slice(1)}`],
-    geom?.[`${type}Compressed`],
-    geom?.[`${type}Decompressed`],
-    arrays?.[type],
-    arrays?.[type]?.data,
-    arrays?.[type]?.array,
-    state?.[type],
-    state?.[`${type}Data`],
-    state?.[`${type}Decompressed`],
-    state?.geometry?.[type],
-    geometryData?.[type],
-    geometryData?.[type]?.data,
-    geometryData?.[type]?.array,
-    nestedGeom?.[type],
-    nestedGeom?.[type]?.data,
-    nestedGeom?.[type]?.array
-  ];
+  push(safeAccess(() => geom?.[type]));
+  push(safeAccess(() => geom?.arrays?.[type]));
+  push(safeAccess(() => geom?.arrays?.[type]?.data));
+  push(safeAccess(() => geom?.arrays?.[type]?.array));
+  push(safeAccess(() => geom?.geometryData?.[type]));
+  push(safeAccess(() => geom?.geometryData?.[type]?.data));
+  push(safeAccess(() => geom?.geometryData?.[type]?.array));
+  push(safeAccess(() => geom?.data?.[type]));
+  push(safeAccess(() => geom?.data?.[type]?.data));
+  push(safeAccess(() => geom?.data?.[type]?.array));
+  push(safeAccess(() => geom?.geometry?.[type]));
+  push(safeAccess(() => geom?.geometry?.[type]?.data));
+  push(safeAccess(() => geom?.geometry?.[type]?.array));
+
+  const publicMeshGeom = safeAccess(() => mesh?.geometry);
+  push(safeAccess(() => publicMeshGeom?.[type]));
+  push(safeAccess(() => publicMeshGeom?.arrays?.[type]));
+  push(safeAccess(() => publicMeshGeom?.arrays?.[type]?.data));
+
+  const stateCandidate = safeAccess(() => geom?.state) || safeAccess(() => geom?._state);
+  push(safeAccess(() => stateCandidate?.[type]));
+  push(safeAccess(() => stateCandidate?.geometry?.[type]));
+  push(safeAccess(() => stateCandidate?.geometry?.[type]?.data));
+  push(safeAccess(() => stateCandidate?.geometry?.[type]?.array));
+
+  const compressedKey = `compressed${type.charAt(0).toUpperCase()}${type.slice(1)}`;
+  const decompressedKey = `decompressed${type.charAt(0).toUpperCase()}${type.slice(1)}`;
+  push(safeAccess(() => geom?.[compressedKey]));
+  push(safeAccess(() => geom?.[decompressedKey]));
+  push(safeAccess(() => geom?.[`${type}Compressed`]));
+  push(safeAccess(() => geom?.[`${type}Decompressed`]));
+  push(safeAccess(() => stateCandidate?.[compressedKey]));
+  push(safeAccess(() => stateCandidate?.[decompressedKey]));
+
+  // Optionnel : anciens hooks privés, ignorés silencieusement si absents.
+  if (type === "positions") {
+    push(safeAccess(() => mesh && mesh.__dfmPositions));
+  } else if (type === "indices") {
+    push(safeAccess(() => mesh && mesh.__dfmIndices));
+  }
+  push(safeAccess(() => geom && geom[`__dfm${type.charAt(0).toUpperCase()}${type.slice(1)}`]));
+  push(safeAccess(() => geom && geom[`_${type}`]));
 
   for (const candidate of candidates) {
     const arr = pickGeometryArray(candidate);
@@ -261,7 +618,11 @@ function resolveGeometryArray(mesh, geom, type) {
 
 function captureGeometry(mesh) {
   if (!mesh || mesh.destroyed) return null;
-  const geom = mesh.geometry || mesh._geometry || mesh._state?.geometry || null;
+  const geom = mesh.geometry
+    || safeAccess(() => mesh._geometry)
+    || safeAccess(() => mesh._state?.geometry)
+    || safeAccess(() => mesh.state?.geometry)
+    || null;
   if (!geom) return null;
 
   const cached = geometryCache.get(mesh);
@@ -461,12 +822,29 @@ function buildDraftState(registry, axisInfo, thresholdDeg) {
 
 function applyMode({ layer, registry, entries, axisInfo, thresholdDeg, requestedMode }) {
   const mode = VALID_MODES.has(requestedMode) ? requestedMode : MODE_OK;
-  layer.renderDraft({
-    axis: axisInfo,
-    thresholdDeg,
-    entries,
-    mode
-  });
+  const axisLetter = String(axisInfo?.letter || "Z").toUpperCase();
+  const modelCandidate = registry?.modelId
+    || registry?.model?.id
+    || registry?.model?.modelId
+    || "unknown";
+  const modelLabel = typeof modelCandidate === "string" ? modelCandidate : String(modelCandidate);
+  const start = nowMs();
+  console.info(`[heatmap] render start (axis = ${axisLetter}, model = ${modelLabel})`);
+  let success = false;
+  try {
+    layer.renderDraft({
+      axis: axisInfo,
+      thresholdDeg,
+      entries,
+      mode
+    });
+    success = true;
+  } finally {
+    if (success) {
+      const duration = Math.round(nowMs() - start);
+      console.info(`[heatmap] render done (duration = ${duration} ms)`);
+    }
+  }
   const heatmapState = registry.heatmap || (registry.heatmap = {});
   heatmapState.mode = mode;
   return mode;
@@ -512,12 +890,6 @@ export function applyDraftHeatmap({ registry, axis, thresholdDeg } = {}) {
     throw new Error("AXIS_INVALID");
   }
 
-  console.info("[heatmap] apply", {
-    axis: axisLetter.toUpperCase(),
-    thresholdDeg,
-    id: reg.modelId || reg.model?.id || reg.model?.modelId || "unknown"
-  });
-
   if (heatmapState && heatmapState.modelRef !== reg.model) {
     heatmapState.cache = new Map();
     heatmapState.modelRef = reg.model;
@@ -541,19 +913,28 @@ export function applyDraftHeatmap({ registry, axis, thresholdDeg } = {}) {
     totalFaces: state.totalFaces
   };
 
-  console.log(`[heatmap] apply axis=${axisInfo.letter} threshold=${threshold.toFixed(1)}° (faces=${state.totalFaces}) done`);
   return state;
 }
 
 export function clearDraftHeatmap(registry) {
   const reg = ensureRegistry(registry);
   const heatmapState = reg.heatmap || (reg.heatmap = {});
+  const suppressLog = !!heatmapState.suppressNextClearLog;
+  heatmapState.suppressNextClearLog = false;
   const layer = heatmapState.layer;
+  let hadOverlays = false;
+  if (layer && typeof layer.getHandles === "function") {
+    try {
+      const handles = layer.getHandles();
+      hadOverlays = Array.isArray(handles) && handles.length > 0;
+    } catch {}
+  }
   if (layer) {
     try {
       layer.clear();
     } catch {}
   }
+  const wasActive = !!heatmapState.active;
   heatmapState.state = null;
   heatmapState.active = false;
   heatmapState.mode = null;
@@ -561,11 +942,15 @@ export function clearDraftHeatmap(registry) {
   if (heatmapState.cache instanceof Map) {
     heatmapState.cache.clear();
   }
-  console.log('[heatmap] cleared');
+  if (!suppressLog && (wasActive || hadOverlays)) {
+    console.info('[heatmap] cleared');
+  }
   return true;
 }
 
 export default {
   applyDraftHeatmap,
-  clearDraftHeatmap
+  clearDraftHeatmap,
+  ensureModelGeometryReady,
+  ensureHeatmapLayer
 };
