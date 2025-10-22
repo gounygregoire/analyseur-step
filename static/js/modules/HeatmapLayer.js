@@ -8,6 +8,99 @@ import {
   PhongMaterial
 } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
 
+const DEFAULT_HEATMAP_BUTTON_SELECTORS = [
+  "#btnHeatmapDepouille",
+  "#btnHeatmapOK",
+  "#btnHeatmapZero",
+  "#btnHeatmapUndercut",
+  "#heatmapBtn",
+  "[data-heatmap-toggle]",
+  "[data-role=\"heatmap-toggle\"]"
+];
+
+let ensureModelGeometryReadyLoader = null;
+
+async function loadEnsureModelGeometryReady() {
+  if (ensureModelGeometryReadyLoader) {
+    return ensureModelGeometryReadyLoader;
+  }
+  ensureModelGeometryReadyLoader = import("./DraftHeatmap.js")
+    .then((mod) => {
+      if (typeof mod.ensureModelGeometryReady === "function") {
+        return mod.ensureModelGeometryReady;
+      }
+      throw new Error("ensureModelGeometryReady unavailable");
+    })
+    .catch((err) => {
+      ensureModelGeometryReadyLoader = null;
+      throw err;
+    });
+  return ensureModelGeometryReadyLoader;
+}
+
+function arrayFromLike(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.slice();
+  if (typeof value.length === "number" && value !== value.window) {
+    try { return Array.from(value); } catch { return []; }
+  }
+  return [];
+}
+
+function addSelectorCandidates(targetSet, candidate) {
+  if (!candidate && candidate !== 0) return;
+  if (typeof candidate === "string") {
+    const trimmed = candidate.trim();
+    if (trimmed) targetSet.add(trimmed);
+    return;
+  }
+  if (typeof candidate === "function") {
+    try { addSelectorCandidates(targetSet, candidate()); } catch {}
+    return;
+  }
+  if (candidate && typeof candidate.length === "number") {
+    for (const item of arrayFromLike(candidate)) {
+      addSelectorCandidates(targetSet, item);
+    }
+    return;
+  }
+  if (candidate && typeof candidate === "object") {
+    const maybeSel = candidate.selector || candidate.sel;
+    if (typeof maybeSel === "string") {
+      addSelectorCandidates(targetSet, maybeSel);
+      return;
+    }
+  }
+}
+
+function addElementCandidates(push, candidate) {
+  if (!candidate && candidate !== 0) return;
+  if (typeof candidate === "function") {
+    try { addElementCandidates(push, candidate()); } catch {}
+    return;
+  }
+  if (typeof candidate === "string") {
+    return; // handled via selectors
+  }
+  if (candidate && typeof candidate.nodeType === "number" && candidate.nodeType === 1) {
+    push(candidate);
+    return;
+  }
+  if (candidate && typeof candidate.length === "number") {
+    for (const item of arrayFromLike(candidate)) {
+      addElementCandidates(push, item);
+    }
+    return;
+  }
+  if (candidate && typeof candidate.forEach === "function") {
+    try { candidate.forEach((item) => addElementCandidates(push, item)); } catch {}
+    return;
+  }
+  if (candidate && typeof candidate.get === "function") {
+    try { addElementCandidates(push, candidate.get()); } catch {}
+  }
+}
+
 export default class HeatmapLayer {
   constructor(viewerAdapter) {
     this.viewerAdapter = viewerAdapter;
@@ -18,6 +111,29 @@ export default class HeatmapLayer {
     this._visible = true;
     this._seq = 0;
     this.opacity = 0.85;
+    this.isReady = false;
+    this._waiting = false;
+    this._warmupDone = new WeakSet();
+    this._warmupPromises = new WeakMap();
+    this._lastReadyBroadcast = null;
+    this._lastWaitingBroadcast = null;
+    this._buttonMeta = new WeakMap();
+    if (this.registry && typeof this.registry === "object") {
+      const heatmapState = this.registry.heatmap || (this.registry.heatmap = {});
+      if (!heatmapState.layer) {
+        heatmapState.layer = this;
+      }
+      if (typeof heatmapState.ready === "boolean") {
+        this.isReady = heatmapState.ready;
+      }
+      if (typeof heatmapState.waiting === "boolean") {
+        this._waiting = heatmapState.waiting;
+      }
+    }
+    this._refreshButtons();
+    if (typeof document !== "undefined" && document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", () => this._refreshButtons(), { once: true });
+    }
   }
 
   get scene() {
@@ -26,6 +142,95 @@ export default class HeatmapLayer {
     const viewerScene = this.viewer?.scene;
     if (viewerScene) return viewerScene;
     return null;
+  }
+
+  setReadyState(flag) {
+    const ready = !!flag;
+    const heatmapState = this.registry?.heatmap;
+    const previous = typeof heatmapState?.ready === "boolean"
+      ? heatmapState.ready
+      : this.isReady;
+    this.isReady = ready;
+    if (heatmapState && typeof heatmapState === "object") {
+      heatmapState.ready = ready;
+    }
+    if (previous !== ready) {
+      this._dispatchReadyEvent(ready);
+    }
+    this._refreshButtons();
+    return ready;
+  }
+
+  setWaiting(waiting) {
+    const next = !!waiting;
+    const prev = this._waiting;
+    this._waiting = next;
+    const heatmapState = this.registry?.heatmap;
+    if (heatmapState && typeof heatmapState === "object") {
+      heatmapState.waiting = next;
+    }
+    if (prev !== next) {
+      this._dispatchWaitingEvent(next);
+    }
+    this._refreshButtons();
+    return next;
+  }
+
+  async awaitReadyAndMaybeWarmup({ viewer, model } = {}) {
+    const targetViewer = viewer || this.viewer || this.registry?.viewer;
+    const registryModel = this.registry?.model;
+    const candidateModel = model || registryModel || this.registry?.loaderModel;
+    if (!targetViewer || !candidateModel) {
+      this.setWaiting(false);
+      this.setReadyState(false);
+      return false;
+    }
+
+    if (this._warmupDone.has(candidateModel)) {
+      this.setWaiting(false);
+      this.setReadyState(true);
+      return true;
+    }
+
+    const existing = this._warmupPromises.get(candidateModel);
+    if (existing) {
+      this.setWaiting(true);
+      try {
+        const ok = await existing;
+        this.setReadyState(ok === true);
+        return ok === true;
+      } catch (err) {
+        this.setReadyState(false);
+        throw err;
+      } finally {
+        this.setWaiting(false);
+      }
+    }
+
+    this.setWaiting(true);
+    this.setReadyState(false);
+
+    const waitPromise = (async () => {
+      const ensureReady = await loadEnsureModelGeometryReady();
+      await ensureReady({ viewer: targetViewer, model: candidateModel });
+      this._warmupDone.add(candidateModel);
+      return true;
+    })();
+
+    this._warmupPromises.set(candidateModel, waitPromise);
+
+    try {
+      const ok = await waitPromise;
+      this.setReadyState(ok === true);
+      return ok === true;
+    } catch (err) {
+      this._warmupDone.delete(candidateModel);
+      this.setReadyState(false);
+      throw err;
+    } finally {
+      this._warmupPromises.delete(candidateModel);
+      this.setWaiting(false);
+    }
   }
 
   clear() {
@@ -208,6 +413,114 @@ export default class HeatmapLayer {
 
   getHandles() {
     return this._overlays.slice();
+  }
+
+  _dispatchReadyEvent(ready) {
+    if (this._lastReadyBroadcast === ready) {
+      return;
+    }
+    this._lastReadyBroadcast = ready;
+    if (typeof document !== "undefined" && typeof document.dispatchEvent === "function") {
+      try {
+        document.dispatchEvent(new CustomEvent("dfm:heatmap-ready", {
+          detail: { ready }
+        }));
+      } catch {}
+    }
+  }
+
+  _dispatchWaitingEvent(waiting) {
+    if (this._lastWaitingBroadcast === waiting) {
+      return;
+    }
+    this._lastWaitingBroadcast = waiting;
+    if (typeof document !== "undefined" && typeof document.dispatchEvent === "function") {
+      try {
+        document.dispatchEvent(new CustomEvent("dfm:heatmap-wait", {
+          detail: { waiting, ready: this.isReady }
+        }));
+      } catch {}
+    }
+  }
+
+  _refreshButtons() {
+    const shouldDisable = this._waiting || !this.isReady;
+    this._applyButtonDisabledState(shouldDisable);
+  }
+
+  _resolveButtons() {
+    if (typeof document === "undefined") {
+      return [];
+    }
+    const heatmapState = this.registry?.heatmap || {};
+    const selectors = new Set(DEFAULT_HEATMAP_BUTTON_SELECTORS);
+    addSelectorCandidates(selectors, heatmapState.buttonSelector);
+    addSelectorCandidates(selectors, heatmapState.buttonSelectors);
+
+    const elements = [];
+    const seen = new Set();
+    const pushElement = (el) => {
+      if (!el || typeof el !== "object") return;
+      if (typeof el.nodeType === "number" && el.nodeType === 1) {
+        if (!seen.has(el)) {
+          seen.add(el);
+          elements.push(el);
+        }
+      }
+    };
+
+    addElementCandidates(pushElement, heatmapState.buttonElement);
+    addElementCandidates(pushElement, heatmapState.buttonElements);
+
+    for (const sel of selectors) {
+      try {
+        const list = document.querySelectorAll(sel);
+        for (const el of list) {
+          pushElement(el);
+        }
+      } catch {}
+    }
+
+    return elements;
+  }
+
+  _applyButtonDisabledState(disable) {
+    const buttons = this._resolveButtons();
+    if (!buttons.length) {
+      return;
+    }
+    for (const btn of buttons) {
+      if (!btn || typeof btn.disabled === "undefined") continue;
+      const meta = this._buttonMeta.get(btn) || {};
+      if (disable) {
+        if (!meta.hasOwnProperty("prevDisabled")) {
+          meta.prevDisabled = !!btn.disabled;
+        }
+        btn.disabled = true;
+        if (this._waiting) {
+          btn.setAttribute("aria-busy", "true");
+        } else {
+          btn.removeAttribute("aria-busy");
+        }
+        this._buttonMeta.set(btn, meta);
+      } else {
+        const hadPrev = meta.hasOwnProperty("prevDisabled");
+        if (hadPrev && meta.prevDisabled === false) {
+          btn.disabled = false;
+        }
+        if (!this._waiting) {
+          btn.removeAttribute("aria-busy");
+        } else {
+          btn.setAttribute("aria-busy", "true");
+        }
+        delete meta.prevDisabled;
+        if (Object.keys(meta).length) {
+          this._buttonMeta.set(btn, meta);
+        } else {
+          this._buttonMeta.delete(btn);
+        }
+      }
+    }
   }
 
   _pickGeometryArray(src) {

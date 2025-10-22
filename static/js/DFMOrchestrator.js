@@ -7,7 +7,8 @@
 
 import {
   applyDraftHeatmap as applyDraftHeatmapFromRegistry,
-  clearDraftHeatmap as clearDraftHeatmapFromRegistry
+  clearDraftHeatmap as clearDraftHeatmapFromRegistry,
+  ensureModelGeometryReady
 } from "./modules/DraftHeatmap.js";
 import { meshHasGeometry } from "./modules/ModelRegistry.js";
 
@@ -59,6 +60,28 @@ function releaseHeatmapHandles(registry) {
     }
   }
   return true;
+}
+
+function syncLayerReadyState(heatmapState, ready) {
+  const layer = heatmapState?.layer;
+  if (!layer) return;
+  try {
+    if (typeof layer.setReadyState === "function") {
+      layer.setReadyState(ready);
+    } else {
+      layer.isReady = !!ready;
+    }
+  } catch (err) {
+    console.warn("[heatmap] sync ready state failed", err);
+  }
+}
+
+function syncLayerWaitingState(heatmapState, waiting) {
+  const layer = heatmapState?.layer;
+  if (!layer) return;
+  if (typeof layer.setWaiting === "function") {
+    try { layer.setWaiting(waiting); } catch (err) { console.warn("[heatmap] sync wait state failed", err); }
+  }
 }
 
 function cloneColorize(value) {
@@ -300,49 +323,87 @@ function nowMs() {
   return Date.now();
 }
 
-export async function ensureGeometryReady(registry, { maxWaitMs = 2000, checkEveryMs = 100 } = {}) {
+export async function ensureGeometryReady(registry, { maxWaitMs = 5000 } = {}) {
   const reg = (registry && typeof registry === "object") ? registry : null;
-  if (!reg?.model) return false;
+  if (!reg?.model || !reg?.viewer) {
+    return false;
+  }
 
   const heatmapState = reg.heatmap || (reg.heatmap = {});
-  if (heatmapState.ready) return true;
+  if (typeof heatmapState.ready !== "boolean") {
+    heatmapState.ready = false;
+  }
+  if (typeof heatmapState.waiting !== "boolean") {
+    heatmapState.waiting = false;
+  }
+  heatmapState.requestedTimeout = Number.isFinite(maxWaitMs) ? Number(maxWaitMs) : undefined;
+  syncLayerReadyState(heatmapState, heatmapState.ready);
+  if (!heatmapState.waiting) {
+    syncLayerWaitingState(heatmapState, false);
+  }
+  if (heatmapState.ready) {
+    return true;
+  }
 
   const existing = __geometryPromises.get(reg);
-  if (existing) return existing;
+  if (existing) {
+    if (!heatmapState.waiting) {
+      heatmapState.waiting = true;
+      syncLayerWaitingState(heatmapState, true);
+    }
+    return existing;
+  }
 
-  const sceneModel = reg.model?.sceneModel || reg.model;
-  if (!sceneModel) return false;
-
-  const maxWait = Math.max(0, Number(maxWaitMs) || 0);
-  const stepDelay = Math.max(10, Number(checkEveryMs) || 0);
-  const modelId = reg.modelId || sceneModel.id || sceneModel.modelId || "unknown";
-
-  const runner = (async () => {
-    if (findReadyMesh(reg)) {
-      heatmapState.ready = true;
+  const viewer = reg.viewer || reg.meta?.viewer;
+  const modelCandidate = reg.model?.sceneModel || reg.model;
+  const loaderModel = reg.model?.sceneModel ? reg.model : (reg.loaderModel || reg.meta?.model || reg.model);
+  const modelForWait = (loaderModel && typeof loaderModel.on === "function") ? loaderModel : modelCandidate;
+  const waitPromise = (async () => {
+    if (!viewer || !modelForWait) {
+      return false;
+    }
+    heatmapState.ready = false;
+    heatmapState.waiting = true;
+    syncLayerReadyState(heatmapState, false);
+    syncLayerWaitingState(heatmapState, true);
+    const modelId = reg.modelId || modelForWait.id || modelCandidate?.id || "unknown";
+    try {
+      let ready = false;
+      const layer = heatmapState.layer;
+      if (layer && typeof layer.awaitReadyAndMaybeWarmup === "function") {
+        ready = await layer.awaitReadyAndMaybeWarmup({ viewer, model: modelForWait });
+      } else {
+        if (layer && typeof layer.setWaiting === "function") {
+          try { layer.setWaiting(true); } catch {}
+        }
+        await ensureModelGeometryReady({ viewer, model: modelForWait });
+        ready = true;
+      }
+      heatmapState.ready = !!ready;
+      heatmapState.modelRef = reg.model;
+      heatmapState.loaderModel = modelForWait;
+      reg.loaderModel = modelForWait;
+      heatmapState.lastError = null;
+      syncLayerReadyState(heatmapState, heatmapState.ready);
       console.info(`[loader] heatmap geometry ready (id=${modelId})`);
-      return true;
+      return heatmapState.ready;
+    } catch (err) {
+      heatmapState.ready = false;
+      heatmapState.lastError = err;
+      syncLayerReadyState(heatmapState, false);
+      console.warn(`[loader] geometry readiness wait failed (id=${modelId})`, err);
+      return false;
     }
-
-    const start = nowMs();
-    while (nowMs() - start < maxWait) {
-      await new Promise((resolve) => setTimeout(resolve, stepDelay));
-      if (heatmapState.ready) {
-        return true;
-      }
-      if (findReadyMesh(reg)) {
-        heatmapState.ready = true;
-        console.info(`[loader] heatmap geometry ready (id=${modelId})`);
-        return true;
-      }
+    finally {
+      heatmapState.waiting = false;
+      syncLayerWaitingState(heatmapState, false);
     }
-    return false;
   })().finally(() => {
     __geometryPromises.delete(reg);
   });
 
-  __geometryPromises.set(reg, runner);
-  return runner;
+  __geometryPromises.set(reg, waitPromise);
+  return waitPromise;
 }
 
 
@@ -1370,6 +1431,12 @@ clearDraftHeatmap(registry = window.CAD, opts = {}) {
     const handles = ensureHeatmapHandleArray(reg);
     if (handles) {
       handles.length = 0;
+    }
+    if (silent) {
+      if (!reg.heatmap || typeof reg.heatmap !== 'object') {
+        reg.heatmap = {};
+      }
+      reg.heatmap.suppressNextClearLog = true;
     }
     clearDraftHeatmapFromRegistry(reg);
     if (reg?.heatmap && typeof reg.heatmap === 'object') {
