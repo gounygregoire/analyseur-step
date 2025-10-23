@@ -81,30 +81,51 @@ export async function ensureModelGeometryReady({ viewer, model, maxWaitMs = 8000
     return hasPos && hasIdx;
   };
 
-  const collectEntities = () => {
-    const entityMap = scene.entities || {};
-    const entities = [];
-    for (const id in entityMap) {
-      const entity = entityMap[id];
-      const entityModel = entity?.model || entity?.sceneModel;
-      if (!entityModel) continue;
-      if (entityModel === model) {
-        entities.push(entity);
-        continue;
-      }
-      const entityId = entityModel.id ?? entityModel.modelId ?? entityModel.modelID;
-      if (targetIdStr !== null && entityId != null && String(entityId) === targetIdStr) {
-        entities.push(entity);
-      }
-    }
-    return entities;
-  };
-
   const extractGeometry = (entity) => entity?.mesh?.geometry
     || entity?.geometry
     || entity?.mesh?.geometryData
     || entity?.meshGeometry
     || null;
+
+  const getEntitiesForModel = () => {
+    const entityMap = scene.entities || {};
+    const entities = [];
+    for (const id in entityMap) {
+      const entity = entityMap[id];
+      const entityModel = entity?.model || entity?.sceneModel;
+      if (entityModel === model) {
+        entities.push(entity);
+        continue;
+      }
+      const entityId = entityModel?.id ?? entityModel?.modelId ?? entityModel?.modelID;
+      if (entityModel && targetIdStr !== null && entityId != null && String(entityId) === targetIdStr) {
+        entities.push(entity);
+        continue;
+      }
+      if (!entityModel) {
+        const geom = extractGeometry(entity);
+        if (hasUsableGeometry(geom)) {
+          entities.push(entity);
+        }
+      }
+    }
+
+    if (entities.length === 0) {
+      const modelEntries = scene.models || {};
+      const modelKeys = Object.keys(modelEntries);
+      if (modelKeys.length === 1) {
+        for (const id in entityMap) {
+          const entity = entityMap[id];
+          const geom = extractGeometry(entity);
+          if (hasUsableGeometry(geom)) {
+            entities.push(entity);
+          }
+        }
+      }
+    }
+
+    return entities;
+  };
 
   const geometrySnapshot = (geometry) => {
     if (!geometry) {
@@ -127,7 +148,7 @@ export async function ensureModelGeometryReady({ viewer, model, maxWaitMs = 8000
     const vol = aabbVolume(model.aabb || model.sceneModel?.aabb || scene.aabb);
     if (!isFinite(vol) || vol <= 0) return false;
 
-    const entities = collectEntities();
+    const entities = getEntitiesForModel();
     if (entities.length === 0) return false;
 
     const sample = entities.slice(0, Math.min(12, entities.length));
@@ -156,7 +177,7 @@ export async function ensureModelGeometryReady({ viewer, model, maxWaitMs = 8000
         if (globalWindow) {
           globalWindow.__heatmap_diag_once = true;
         }
-        const entities = collectEntities();
+        const entities = getEntitiesForModel();
         const sample = entities.slice(0, 3).map((entity, index) => {
           const geom = extractGeometry(entity);
           const snap = geometrySnapshot(geom);
@@ -175,6 +196,7 @@ export async function ensureModelGeometryReady({ viewer, model, maxWaitMs = 8000
             maxWaitMs,
             entities: entities.length,
             sample,
+            sceneModels: Object.keys(scene.models || {}),
           },
         );
       }

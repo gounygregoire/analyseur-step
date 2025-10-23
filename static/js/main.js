@@ -390,7 +390,7 @@ const xktLoader = new XKTLoaderPlugin(viewer, {
   readGeometry: true,
   decodeGeometry: true,
   decompressGeometry: true,
-  edges: true // garantit edgeIndices/indices pour la heatmap
+  edges: true // utile si fallback edgeIndices
 });
 
 
@@ -708,6 +708,12 @@ let __lastDraftMode = null;
 let __draftState = null;
 let __draftHeatmapActive = false;
 let __draftLegendEl = null;
+let __heatmapCooldownUntil = 0;
+
+function setHeatmapCooldown(delayMs = 1200) {
+  const clamped = Math.max(0, Number(delayMs) || 0);
+  __heatmapCooldownUntil = Date.now() + clamped;
+}
 
 function destroyDraftLegend({ soft = false } = {}) {
   if (!__draftLegendEl) {
@@ -1048,16 +1054,24 @@ function bindClick(sel, cb) {
 bindClick("#btnHeatmapOK",       () => applyDraftHeatmapUI('ok'));
 bindClick("#btnHeatmapZero",     () => applyDraftHeatmapUI('zero'));
 bindClick("#btnHeatmapUndercut", () => applyDraftHeatmapUI('undercut'));
-bindClick("#btnHeatmapDepouille", async () => {
+bindClick("#btnHeatmapDepouille", async (event) => {
+  const btn = event?.currentTarget || document.querySelector("#btnHeatmapDepouille");
+  if (Date.now() < __heatmapCooldownUntil) {
+    showHeatmapToast("Préparation de la géométrie… réessaie dans 1 seconde.", "info");
+    return;
+  }
+
   const registry = window.CAD || null;
   if (!registry?.model) {
     showHeatmapToast("Le modèle s'initialise, réessaie dans 1 s.", "info");
+    setHeatmapCooldown();
     return;
   }
 
   const layer = getHeatmapLayer();
   if (!layer) {
     showHeatmapToast("Heatmap indisponible pour le moment.", "error");
+    setHeatmapCooldown();
     return;
   }
 
@@ -1077,19 +1091,20 @@ bindClick("#btnHeatmapDepouille", async () => {
         console.warn("[heatmap] warmup restart failed", err);
       }
     }
+    setHeatmapCooldown();
     return;
   }
 
   try {
-    await ensureModelGeometryReady({ viewer, model, maxWaitMs: 12000 });
+    await ensureModelGeometryReady({ viewer, model, maxWaitMs: 15000 }); // marge ↑
   } catch (err) {
     console.warn("[heatmap] geometry wait failed", err);
     showHeatmapToast("Préparation de la géométrie… réessaie dans 1 seconde.", "info");
+    setHeatmapCooldown(1500);
     return;
   }
 
   let pending = null;
-  const btn = document.querySelector("#btnHeatmapDepouille");
   const toggleResult = layer.toggle({
     model,
     axis,
@@ -1310,13 +1325,18 @@ if (btnAnnot) { btnAnnot.style.display = "none"; btnAnnot.disabled = true; }
 
 /* ---------- chargement XKT ---------- */
 async function loadXKT(url, nameHint){
-  const id="m"+Date.now();
+  const uploadMetaId = (typeof fileMeta !== "undefined" && fileMeta && fileMeta.file_id) ? fileMeta.file_id : null;
+  const stableId = uploadMetaId
+    || currentFileId
+    || (typeof window !== "undefined" && window.currentFileId ? window.currentFileId : null)
+    || (typeof window !== "undefined" && window.CAD && window.CAD.fileIdStep ? window.CAD.fileIdStep : null)
+    || `mdl_${Date.now()}`;
   window.CAD.heatmap.ready = false;
   window.CAD.model = null;
   window.CAD.modelId = null;
   clearModelRegistry();
   const model = xktLoader.load({
-    id,
+    id: stableId,
     src: url,
     edges: true, // garder les indices d'arêtes dispo même si rendu edge désactivé
     storeGeometry: true,
@@ -1327,21 +1347,24 @@ async function loadXKT(url, nameHint){
     decompressGeometry: true
   });
 
-  registerModelInstance(model, { id, src: url, viewer });
+  const registryGlobal = (typeof globalThis !== "undefined" && globalThis.ModelRegistry) ? globalThis.ModelRegistry : null;
+  registryGlobal?.setCurrentModel?.(model);
+
+  registerModelInstance(model, { id: stableId, src: url, viewer });
 
   setProgress(8);
   model.on("progress", p=> setProgress(8+Math.round(p*84)));
   model.on("loaded", ()=>{
     setProgress(100); setTimeout(()=>setProgress(0), 350);
     viewer.cameraFlight.flyTo(model);
-    models.set(id,{model,name:nameHint||id,src:url}); lastModelId=id;
+    models.set(stableId,{model,name:nameHint||stableId,src:url}); lastModelId=stableId;
     if (chkEdges?.checked) viewer.scene.edgeMaterial.edgesEnabled=true;
 
-    markModelReady(model, { id, src: url, name: nameHint || id });
+    markModelReady(model, { id: stableId, src: url, name: nameHint || stableId });
 
     window.CAD.viewer = viewer;
     window.CAD.model = model?.sceneModel || model;
-    window.CAD.modelId = id;
+    window.CAD.modelId = stableId;
 
     (async () => {
       const ok = await ensureGeometryReady(window.CAD, { maxWaitMs: 2500, checkEveryMs: 100 });
@@ -1373,7 +1396,7 @@ async function loadXKT(url, nameHint){
     } catch (e) { console.warn("[analyse] fetch initial ignoré:", e); }
   });
   model.on("error", e=>{ console.error(e); setProgress(0); alert("Erreur chargement XKT."); });
-  return id;
+  return stableId;
 }
 
 // --- FIX XKT local via blob: garder l'URL jusqu'à la fin, éviter double-load ---
@@ -1409,22 +1432,25 @@ async function loadLocalXKT(file) {
   // 3) Charger UNE SEULE FOIS via XKTLoader
   //    Assure-toi d'avoir ton instance déjà créée :
   //    const xktLoader = new XKTLoaderPlugin(viewer);
-  const id = `local_xkt_${Date.now()}`;
-  const model = xktLoader.load({ id, src: blobURL, edges: true });
+  const stableIdLocal = window.currentFileId || currentFileId || `local_xkt_${Date.now()}`;
+  const model = xktLoader.load({ id: stableIdLocal, src: blobURL, edges: true });
   currentModel = model;
 
-  registerModelInstance(model, { id, src: blobURL, viewer, fileName: file.name });
+  const registryGlobal = (typeof globalThis !== "undefined" && globalThis.ModelRegistry) ? globalThis.ModelRegistry : null;
+  registryGlobal?.setCurrentModel?.(model);
+
+  registerModelInstance(model, { id: stableIdLocal, src: blobURL, viewer, fileName: file.name });
 
   model.on("loaded", () => {
     viewer.cameraFlight.flyTo(model);
-    models.set(id, { model, name: file?.name || id, src: blobURL });
-    lastModelId = id;
+    models.set(stableIdLocal, { model, name: file?.name || stableIdLocal, src: blobURL });
+    lastModelId = stableIdLocal;
 
-    markModelReady(model, { id, src: blobURL, name: file?.name || id });
+    markModelReady(model, { id: stableIdLocal, src: blobURL, name: file?.name || stableIdLocal });
 
     window.CAD.viewer = viewer;
     window.CAD.model = model?.sceneModel || model;
-    window.CAD.modelId = id;
+    window.CAD.modelId = stableIdLocal;
 
     (async () => {
       const ok = await ensureGeometryReady(window.CAD, { maxWaitMs: 2500, checkEveryMs: 100 });
