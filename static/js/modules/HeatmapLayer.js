@@ -158,6 +158,18 @@ export default class HeatmapLayer {
     return next;
   }
 
+  _handleWarmupError(err) {
+    console.error('[heatmap] warmup failed', err);
+    try {
+      const globalWindow = typeof window !== 'undefined' ? window : null;
+      if (globalWindow && typeof globalWindow.showError === 'function') {
+        globalWindow.showError('Heatmap indisponible : impossible de préparer la géométrie.');
+      }
+    } catch (notifyErr) {
+      console.warn('[heatmap] toast notification failed', notifyErr);
+    }
+  }
+
   async awaitReadyAndMaybeWarmup(input = {}) {
     const options = (input && typeof input === "object" && !Array.isArray(input)) ? input : {};
     let targetViewer = this.viewer || this.registry?.viewer;
@@ -207,6 +219,7 @@ export default class HeatmapLayer {
         return ok === true;
       } catch (err) {
         this.setReadyState(false);
+        this._handleWarmupError(err);
         throw err;
       } finally {
         this.setWaiting(false);
@@ -235,6 +248,7 @@ export default class HeatmapLayer {
     } catch (err) {
       this._warmupDone.delete(model);
       this.setReadyState(false);
+      this._handleWarmupError(err);
       throw err;
     } finally {
       this._warmupPromises.delete(model);
