@@ -60,10 +60,28 @@ export async function ensureModelGeometryReady({ viewer, model, maxWaitMs = 8000
   const targetId = model?.id ?? model?.modelId ?? model?.modelID;
   const targetIdStr = targetId != null ? String(targetId) : null;
 
-  const conditionsOK = () => {
-    const vol = aabbVolume(model.aabb || model.sceneModel?.aabb || scene.aabb);
-    if (!isFinite(vol) || vol <= 0) return false;
+  const len = (value) => {
+    if (!value) return 0;
+    if (typeof value.length === "number") return value.length;
+    if (typeof value.numItems === "number") return value.numItems;
+    if (value.array && typeof value.array.length === "number") return value.array.length;
+    return 0;
+  };
 
+  const hasUsableGeometry = (geometry) => {
+    if (!geometry) return false;
+    const pos = geometry.positions || geometry._positions || geometry.geometryData?.positions;
+    const idx = geometry.indices
+      || geometry.edgeIndices
+      || geometry._indices
+      || geometry.geometryData?.indices
+      || geometry.geometryData?.edgeIndices;
+    const hasPos = len(pos) > 0;
+    const hasIdx = len(idx) > 0;
+    return hasPos && hasIdx;
+  };
+
+  const collectEntities = () => {
     const entityMap = scene.entities || {};
     const entities = [];
     for (const id in entityMap) {
@@ -79,25 +97,87 @@ export async function ensureModelGeometryReady({ viewer, model, maxWaitMs = 8000
         entities.push(entity);
       }
     }
+    return entities;
+  };
+
+  const extractGeometry = (entity) => entity?.mesh?.geometry
+    || entity?.geometry
+    || entity?.mesh?.geometryData
+    || entity?.meshGeometry
+    || null;
+
+  const geometrySnapshot = (geometry) => {
+    if (!geometry) {
+      return { hasGeometry: false, positions: 0, indices: 0 };
+    }
+    const pos = geometry.positions || geometry._positions || geometry.geometryData?.positions;
+    const idx = geometry.indices
+      || geometry.edgeIndices
+      || geometry._indices
+      || geometry.geometryData?.indices
+      || geometry.geometryData?.edgeIndices;
+    return {
+      hasGeometry: true,
+      positions: len(pos),
+      indices: len(idx),
+    };
+  };
+
+  const conditionsOK = () => {
+    const vol = aabbVolume(model.aabb || model.sceneModel?.aabb || scene.aabb);
+    if (!isFinite(vol) || vol <= 0) return false;
+
+    const entities = collectEntities();
     if (entities.length === 0) return false;
 
-    const sample = entities.slice(0, Math.min(10, entities.length));
+    const sample = entities.slice(0, Math.min(12, entities.length));
     for (const entity of sample) {
-      const geom = entity?.mesh?.geometry;
-      const hasPos = geom?.positions?.numItems > 0;
-      const hasIdx = (geom?.indices?.numItems > 0) || (geom?.edgeIndices?.numItems > 0);
-      if (hasPos && hasIdx) {
+      const geom = extractGeometry(entity);
+      if (hasUsableGeometry(geom)) {
         return true;
       }
     }
     return false;
   };
 
+  let diagEmitted = false;
+
   while (performance.now() - t0 < maxWaitMs) {
     if (conditionsOK()) {
       const dt = Math.round(performance.now() - t0);
       console.log(`[heatmap] ready after ${dt} ms (model=${model.id})`);
       return;
+    }
+    const elapsed = performance.now() - t0;
+    if (!diagEmitted && elapsed > maxWaitMs * 0.75) {
+      const globalWindow = globalWindowRef;
+      if (!globalWindow || !globalWindow.__heatmap_diag_once) {
+        diagEmitted = true;
+        if (globalWindow) {
+          globalWindow.__heatmap_diag_once = true;
+        }
+        const entities = collectEntities();
+        const sample = entities.slice(0, 3).map((entity, index) => {
+          const geom = extractGeometry(entity);
+          const snap = geometrySnapshot(geom);
+          return {
+            index,
+            hasGeometry: snap.hasGeometry,
+            positions: snap.positions,
+            indices: snap.indices,
+          };
+        });
+        console.warn(
+          "[heatmap][diag] nearing timeout",
+          {
+            modelId: targetIdStr ?? model?.id ?? null,
+            elapsed: Math.round(elapsed),
+            maxWaitMs,
+            entities: entities.length,
+            sample,
+          },
+        );
+      }
     }
     await new Promise(raf);
   }
