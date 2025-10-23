@@ -1,6 +1,7 @@
 import { XeokitModelViewer } from "./viewer.js";
 import DFMViewerAdapter from "./DFMViewerAdapter.js";
 import { ensureHeatmapLayer } from "./DraftHeatmap.js";
+import { ensureGeometryReady } from "../DFMOrchestrator.js";
 
 const modelId = document.body.dataset.modelId;
 const app = new XeokitModelViewer("viewerCanvas");
@@ -152,9 +153,98 @@ qualityBtn.addEventListener("click", async () => {
     qualityBtn.textContent = `Qualité : ${mode === "final" ? "Haute" : "Preview"}`;
 });
 
-document.getElementById("heatmapBtn").onclick = () => {
-    app.toggleHeatmap(!app.heatmapActive);
+const heatmapBtn = document.getElementById("heatmapBtn");
+const HEATMAP_LOADING_MESSAGE = "Chargement de la géométrie…";
+const heatmapButtonState = {
+    ready: !!(window.CAD?.heatmap?.ready),
+    waitingEvent: !!(window.CAD?.heatmap?.waiting),
+    fallbackWaiting: false,
+    fallbackOverride: false
 };
+
+const savedHeatmapTitle = heatmapBtn?.getAttribute("title") || "";
+
+function setHeatmapBusy(waiting) {
+    if (!heatmapBtn) {
+        return;
+    }
+    heatmapBtn.setAttribute("aria-busy", waiting ? "true" : "false");
+    if (waiting) {
+        if (!heatmapBtn.dataset.originalTitle) {
+            heatmapBtn.dataset.originalTitle = savedHeatmapTitle;
+        }
+        heatmapBtn.setAttribute("title", HEATMAP_LOADING_MESSAGE);
+    } else {
+        const originalTitle = heatmapBtn.dataset.originalTitle ?? "";
+        if (originalTitle) {
+            heatmapBtn.setAttribute("title", originalTitle);
+        } else {
+            heatmapBtn.removeAttribute("title");
+        }
+    }
+}
+
+function updateHeatmapButtonState() {
+    if (!heatmapBtn) {
+        return;
+    }
+    const waiting = heatmapButtonState.waitingEvent || heatmapButtonState.fallbackWaiting;
+    const ready = heatmapButtonState.ready || heatmapButtonState.fallbackOverride;
+    const shouldDisable = waiting || !ready;
+    heatmapBtn.disabled = shouldDisable;
+    setHeatmapBusy(waiting);
+}
+
+if (heatmapBtn) {
+    document.addEventListener("dfm:heatmap-ready", (event) => {
+        const ready = !!(event?.detail?.ready);
+        heatmapButtonState.ready = ready;
+        if (window.CAD?.heatmap) {
+            window.CAD.heatmap.ready = ready;
+        }
+        if (ready) {
+            heatmapButtonState.fallbackOverride = false;
+        }
+        updateHeatmapButtonState();
+    });
+
+    document.addEventListener("dfm:heatmap-wait", (event) => {
+        const waiting = !!(event?.detail?.waiting);
+        heatmapButtonState.waitingEvent = waiting;
+        if (window.CAD?.heatmap) {
+            window.CAD.heatmap.waiting = waiting;
+        }
+        if (waiting) {
+            heatmapButtonState.fallbackOverride = false;
+        }
+        updateHeatmapButtonState();
+    });
+
+    heatmapBtn.addEventListener("click", () => {
+        const shouldApplyFallback = !heatmapButtonState.ready && !heatmapButtonState.waitingEvent;
+        if (shouldApplyFallback) {
+            heatmapButtonState.fallbackWaiting = true;
+            heatmapButtonState.fallbackOverride = false;
+            updateHeatmapButtonState();
+            ensureGeometryReady(window.CAD, { maxWaitMs: 12000 })
+                .then(() => {
+                    heatmapButtonState.fallbackWaiting = false;
+                    heatmapButtonState.fallbackOverride = true;
+                    updateHeatmapButtonState();
+                })
+                .catch((err) => {
+                    console.warn("[heatmap] ensureGeometryReady failed", err);
+                    heatmapButtonState.fallbackWaiting = false;
+                    heatmapButtonState.fallbackOverride = false;
+                    updateHeatmapButtonState();
+                });
+        }
+
+        app.toggleHeatmap(!app.heatmapActive);
+    });
+
+    updateHeatmapButtonState();
+}
 
 document.getElementById("wireframeBtn").onclick = () => {
     app.toggleWireframe(!app.edges.enabled);
