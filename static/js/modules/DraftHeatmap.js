@@ -23,14 +23,26 @@ function safeAccess(getter) {
 
 // Attente robuste de la géométrie, sans API privée Xeokit
 // Usage:
-//   await ensureModelGeometryReady({ viewer, model, maxWaitMs: 15000 });
-export async function ensureModelGeometryReady({ viewer, model, maxWaitMs = 15000 }) {
-  const scene = viewer?.scene;
-  if (!scene || !model) {
-    throw new Error("GEOMETRY_WAIT_INVALID_STATE");
+//   await ensureModelGeometryReady({ model, viewer, maxWaitMs: 15000 });
+export async function ensureModelGeometryReady({ model, viewer, maxWaitMs = 15000 }) {
+  if (!model) {
+    throw new Error("GEOMETRY_WAIT_INVALID_MODEL");
   }
 
-  const t0 = performance.now();
+  // Priorité absolue : la scène liée au modèle (single source of truth)
+  const scene = model?.scene || viewer?.scene;
+  if (!scene) {
+    throw new Error("NO_SCENE_BOUND_TO_MODEL");
+  }
+
+  const t0 = nowMs();
+
+  // Diagnostic : détection d'un mismatch entre viewer passé et scène réelle
+  if (viewer && scene !== viewer.scene) {
+    console.warn("[heatmap][diag] viewer-scene mismatch: model.scene !== viewer.scene", {
+      modelId: model?.id
+    });
+  }
 
   const raf = typeof requestAnimationFrame === "function"
     ? requestAnimationFrame
@@ -68,14 +80,22 @@ export async function ensureModelGeometryReady({ viewer, model, maxWaitMs = 1500
     return n(pos) > 0 && n(idx) > 0;
   };
 
-  function collectEntitiesForModel(m) {
+  const collectMeshesForModel = () => {
+    const all = Object.values(scene.meshes || {});
+    if (all.length === 0) return all;
+    const byId = all.filter((ms) => ms?.model?.id === model?.id);
+    if (byId.length > 0) return byId;
+    const modelCount = Object.keys(scene.models || {}).length;
+    return (modelCount === 1 ? all : byId);
+  };
+
+  const collectEntitiesForModel = () => {
     const out = [];
     for (const k in scene.entities) {
       const e = scene.entities[k];
-      if (e?.model?.id === m?.id) { out.push(e); continue; }
+      if (e?.model?.id === model?.id) { out.push(e); continue; }
       if (!e?.model && (e?.mesh?.geometry || e?.geometry)) out.push(e);
     }
-    // Fallback: s’il n’y a qu’un seul modèle dans la scène, prendre toutes les entités géométrées
     const modelCount = Object.keys(scene.models || {}).length;
     if (out.length === 0 && modelCount === 1) {
       for (const k in scene.entities) {
@@ -84,17 +104,7 @@ export async function ensureModelGeometryReady({ viewer, model, maxWaitMs = 1500
       }
     }
     return out;
-  }
-
-  function collectMeshesForModel(m) {
-    const all = Object.values(scene.meshes || {});
-    if (all.length === 0) return all;
-    // Filtre par model.id si dispo, sinon fallback: un seul modèle dans la scène => tous
-    const byId = all.filter((ms) => ms?.model?.id === m?.id);
-    if (byId.length > 0) return byId;
-    const modelCount = Object.keys(scene.models || {}).length;
-    return (modelCount === 1 ? all : byId); // si multi-modèles et byId vide, on reste strict
-  }
+  };
 
   function conditionsOK() {
     // A) volume AABB non nul
@@ -102,13 +112,13 @@ export async function ensureModelGeometryReady({ viewer, model, maxWaitMs = 1500
     if (!isFinite(vol) || vol <= 0) return false;
 
     // B) d’abord via meshes (chemin le plus fiable avec @latest)
-    const meshes = collectMeshesForModel(model);
+    const meshes = collectMeshesForModel();
     for (const m of meshes.slice(0, 24)) {
       if (hasGeom(m?.geometry)) return true;
     }
 
     // C) fallback via entities (certaines versions exposent surtout entities)
-    const entities = collectEntitiesForModel(model);
+    const entities = collectEntitiesForModel();
     for (const e of entities.slice(0, 24)) {
       const g = e?.mesh?.geometry || e?.geometry;
       if (hasGeom(g)) return true;
@@ -116,19 +126,19 @@ export async function ensureModelGeometryReady({ viewer, model, maxWaitMs = 1500
     return false;
   }
 
-  while (performance.now() - t0 < maxWaitMs) {
+  while (nowMs() - t0 < maxWaitMs) {
     if (conditionsOK()) {
-      const dt = Math.round(performance.now() - t0);
+      const dt = Math.round(nowMs() - t0);
       console.log(`[heatmap] ready after ${dt} ms (model=${model?.id})`);
       return;
     }
-    const elapsed = performance.now() - t0;
+    const elapsed = nowMs() - t0;
     if (elapsed > maxWaitMs * 0.6 && !globalWindowRef?.__heatmap_diag_once) {
       if (globalWindowRef) {
         globalWindowRef.__heatmap_diag_once = true;
       }
       const models = Object.keys(scene.models || {});
-      const meshes = Object.values(scene.meshes || {});
+      const meshes = collectMeshesForModel();
       // échantillon diag
       const sample = meshes.slice(0, 3).map((m, i) => ({
         i,
@@ -137,14 +147,19 @@ export async function ensureModelGeometryReady({ viewer, model, maxWaitMs = 1500
         idx: n(m?.geometry?.indices) || n(m?.geometry?.edgeIndices),
       }));
       console.warn("[heatmap][diag] nearing timeout", {
-        modelId: model?.id, elapsed: Math.round(elapsed), maxWaitMs,
-        sceneModels: models, meshesTotal: meshes.length, sample
+        modelId: model?.id,
+        elapsed: Math.round(elapsed),
+        maxWaitMs,
+        sceneModels: models,
+        meshesTotal: meshes.length,
+        sameScene: !!(model?.scene && model?.scene === scene),
+        sample
       });
     }
     await new Promise(raf);
   }
 
-  const dt = Math.round(performance.now() - t0);
+  const dt = Math.round(nowMs() - t0);
   const err = new Error("GEOMETRY_WAIT_TIMEOUT");
   console.warn(`[loader] geometry readiness wait failed (dt=${dt}ms)`, err);
   throw err;

@@ -365,11 +365,12 @@ const getStatEl = (primarySel, dataMetric) =>
 const projAxisRadios = () => $$('input[name="projAxis"]');
 
 /* ---------- viewer + plugins ---------- */
-const viewer = new Viewer({
+export const viewerSingleton = new Viewer({
   canvasId: "xeokit-canvas",
   dtxEnabled: false,
   transparent: true
 });
+const viewer = viewerSingleton;
 // PATCH: exposer le viewer pour la sonde & signaler "prêt"
 window.viewerAdapter = window.viewerAdapter || {};
 window.viewerAdapter.viewer = viewer;
@@ -382,7 +383,7 @@ new FastNavPlugin(viewer, { flyToDuration: 0.9, hideEdges:false, autoHideEdges:f
 /* -----------------------------------------------------------------------
    XKT LOADER — flags
 ------------------------------------------------------------------------ */
-const xktLoader = new XKTLoaderPlugin(viewer, {
+const xktLoader = new XKTLoaderPlugin(viewerSingleton, {
   dracoDecompressorPath:
     "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/resources/draco/",
   storeGeometry: true,
@@ -394,9 +395,26 @@ const xktLoader = new XKTLoaderPlugin(viewer, {
   edges: true // utile si la heatmap peut fallback sur edgeIndices
 });
 
-
 const sections = new SectionPlanesPlugin(viewer);
 new AnnotationsPlugin(viewer, { container: overlayHost });
+
+export function getViewer() { return viewerSingleton; }
+export function getScene() { return viewerSingleton.scene; }
+
+function getGlobalModelRegistry() {
+  if (typeof ModelRegistry !== "undefined") return ModelRegistry;
+  if (typeof globalThis !== "undefined" && globalThis.ModelRegistry) {
+    return globalThis.ModelRegistry;
+  }
+  return null;
+}
+
+function registerGlobalModel({ viewer, model, meta }) {
+  const registry = getGlobalModelRegistry();
+  if (!registry) return;
+  try { registry.register?.({ viewer, model, meta }); } catch (err) { console.warn("[loader] global register failed", err); }
+  try { registry.setCurrentModel?.(model); } catch (err) { console.warn("[loader] setCurrentModel failed", err); }
+}
 
 /* ========= Canvas & overlay sizing ========= */
 const canvasEl = document.getElementById("xeokit-canvas");
@@ -1101,7 +1119,7 @@ bindClick("#btnHeatmapDepouille", async (event) => {
     showHeatmapToast("Préparation de la géométrie… réessaie dans 1 seconde.", "info");
     if (typeof layer.awaitReadyAndMaybeWarmup === "function") {
       try {
-        layer.awaitReadyAndMaybeWarmup({ viewer, model });
+        layer.awaitReadyAndMaybeWarmup({ model, viewer });
       } catch (err) {
         console.warn("[heatmap] warmup restart failed", err);
       }
@@ -1112,7 +1130,7 @@ bindClick("#btnHeatmapDepouille", async (event) => {
 
   const releaseWait = acquireHeatmapWaitLock();
   try {
-    await ensureModelGeometryReady({ viewer, model, maxWaitMs: 15000 }); // marge ↑
+    await ensureModelGeometryReady({ model, viewer, maxWaitMs: 15000 }); // marge ↑
   } catch (err) {
     console.warn("[heatmap] geometry wait failed", err);
     showHeatmapToast("Préparation de la géométrie… réessaie dans 1 seconde.", "info");
@@ -1366,8 +1384,7 @@ async function loadXKT(url, nameHint){
     decompressGeometry: true
   });
 
-  const registryGlobal = (typeof globalThis !== "undefined" && globalThis.ModelRegistry) ? globalThis.ModelRegistry : null;
-  (typeof ModelRegistry !== "undefined" ? ModelRegistry : registryGlobal)?.setCurrentModel?.(model);
+  registerGlobalModel({ viewer, model, meta: { id: stableId, src: url, name: nameHint } });
 
   console.log("[loader] model set", { id: stableId });
 
@@ -1457,8 +1474,7 @@ async function loadLocalXKT(file) {
   const model = xktLoader.load({ id: stableIdLocal, src: blobURL, edges: true });
   currentModel = model;
 
-  const registryGlobal = (typeof globalThis !== "undefined" && globalThis.ModelRegistry) ? globalThis.ModelRegistry : null;
-  (typeof ModelRegistry !== "undefined" ? ModelRegistry : registryGlobal)?.setCurrentModel?.(model);
+  registerGlobalModel({ viewer, model, meta: { id: stableIdLocal, src: blobURL, name: file?.name || stableIdLocal } });
 
   console.log("[loader] model set", { id: stableIdLocal });
 

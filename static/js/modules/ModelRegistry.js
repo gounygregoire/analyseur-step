@@ -4,6 +4,7 @@
 
 const listeners = new Set();
 let currentEntry = null;
+let currentViewerRef = null;
 const globalWindowRef = typeof window !== "undefined" ? window : null;
 
 function notify() {
@@ -162,16 +163,48 @@ function collectMeshes(entry, { includeHidden = false } = {}) {
   return out.filter(mesh => mesh && !mesh.destroyed && mesh.geometry && (includeHidden || mesh.visible !== false));
 }
 
-export function registerModelInstance(model, meta = {}) {
-  if (!model) return () => {};
+export function registerModelInstance(modelOrEntry, meta = {}) {
+  if (!modelOrEntry) return () => {};
   if (currentEntry?.cleanup) {
     try { currentEntry.cleanup(); } catch {}
   }
 
-  const entry = { model, meta, ready: false };
+  let model = modelOrEntry;
+  let incomingMeta = meta || {};
+  let explicitViewer = incomingMeta.viewer;
+
+  if (modelOrEntry && typeof modelOrEntry === 'object' && 'model' in modelOrEntry && modelOrEntry.model) {
+    model = modelOrEntry.model;
+    const entryMeta = { ...(modelOrEntry.meta || {}) };
+    if (typeof incomingMeta === 'object' && incomingMeta) {
+      incomingMeta = { ...entryMeta, ...incomingMeta };
+    } else {
+      incomingMeta = entryMeta;
+    }
+    if (!explicitViewer && modelOrEntry.viewer) {
+      explicitViewer = modelOrEntry.viewer;
+    }
+  }
+
+  if (!incomingMeta || typeof incomingMeta !== 'object') {
+    incomingMeta = {};
+  }
+
+  const resolvedViewer = explicitViewer || model?.viewer || incomingMeta.viewer || null;
+  const entry = {
+    model,
+    viewer: resolvedViewer || null,
+    meta: { ...(incomingMeta || {}) },
+    ready: false
+  };
+
+  if (entry.viewer && !entry.meta.viewer) {
+    entry.meta.viewer = entry.viewer;
+  }
   const destroyHandler = () => {
     if (currentEntry === entry) {
       currentEntry = null;
+      currentViewerRef = null;
       notify();
     }
   };
@@ -186,11 +219,13 @@ export function registerModelInstance(model, meta = {}) {
     }
     if (currentEntry === entry) {
       currentEntry = null;
+      currentViewerRef = null;
       notify();
     }
   };
 
   currentEntry = entry;
+  currentViewerRef = entry.viewer || null;
   notify();
   return entry.cleanup;
 }
@@ -199,7 +234,15 @@ export function markModelReady(model, extraMeta = {}) {
   if (!model) return;
   if (currentEntry && currentEntry.model === model) {
     currentEntry.ready = true;
-    currentEntry.meta = { ...(currentEntry.meta || {}), ...extraMeta };
+    const mergedMeta = { ...(currentEntry.meta || {}), ...(extraMeta || {}) };
+    if (currentEntry.viewer && !mergedMeta.viewer) {
+      mergedMeta.viewer = currentEntry.viewer;
+    }
+    if (extraMeta && extraMeta.viewer) {
+      currentEntry.viewer = extraMeta.viewer;
+    }
+    currentEntry.meta = mergedMeta;
+    currentViewerRef = currentEntry.viewer || mergedMeta.viewer || currentViewerRef;
     notify();
   }
 }
@@ -209,11 +252,18 @@ export function clearModelRegistry() {
     try { currentEntry.cleanup(); } catch {}
   }
   currentEntry = null;
+  currentViewerRef = null;
   notify();
 }
 
 export function getCurrentModel() {
   return currentEntry?.model || null;
+}
+
+export function getCurrentViewer() {
+  if (currentEntry?.viewer) return currentEntry.viewer;
+  if (currentEntry?.meta?.viewer) return currentEntry.meta.viewer;
+  return currentViewerRef;
 }
 
 export function getCurrentMeshes(options = {}) {
@@ -260,14 +310,35 @@ export function getCurrentMeta() {
   return currentEntry?.meta || {};
 }
 
+export function register({ viewer, model, meta = {} } = {}) {
+  if (!model) return () => {};
+  const normalizedMeta = (meta && typeof meta === 'object') ? { ...meta } : {};
+  if (viewer && !normalizedMeta.viewer) {
+    normalizedMeta.viewer = viewer;
+  }
+  return registerModelInstance(model, normalizedMeta);
+}
+
+export function currentModel() {
+  return getCurrentModel();
+}
+
+export function currentViewer() {
+  return getCurrentViewer();
+}
+
 export default {
   registerModelInstance,
   markModelReady,
   clearModelRegistry,
   getCurrentModel,
+  getCurrentViewer,
   getCurrentMeshes,
   waitForModelReady,
   onModelChange,
   getCurrentMeta,
-  meshHasGeometry
+  meshHasGeometry,
+  register,
+  currentModel,
+  currentViewer
 };
