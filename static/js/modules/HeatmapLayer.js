@@ -8,6 +8,7 @@ import {
   PhongMaterial
 } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
 import { ensureModelGeometryReady } from "./DraftHeatmap.js";
+import { currentViewer } from "./ModelRegistry.js";
 
 const DEFAULT_HEATMAP_BUTTON_SELECTORS = [
   "#btnHeatmapDepouille",
@@ -87,7 +88,12 @@ export default class HeatmapLayer {
     this.viewerAdapter = viewerAdapter;
     const registry = viewerAdapter?.registry || viewerAdapter;
     this.registry = registry;
-    this.viewer = registry?.viewer || viewerAdapter?.viewer || viewerAdapter;
+    const registryViewer = registry?.viewer || registry?.meta?.viewer;
+    const adapterViewer = viewerAdapter?.viewer || (viewerAdapter && viewerAdapter.viewer === undefined ? viewerAdapter : null);
+    this.viewer = registryViewer
+      || adapterViewer
+      || currentViewer?.()
+      || null;
     this._overlays = [];
     this._visible = true;
     this._seq = 0;
@@ -172,7 +178,11 @@ export default class HeatmapLayer {
 
   async awaitReadyAndMaybeWarmup(input = {}) {
     const options = (input && typeof input === "object" && !Array.isArray(input)) ? input : {};
-    let targetViewer = this.viewer || this.registry?.viewer;
+    let targetViewer = this.viewer
+      || this.registry?.viewer
+      || this.registry?.meta?.viewer
+      || currentViewer?.()
+      || null;
     let candidateModel = this.registry?.model || this.registry?.loaderModel;
 
     if (options.viewer) {
@@ -191,11 +201,22 @@ export default class HeatmapLayer {
       }
     }
 
-    const viewer = targetViewer;
+    if (!candidateModel && targetViewer?.model) {
+      candidateModel = targetViewer.model;
+    }
+
+    const viewer = targetViewer
+      || candidateModel?.viewer
+      || candidateModel?.scene?.viewer
+      || null;
     const model = candidateModel;
     const maxWaitMs = Number(options.maxWaitMs) > 0 ? Number(options.maxWaitMs) : undefined;
 
-    if (!viewer || !model) {
+    if (viewer && !this.viewer) {
+      this.viewer = viewer;
+    }
+
+    if (!model) {
       this.setWaiting(false);
       this.setReadyState(false);
       return false;
@@ -230,7 +251,10 @@ export default class HeatmapLayer {
     this.setReadyState(false);
 
     const waitPromise = (async () => {
-      const params = { viewer, model };
+      const params = { model };
+      if (viewer) {
+        params.viewer = viewer;
+      }
       if (maxWaitMs) {
         params.maxWaitMs = maxWaitMs;
       }

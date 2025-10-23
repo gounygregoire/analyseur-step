@@ -10,7 +10,7 @@ import {
   clearDraftHeatmap as clearDraftHeatmapFromRegistry,
   ensureModelGeometryReady
 } from "./modules/DraftHeatmap.js";
-import { meshHasGeometry } from "./modules/ModelRegistry.js";
+import { meshHasGeometry, currentViewer } from "./modules/ModelRegistry.js";
 
 const __geometryPromises = new WeakMap();
 
@@ -325,7 +325,7 @@ function nowMs() {
 
 export async function ensureGeometryReady(registry, { maxWaitMs = 5000 } = {}) {
   const reg = (registry && typeof registry === "object") ? registry : null;
-  if (!reg?.model || !reg?.viewer) {
+  if (!reg?.model && !reg?.loaderModel && !reg?.meta?.model) {
     return false;
   }
 
@@ -354,12 +354,21 @@ export async function ensureGeometryReady(registry, { maxWaitMs = 5000 } = {}) {
     return existing;
   }
 
-  const viewer = reg.viewer || reg.meta?.viewer;
   const modelCandidate = reg.model?.sceneModel || reg.model;
   const loaderModel = reg.model?.sceneModel ? reg.model : (reg.loaderModel || reg.meta?.model || reg.model);
   const modelForWait = (loaderModel && typeof loaderModel.on === "function") ? loaderModel : modelCandidate;
+  const viewerCandidates = [
+    reg.viewer,
+    reg.meta?.viewer,
+    modelCandidate?.viewer,
+    modelCandidate?.scene?.viewer,
+    loaderModel?.viewer,
+    loaderModel?.scene?.viewer,
+    currentViewer?.()
+  ];
+  const viewer = viewerCandidates.find((candidate) => !!candidate) || null;
   const waitPromise = (async () => {
-    if (!viewer || !modelForWait) {
+    if (!modelForWait) {
       return false;
     }
     heatmapState.ready = false;
@@ -371,12 +380,16 @@ export async function ensureGeometryReady(registry, { maxWaitMs = 5000 } = {}) {
       let ready = false;
       const layer = heatmapState.layer;
       if (layer && typeof layer.awaitReadyAndMaybeWarmup === "function") {
-        ready = await layer.awaitReadyAndMaybeWarmup({ viewer, model: modelForWait });
+        ready = await layer.awaitReadyAndMaybeWarmup({ model: modelForWait, viewer });
       } else {
         if (layer && typeof layer.setWaiting === "function") {
           try { layer.setWaiting(true); } catch {}
         }
-        await ensureModelGeometryReady({ viewer, model: modelForWait });
+        const waitParams = { model: modelForWait };
+        if (viewer) {
+          waitParams.viewer = viewer;
+        }
+        await ensureModelGeometryReady(waitParams);
         ready = true;
       }
       heatmapState.ready = !!ready;
@@ -900,19 +913,33 @@ class DFMOrchestrator {
       return;
     }
 
-    const viewer = window.viewerAdapter?.viewer || window.CAD?.viewer || window.viewer || null;
     const registry = window.viewerAdapter?.registry || window.CAD || {};
-    const baseModel = registry?.model || null;
-    const model = baseModel?.sceneModel || baseModel;
+    const baseModel = registry?.model || registry?.loaderModel || null;
+    const model = baseModel?.sceneModel || baseModel || registry?.loaderModel || null;
+    const viewerCandidates = [
+      registry?.viewer,
+      registry?.meta?.viewer,
+      window.viewerAdapter?.viewer,
+      window.CAD?.viewer,
+      window.viewer,
+      model?.viewer,
+      model?.scene?.viewer,
+      currentViewer?.()
+    ];
+    const viewer = viewerCandidates.find((candidate) => !!candidate) || null;
 
-    if (!viewer || !model) {
+    if (!model) {
       console.warn('[dfm] geometry context missing → postpone analysis', { hasViewer: !!viewer, hasModel: !!model });
       UI.info?.('Modèle encore en préparation, réessaie dans quelques secondes.');
       return;
     }
 
     try {
-      await ensureModelGeometryReady({ viewer, model });
+      const waitParams = { model };
+      if (viewer) {
+        waitParams.viewer = viewer;
+      }
+      await ensureModelGeometryReady(waitParams);
     } catch (err) {
       console.warn('[dfm] geometry not ready → skip analysis', err);
       UI.info?.('Modèle encore en préparation, réessaie dans quelques secondes.');
