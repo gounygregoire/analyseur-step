@@ -1,3 +1,5 @@
+import { currentViewer } from "./ModelRegistry.js";
+
 const STATE = {
   warnedUnavailable: false,
   installed: false,
@@ -37,7 +39,7 @@ export function installProbeSafe(sceneOrModel) {
       logOnceUnavailable();
       return;
     }
-    const candidate = sceneOrModel || window.viewerAdapter?.viewer || window.viewer;
+    const candidate = sceneOrModel || currentViewer?.() || window.viewerAdapter?.viewer || window.viewer;
     const hookSource = candidate && typeof candidate.__getFaces === "function"
       ? candidate
       : (candidate && candidate.scene && typeof candidate.scene.__getFaces === "function"

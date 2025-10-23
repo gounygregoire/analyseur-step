@@ -14,10 +14,12 @@ import {
   DistanceMeasurementsMouseControl
 } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
 import {
-  registerModelInstance,
+  register as registerModel,
   markModelReady,
   clearModelRegistry,
-  onModelChange
+  onModelChange,
+  currentViewer,
+  setViewerSingleton
 } from "./modules/ModelRegistry.js";
 import {
   applyDraftHeatmap as applyDraftHeatmapModule,
@@ -53,6 +55,37 @@ function showHeatmapToast(message, type = "info") {
   } catch {
     console.log(message);
   }
+}
+
+function onModelLoadedOnce(model, handler) {
+  if (!model || typeof handler !== "function") {
+    return;
+  }
+  if (typeof model.once === "function") {
+    try {
+      model.once("loaded", handler);
+      return;
+    } catch (err) {
+      console.warn("[loader] once(loaded) failed, fallback to on/off", err);
+    }
+  }
+  if (typeof model.on === "function") {
+    const wrapped = (...args) => {
+      if (typeof model.off === "function") {
+        try { model.off("loaded", wrapped); } catch {}
+      }
+      handler(...args);
+    };
+    try {
+      model.on("loaded", wrapped);
+      return;
+    } catch (err) {
+      console.warn("[loader] on(loaded) failed", err);
+    }
+  }
+  scheduleMicrotask(() => {
+    try { handler(); } catch (err) { console.warn("[loader] loaded fallback errored", err); }
+  });
 }
 
 function scheduleMicrotask(cb) {
@@ -371,6 +404,7 @@ export const viewerSingleton = new Viewer({
   transparent: true
 });
 const viewer = viewerSingleton;
+setViewerSingleton(viewer, { source: "main" });
 // PATCH: exposer le viewer pour la sonde & signaler "prêt"
 window.viewerAdapter = window.viewerAdapter || {};
 window.viewerAdapter.viewer = viewer;
@@ -412,6 +446,9 @@ function getGlobalModelRegistry() {
 function registerGlobalModel({ viewer, model, meta }) {
   const registry = getGlobalModelRegistry();
   if (!registry) return;
+  if (viewer) {
+    try { setViewerSingleton(viewer, meta); } catch (err) { console.warn("[loader] viewer singleton sync failed", err); }
+  }
   try { registry.register?.({ viewer, model, meta }); } catch (err) { console.warn("[loader] global register failed", err); }
   try { registry.setCurrentModel?.(model); } catch (err) { console.warn("[loader] setCurrentModel failed", err); }
 }
@@ -1090,13 +1127,13 @@ bindClick("#btnHeatmapUndercut", () => applyDraftHeatmapUI('undercut'));
 bindClick("#btnHeatmapDepouille", async (event) => {
   const btn = event?.currentTarget || document.querySelector("#btnHeatmapDepouille");
   if (Date.now() < __heatmapCooldownUntil) {
-    showHeatmapToast("Préparation de la géométrie… réessaie dans 1 seconde.", "info");
+    showHeatmapToast("Préparation de la géométrie…", "info");
     return;
   }
 
   const registry = window.CAD || null;
   if (!registry?.model) {
-    showHeatmapToast("Le modèle s'initialise, réessaie dans 1 s.", "info");
+    showHeatmapToast("Préparation de la géométrie…", "info");
     setHeatmapCooldown();
     return;
   }
@@ -1116,10 +1153,11 @@ bindClick("#btnHeatmapDepouille", async (event) => {
   }
 
   if (!layer.isReady || !registry?.heatmap?.ready) {
-    showHeatmapToast("Préparation de la géométrie… réessaie dans 1 seconde.", "info");
+    showHeatmapToast("Préparation de la géométrie…", "info");
     if (typeof layer.awaitReadyAndMaybeWarmup === "function") {
       try {
-        layer.awaitReadyAndMaybeWarmup({ model, viewer });
+        const viewerRef = currentViewer() || viewer;
+        layer.awaitReadyAndMaybeWarmup({ model, viewer: viewerRef });
       } catch (err) {
         console.warn("[heatmap] warmup restart failed", err);
       }
@@ -1130,10 +1168,11 @@ bindClick("#btnHeatmapDepouille", async (event) => {
 
   const releaseWait = acquireHeatmapWaitLock();
   try {
-    await ensureModelGeometryReady({ model, viewer, maxWaitMs: 15000 }); // marge ↑
+    const viewerRef = currentViewer() || viewer;
+    await ensureModelGeometryReady({ model, viewer: viewerRef, maxWaitMs: 15000 }); // marge ↑
   } catch (err) {
     console.warn("[heatmap] geometry wait failed", err);
-    showHeatmapToast("Préparation de la géométrie… réessaie dans 1 seconde.", "info");
+    showHeatmapToast("Préparation de la géométrie…", "info");
     releaseWait();
     setHeatmapCooldown(1500);
     return;
@@ -1360,6 +1399,45 @@ if (btnAnnot) { btnAnnot.style.display = "none"; btnAnnot.disabled = true; }
 })();
 
 /* ---------- chargement XKT ---------- */
+function buildXKTLoadConfig({ id, src }) {
+  return {
+    id,
+    src,
+    edges: true, // utile si la heatmap peut fallback sur edgeIndices
+    storeGeometry: true,
+    keepGeometry: true,
+    parseGeometryStreams: true,
+    readGeometry: true,
+    decodeGeometry: true,
+    decompressGeometry: true
+  };
+}
+
+function logModelSceneBinding(model, viewer, meta = {}) {
+  const modelScene = model?.scene || model?.sceneModel?.scene || model?.sceneModel || null;
+  const viewerScene = viewer?.scene || null;
+  const payload = {
+    modelId: meta.id || model?.id || null,
+    src: meta.src || null,
+    modelSceneId: modelScene?.id || null,
+    viewerSceneId: viewerScene?.id || null
+  };
+  if (!modelScene) {
+    console.warn("[loader][diag] load() returned model without scene", payload);
+    return false;
+  }
+  if (!viewerScene) {
+    console.warn("[loader][diag] viewer missing scene for binding", payload);
+    return false;
+  }
+  if (modelScene === viewerScene) {
+    console.info("[loader][diag] load() scene binding OK", payload);
+    return true;
+  }
+  console.warn("[loader][diag] load() scene binding mismatch", payload);
+  return false;
+}
+
 async function loadXKT(url, nameHint){
   // Id stable = file_id pour aligner loader ↔ registry ↔ scène
   const uploadMetaId = (typeof fileMeta !== "undefined" && fileMeta && fileMeta.file_id) ? fileMeta.file_id : null;
@@ -1372,27 +1450,17 @@ async function loadXKT(url, nameHint){
   window.CAD.model = null;
   window.CAD.modelId = null;
   clearModelRegistry();
-  const model = xktLoader.load({
-    id: stableId,
-    src: url,
-    edges: true, // utile si la heatmap peut fallback sur edgeIndices
-    storeGeometry: true,
-    keepGeometry: true,
-    parseGeometryStreams: true,
-    readGeometry: true,
-    decodeGeometry: true,
-    decompressGeometry: true
-  });
+  const model = xktLoader.load(buildXKTLoadConfig({ id: stableId, src: url }));
+
+  logModelSceneBinding(model, viewer, { id: stableId, src: url });
 
   registerGlobalModel({ viewer, model, meta: { id: stableId, src: url, name: nameHint } });
 
-  console.log("[loader] model set", { id: stableId });
-
-  registerModelInstance(model, { id: stableId, src: url, viewer });
+  registerModel({ viewer, model, meta: { id: stableId, src: url } });
 
   setProgress(8);
   model.on("progress", p=> setProgress(8+Math.round(p*84)));
-  model.on("loaded", ()=>{
+  onModelLoadedOnce(model, () => {
     setProgress(100); setTimeout(()=>setProgress(0), 350);
     viewer.cameraFlight.flyTo(model);
     models.set(stableId,{model,name:nameHint||stableId,src:url}); lastModelId=stableId;
@@ -1403,13 +1471,6 @@ async function loadXKT(url, nameHint){
     window.CAD.viewer = viewer;
     window.CAD.model = model?.sceneModel || model;
     window.CAD.modelId = stableId;
-
-    (async () => {
-      const ok = await ensureGeometryReady(window.CAD, { maxWaitMs: 2500, checkEveryMs: 100 });
-      if (!ok) {
-        console.warn("[loader] geometry still not ready after timeout for heatmap", { id: window.CAD.modelId });
-      }
-    })();
 
     // init unités + heuristique AABB
     MM_PER_WU = 0.001;
@@ -1471,16 +1532,15 @@ async function loadLocalXKT(file) {
   //    Assure-toi d'avoir ton instance déjà créée :
   //    const xktLoader = new XKTLoaderPlugin(viewer);
   const stableIdLocal = window.currentFileId || currentFileId || `local_xkt_${Date.now()}`;
-  const model = xktLoader.load({ id: stableIdLocal, src: blobURL, edges: true });
+  const model = xktLoader.load(buildXKTLoadConfig({ id: stableIdLocal, src: blobURL }));
+  logModelSceneBinding(model, viewer, { id: stableIdLocal, src: blobURL });
   currentModel = model;
 
   registerGlobalModel({ viewer, model, meta: { id: stableIdLocal, src: blobURL, name: file?.name || stableIdLocal } });
 
-  console.log("[loader] model set", { id: stableIdLocal });
+  registerModel({ viewer, model, meta: { id: stableIdLocal, src: blobURL, fileName: file.name } });
 
-  registerModelInstance(model, { id: stableIdLocal, src: blobURL, viewer, fileName: file.name });
-
-  model.on("loaded", () => {
+  onModelLoadedOnce(model, () => {
     viewer.cameraFlight.flyTo(model);
     models.set(stableIdLocal, { model, name: file?.name || stableIdLocal, src: blobURL });
     lastModelId = stableIdLocal;
@@ -1490,13 +1550,6 @@ async function loadLocalXKT(file) {
     window.CAD.viewer = viewer;
     window.CAD.model = model?.sceneModel || model;
     window.CAD.modelId = stableIdLocal;
-
-    (async () => {
-      const ok = await ensureGeometryReady(window.CAD, { maxWaitMs: 2500, checkEveryMs: 100 });
-      if (!ok) {
-        console.warn("[loader] geometry still not ready after timeout for heatmap", { id: window.CAD.modelId });
-      }
-    })();
   });
 
   model.on("error", (err) => {
