@@ -22,7 +22,8 @@ import {
 import {
   applyDraftHeatmap as applyDraftHeatmapModule,
   clearDraftHeatmap as clearDraftHeatmapModule,
-  ensureHeatmapLayer
+  ensureHeatmapLayer,
+  ensureModelGeometryReady
 } from "./modules/DraftHeatmap.js";
 import { ensureGeometryReady } from "./DFMOrchestrator.js";
 import { installProbeSafe } from "./modules/probeSafe.js";
@@ -388,7 +389,8 @@ const xktLoader = new XKTLoaderPlugin(viewer, {
   parseGeometryStreams: true,
   readGeometry: true,
   decodeGeometry: true,
-  decompressGeometry: true
+  decompressGeometry: true,
+  edges: true // garantit edgeIndices/indices pour la heatmap
 });
 
 
@@ -1046,7 +1048,7 @@ function bindClick(sel, cb) {
 bindClick("#btnHeatmapOK",       () => applyDraftHeatmapUI('ok'));
 bindClick("#btnHeatmapZero",     () => applyDraftHeatmapUI('zero'));
 bindClick("#btnHeatmapUndercut", () => applyDraftHeatmapUI('undercut'));
-bindClick("#btnHeatmapDepouille", () => {
+bindClick("#btnHeatmapDepouille", async () => {
   const registry = window.CAD || null;
   if (!registry?.model) {
     showHeatmapToast("Le modèle s'initialise, réessaie dans 1 s.", "info");
@@ -1075,6 +1077,14 @@ bindClick("#btnHeatmapDepouille", () => {
         console.warn("[heatmap] warmup restart failed", err);
       }
     }
+    return;
+  }
+
+  try {
+    await ensureModelGeometryReady({ viewer, model, maxWaitMs: 12000 });
+  } catch (err) {
+    console.warn("[heatmap] geometry wait failed", err);
+    showHeatmapToast("Préparation de la géométrie… réessaie dans 1 seconde.", "info");
     return;
   }
 
@@ -1308,7 +1318,7 @@ async function loadXKT(url, nameHint){
   const model = xktLoader.load({
     id,
     src: url,
-    edges: !!chkEdges?.checked,
+    edges: true, // garder les indices d'arêtes dispo même si rendu edge désactivé
     storeGeometry: true,
     keepGeometry: true,
     parseGeometryStreams: true,
@@ -1400,7 +1410,7 @@ async function loadLocalXKT(file) {
   //    Assure-toi d'avoir ton instance déjà créée :
   //    const xktLoader = new XKTLoaderPlugin(viewer);
   const id = `local_xkt_${Date.now()}`;
-  const model = xktLoader.load({ id, src: blobURL });
+  const model = xktLoader.load({ id, src: blobURL, edges: true });
   currentModel = model;
 
   registerModelInstance(model, { id, src: blobURL, viewer, fileName: file.name });
