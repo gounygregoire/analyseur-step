@@ -83,6 +83,7 @@ if (typeof window.CAD.heatmap.waiting !== 'boolean') window.CAD.heatmap.waiting 
 if (!window.CAD.ui || typeof window.CAD.ui !== 'object') window.CAD.ui = {};
 
 const DEFAULT_HEATMAP_BUTTON_SELECTORS = [
+  "#btnHeatmapDraft",
   "#btnHeatmapDepouille",
   "#btnHeatmapOK",
   "#btnHeatmapZero",
@@ -189,7 +190,7 @@ function setHeatmapButtonsDisabled(disabled, reason = "ready") {
       } else {
         btn.removeAttribute("aria-busy");
       }
-      if (btn.id === "btnHeatmapDepouille") {
+      if (btn.id === "btnHeatmapDepouille" || btn.id === "btnHeatmapDraft") {
         btn.classList.add("is-loading");
       }
     } else {
@@ -197,7 +198,7 @@ function setHeatmapButtonsDisabled(disabled, reason = "ready") {
         btn.disabled = false;
       }
       btn.removeAttribute("aria-busy");
-      if (btn.id === "btnHeatmapDepouille") {
+      if (btn.id === "btnHeatmapDepouille" || btn.id === "btnHeatmapDraft") {
         btn.classList.remove("is-loading");
       }
       heatmapButtonMeta.delete(btn);
@@ -390,7 +391,7 @@ const xktLoader = new XKTLoaderPlugin(viewer, {
   readGeometry: true,
   decodeGeometry: true,
   decompressGeometry: true,
-  edges: true // utile si fallback edgeIndices
+  edges: true // utile si la heatmap peut fallback sur edgeIndices
 });
 
 
@@ -615,31 +616,23 @@ onModelChange((entry) => {
   const loaderModel = entry?.meta?.loaderModel || entry?.meta?.model || entry?.model || sceneModel;
   window.CAD.loaderModel = loaderModel;
 
+  const releaseWait = acquireHeatmapWaitLock();
+  const readinessPromise = ensureGeometryReady(window.CAD, { maxWaitMs: 15000 });
+  Promise.resolve(readinessPromise)
+    .catch(() => {})
+    .finally(() => {
+      releaseWait();
+    });
+
   scheduleMicrotask(() => {
-    const layer = getHeatmapLayer();
-    if (layer && typeof layer.awaitReadyAndMaybeWarmup === "function") {
-      try {
-        const warmup = layer.awaitReadyAndMaybeWarmup({ viewer, model: loaderModel });
-        if (warmup && typeof warmup.then === "function") {
-          warmup
-            .then(() => {
-              window.CAD.ui?.enableHeatmapButton?.(true);
-            })
-            .catch((err) => {
-              console.warn("[heatmap] warmup failed", err);
-            });
-        } else {
+    Promise.resolve(readinessPromise)
+      .then((ready) => {
+        if (ready) {
           window.CAD.ui?.enableHeatmapButton?.(true);
         }
-      } catch (err) {
-        console.warn("[heatmap] warmup start failed", err);
-      }
-    } else {
-      ensureGeometryReady(window.CAD, { maxWaitMs: 2000 }).catch(() => {});
-    }
+      })
+      .catch(() => {});
   });
-
-  ensureGeometryReady(window.CAD, { maxWaitMs: 2000 }).catch(() => {});
 });
 
 /** Axe sélectionné (X/Y/Z) — robuste à plusieurs implémentations possibles */
@@ -709,6 +702,28 @@ let __draftState = null;
 let __draftHeatmapActive = false;
 let __draftLegendEl = null;
 let __heatmapCooldownUntil = 0;
+
+let __heatmapWaitToken = 0;
+function acquireHeatmapWaitLock() {
+  const token = ++__heatmapWaitToken;
+  setHeatmapButtonsDisabled(true, "wait");
+  if (window?.CAD?.heatmap && typeof window.CAD.heatmap === "object") {
+    window.CAD.heatmap.waiting = true;
+  }
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    if (__heatmapWaitToken === token) {
+      if (window?.CAD?.heatmap && typeof window.CAD.heatmap === "object") {
+        window.CAD.heatmap.waiting = false;
+      }
+      setHeatmapButtonsDisabled(false, "wait");
+    }
+  };
+}
 
 function setHeatmapCooldown(delayMs = 1200) {
   const clamped = Math.max(0, Number(delayMs) || 0);
@@ -1095,14 +1110,17 @@ bindClick("#btnHeatmapDepouille", async (event) => {
     return;
   }
 
+  const releaseWait = acquireHeatmapWaitLock();
   try {
     await ensureModelGeometryReady({ viewer, model, maxWaitMs: 15000 }); // marge ↑
   } catch (err) {
     console.warn("[heatmap] geometry wait failed", err);
     showHeatmapToast("Préparation de la géométrie… réessaie dans 1 seconde.", "info");
+    releaseWait();
     setHeatmapCooldown(1500);
     return;
   }
+  releaseWait();
 
   let pending = null;
   const toggleResult = layer.toggle({
@@ -1325,6 +1343,7 @@ if (btnAnnot) { btnAnnot.style.display = "none"; btnAnnot.disabled = true; }
 
 /* ---------- chargement XKT ---------- */
 async function loadXKT(url, nameHint){
+  // Id stable = file_id pour aligner loader ↔ registry ↔ scène
   const uploadMetaId = (typeof fileMeta !== "undefined" && fileMeta && fileMeta.file_id) ? fileMeta.file_id : null;
   const stableId = uploadMetaId
     || currentFileId
@@ -1338,7 +1357,7 @@ async function loadXKT(url, nameHint){
   const model = xktLoader.load({
     id: stableId,
     src: url,
-    edges: true, // garder les indices d'arêtes dispo même si rendu edge désactivé
+    edges: true, // utile si la heatmap peut fallback sur edgeIndices
     storeGeometry: true,
     keepGeometry: true,
     parseGeometryStreams: true,
@@ -1348,7 +1367,9 @@ async function loadXKT(url, nameHint){
   });
 
   const registryGlobal = (typeof globalThis !== "undefined" && globalThis.ModelRegistry) ? globalThis.ModelRegistry : null;
-  registryGlobal?.setCurrentModel?.(model);
+  (typeof ModelRegistry !== "undefined" ? ModelRegistry : registryGlobal)?.setCurrentModel?.(model);
+
+  console.log("[loader] model set", { id: stableId });
 
   registerModelInstance(model, { id: stableId, src: url, viewer });
 
@@ -1437,7 +1458,9 @@ async function loadLocalXKT(file) {
   currentModel = model;
 
   const registryGlobal = (typeof globalThis !== "undefined" && globalThis.ModelRegistry) ? globalThis.ModelRegistry : null;
-  registryGlobal?.setCurrentModel?.(model);
+  (typeof ModelRegistry !== "undefined" ? ModelRegistry : registryGlobal)?.setCurrentModel?.(model);
+
+  console.log("[loader] model set", { id: stableIdLocal });
 
   registerModelInstance(model, { id: stableIdLocal, src: blobURL, viewer, fileName: file.name });
 
