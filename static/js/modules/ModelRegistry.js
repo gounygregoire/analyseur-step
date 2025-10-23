@@ -5,7 +5,92 @@
 const listeners = new Set();
 let currentEntry = null;
 let currentViewerRef = null;
+let viewerSingletonRef = null;
+const viewerDiagLogged = new WeakSet();
+const pendingSceneLogHandlers = new WeakMap();
 const globalWindowRef = typeof window !== "undefined" ? window : null;
+
+function scheduleSceneBindingLog(entry) {
+  if (!entry || viewerDiagLogged.has(entry.model)) {
+    return;
+  }
+  const { model, viewer, meta } = entry;
+  if (!model || !viewer) {
+    return;
+  }
+  const tryLog = () => {
+    if (!model || !viewer || viewerDiagLogged.has(model)) {
+      return true;
+    }
+    const modelScene = model.scene || model.sceneModel?.scene || model.sceneModel || null;
+    const viewerScene = viewer.scene || null;
+    if (!modelScene || !viewerScene) {
+      return false;
+    }
+    viewerDiagLogged.add(model);
+    const payload = {};
+    const metaId = meta?.id || meta?.modelId || model.id || model.sceneModel?.id;
+    if (metaId) payload.id = metaId;
+    if (modelScene?.id) payload.modelSceneId = modelScene.id;
+    if (viewerScene?.id) payload.viewerSceneId = viewerScene.id;
+    if (modelScene === viewerScene) {
+      console.info("[loader][diag] model.scene === viewer.scene", payload);
+    } else {
+      console.warn("[loader][diag] model.scene !== viewer.scene", payload);
+    }
+    return true;
+  };
+
+  if (tryLog()) {
+    return;
+  }
+
+  if (pendingSceneLogHandlers.has(model)) {
+    return;
+  }
+
+  const handler = () => {
+    if (tryLog()) {
+      if (typeof model.off === "function") {
+        try { model.off("loaded", handler); } catch {}
+      }
+      pendingSceneLogHandlers.delete(model);
+    }
+  };
+
+  pendingSceneLogHandlers.set(model, handler);
+
+  if (typeof model.on === "function") {
+    try { model.on("loaded", handler); } catch {}
+  }
+
+  setTimeout(() => handler(), 0);
+}
+
+export function setViewerSingleton(viewer, meta = {}) {
+  viewerSingletonRef = viewer || viewerSingletonRef;
+  currentViewerRef = viewer || currentViewerRef || viewerSingletonRef || null;
+  if (!currentEntry) {
+    notify();
+    return currentViewerRef;
+  }
+
+  if (viewer && currentEntry) {
+    if (!currentEntry.viewer) {
+      currentEntry.viewer = viewer;
+    }
+    if (currentEntry.meta && !currentEntry.meta.viewer) {
+      currentEntry.meta.viewer = viewer;
+    }
+    if (meta && typeof meta === "object" && Object.keys(meta).length) {
+      currentEntry.meta = { ...meta, ...currentEntry.meta, viewer: currentEntry.meta.viewer || viewer };
+    }
+    scheduleSceneBindingLog(currentEntry);
+  }
+
+  notify();
+  return currentViewerRef;
+}
 
 function notify() {
   for (const cb of Array.from(listeners)) {
@@ -204,8 +289,15 @@ export function registerModelInstance(modelOrEntry, meta = {}) {
   const destroyHandler = () => {
     if (currentEntry === entry) {
       currentEntry = null;
-      currentViewerRef = null;
+      currentViewerRef = viewerSingletonRef || null;
       notify();
+    }
+    if (pendingSceneLogHandlers.has(model)) {
+      const handler = pendingSceneLogHandlers.get(model);
+      if (handler && typeof model.off === 'function') {
+        try { model.off('loaded', handler); } catch {}
+      }
+      pendingSceneLogHandlers.delete(model);
     }
   };
 
@@ -219,14 +311,27 @@ export function registerModelInstance(modelOrEntry, meta = {}) {
     }
     if (currentEntry === entry) {
       currentEntry = null;
-      currentViewerRef = null;
+      currentViewerRef = viewerSingletonRef || null;
       notify();
+    }
+    if (pendingSceneLogHandlers.has(model)) {
+      const handler = pendingSceneLogHandlers.get(model);
+      if (handler && typeof model.off === 'function') {
+        try { model.off('loaded', handler); } catch {}
+      }
+      pendingSceneLogHandlers.delete(model);
     }
   };
 
   currentEntry = entry;
-  currentViewerRef = entry.viewer || null;
-  notify();
+  const viewerForEntry = entry.viewer || viewerSingletonRef || null;
+  if (viewerForEntry) {
+    setViewerSingleton(viewerForEntry, entry.meta);
+  } else {
+    notify();
+  }
+  currentViewerRef = viewerForEntry || currentViewerRef || null;
+  scheduleSceneBindingLog(entry);
   return entry.cleanup;
 }
 
@@ -242,8 +347,14 @@ export function markModelReady(model, extraMeta = {}) {
       currentEntry.viewer = extraMeta.viewer;
     }
     currentEntry.meta = mergedMeta;
-    currentViewerRef = currentEntry.viewer || mergedMeta.viewer || currentViewerRef;
-    notify();
+    const viewerForEntry = currentEntry.viewer || mergedMeta.viewer || viewerSingletonRef || null;
+    if (viewerForEntry) {
+      setViewerSingleton(viewerForEntry, mergedMeta);
+    } else {
+      notify();
+    }
+    currentViewerRef = viewerForEntry || currentViewerRef;
+    scheduleSceneBindingLog(currentEntry);
   }
 }
 
@@ -252,7 +363,7 @@ export function clearModelRegistry() {
     try { currentEntry.cleanup(); } catch {}
   }
   currentEntry = null;
-  currentViewerRef = null;
+  currentViewerRef = viewerSingletonRef || currentViewerRef || null;
   notify();
 }
 
@@ -263,7 +374,7 @@ export function getCurrentModel() {
 export function getCurrentViewer() {
   if (currentEntry?.viewer) return currentEntry.viewer;
   if (currentEntry?.meta?.viewer) return currentEntry.meta.viewer;
-  return currentViewerRef;
+  return currentViewerRef || viewerSingletonRef || null;
 }
 
 export function getCurrentMeshes(options = {}) {
@@ -340,5 +451,6 @@ export default {
   meshHasGeometry,
   register,
   currentModel,
-  currentViewer
+  currentViewer,
+  setViewerSingleton
 };

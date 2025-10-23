@@ -14,6 +14,21 @@ import { meshHasGeometry, currentViewer } from "./modules/ModelRegistry.js";
 
 const __geometryPromises = new WeakMap();
 
+function resolveViewerFromRegistry(registry, fallbackModel = null) {
+  const candidateRegistry = registry && typeof registry === "object" ? registry : null;
+  const modelCandidate = fallbackModel || candidateRegistry?.model || candidateRegistry?.loaderModel || null;
+  const registryViewer = candidateRegistry?.viewer || candidateRegistry?.meta?.viewer || null;
+  const accessorViewer = typeof currentViewer === "function" ? currentViewer() : null;
+  if (registryViewer) return registryViewer;
+  if (accessorViewer) return accessorViewer;
+  if (modelCandidate?.viewer) return modelCandidate.viewer;
+  if (modelCandidate?.scene?.viewer) return modelCandidate.scene.viewer;
+  if (typeof window !== "undefined") {
+    return window.viewerAdapter?.viewer || window.viewer || null;
+  }
+  return null;
+}
+
 function ensureHeatmapHandleArray(registry) {
   if (!registry || typeof registry !== "object") {
     return null;
@@ -916,17 +931,7 @@ class DFMOrchestrator {
     const registry = window.viewerAdapter?.registry || window.CAD || {};
     const baseModel = registry?.model || registry?.loaderModel || null;
     const model = baseModel?.sceneModel || baseModel || registry?.loaderModel || null;
-    const viewerCandidates = [
-      registry?.viewer,
-      registry?.meta?.viewer,
-      window.viewerAdapter?.viewer,
-      window.CAD?.viewer,
-      window.viewer,
-      model?.viewer,
-      model?.scene?.viewer,
-      currentViewer?.()
-    ];
-    const viewer = viewerCandidates.find((candidate) => !!candidate) || null;
+    const viewer = resolveViewerFromRegistry(registry, model);
 
     if (!model) {
       console.warn('[dfm] geometry context missing → postpone analysis', { hasViewer: !!viewer, hasModel: !!model });
@@ -1142,9 +1147,9 @@ _draftToRGBA(d) {
 // Calcule d° signé par face → agrège par entité → colorise
 async _applyEntityHeatmapStrict(axisLetter = 'Z', registry = window.CAD || {}) {
   const faces = await this._getStableFaces(axisLetter);
-  const v = window.viewerAdapter?.viewer || window.viewer;
-  if (!faces.length || !v?.scene?.objects) return 0;
   const reg = (registry && typeof registry === 'object') ? registry : (window.CAD || {});
+  const v = resolveViewerFromRegistry(reg);
+  if (!faces.length || !v?.scene?.objects) return 0;
 
   const ax = (axisLetter==='X')?[1,0,0]:(axisLetter==='Y')?[0,1,0]:[0,0,1];
   const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
@@ -1258,7 +1263,8 @@ const faces = await window.orchestrator?._getStableFaces() || [];
   }
 
   async _buildPerFaceDraftMapFromScreen(axisLetter='Z', maxSamples=2500){
-    const viewer = window.viewerAdapter?.viewer || window.viewer;
+    const registry = window.viewerAdapter?.registry || window.CAD || {};
+    const viewer = resolveViewerFromRegistry(registry);
     const canvas =
       document.getElementById('xeokit-canvas') ||
       document.getElementById('xktCanvas') ||
@@ -1319,7 +1325,8 @@ const faces = await window.orchestrator?._getStableFaces() || [];
       alert("Aucun échantillon local pour la heatmap.");
       return 0;
     }
-    const v = window.viewerAdapter?.viewer || window.viewer;
+    const registry = window.viewerAdapter?.registry || window.CAD || {};
+    const v = resolveViewerFromRegistry(registry);
     if (!v?.scene?.objects) { alert("Viewer non initialisé."); return 0; }
 
     const byE = new Map();
@@ -1503,7 +1510,8 @@ clearDraftHeatmap(registry = window.CAD, opts = {}) {
   // --- Fallback: extraction approx depuis le viewer ---
   async _computeFacesFromViewer() {
     try {
-      const v = window.viewerAdapter?.viewer;
+      const registry = window.viewerAdapter?.registry || window.CAD || {};
+      const v = resolveViewerFromRegistry(registry);
       const scene = v?.scene;
       if (!scene) return [];
       const faces = [];
@@ -1593,11 +1601,12 @@ clearDraftHeatmap(registry = window.CAD, opts = {}) {
       hmBtn.id = "dfmHeatmapBtn";
       hmBtn.className = "btn btn-outline-primary btn-sm mt-2";
       hmBtn.textContent = "Afficher heatmap (beta)";
-      if (!window.viewerAdapter?.viewer) hmBtn.disabled = true;
-hmBtn.addEventListener("click", () => {
-  // on affiche le bucket "ok" par défaut (tu peux mettre 'zero' ou 'undercut')
-  window.applyDraftHeatmap?.('ok');
-});
+      const registry = window.viewerAdapter?.registry || window.CAD || {};
+      if (!resolveViewerFromRegistry(registry)) hmBtn.disabled = true;
+      hmBtn.addEventListener("click", () => {
+        // on affiche le bucket "ok" par défaut (tu peux mettre 'zero' ou 'undercut')
+        window.applyDraftHeatmap?.('ok');
+      });
       panel.appendChild(hmBtn);
     }
 
@@ -1609,7 +1618,8 @@ hmBtn.addEventListener("click", () => {
     if (!fileId) return;
     const preset = await loadCameraPresetOptional(`/static/dfm/${fileId}/camera_states.json`);
     if (preset?.iso) {
-      const cam = window.viewerAdapter?.viewer?.camera;
+      const registry = window.viewerAdapter?.registry || window.CAD || {};
+      const cam = resolveViewerFromRegistry(registry)?.camera;
       if (cam) {
         cam.eye = preset.iso.eye;
         cam.look = preset.iso.look;
