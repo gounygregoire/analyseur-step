@@ -25,6 +25,7 @@ import {
   ensureHeatmapLayer
 } from "./modules/DraftHeatmap.js";
 import { ensureGeometryReady } from "./DFMOrchestrator.js";
+import { installProbeSafe } from "./modules/probeSafe.js";
 
 /* ---------- utils DOM ---------- */
 const $  = (s) => document.querySelector(s);
@@ -187,11 +188,17 @@ function setHeatmapButtonsDisabled(disabled, reason = "ready") {
       } else {
         btn.removeAttribute("aria-busy");
       }
+      if (btn.id === "btnHeatmapDepouille") {
+        btn.classList.add("is-loading");
+      }
     } else {
       if (meta.prevDisabled === false) {
         btn.disabled = false;
       }
       btn.removeAttribute("aria-busy");
+      if (btn.id === "btnHeatmapDepouille") {
+        btn.classList.remove("is-loading");
+      }
       heatmapButtonMeta.delete(btn);
     }
   }
@@ -901,6 +908,70 @@ function resetDraftHeatmap({ clearCache = false } = {}) {
   }
 }
 
+function setHeatmapVisibility(show) {
+  const layer = getHeatmapLayer();
+  if (!layer) {
+    return;
+  }
+  const shouldShow = show !== false;
+  try {
+    layer.setVisible(shouldShow);
+  } catch (err) {
+    console.warn('[heatmap] toggle visibility failed', err);
+  }
+  if (shouldShow) {
+    __draftHeatmapActive = true;
+    const legendHidden = __draftLegendEl?.__softHidden || !__draftLegendEl;
+    if (legendHidden && __draftState) {
+      const mode = __lastDraftMode || __draftState.mode || DEFAULT_DRAFT_MODE;
+      renderDraftLegend(__draftState, mode);
+    }
+    const heatmapState = window.CAD?.heatmap;
+    if (heatmapState && typeof heatmapState === 'object') {
+      heatmapState.active = true;
+    }
+  } else {
+    hideDraftHeatmapOverlay({ keepState: true, softLegend: true });
+  }
+}
+
+async function renderDraftHeatmap({ axis, show = true } = {}) {
+  if (!show) {
+    setHeatmapVisibility(false);
+    return;
+  }
+
+  const registry = window.CAD || {};
+  if (!registry?.model) {
+    throw new Error('MODEL_NOT_READY');
+  }
+
+  const axisVector = axis || getSelectedAxisVector();
+  const thresholdDeg = getDraftThresholdDeg();
+  const existingState = __draftState;
+  const sameAxis = existingState && axisSignature(existingState.axis) === axisSignature(axisVector);
+  const sameThreshold = existingState && Math.abs(Number(existingState.thresholdDeg || 0) - Number(thresholdDeg || 0)) < 1e-3;
+  const hasEntries = Array.isArray(existingState?.entries) && existingState.entries.length > 0;
+
+  let stateToUse = existingState;
+  if (!stateToUse || !sameAxis || !sameThreshold || !hasEntries) {
+    stateToUse = await applyDraftHeatmapModule({ registry, axis: axisVector, thresholdDeg });
+  }
+
+  const targetMode = __lastDraftMode || stateToUse?.mode || DEFAULT_DRAFT_MODE;
+  await applyDraftHeatmapUI(targetMode, {
+    axisVector,
+    thresholdDeg,
+    stateOverride: stateToUse,
+    readyTimeoutMs: 1500,
+    readyCheckEveryMs: 75
+  });
+
+  const heatmapState = registry.heatmap || (registry.heatmap = {});
+  heatmapState.active = true;
+  setHeatmapVisibility(true);
+}
+
 async function applyDraftHeatmapUI(mode = DEFAULT_DRAFT_MODE, opts = {}) {
   const stateOverride = opts?.stateOverride || null;
   if (mode === 'reset' || opts.reset) {
@@ -975,7 +1046,7 @@ function bindClick(sel, cb) {
 bindClick("#btnHeatmapOK",       () => applyDraftHeatmapUI('ok'));
 bindClick("#btnHeatmapZero",     () => applyDraftHeatmapUI('zero'));
 bindClick("#btnHeatmapUndercut", () => applyDraftHeatmapUI('undercut'));
-bindClick("#btnHeatmapDepouille", async () => {
+bindClick("#btnHeatmapDepouille", () => {
   const registry = window.CAD || null;
   if (!registry?.model) {
     showHeatmapToast("Le modèle s'initialise, réessaie dans 1 s.", "info");
@@ -988,16 +1059,18 @@ bindClick("#btnHeatmapDepouille", async () => {
     return;
   }
 
-  if (__draftHeatmapActive) {
-    hideDraftHeatmapOverlay({ keepState: true, softLegend: true });
+  const model = registry.loaderModel || registry.model;
+  const axis = getSelectedAxisVector();
+  if (!axis) {
+    showHeatmapToast("Choisis un axe de dépouille (X, Y ou Z).", "warn");
     return;
   }
 
   if (!layer.isReady || !registry?.heatmap?.ready) {
-    showHeatmapToast("Préparation de la géométrie…", "info");
+    showHeatmapToast("Préparation de la géométrie… réessaie dans 1 seconde.", "info");
     if (typeof layer.awaitReadyAndMaybeWarmup === "function") {
       try {
-        layer.awaitReadyAndMaybeWarmup({ viewer, model: registry.loaderModel || registry.model });
+        layer.awaitReadyAndMaybeWarmup({ viewer, model });
       } catch (err) {
         console.warn("[heatmap] warmup restart failed", err);
       }
@@ -1005,44 +1078,51 @@ bindClick("#btnHeatmapDepouille", async () => {
     return;
   }
 
-  const axis = getSelectedAxisVector();
-  const thresholdDeg = getDraftThresholdDeg();
-  const existingState = __draftState;
-  const sameAxis = existingState && axisSignature(existingState.axis) === axisSignature(axis);
-  const sameThreshold = existingState && Math.abs(Number(existingState.thresholdDeg || 0) - Number(thresholdDeg || 0)) < 1e-3;
-  const hasEntries = Array.isArray(existingState?.entries) && existingState.entries.length > 0;
-  if (existingState && sameAxis && sameThreshold && hasEntries && typeof layer.renderDraft === "function") {
-    try {
-      const reuseMode = __lastDraftMode || existingState.mode || DEFAULT_DRAFT_MODE;
-      return await applyDraftHeatmapUI(reuseMode, {
-        axisVector: axis,
-        thresholdDeg,
-        stateOverride: existingState
-      });
-    } catch (err) {
-      console.warn("[heatmap] reuse failed, fallback to recompute", err);
-    }
-  }
+  let pending = null;
+  const btn = document.querySelector("#btnHeatmapDepouille");
+  const toggleResult = layer.toggle({
+    model,
+    axis,
+    renderFn: ({ recompute, visibleOnly, show, axis: renderAxis } = {}) => {
+      if (visibleOnly) {
+        setHeatmapVisibility(show);
+        return;
+      }
+      if (!recompute) {
+        return;
+      }
 
-  try {
-    const state = await applyDraftHeatmapModule({ registry, axis, thresholdDeg });
-    return applyDraftHeatmapUI("ok", {
-      axisVector: axis,
-      thresholdDeg,
-      stateOverride: state,
-      readyTimeoutMs: 1500,
-      readyCheckEveryMs: 75
-    });
-  } catch (err) {
-    const code = err?.message || err;
-    if (code === "GEOMETRY_NOT_READY") {
-      console.info("[heatmap] geometry still initializing");
-      showHeatmapToast("Préparation de la géométrie…", "info");
-      return;
+      const finalAxis = renderAxis || axis;
+      const promise = Promise.resolve(renderDraftHeatmap({ axis: finalAxis, show }));
+      if (btn) {
+        btn.disabled = true;
+        btn.classList.add("is-loading");
+        btn.setAttribute("aria-busy", "true");
+      }
+      pending = promise
+        .catch((err) => {
+          const code = err?.message || err;
+          if (code === "GEOMETRY_NOT_READY") {
+            showHeatmapToast("Préparation de la géométrie…", "info");
+          } else if (code === "MODEL_NOT_READY") {
+            showHeatmapToast("Heatmap indisponible pour le moment.", "error");
+          } else {
+            showHeatmapToast("Heatmap indisponible pour le moment.", "error");
+          }
+          console.warn("[heatmap] toggle render failed", err);
+          throw err;
+        })
+        .finally(() => {
+          if (btn) {
+            btn.disabled = false;
+            btn.classList.remove("is-loading");
+            btn.removeAttribute("aria-busy");
+          }
+        });
     }
-    console.warn("[heatmap] apply error", code);
-    showHeatmapToast("Heatmap indisponible pour le moment.", "error");
-  }
+  });
+
+  return pending || Promise.resolve(toggleResult);
 });
 
 /* Recalcul auto quand l’axe change */
@@ -1367,177 +1447,7 @@ async function loadLocalXKT(file) {
 // lorsqu’un File est présent.
 
 /* ====================== PROBE SAFE (faces) ====================== */
-(function installProbeSafe(){
-  // Si une version "hard" est déjà installée, on ne touche pas.
-  if (typeof window.__getFaces === 'function' && window.__getFaces.__dfmPatch === 'hard') {
-    console.log('[probe safe] déjà patché (hard), skip.');
-    return;
-  }
-
-  const sleep = (ms)=> new Promise(r=>setTimeout(r,ms));
-
-  const viewer = window.viewerAdapter?.viewer || window.viewer;
-  const canvasEl =
-    document.getElementById('xeokit-canvas') ||
-    document.getElementById('xktCanvas') ||
-    document.querySelector('canvas');
-
-  if (!viewer || !viewer.scene) {
-    console.warn('[probe safe] viewer non prêt, la sonde attendra le scene.aabb');
-  }
-  if (!canvasEl) {
-    console.warn('[probe safe] canvas introuvable – sonde limitée.');
-  }
-
-  async function waitSceneReady(maxMs=2000){
-    const t0 = performance.now();
-    while (performance.now()-t0 < maxMs){
-      const a = viewer?.scene?.aabb;
-      if (a && (a[3]-a[0])>1e-6 && (a[4]-a[1])>1e-6 && (a[5]-a[2])>1e-6) return true;
-      await sleep(50);
-    }
-    return true;
-  }
-
-  // Fallback géométrique : parcourt les meshes et reconstruit des normales
-  function geometryFallback(maxSamples = 4000) {
-    try {
-      const scene = viewer?.scene;
-      if (!scene) return [];
-      const meshes = [];
-      if (scene.meshes) {
-        for (const k in scene.meshes) if (scene.meshes[k]) meshes.push(scene.meshes[k]);
-      } else if (scene.objects) {
-        for (const k in scene.objects) {
-          const o = scene.objects[k];
-          if (o && (o.geometry || o._geometry || o._state?.geometry)) meshes.push(o);
-        }
-      } else if (scene.iterate) {
-        scene.iterate((n) => { if (n?.geometry) meshes.push(n); });
-      }
-      if (!meshes.length) return [];
-
-      const arr = (x) => x?.data || x?.array || x || null;
-      const faces = [];
-      const MAX = Math.max(1000, Math.min(maxSamples, 12000));
-      let budget = MAX;
-
-      const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
-      const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
-      const len=(v)=>Math.hypot(v[0],v[1],v[2])||1;
-      const norm=(v)=>{ const L=len(v); return [v[0]/L,v[1]/L,v[2]/L]; };
-
-      for (const m of meshes) {
-        if (budget <= 0) break;
-        const g = m.geometry || m._geometry || m._state?.geometry || {};
-        let P = arr(g.positions || g._positions || g.vertexPositions || g._vertexPositions || g.decompressedPositions || g.positionsDecompressed || g._state?.positions);
-        let I = arr(g.indices   || g._indices   || g.triangles       || g._triangles       || g._state?.indices);
-        if (!P && typeof g.getPositions === 'function') { try { P = arr(g.getPositions()); } catch {} }
-        if (!I && typeof g.getIndices   === 'function') { try { I = arr(g.getIndices());   } catch {} }
-        if (!P || !I) continue;
-
-        const wm = m.worldMatrix || m.matrix || m.worldTransform?.matrix || m.transform?.matrix ||
-                   [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
-        const mul4x4 = (mat,[x,y,z]) => [
-          mat[0]*x + mat[4]*y + mat[8]*z + mat[12],
-          mat[1]*x + mat[5]*y + mat[9]*z + mat[13],
-          mat[2]*x + mat[6]*y + mat[10]*z+ mat[14]
-        ];
-
-        const triCount = Math.floor(I.length/3);
-        const step = Math.max(1, Math.ceil(triCount / Math.max(256, Math.min(budget, 4096))));
-        for (let i=0; i<I.length-2 && budget>0; i += 3*step) {
-          const i0 = I[i]*3, i1 = I[i+1]*3, i2 = I[i+2]*3;
-          const p0 = mul4x4(wm, [P[i0], P[i0+1], P[i0+2]]);
-          const p1 = mul4x4(wm, [P[i1], P[i1+1], P[i1+2]]);
-          const p2 = mul4x4(wm, [P[i2], P[i2+1], P[i2+2]]);
-          const u = sub(p1,p0), v = sub(p2,p0);
-          const n = norm(cross(u,v));
-          const area = 0.5 * len(cross(u,v));
-          faces.push({ normal:n, area, source:"mesh-fallback" });
-          budget--;
-        }
-      }
-      console.log('[probe safe] faces via MESH fallback =', faces.length);
-      return faces;
-    } catch (e) {
-      console.warn('[probe safe] mesh fallback error', e);
-      return [];
-    }
-  }
-
-  // Sonde écran : échantillonnage uniforme + identifiant d’entité
-  const hardImpl = async function __getFaces_impl(maxSamples = 3500){
-    await waitSceneReady(1200);
-    if (!viewer || !canvasEl) return [];
-
-    const W = canvasEl.clientWidth  || canvasEl.width  || 512;
-    const H = canvasEl.clientHeight || canvasEl.height || 512;
-    const areaScreen = W * H;
-
-    const nx = Math.max(24, Math.round(Math.sqrt(maxSamples * (W/H))));
-    const ny = Math.max(24, Math.round(maxSamples / nx));
-    const stepX = W / nx, stepY = H / ny;
-    const sampleArea = areaScreen / (nx*ny);
-
-    const norm = (v)=>{ const L=Math.hypot(v[0],v[1],v[2])||1; return [v[0]/L,v[1]/L,v[2]/L]; };
-    const faces = [];
-
-    for (let iy=0; iy<ny; iy++){
-      const y = (iy+0.5)*stepY;
-      for (let ix=0; ix<nx; ix++){
-        const x = (ix+0.5)*stepX;
-        const hit = viewer.scene.pick?.({ canvasPos:[x,y], pickSurface:true });
-        if (hit && hit.worldNormal){
-          const eid = hit.entity?.id || hit.mesh?.id || hit.object?.id || null;
-          faces.push({ normal: norm(hit.worldNormal), area: sampleArea, source: "screen-pick", eid });
-        }
-      }
-    }
-
-    // Fallback si on n'a rien pické
-    if (!faces.length) {
-      const fb = geometryFallback(Math.max(1000, maxSamples));
-      if (fb.length) {
-        console.log('[probe safe] faces via geometry fallback =', fb.length);
-        return fb;
-      }
-    }
-
-    console.log('[probe safe] faces(canvas-wide) =', faces.length);
-    return faces;
-  };
-  // tag interne (utile si un autre script checke)
-  Object.defineProperty(hardImpl, '__dfmPatch', { value: 'hard', enumerable:false });
-
-  // Soft-lock : si la propriété existe et est reconfigurable → on la remplace,
-  // sinon on crée un getter/setter qui ignore les overrides futurs (sans erreur).
-  try {
-    const desc = Object.getOwnPropertyDescriptor(window, '__getFaces');
-    if (desc && desc.configurable !== false) {
-      try { delete window.__getFaces; } catch {}
-      Object.defineProperty(window, '__getFaces', {
-        configurable: true,
-        get(){ return hardImpl; },
-        set(v){ console.warn('[probe safe] override __getFaces ignoré'); },
-      });
-    } else if (!desc) {
-      Object.defineProperty(window, '__getFaces', {
-        configurable: true,
-        get(){ return hardImpl; },
-        set(v){ console.warn('[probe safe] override __getFaces ignoré'); },
-      });
-    } else {
-      // non reconfigurable : on ne jette pas d’erreur, on laisse l’existante
-      console.warn('[probe safe] __getFaces non reconfigurable, conservation de la version existante');
-    }
-    console.log('[probe safe] installed (main.js)');
-  } catch (e) {
-    // Dernier filet: simple assign (ne jette pas si propriété simple writable)
-    try { window.__getFaces = hardImpl; console.log('[probe safe] installed (assign)'); }
-    catch (err){ console.warn('[probe safe] install failed', err); }
-  }
-})();
+installProbeSafe(viewer);
 
 /* ---------- FICHIERS / upload ---------- */
 async function uploadAndShow(file) {

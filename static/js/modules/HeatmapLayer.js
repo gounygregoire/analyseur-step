@@ -7,6 +7,7 @@ import {
   Mesh,
   PhongMaterial
 } from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
+import { ensureModelGeometryReady } from "./DraftHeatmap.js";
 
 const DEFAULT_HEATMAP_BUTTON_SELECTORS = [
   "#btnHeatmapDepouille",
@@ -17,26 +18,6 @@ const DEFAULT_HEATMAP_BUTTON_SELECTORS = [
   "[data-heatmap-toggle]",
   "[data-role=\"heatmap-toggle\"]"
 ];
-
-let ensureModelGeometryReadyLoader = null;
-
-async function loadEnsureModelGeometryReady() {
-  if (ensureModelGeometryReadyLoader) {
-    return ensureModelGeometryReadyLoader;
-  }
-  ensureModelGeometryReadyLoader = import("./DraftHeatmap.js")
-    .then((mod) => {
-      if (typeof mod.ensureModelGeometryReady === "function") {
-        return mod.ensureModelGeometryReady;
-      }
-      throw new Error("ensureModelGeometryReady unavailable");
-    })
-    .catch((err) => {
-      ensureModelGeometryReadyLoader = null;
-      throw err;
-    });
-  return ensureModelGeometryReadyLoader;
-}
 
 function arrayFromLike(value) {
   if (!value) return [];
@@ -118,6 +99,7 @@ export default class HeatmapLayer {
     this._lastReadyBroadcast = null;
     this._lastWaitingBroadcast = null;
     this._buttonMeta = new WeakMap();
+    this._lastToggleKey = null;
     if (this.registry && typeof this.registry === "object") {
       const heatmapState = this.registry.heatmap || (this.registry.heatmap = {});
       if (!heatmapState.layer) {
@@ -176,23 +158,47 @@ export default class HeatmapLayer {
     return next;
   }
 
-  async awaitReadyAndMaybeWarmup({ viewer, model } = {}) {
-    const targetViewer = viewer || this.viewer || this.registry?.viewer;
-    const registryModel = this.registry?.model;
-    const candidateModel = model || registryModel || this.registry?.loaderModel;
-    if (!targetViewer || !candidateModel) {
+  async awaitReadyAndMaybeWarmup(input = {}) {
+    const options = (input && typeof input === "object" && !Array.isArray(input)) ? input : {};
+    let targetViewer = this.viewer || this.registry?.viewer;
+    let candidateModel = this.registry?.model || this.registry?.loaderModel;
+
+    if (options.viewer) {
+      targetViewer = options.viewer;
+    }
+    if (options.model) {
+      candidateModel = options.model;
+    } else if (!options.viewer && !options.model && this._looksLikeModel(input)) {
+      candidateModel = input;
+    } else if (options && this._looksLikeModel(options)) {
+      candidateModel = options;
+    }
+    if (!options.viewer && !options.model && !this._looksLikeModel(input) && typeof input !== "object") {
+      if (input) {
+        candidateModel = input;
+      }
+    }
+
+    const viewer = targetViewer;
+    const model = candidateModel;
+    const maxWaitMs = Number(options.maxWaitMs) > 0 ? Number(options.maxWaitMs) : undefined;
+
+    if (!viewer || !model) {
       this.setWaiting(false);
       this.setReadyState(false);
       return false;
     }
 
-    if (this._warmupDone.has(candidateModel)) {
+    const alreadyWarm = this._warmupDone.has(model);
+    if (alreadyWarm) {
       this.setWaiting(false);
       this.setReadyState(true);
       return true;
     }
 
-    const existing = this._warmupPromises.get(candidateModel);
+    this._lastToggleKey = null;
+
+    const existing = this._warmupPromises.get(model);
     if (existing) {
       this.setWaiting(true);
       try {
@@ -211,24 +217,27 @@ export default class HeatmapLayer {
     this.setReadyState(false);
 
     const waitPromise = (async () => {
-      const ensureReady = await loadEnsureModelGeometryReady();
-      await ensureReady({ viewer: targetViewer, model: candidateModel });
-      this._warmupDone.add(candidateModel);
+      const params = { viewer, model };
+      if (maxWaitMs) {
+        params.maxWaitMs = maxWaitMs;
+      }
+      await ensureModelGeometryReady(params);
+      this._warmupDone.add(model);
       return true;
     })();
 
-    this._warmupPromises.set(candidateModel, waitPromise);
+    this._warmupPromises.set(model, waitPromise);
 
     try {
       const ok = await waitPromise;
       this.setReadyState(ok === true);
       return ok === true;
     } catch (err) {
-      this._warmupDone.delete(candidateModel);
+      this._warmupDone.delete(model);
       this.setReadyState(false);
       throw err;
     } finally {
-      this._warmupPromises.delete(candidateModel);
+      this._warmupPromises.delete(model);
       this.setWaiting(false);
     }
   }
@@ -259,6 +268,34 @@ export default class HeatmapLayer {
         handle.mesh.visible = this._visible;
       }
     }
+  }
+
+  toggle({ model, axis, renderFn } = {}) {
+    const modelId = model?.id
+      ?? this.registry?.model?.id
+      ?? this.registry?.loaderModel?.id
+      ?? "unknown";
+    const axisKey = this._axisKey(axis);
+    const key = `${modelId}|${axisKey}`;
+    const same = key === this._lastToggleKey;
+    const hasOverlays = this._overlays.length > 0;
+
+    if (same && hasOverlays) {
+      this._visible = !this._visible;
+      this.setVisible(this._visible);
+      if (typeof renderFn === "function") {
+        renderFn({ visibleOnly: true, show: this._visible });
+      }
+      return this._visible;
+    }
+
+    this._lastToggleKey = key;
+    this._visible = true;
+    this.setVisible(true);
+    if (typeof renderFn === "function") {
+      renderFn({ recompute: true, axis, show: true });
+    }
+    return true;
   }
 
   apply(mapping = {}) {
@@ -413,6 +450,33 @@ export default class HeatmapLayer {
 
   getHandles() {
     return this._overlays.slice();
+  }
+
+  _axisKey(axis) {
+    if (axis && typeof axis === "object") {
+      const vector = axis.vector && typeof axis.vector === "object"
+        ? axis.vector
+        : axis;
+      const x = Number(vector.x) || 0;
+      const y = Number(vector.y) || 0;
+      const z = Number(vector.z) || 0;
+      return `${x.toFixed(6)},${y.toFixed(6)},${z.toFixed(6)}`;
+    }
+    if (typeof axis === "string") {
+      const trimmed = axis.trim();
+      if (trimmed) {
+        return trimmed.toLowerCase();
+      }
+    }
+    return "none";
+  }
+
+  _looksLikeModel(value) {
+    if (!value || typeof value !== "object") return false;
+    if (value.meshes || value.meshList || value.sceneModel) return true;
+    if (typeof value.id !== "undefined" && (value.meshes || value.meshList || value.sceneModel)) return true;
+    if (value.modelId || value.modelID) return true;
+    return false;
   }
 
   _dispatchReadyEvent(ready) {
