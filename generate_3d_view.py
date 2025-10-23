@@ -3,7 +3,7 @@ import json
 import time
 import resource
 import logging
-from typing import Tuple, Dict, Callable
+from typing import Tuple, Dict, Callable, Optional
 
 try:
     import trimesh
@@ -21,7 +21,7 @@ def generate_view_data(
     file_id: str,
     progress_cb: Callable[[int], None] | None = None,
     fast_mode: bool = False,
-) -> Tuple[Dict[str, Dict], Dict[str, float]]:
+) -> Tuple[Dict[str, Dict], Dict[str, float], Optional[str]]:
     """Compute heatmap then camera states for a mesh."""
 
     out_dir = os.path.join("static", "dfm", file_id)
@@ -30,13 +30,27 @@ def generate_view_data(
     logger = logging.getLogger(__name__)
     t = time.perf_counter()
     heatmap_faces: Dict[str, float] = {}
+    heatmap_notice: Optional[str] = None
     if not fast_mode:
-        if stl_path and generate_heatmap and os.path.exists(stl_path):
+        if not stl_path or not os.path.exists(stl_path):
+            logger.warning("dfm heatmap skipped: STL path missing (%s)", stl_path)
+            heatmap_notice = "Heatmap indisponible : le maillage STL est introuvable."
+        elif not generate_heatmap:
+            logger.warning("dfm heatmap skipped: generator not available")
+            heatmap_notice = "Heatmap indisponible sur cette analyse : module serveur absent."
+        else:
             try:
                 faces = generate_heatmap(stl_path)
                 heatmap_faces = {str(f["face_index"]): float(f["severity"]) for f in faces}
+                face_count = len(heatmap_faces)
+                logger.info("dfm heatmap faces=%d", face_count)
+                if face_count == 0:
+                    heatmap_notice = "Heatmap indisponible : aucune surface analysable sur ce modèle."
+                    logger.warning("dfm heatmap empty for %s", file_id)
             except Exception:
+                logger.exception("dfm heatmap generation failed for %s", file_id)
                 heatmap_faces = {}
+                heatmap_notice = "Heatmap indisponible : échec du calcul sur ce modèle."
         heat_file = os.path.join(out_dir, "heatmap_faces.json")
         with open(heat_file, "w", encoding="utf-8") as fh:
             json.dump(heatmap_faces, fh)
@@ -73,4 +87,4 @@ def generate_view_data(
     mem = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
     logger.info("dfm cameras dt=%.2fs rss=%.1fMB", time.perf_counter() - t, mem)
 
-    return camera_states, heatmap_faces
+    return camera_states, heatmap_faces, heatmap_notice

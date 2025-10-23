@@ -75,7 +75,7 @@ def run_dfm(
     file_id = input.get("file_id") if isinstance(input, dict) else getattr(input, "file_id")
     out_dir = os.path.join("static", "dfm", file_id)
     t = time.perf_counter()
-    camera_states, heatmap_faces = generate_view_data(
+    camera_states, heatmap_faces, heatmap_notice = generate_view_data(
         stl_path, file_id, progress_cb, fast_mode=fast_mode
     )
     _log("views_heatmap", t)
@@ -90,13 +90,20 @@ def run_dfm(
 
     views = {"camera_states": camera_states, "thumbnails": thumbnails}
     heatmaps = {"faces": heatmap_faces} if heatmap_faces else {}
+    issues = []
+    if heatmap_notice:
+        issues.append({
+            "type": "heatmap",
+            "severity": "warn",
+            "message": heatmap_notice,
+        })
 
     from types import SimpleNamespace
 
     flags = {"partial": True} if fast_mode else {}
     return SimpleNamespace(
         metrics=metrics,
-        issues=[],
+        issues=issues,
         heatmaps=heatmaps,
         views=views,
         report_paths={},

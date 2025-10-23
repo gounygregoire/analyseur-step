@@ -17,8 +17,9 @@ def test_generate_view_data(tmp_path):
     stl_path = tmp_path / "cube.stl"
     mesh.export(stl_path)
 
-    camera_states, heatmap = generate_view_data(str(stl_path), "unitcube")
+    camera_states, heatmap, notice = generate_view_data(str(stl_path), "unitcube")
     assert set(camera_states.keys()) == {"iso", "top", "right", "front"}
+    assert notice is None
 
     cam_file = pathlib.Path("static/dfm/unitcube/camera_states.json")
     heat_file = pathlib.Path("static/dfm/unitcube/heatmap_faces.json")
