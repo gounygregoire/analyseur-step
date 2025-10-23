@@ -900,6 +900,25 @@ class DFMOrchestrator {
       return;
     }
 
+    const viewer = window.viewerAdapter?.viewer || window.CAD?.viewer || window.viewer || null;
+    const registry = window.viewerAdapter?.registry || window.CAD || {};
+    const baseModel = registry?.model || null;
+    const model = baseModel?.sceneModel || baseModel;
+
+    if (!viewer || !model) {
+      console.warn('[dfm] geometry context missing → postpone analysis', { hasViewer: !!viewer, hasModel: !!model });
+      UI.info?.('Modèle encore en préparation, réessaie dans quelques secondes.');
+      return;
+    }
+
+    try {
+      await ensureModelGeometryReady({ viewer, model });
+    } catch (err) {
+      console.warn('[dfm] geometry not ready → skip analysis', err);
+      UI.info?.('Modèle encore en préparation, réessaie dans quelques secondes.');
+      return;
+    }
+
     UI.progress?.(5);
     UI.setLoading?.(true);
     this.state.running = true;
