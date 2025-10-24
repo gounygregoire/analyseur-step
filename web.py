@@ -937,6 +937,40 @@ def __diag():
         info["converter_health"] = {"ok": False, "error": str(e)}
     return jsonify(info)
 
+
+@app.route("/debug/xkt/<file_id>")
+def debug_xkt(file_id: str):
+    glb_path = os.path.join(OUTPUT_FOLDER, f"{file_id}.glb")
+    xkt_path = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+
+    def _count_faces(path: str) -> int:
+        try:
+            import trimesh  # type: ignore
+
+            scene = trimesh.load(path, force="scene")
+            if hasattr(scene, "geometry"):
+                return sum(
+                    getattr(geom, "faces", []).shape[0]
+                    for geom in scene.geometry.values()
+                )
+            return int(getattr(scene, "faces", []).shape[0])
+        except Exception:
+            return -1
+
+    data = {
+        "file_id": file_id,
+        "exists_glb": os.path.exists(glb_path),
+        "exists_xkt": os.path.exists(xkt_path),
+        "glb_faces": _count_faces(glb_path) if os.path.exists(glb_path) else -1,
+        "glb_size": os.path.getsize(glb_path) if os.path.exists(glb_path) else 0,
+        "xkt_size": os.path.getsize(xkt_path) if os.path.exists(xkt_path) else 0,
+    }
+
+    return app.response_class(
+        response=json.dumps(data), status=200, mimetype="application/json"
+    )
+
+
 @app.get("/__s3_env")
 def __s3_env():
     return jsonify({
