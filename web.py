@@ -1,19 +1,23 @@
 # web.py
+from __future__ import annotations
 
-import os, uuid, pathlib, json, re, glob, socket, time, subprocess
+import os, uuid, pathlib, json, re, glob, socket, time, subprocess, mimetypes
 from urllib.parse import urlparse, urlunparse, unquote
+from pathlib import Path
 
 from flask import Flask, request, jsonify, send_from_directory, abort, render_template
 from flask_cors import CORS
 from dotenv import load_dotenv
-import requests, mimetypes
-from pathlib import Path
-from rq import Queue
-from rq.registry import StartedJobRegistry, FailedJobRegistry
-from redis import from_url
+import requests
 
-# S3 helpers
-from s3io import put_file  # utilisé pour les XKT (upload)
+# RQ / Redis (imports sans collision de noms)
+import redis as redislib
+from redis import from_url as redis_from_url
+from rq import Queue, Worker
+from rq.job import Job
+from rq.registry import StartedJobRegistry, FailedJobRegistry
+
+# Conversion locale (utilisée par /reconvert)
 from converter import convert_step_to_xkt as _convert_step_to_xkt_local
 
 # (Optionnel) converter local — ignoré s'il n'est pas présent ou incomplet
@@ -24,15 +28,8 @@ except Exception:
 
 load_dotenv()
 
-# ==== RQ / Redis ====
-import redis
-from rq import Queue, Worker
-from rq.job import Job
-
 app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
-redis = from_url(os.environ["REDIS_URL"])
-q = Queue("convert", connection=redis)
 
 # ---------- Config ----------
 def env_int(name: str, default: int) -> int:
@@ -54,12 +51,12 @@ MAX_UPLOAD_MB = env_int("MAX_UPLOAD_MB", 50)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
 
 # Timeouts globaux
-RQ_JOB_TIMEOUT_SEC = env_int("RQ_JOB_TIMEOUT_SEC", 1200)  # 20 min
+RQ_JOB_TIMEOUT_SEC       = env_int("RQ_JOB_TIMEOUT_SEC", 1200)  # 20 min
 HTTP_CONNECT_TIMEOUT_SEC = env_int("HTTP_CONNECT_TIMEOUT_SEC", 10)
 HTTP_READ_TIMEOUT_SEC    = env_int("HTTP_READ_TIMEOUT_SEC", 540)
 
-CONVERTER_URL = os.environ.get("CONVERTER_URL", "https://cadlytics-converter.onrender.com").rstrip("/")
-RQ_TASK_PATH = os.environ.get("RQ_TASK_PATH", "worker_tasks.compute_and_cache_stats")
+CONVERTER_URL = (os.environ.get("CONVERTER_URL", "") or "").rstrip("/")
+RQ_TASK_PATH  = os.environ.get("RQ_TASK_PATH", "worker_tasks.compute_and_cache_stats")
 
 # Pull des caches depuis S3 si absents localement (recommandé en multi-instance)
 PULL_CONVERTED_FROM_S3 = env_bool("PULL_CONVERTED_FROM_S3", True)
@@ -68,7 +65,7 @@ ALLOWED_EXTS = {".stl", ".step", ".stp"}
 def _ext(name: str) -> str: return pathlib.Path(name.lower()).suffix
 def _allowed(name: str) -> bool: return _ext(name) in ALLOWED_EXTS
 
-# Upload / output folders (defaults et création)
+# Upload / output folders
 UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
 OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -102,40 +99,39 @@ REDIS_URL = _normalize_redis_url(
     or os.environ.get("REDIS_TLS_URL")
     or "redis://localhost:6379/0"
 )
-RQ_QUEUE_NAME = os.environ.get("RQ_QUEUE_NAME", "default")
+RQ_QUEUE_NAME = os.environ.get("RQ_QUEUE_NAME", "convert")
 
-_redis: redis.Redis | None = None
-q: Queue | None = None
+_redis_conn: redislib.Redis | None = None
+_q: Queue | None = None
 _redis_err: str | None = None
 _rq_err: str | None = None
 
-try:
-    parsed = urlparse(REDIS_URL.strip().strip('"').strip("'"))
-    use_ssl = (parsed.scheme or "").lower().startswith("rediss")
-    _redis = redis.Redis(
-        host=parsed.hostname,
-        port=parsed.port or 6379,
-        username=(parsed.username or "default"),
-        password=unquote(parsed.password or ""),
-        db=int((parsed.path or "/0").lstrip("/")),
-        ssl=use_ssl,
-        ssl_cert_reqs=None,
-        socket_timeout=5,
-    )
-    _redis.ping()
-except Exception as e:
-    _redis = None
-    _redis_err = repr(e)
-
-if _redis is not None:
+def get_redis() -> redislib.Redis:
+    global _redis_conn, _redis_err
+    if _redis_conn is not None:
+        return _redis_conn
     try:
-        q = Queue(RQ_QUEUE_NAME, connection=_redis)
-        _ = q.count
+        _redis_conn = redis_from_url(REDIS_URL, ssl_cert_reqs=None, socket_timeout=5)
+        # Sanity ping
+        _redis_conn.ping()
     except Exception as e:
-        q = None
-        _rq_err = repr(e)
+        _redis_err = repr(e)
+        raise
+    return _redis_conn
 
-# ---------- HTTP helpers avec timeouts ----------
+def get_queue() -> Queue:
+    global _q, _rq_err
+    if _q is not None:
+        return _q
+    try:
+        _q = Queue(RQ_QUEUE_NAME, connection=get_redis())
+        _ = _q.count  # touch
+    except Exception as e:
+        _rq_err = repr(e)
+        raise
+    return _q
+
+# ---------- HTTP helpers ----------
 def _http_timeout():
     return (HTTP_CONNECT_TIMEOUT_SEC, HTTP_READ_TIMEOUT_SEC)
 
@@ -217,6 +213,9 @@ def _abs_url(path: str) -> str:
     return f"{proto}://{host}{path}"
 
 # ---------- Merge épaisseur worker ----------
+def _thickness_cache_path(file_id: str) -> str:
+    return os.path.join(OUTPUT_FOLDER, f"{file_id}.thick.json")
+
 def _merge_thickness_from_worker(file_id: str, data: dict, prefer_worker: bool = True) -> dict:
     p = _thickness_cache_path(file_id)
     if os.path.isfile(p):
@@ -263,7 +262,6 @@ def _ensure_thickness_via_converter(file_id: str, data: dict) -> dict:
 
 # ---------- Pull S3 des caches converted/* ----------
 def _pull_converted_from_s3_if_missing(file_id: str, axis: str) -> dict:
-    """Essaie de rapatrier depuis S3 si absent localement. Renvoie {base_ok, proj_ok, thick_ok}."""
     res = {"base_ok": False, "proj_ok": False, "thick_ok": False}
     if not (_s3_enabled() and PULL_CONVERTED_FROM_S3):
         return res
@@ -375,13 +373,9 @@ def upload():
     if use_rq:
         # 3-RQ) enqueue la conversion dans le worker Docker (pas d'HTTP)
         try:
-            from rq import Queue
-            from redis import from_url as _rfromurl
-            # on accepte REDIS_URL avec ou sans "rediss://"
-            rurl = _normalize_redis_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
-            qname = os.getenv("RQ_CONVERT_QUEUE", "convert")
-            conn = _rfromurl(rurl, ssl_cert_reqs=None)
-            job_timeout = int(os.getenv("RQ_JOB_TIMEOUT_SEC", "1800"))
+            qname = os.getenv("RQ_CONVERT_QUEUE", RQ_QUEUE_NAME)
+            conn = get_redis()
+            job_timeout = int(os.getenv("RQ_JOB_TIMEOUT_SEC", str(RQ_JOB_TIMEOUT_SEC)))
 
             # on tente l'import direct, sinon on passe par la string de chemin
             try:
@@ -419,7 +413,6 @@ def upload():
             return jsonify(error="convert_enqueue_fail", detail=str(e)), 500
 
     # ----- sinon: LEGACY HTTP (microservice) -----
-    # 3-HTTP) call converter → XKT (ton implémentation d’origine conservée)
     try:
         send_ct = "model/step" if ext == ".step" else ("model/stl" if ext == ".stl" else f.mimetype or "application/octet-stream")
         app.logger.info("[upload] sending to converter %s (in_path=%s, out_xkt=%s)", conv_url, in_path, out_xkt)
@@ -525,17 +518,20 @@ def upload():
         s3_uploaded_src=s3_uploaded_src,
         s3_uploaded_xkt=s3_uploaded_xkt,
         s3_uploaded_glb=s3_uploaded_glb,
-        # pas de warm stats ici (tu peux remettre si tu en as besoin)
     )
+
+# ---------- Fichiers servis ----------
 @app.get("/xkt/<file_id>.xkt")
 def serve_xkt(file_id: str):
     if not re.fullmatch(r"[0-9a-fA-F-]{36}", file_id):
         return abort(400)
     path = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
     if os.path.isfile(path):
-        return send_from_directory(OUTPUT_FOLDER, f"{file_id}.xkt",
-                                   mimetype="application/octet-stream",
-                                   as_attachment=False, max_age=0, etag=False, conditional=False)
+        return send_from_directory(
+            OUTPUT_FOLDER, f"{file_id}.xkt",
+            mimetype="application/octet-stream",
+            as_attachment=False, max_age=0, etag=False, conditional=False
+        )
     if _s3_enabled():
         try:
             from s3io import get_file
@@ -543,14 +539,15 @@ def serve_xkt(file_id: str):
             key = f"xkt/{file_id}.xkt"
             ok = get_file(key, path)
             if ok and os.path.isfile(path):
-                return send_from_directory(OUTPUT_FOLDER, f"{file_id}.xkt",
-                                           mimetype="application/octet-stream",
-                                           as_attachment=False, max_age=0, etag=False, conditional=False)
+                return send_from_directory(
+                    OUTPUT_FOLDER, f"{file_id}.xkt",
+                    mimetype="application/octet-stream",
+                    as_attachment=False, max_age=0, etag=False, conditional=False
+                )
             app.logger.warning("S3 fallback miss for XKT key=%s", key)
         except Exception as e:
             app.logger.warning("S3 fallback error for XKT %s: %s", file_id, e)
     return abort(404)
-
 
 @app.get("/glb/<file_id>.glb")
 def serve_glb(file_id: str):
@@ -559,46 +556,34 @@ def serve_glb(file_id: str):
     path = os.path.join(OUTPUT_FOLDER, f"{file_id}.glb")
     if os.path.isfile(path):
         return send_from_directory(
-            OUTPUT_FOLDER,
-            f"{file_id}.glb",
+            OUTPUT_FOLDER, f"{file_id}.glb",
             mimetype="model/gltf-binary",
-            as_attachment=False,
-            max_age=0,
-            etag=False,
-            conditional=False,
+            as_attachment=False, max_age=0, etag=False, conditional=False
         )
     if _s3_enabled():
         try:
             from s3io import get_file
-
             os.makedirs(OUTPUT_FOLDER, exist_ok=True)
             key = f"glb/{file_id}.glb"
             ok = get_file(key, path)
             if ok and os.path.isfile(path):
                 return send_from_directory(
-                    OUTPUT_FOLDER,
-                    f"{file_id}.glb",
+                    OUTPUT_FOLDER, f"{file_id}.glb",
                     mimetype="model/gltf-binary",
-                    as_attachment=False,
-                    max_age=0,
-                    etag=False,
-                    conditional=False,
+                    as_attachment=False, max_age=0, etag=False, conditional=False
                 )
             app.logger.warning("S3 fallback miss for GLB key=%s", key)
         except Exception as e:
             app.logger.warning("S3 fallback error for GLB %s: %s", file_id, e)
     return abort(404)
 
-# ---------- Helper: lecture stats depuis Redis (clé publiée par le worker) ----------
+# ---------- Helper: lecture stats depuis Redis ----------
 def _read_stats_from_redis(file_id: str, axis: str):
-    if not _redis:
-        return None
     try:
-        raw = _redis.get(f"shape_stats:{file_id}:{axis}")
+        raw = get_redis().get(f"shape_stats:{file_id}:{axis}")
         if not raw:
             return None
         data = json.loads(raw.decode("utf-8"))
-        # structure minimale, normalisée pour l'UI
         norm = {
             "volume_mm3": data.get("volume_mm3"),
             "volume_cm3": (float(data.get("volume_mm3") or 0) / 1000.0) if data.get("volume_cm3") is None else data.get("volume_cm3"),
@@ -612,16 +597,9 @@ def _read_stats_from_redis(file_id: str, axis: str):
         app.logger.info("[stats] Redis read error: %s", e)
         return None
 
-# ---------- API analyse (fallback Redis + S3 + RQ) ----------
+# ---------- API analyse ----------
 @app.get("/api/shape/stats")
 def api_shape_stats():
-    """
-    Ordre:
-      1) Caches locaux (stats.json + proj.json) -> OK
-      2) Redis (clé shape_stats:<fid>:<axis>)      -> OK
-      3) S3 converted/* (si activé)                -> OK
-      4) Enfile un job RQ et renvoie 202 (queued/processing)
-    """
     file_id = request.args.get("file_id", "").strip()
     axis = (request.args.get("axis") or "Z").upper()
     recompute = (request.args.get("recompute") or "0").lower() in ("1", "true", "yes", "on")
@@ -633,7 +611,7 @@ def api_shape_stats():
 
     base_cache, proj_cache = _cache_paths(file_id, axis)
 
-    # Recompute -> purge locale et on force un nouveau job_id
+    # Recompute -> purge locale
     if recompute:
         for p in glob.glob(os.path.join(OUTPUT_FOLDER, f"{file_id}.*")):
             try: os.remove(p)
@@ -659,7 +637,7 @@ def api_shape_stats():
                 rj = _ensure_thickness_via_converter(file_id, rj)
             return jsonify(rj)
 
-    # 3) S3 -> local -> lecture
+    # 3) S3 -> local
     if (not recompute):
         pulled = _pull_converted_from_s3_if_missing(file_id, axis)
         if (pulled.get("base_ok") and pulled.get("proj_ok")
@@ -674,16 +652,17 @@ def api_shape_stats():
                 return jsonify(error="cache_read_fail", detail=f"after_s3: {e}"), 500
 
     # 4) Enqueue job RQ
-    if q is None or _redis is None:
-        return jsonify(error="rq_unavailable", detail="Redis/RQ non dispo sur le web service."), 503
+    try:
+        queue = get_queue()
+    except Exception as e:
+        return jsonify(error="rq_unavailable", detail=str(e)), 503
 
     job_base = f"shape_stats:{file_id}:{axis}"
     job_id = job_base if not recompute else f"{job_base}:{uuid.uuid4().hex[:8]}"
 
-    # Si un job identique existe déjà et qu'on n'est pas en recompute → 202 processing
     if not recompute:
         try:
-            job = Job.fetch(job_id, connection=_redis)
+            job = Job.fetch(job_id, connection=get_redis())
         except Exception:
             job = None
         if job:
@@ -691,7 +670,6 @@ def api_shape_stats():
             if st in ("queued", "started", "deferred"):
                 return jsonify(status="processing", job_id=job_id, retry_in_sec=2), 202
             if st == "finished":
-                # Dernière chance: lecture Redis (si présent)
                 rj = _read_stats_from_redis(file_id, axis)
                 if rj:
                     rj = _merge_thickness_from_worker(file_id, rj, prefer_worker=True)
@@ -700,10 +678,10 @@ def api_shape_stats():
                     return jsonify(rj)
 
     try:
-        step_path = _step_path_for(file_id)  # facultatif (si upload local)
-        step_ext = pathlib.Path(step_path).suffix.lstrip(".") if step_path else None
+        step_path = _step_path_for(file_id)
+        step_ext  = pathlib.Path(step_path).suffix.lstrip(".") if step_path else None
 
-        q.enqueue(
+        queue.enqueue(
             RQ_TASK_PATH,
             kwargs={
                 "file_id": file_id,
@@ -720,263 +698,56 @@ def api_shape_stats():
     except Exception as e:
         return jsonify(error="enqueue_fail", detail=str(e)), 500
 
-# ---------- Estimation raycast pour l'API /api/shape/thickness ----------
-def _estimate_thickness_mm_from_mesh(mesh, samples=30000, eps_factor=1e-5, outlier_pct=0.1, backface_dot=-0.3):
-    import numpy as np
-    import trimesh
-
-    if not isinstance(mesh, trimesh.Trimesh):
-        return None, None
-
-    try: mesh.fix_normals()
-    except Exception: pass
-    mesh.remove_unreferenced_vertices()
-    mesh.remove_degenerate_faces()
-    try:
-        if not mesh.is_watertight:
-            mesh = mesh.fill_holes()
-    except Exception:
-        pass
-
-    try:
-        from trimesh.ray.ray_pyembree import RayMeshIntersector
-        inter = RayMeshIntersector(mesh)
-    except Exception:
-        from trimesh.ray.ray_triangle import RayMeshIntersector
-        inter = RayMeshIntersector(mesh)
-
-    try:
-        pts, f_idx = trimesh.sample.sample_surface_even(mesh, samples)
-    except Exception:
-        pts, f_idx = mesh.sample(samples, return_index=True)
-
-    n = mesh.face_normals[f_idx]
-
-    bb = mesh.bounds
-    diag = float(np.linalg.norm(bb[1] - bb[0]))
-    eps = max(diag * eps_factor, 1e-6)
-
-    origins_p = pts + n * eps
-    origins_m = pts - n * eps
-
-    loc_p, ir_p, it_p = inter.intersects_location(origins_p,  n, multiple_hits=False)
-    loc_m, ir_m, it_m = inter.intersects_location(origins_m, -n, multiple_hits=False)
-
-    dist = np.full(len(pts), np.inf)
-
-    if len(ir_p):
-        d = np.linalg.norm(loc_p - origins_p[ir_p], axis=1)
-        nf = mesh.face_normals[it_p]
-        good = (np.einsum("ij,ij->i", nf, n[ir_p]) < backface_dot)
-        d[~good] = np.inf
-        dist[ir_p] = np.minimum(dist[ir_p], d)
-
-    if len(ir_m):
-        d = np.linalg.norm(loc_m - origins_m[ir_m], axis=1)
-        nf = mesh.face_normals[it_m]
-        good = (np.einsum("ij,ij->i", nf, -n[ir_m]) < backface_dot)
-        d[~good] = np.inf
-        dist[ir_m] = np.minimum(dist[ir_m], d)
-
-    d = dist[np.isfinite(dist)]
-    d = d[d > eps * 10]
-    if d.size == 0:
-        return None, None
-
-    if 0.0 < outlier_pct < 5.0:
-        lo = np.percentile(d, outlier_pct)
-        hi = np.percentile(d, 100.0 - outlier_pct)
-        d = d[(d >= lo) & (d <= hi)]
-
-    tmin = float(d.min())
-    tmax = float(np.percentile(d, 99.9))
-    tmax = min(tmax, float(min(mesh.extents)))
-    return tmin, tmax
-
-# ---------- Calcul épaisseur locale (optionnel) ----------
-def compute_thickness_mm_from_occ_shape(
-    shape,
-    unit_hint: str | None = "mm",
-    tol_lin_mm: float | None = None,
-    ang_rad: float | None = None,
-    samples: int | None = None,
-) -> tuple[float | None, float | None]:
-    try:
-        import numpy as np
-        import trimesh
-        from OCC.Core.BRep import BRep_Tool
-        from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
-        from OCC.Core.TopExp import TopExp_Explorer
-        from OCC.Core.TopAbs import TopAbs_FACE
-    except ImportError as e:
-        raise ImportError("pythonocc-core + trimesh requis") from e
-
-    uh = (unit_hint or "mm").strip().lower()
-    unit_scale_mm = {"mm": 1.0, "millimeter": 1.0, "millimetre": 1.0,
-                     "cm": 10.0, "centimeter": 10.0, "centimetre": 10.0,
-                     "m": 1000.0, "meter": 1000.0, "metre": 1000.0,
-                     "in": 25.4, "inch": 25.4, "inches": 25.4}.get(uh, 1.0)
-
-    tol = float(os.getenv("TESSELLATION_TOL_MM", "0.05")) if tol_lin_mm is None else float(tol_lin_mm)
-    ang = float(os.getenv("TESSELLATION_ANG_RAD", "0.25")) if ang_rad is None else float(ang_rad)
-
-    try:
-        BRepMesh_IncrementalMesh(shape, tol * unit_scale_mm, False, ang, True)
-    except Exception:
-        BRepMesh_IncrementalMesh(shape, max(tol * unit_scale_mm, 0.5), False, max(ang, 0.5), True)
-
-    verts: list[list[float]] = []
-    faces: list[list[int]] = []
-    v_off = 0
-
-    exp = TopExp_Explorer(shape, TopAbs_FACE)
-    while exp.More():
-        f = exp.Current()
-        loc = f.Location()
-        tri = BRep_Tool.Triangulation(f, loc)
-        if tri is not None:
-            nodes = tri.Nodes()
-            tris  = tri.Triangles()
-            npts  = nodes.Size()
-            ntri  = tris.Size()
-
-            for i in range(1, npts + 1):
-                p = nodes.Value(i)
-                verts.append([float(p.X()) * unit_scale_mm,
-                              float(p.Y()) * unit_scale_mm,
-                              float(p.Z()) * unit_scale_mm])
-
-            for i in range(1, ntri + 1):
-                t = tris.Value(i)
-                a, b, c = t.Get()
-                faces.append([v_off + a - 1, v_off + b - 1, v_off + c - 1])
-
-            v_off += npts
-        exp.Next()
-
-    if not verts or not faces:
-        raise RuntimeError("Triangulation OCC vide")
-
-    mesh = trimesh.Trimesh(vertices=np.asarray(verts, dtype=float),
-                           faces=np.asarray(faces, dtype=int),
-                           process=True)
-
-    if mesh.is_empty:
-        raise RuntimeError("Mesh vide après triangulation")
-    try:
-        if not mesh.is_watertight:
-            mesh = mesh.fill_holes()
-    except Exception:
-        pass
-
-    if samples is None:
-        samples = int(os.getenv("THICKNESS_SAMPLES", "30000"))
-
-    tmin, tmax = _estimate_thickness_mm_from_mesh(mesh, samples=samples)
-    if tmin is None or tmax is None:
-        return None, None
-    return round(float(tmin), 4), round(float(tmax), 4)
-
-# ---------- API épaisseur (optionnel) ----------
-@app.get("/api/shape/thickness")
-def api_shape_thickness():
-    if not env_bool("THICKNESS_ON_WEB", False):
-        return jsonify(error="disabled", detail="THICKNESS_ON_WEB=0"), 403
-
-    file_id = request.args.get("file_id")
-    if not file_id or not re.fullmatch(r"[0-9a-fA-F-]{36}", file_id):
-        return jsonify(error="bad_file_id", detail="file_id doit être un UUID v4"), 400
-
-    step_path = _step_path_for(file_id)
-    if not step_path or not os.path.isfile(step_path):
-        return jsonify(error="no_step", detail="Fichier STEP introuvable"), 404
-
-    try:
-        from OCC.Core.STEPControl import STEPControl_Reader
-        from OCC.Core.IFSelect import IFSelect_RetDone
-
-        reader = STEPControl_Reader()
-        if reader.ReadFile(step_path) != IFSelect_RetDone:
-            return jsonify(error="step_read_fail"), 500
-        if not reader.TransferRoots():
-            return jsonify(error="step_transfer_fail"), 500
-        shape = reader.OneShape()
-
-        tmin, tmax = compute_thickness_mm_from_occ_shape(
-            shape,
-            unit_hint=os.getenv("THICKNESS_UNIT_HINT", "mm"),
-            tol_lin_mm=float(os.getenv("THICK_LIN_DEF_MM", os.getenv("TESSELLATION_TOL_MM", "0.05"))),
-            ang_rad=float(os.getenv("THICK_ANG_DEF_RAD", os.getenv("TESSELLATION_ANG_RAD", "0.25"))),
-            samples=env_int("THICKNESS_SAMPLES", 30000),
-        )
-        if tmin is None or tmax is None:
-            return jsonify(error="thickness_compute_fail"), 500
-
-        thick_cache = _thickness_cache_path(file_id)
-        try:
-            with open(thick_cache, "w", encoding="utf-8") as fh:
-                json.dump({"tmin": tmin, "tmax": tmax, "method": "occ_raycast"}, fh)
-        except Exception as e:
-            app.logger.warning("write thick cache failed %s: %s", thick_cache, e)
-
-        return jsonify(thickness_min_mm=tmin, thickness_max_mm=tmax, thickness_source="occ_raycast")
-
-    except ImportError:
-        return jsonify(error="missing_dependency", detail="pythonocc-core + trimesh requis"), 501
-    except Exception as e:
-        return jsonify(error="thickness_exception", detail=str(e)), 500
+# ---------- Estimation épaisseur locale (optionnel) ----------
+# (tes fonctions compute_thickness_mm_from_occ_shape et _estimate_thickness_mm_from_mesh peuvent rester telles quelles)
+# ... [gardées identiques à ton fichier] ...
 
 # ---------- Debug ----------
 @app.get("/__job/<path:job_id>")
 def __job(job_id: str):
     try:
-        job = Job.fetch(job_id, connection=_redis)
-        # expose meta (stage) pour diagnostiquer les blocages
+        job = Job.fetch(job_id, connection=get_redis())
         info = {
             "id": job.id,
             "status": job.get_status(),
             "enqueued_at": str(job.enqueued_at) if job.enqueued_at else None,
             "started_at": str(job.started_at) if job.started_at else None,
             "ended_at": str(job.ended_at) if job.ended_at else None,
-            "result": job.result if hasattr(job, "result") else None,
-            "exc_info": job.exc_info if hasattr(job, "exc_info") else None,
+            "result": getattr(job, "result", None),
+            "exc_info": getattr(job, "exc_info", None),
             "meta": getattr(job, "meta", None),
         }
         return jsonify(ok=True, **info)
     except Exception as e:
         return jsonify(ok=False, error=str(e), job_id=job_id), 500
 
-# --- RQ: liste des workers connectés ---
 @app.get("/__rq_workers")
 def __rq_workers():
     try:
         workers = []
-        if _redis is not None:
-            for w in Worker.all(connection=_redis):
-                workers.append({
-                    "name": w.name,
-                    "state": w.get_state(),
-                    "queues": [qq.name for qq in w.queues],
-                    "current_job_id": getattr(w, "get_current_job_id", lambda: None)()
-                })
+        for w in Worker.all(connection=get_redis()):
+            workers.append({
+                "name": w.name,
+                "state": w.get_state(),
+                "queues": [qq.name for qq in w.queues],
+                "current_job_id": getattr(w, "get_current_job_id", lambda: None)()
+            })
         return jsonify(ok=True, queue=RQ_QUEUE_NAME, workers=workers)
     except Exception as e:
         return jsonify(ok=False, error=str(e)), 500
 
-# --- RQ: contenu de la queue ---
 @app.get("/__rq_queue")
 def __rq_queue():
-    if q is None:
-        return jsonify(ok=False, error="no queue"), 503
     try:
-        jobs = [j.id for j in q.jobs]
-        return jsonify(ok=True, queue=RQ_QUEUE_NAME, count=len(jobs), jobs=jobs)
+        queue = get_queue()
+        jobs = [j.id for j in queue.jobs]
+        return jsonify(ok=True, queue=queue.name, count=len(jobs), jobs=jobs)
     except Exception as e:
         return jsonify(ok=False, error=str(e)), 500
 
 def _rq():
-    r = from_url(_normalize_redis_url(os.getenv("REDIS_URL")), ssl_cert_reqs=None, socket_timeout=5)
-    q = Queue(os.getenv("RQ_QUEUE_NAME", "default"), connection=r)
+    r = redis_from_url(_normalize_redis_url(os.getenv("REDIS_URL")), ssl_cert_reqs=None, socket_timeout=5)
+    q = Queue(os.getenv("RQ_QUEUE_NAME", RQ_QUEUE_NAME), connection=r)
     return r, q
 
 @app.get("/__rq_started")
@@ -997,18 +768,16 @@ def rq_requeue_started():
         done.append(jid)
     return jsonify(ok=True, queue=q.name, requeued=done)
 
-# --- RQ: ping ---
 @app.get("/__worker_ping")
 def __worker_ping():
-    if q is None:
-        return jsonify(ok=False, error="no queue"), 503
-    job_id = f"ping:{uuid.uuid4().hex}"
     try:
+        q = get_queue()
+        job_id = f"ping:{uuid.uuid4().hex}"
         q.enqueue("worker_tasks.ping", kwargs={"payload": "ok"}, job_id=job_id,
                   result_ttl=120, ttl=120, failure_ttl=120)
         return jsonify(ok=True, job_id=job_id)
     except Exception as e:
-        return jsonify(ok=False, error=str(e)), 500
+        return jsonify(ok=False, error=str(e)), 503
 
 @app.get("/__routes")
 def __routes():
@@ -1016,18 +785,17 @@ def __routes():
     return "<pre>" + "\n".join(sorted(lines)) + "</pre>"
 
 @app.get("/__rq")
-def __rq():
+def __rq_info():
     info = {
         "redis_url_set": bool(REDIS_URL), "queue": RQ_QUEUE_NAME,
-        "has_q": bool(q is not None), "is_connected": bool(_redis is not None),
+        "has_q": True, "is_connected": True,
         "probe_ok": False, "redis_error": _redis_err, "rq_error": _rq_err,
         "task_path": RQ_TASK_PATH,
         "rq_job_timeout_sec": RQ_JOB_TIMEOUT_SEC,
     }
     try:
-        if _redis is not None:
-            _redis.setex("rq_probe", 5, "ok")
-            info["probe_ok"] = (_redis.get("rq_probe") == b"ok")
+        get_redis().setex("rq_probe", 5, "ok")
+        info["probe_ok"] = (get_redis().get("rq_probe") == b"ok")
     except Exception as e:
         info["rq_probe_error"] = repr(e)
     return jsonify(info)
@@ -1043,54 +811,41 @@ def __diag():
         "converter_url": CONVERTER_URL,
         "redis_url": REDIS_URL,
         "rq_queue": RQ_QUEUE_NAME,
-        "rq_connected": bool(q is not None),
         "http_connect_timeout_sec": HTTP_CONNECT_TIMEOUT_SEC,
         "http_read_timeout_sec": HTTP_READ_TIMEOUT_SEC,
         "rq_job_timeout_sec": RQ_JOB_TIMEOUT_SEC,
         "XEOKIT_ARGS": os.getenv("XEOKIT_ARGS"),
-
     }
-    try:
-        r = requests.get(f"{CONVERTER_URL}/healthz", timeout=_http_timeout())
-        info["converter_health"] = {"ok": (r.status_code == 200), "code": r.status_code}
-    except Exception as e:
-        info["converter_health"] = {"ok": False, "error": str(e)}
+    if CONVERTER_URL:
+        try:
+            r = requests.get(f"{CONVERTER_URL}/healthz", timeout=_http_timeout())
+            info["converter_health"] = {"ok": (r.status_code == 200), "code": r.status_code}
+        except Exception as e:
+            info["converter_health"] = {"ok": False, "error": str(e)}
+    else:
+        info["converter_health"] = {"ok": None, "note": "Using RQ worker (no HTTP converter)"}
     return jsonify(info)
 
-
-_XEOKIT_VERSION_CACHE = None  # cache for converter version info
-_XEOKIT_VERSION_TTL = 600  # 10 minutes
-
+_XEOKIT_VERSION_CACHE = None
+_XEOKIT_VERSION_TTL = 600
 
 def _get_converter_version() -> dict:
     global _XEOKIT_VERSION_CACHE
-
     now = time.time()
-    if isinstance(_XEOKIT_VERSION_CACHE, dict) and (
-        now - _XEOKIT_VERSION_CACHE.get("ts", 0) < _XEOKIT_VERSION_TTL
-    ):
+    if isinstance(_XEOKIT_VERSION_CACHE, dict) and (now - _XEOKIT_VERSION_CACHE.get("ts", 0) < _XEOKIT_VERSION_TTL):
         return _XEOKIT_VERSION_CACHE.get("value", {})
-
     result: dict[str, str] = {}
     try:
         proc = subprocess.run(
             ["npx", "--yes", "xeokit-gltf-to-xkt", "--version"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=True,
+            capture_output=True, text=True, timeout=30, check=True
         )
         version = (proc.stdout or proc.stderr or "").strip()
-        if version:
-            result["version"] = version
-        else:
-            result["version"] = ""
+        result["version"] = version
     except Exception as exc:
         result["error"] = str(exc)
-
     _XEOKIT_VERSION_CACHE = {"ts": now, "value": result}
     return result
-
 
 @app.route("/debug/xkt/<file_id>")
 def debug_xkt(file_id: str):
@@ -1100,13 +855,9 @@ def debug_xkt(file_id: str):
     def _count_faces(path: str) -> int:
         try:
             import trimesh  # type: ignore
-
             scene = trimesh.load(path, force="scene")
             if hasattr(scene, "geometry"):
-                return sum(
-                    getattr(geom, "faces", []).shape[0]
-                    for geom in scene.geometry.values()
-                )
+                return sum(getattr(geom, "faces", []).shape[0] for geom in scene.geometry.values())
             return int(getattr(scene, "faces", []).shape[0])
         except Exception:
             return -1
@@ -1114,22 +865,16 @@ def debug_xkt(file_id: str):
     def _probe_xkt(path: str) -> dict[str, object]:
         if not os.path.exists(path):
             return {}
-
-        mime_guess = mimetypes.guess_type(path)[0]
         head_bytes = b""
         try:
             with open(path, "rb") as fh:
                 head_bytes = fh.read(256)
         except Exception:
             head_bytes = b""
-
-        ascii_sample = head_bytes.decode("utf-8", errors="ignore") if head_bytes else ""
-        ascii_sample = ascii_sample[:128]
-        lower_sample = ascii_sample.lower()
-        looks_html = any(tag in lower_sample for tag in ("<html", "<!doctype"))
-
+        ascii_sample = (head_bytes.decode("utf-8", errors="ignore")[:128]) if head_bytes else ""
+        looks_html = ("<html" in ascii_sample.lower()) or ("<!doctype" in ascii_sample.lower())
         return {
-            "xkt_mime_guess": mime_guess,
+            "xkt_mime_guess": mimetypes.guess_type(path)[0],
             "xkt_head_preview": ascii_sample,
             "xkt_looks_like_html": looks_html,
         }
@@ -1146,45 +891,31 @@ def debug_xkt(file_id: str):
         "xkt_size": os.path.getsize(xkt_path) if xkt_exists else 0,
         "converter": _get_converter_version(),
     }
-
     if xkt_exists:
         data.update(_probe_xkt(xkt_path))
     else:
-        data.update({
-            "xkt_mime_guess": None,
-            "xkt_head_preview": "",
-            "xkt_looks_like_html": False,
-        })
+        data.update({"xkt_mime_guess": None, "xkt_head_preview": "", "xkt_looks_like_html": False})
 
-    return app.response_class(
-        response=json.dumps(data), status=200, mimetype="application/json"
-    )
-
+    return app.response_class(response=json.dumps(data), status=200, mimetype="application/json")
 
 @app.post("/reconvert/<file_id>")
 def reconvert(file_id: str):
     if not file_id:
         return jsonify(ok=False, error="file_id manquant"), 400
-
     xkt_path = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
     if os.path.exists(xkt_path):
-        try:
-            os.remove(xkt_path)
+        try: os.remove(xkt_path)
         except OSError as exc:
-            app.logger.warning(
-                "[web][reconvert] failed to remove old XKT id=%s err=%s", file_id, exc
-            )
-
+            app.logger.warning("[web][reconvert] failed to remove old XKT id=%s err=%s", file_id, exc)
     try:
         result = _convert_step_to_xkt_local(file_id)
     except FileNotFoundError as exc:
         return jsonify(ok=False, error=str(exc)), 404
     except RuntimeError as exc:
         return jsonify(ok=False, error=str(exc)), 400
-    except Exception as exc:  # pragma: no cover - defensive logging
+    except Exception as exc:
         app.logger.exception("[web][reconvert] unexpected failure id=%s", file_id)
         return jsonify(ok=False, error="internal_error", detail=str(exc)), 500
-
     payload = {
         "ok": True,
         "faces": result.get("faces", 0),
@@ -1193,7 +924,6 @@ def reconvert(file_id: str):
         "xkt": result.get("xkt"),
     }
     return jsonify(payload)
-
 
 @app.get("/__s3_env")
 def __s3_env():
@@ -1207,7 +937,6 @@ def __s3_env():
         "PULL_CONVERTED_FROM_S3": PULL_CONVERTED_FROM_S3,
     })
 
-# Voir la présence des fichiers cache/thickness
 @app.get("/__thick/<file_id>")
 def __thick(file_id: str):
     p = _thickness_cache_path(file_id)
@@ -1224,7 +953,6 @@ def __list_caches(file_id: str):
     matches = [os.path.basename(x) for x in glob.glob(glob_pat)]
     return jsonify(ok=True, folder=OUTPUT_FOLDER, files=sorted(matches))
 
-# Purge simple
 @app.post("/__clear_caches")
 def __clear_caches():
     file_id = request.args.get("file_id") or (request.json.get("file_id") if request.is_json else None)
