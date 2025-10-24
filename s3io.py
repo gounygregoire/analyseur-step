@@ -45,6 +45,8 @@ def put_file(local_path: str, key: str, content_type: Optional[str] = None) -> b
         s3, bucket = _client_and_bucket()
         if not content_type:
             content_type, _ = mimetypes.guess_type(local_path)
+        if not content_type or local_path.lower().endswith(".xkt"):
+            content_type = "application/octet-stream"
         extra = {}
         if content_type:
             extra["ContentType"] = content_type

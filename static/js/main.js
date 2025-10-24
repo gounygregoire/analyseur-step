@@ -8,6 +8,7 @@ const XEOKIT_VERSION = "2.6.86";
 import {
   Viewer,
   XKTLoaderPlugin,
+  GLTFLoaderPlugin,
   FastNavPlugin,
   NavCubePlugin,
   SectionPlanesPlugin,
@@ -1748,6 +1749,137 @@ function buildXKTLoadConfig({ id, src }) {
   };
 }
 
+let gltfLoaderSingleton = null;
+
+function getGLTFLoader(viewerInstance) {
+  if (!gltfLoaderSingleton) {
+    gltfLoaderSingleton = new GLTFLoaderPlugin(viewerInstance);
+  }
+  return gltfLoaderSingleton;
+}
+
+function attachModelEvent(model, eventName, handler) {
+  if (!model || typeof handler !== "function") {
+    return { detach: () => {}, attached: false };
+  }
+  if (typeof model.once === "function") {
+    try {
+      model.once(eventName, handler);
+      return { detach: () => {}, attached: true };
+    } catch (err) {
+      console.warn(`[viewer] once(${eventName}) indisponible`, err);
+    }
+  }
+  if (typeof model.on === "function") {
+    try {
+      model.on(eventName, handler);
+      return {
+        detach: () => {
+          if (typeof model.off === "function") {
+            try { model.off(eventName, handler); } catch {}
+          }
+        },
+        attached: true
+      };
+    } catch (err) {
+      console.warn(`[viewer] on(${eventName}) indisponible`, err);
+    }
+  }
+  return { detach: () => {}, attached: false };
+}
+
+function waitForModelLoad(model) {
+  return new Promise((resolve, reject) => {
+    const cleanups = [];
+    let settled = false;
+    const settle = (fn, payload) => {
+      if (settled) return;
+      settled = true;
+      for (const { detach } of cleanups) {
+        try { detach(); } catch {}
+      }
+      fn(payload);
+    };
+    const onLoaded = () => settle(resolve, { model });
+    const onError  = (error) => settle(reject, { model, error });
+    cleanups.push(attachModelEvent(model, "loaded", onLoaded));
+    cleanups.push(attachModelEvent(model, "error", onError));
+    if (cleanups.every(({ attached }) => !attached)) {
+      settle(resolve, { model });
+    }
+  });
+}
+
+async function tryLoadXKTThenGLB({
+  viewerInstance,
+  stableId,
+  xktUrl,
+  glbUrl,
+  onBeforeLoad
+}) {
+  const attempt = async ({ type, loader, src }) => {
+    let model;
+    try {
+      model = loader();
+    } catch (error) {
+      throw { error, type, model: null, src };
+    }
+
+    let cleanupHook = null;
+    if (typeof onBeforeLoad === "function") {
+      try {
+        cleanupHook = onBeforeLoad({ model, type, src });
+      } catch (err) {
+        console.warn("[viewer] onBeforeLoad a échoué", err);
+      }
+    }
+
+    try {
+      await waitForModelLoad(model);
+      if (cleanupHook) {
+        try { cleanupHook(); } catch {}
+      }
+      return { model, type, src };
+    } catch (info) {
+      if (cleanupHook) {
+        try { cleanupHook(); } catch {}
+      }
+      info = info || {};
+      info.type = type;
+      info.model = info.model || model;
+      info.src = src;
+      throw info;
+    }
+  };
+
+  try {
+    return await attempt({
+      type: "xkt",
+      src: xktUrl,
+      loader: () => xktLoader.load(buildXKTLoadConfig({ id: stableId, src: xktUrl }))
+    });
+  } catch (firstErr) {
+    const cause = firstErr?.error || firstErr;
+    console.warn("[viewer] XKT load failed, tentative GLB", cause);
+    if (!glbUrl) {
+      throw firstErr;
+    }
+    try {
+      firstErr?.model?.destroy?.();
+    } catch (destroyErr) {
+      console.warn("[viewer] destruction modèle XKT échouée", destroyErr);
+    }
+    const gltfLoader = getGLTFLoader(viewerInstance);
+    const result = await attempt({
+      type: "glb",
+      src: glbUrl,
+      loader: () => gltfLoader.load({ id: stableId, src: glbUrl })
+    });
+    console.log("[viewer] GLB loaded fallback");
+    return result;
+  }
+}
+
 const loggedXKTContentSources = new Set();
 
 function normalizeXKTSrc(src) {
@@ -1838,76 +1970,134 @@ function logModelSceneBinding(model, viewer, meta = {}) {
   return false;
 }
 
-async function loadXKT(url, nameHint){
-  // Id stable = file_id pour aligner loader ↔ registry ↔ scène
+function resolveFallbackGlbUrl({ explicitUrl, fileId }) {
+  if (explicitUrl) return explicitUrl;
+  const candidate = fileId && typeof fileId === "string" ? fileId.trim() : "";
+  if (!candidate) return null;
+  try {
+    if (typeof location !== "undefined" && location.origin) {
+      return new URL(`/glb/${candidate}.glb`, location.origin).toString();
+    }
+  } catch {}
+  return `/glb/${candidate}.glb`;
+}
+
+function finalizeModelLoad({ model, stableId, src, nameHint, loaderType }) {
+  setProgress(100);
+  setTimeout(() => setProgress(0), 350);
+  try {
+    viewer.cameraFlight.flyTo(model);
+  } catch (err) {
+    console.warn("[viewer] camera flyTo failed", err);
+  }
+  models.set(stableId, { model, name: nameHint || stableId, src, loader: loaderType });
+  lastModelId = stableId;
+  if (chkEdges?.checked) {
+    viewer.scene.edgeMaterial.edgesEnabled = true;
+  }
+
+  const readinessModel = model?.sceneModel || model;
+  const viewerRef = (typeof currentViewer === "function" && currentViewer()) || viewer;
+  beginGeometryReadySequence({
+    modelId: stableId,
+    viewerCandidate: viewerRef || viewer,
+    fallbackScene: readinessModel?.scene || viewer?.scene
+  });
+
+  markModelReady(model, { id: stableId, src, name: nameHint || stableId, loader: loaderType });
+
+  window.CAD.viewer = viewer;
+  window.CAD.model = readinessModel;
+  window.CAD.modelId = stableId;
+  window.CAD.lastLoadedFormat = loaderType;
+
+  handleSceneAuditAfterLoad(viewer);
+
+  MM_PER_WU = 0.001;
+  console.log("[units] init forced to µm→mm");
+  onUnitsChanged();
+  let tries = 0;
+  const iv = setInterval(() => {
+    updateUnitsFromAABB(model?.aabb || viewer.scene?.aabb);
+    if (++tries > 10) clearInterval(iv);
+  }, 80);
+
+  setTimeout(() => {
+    window.dispatchEvent(new CustomEvent("dfm:fileReady", {
+      detail: { fileId: window.currentFileId || null }
+    }));
+  }, 50);
+
+  try {
+    currentAxis = getSelectedAxis();
+    if (currentFileId) {
+      fetchStats(currentFileId, currentAxis);
+    }
+  } catch (e) {
+    console.warn("[analyse] fetch initial ignoré:", e);
+  }
+}
+
+async function loadXKT(url, nameHint, options = {}) {
   const uploadMetaId = (typeof fileMeta !== "undefined" && fileMeta && fileMeta.file_id) ? fileMeta.file_id : null;
   const stableId = uploadMetaId
     || currentFileId
     || (typeof window !== "undefined" && window.currentFileId ? window.currentFileId : null)
     || (typeof window !== "undefined" && window.CAD && window.CAD.fileIdStep ? window.CAD.fileIdStep : null)
     || `mdl_${Date.now()}`;
+
   window.CAD.heatmap.ready = false;
   window.CAD.model = null;
   window.CAD.modelId = null;
+  window.CAD.xktUrl = url;
+  const fallbackGlbUrl = resolveFallbackGlbUrl({
+    explicitUrl: options?.glbUrl,
+    fileId: options?.fileId || stableId
+  });
+  if (fallbackGlbUrl) {
+    window.CAD.glbUrl = fallbackGlbUrl;
+  }
+
   resetGeometryReadyState();
   clearModelRegistry();
   logXKTContentDiagnostics({ src: url, label: nameHint || stableId }).catch(() => {});
-  const model = xktLoader.load(buildXKTLoadConfig({ id: stableId, src: url }));
-
-  logModelSceneBinding(model, viewer, { id: stableId, src: url });
-
-  registerGlobalModel({ viewer, model, meta: { id: stableId, src: url, name: nameHint } });
-
-  registerModel({ viewer, model, meta: { id: stableId, src: url } });
 
   setProgress(8);
-  model.on("progress", p=> setProgress(8+Math.round(p*84)));
-  onModelLoadedOnce(model, () => {
-    setProgress(100); setTimeout(()=>setProgress(0), 350);
-    viewer.cameraFlight.flyTo(model);
-    models.set(stableId,{model,name:nameHint||stableId,src:url}); lastModelId=stableId;
-    if (chkEdges?.checked) viewer.scene.edgeMaterial.edgesEnabled=true;
 
-    const readinessModel = model?.sceneModel || model;
-    const viewerRef = (typeof currentViewer === "function" && currentViewer()) || viewer;
-    beginGeometryReadySequence({
-      modelId: stableId,
-      viewerCandidate: viewerRef || viewer,
-      fallbackScene: readinessModel?.scene || viewer?.scene
+  const progressHandler = (value) => {
+    const ratio = (typeof value === "number" && Number.isFinite(value))
+      ? value
+      : Number(value?.progress ?? value?.value ?? 0) || 0;
+    setProgress(8 + Math.round(Math.max(0, Math.min(1, ratio)) * 84));
+  };
+
+  try {
+    const { model, type, src } = await tryLoadXKTThenGLB({
+      viewerInstance: viewer,
+      stableId,
+      xktUrl: url,
+      glbUrl: fallbackGlbUrl,
+      onBeforeLoad: ({ model: loadingModel, type: loaderType, src: loaderSrc }) => {
+        logModelSceneBinding(loadingModel, viewer, { id: stableId, src: loaderSrc, loader: loaderType });
+        const attached = attachModelEvent(loadingModel, "progress", progressHandler);
+        return () => {
+          try { attached.detach(); } catch {}
+        };
+      }
     });
 
-    markModelReady(model, { id: stableId, src: url, name: nameHint || stableId });
-
-    window.CAD.viewer = viewer;
-    window.CAD.model = readinessModel;
-    window.CAD.modelId = stableId;
-
-    handleSceneAuditAfterLoad(viewer);
-
-    // init unités + heuristique AABB
-    MM_PER_WU = 0.001;
-    console.log("[units] init forced to µm→mm");
-    onUnitsChanged();
-    let tries = 0;
-    const iv = setInterval(()=>{
-      updateUnitsFromAABB(model?.aabb || viewer.scene?.aabb);
-      if (++tries > 10) clearInterval(iv);
-    }, 80);
-
-    // notifier l’UI: fichier prêt
-    setTimeout(()=>{
-      window.dispatchEvent(new CustomEvent('dfm:fileReady', {
-        detail: { fileId: window.currentFileId || null }
-      }));
-    }, 50);
-
-    try {
-      currentAxis = getSelectedAxis();
-      if (currentFileId) { fetchStats(currentFileId, currentAxis); }
-    } catch (e) { console.warn("[analyse] fetch initial ignoré:", e); }
-  });
-  model.on("error", e=>{ console.error(e); setProgress(0); alert("Erreur chargement XKT."); });
-  return stableId;
+    const meta = { id: stableId, src, name: nameHint || stableId, loader: type };
+    registerGlobalModel({ viewer, model, meta });
+    registerModel({ viewer, model, meta });
+    finalizeModelLoad({ model, stableId, src, nameHint, loaderType: type });
+    return stableId;
+  } catch (err) {
+    const error = err?.error || err;
+    console.error("[viewer] chargement modèle échoué", error);
+    setProgress(0);
+    alert("Erreur chargement modèle (XKT/GLB).");
+    throw error;
+  }
 }
 
 // --- FIX XKT local via blob: garder l'URL jusqu'à la fin, éviter double-load ---
@@ -2053,7 +2243,17 @@ async function uploadAndShow(file) {
     console.log("[viewer] loading XKT]:", xktUrl);
     logXKTContentDiagnostics({ src: xktUrl, label: f.name || currentFileId }).catch(() => {});
     StatsPoller.cancel();
-    await loadXKT(xktUrl, f.name);
+    let glbUrl = null;
+    try {
+      if (j.glb_url) {
+        glbUrl = new URL(j.glb_url, location.origin).toString();
+      } else if (currentFileId) {
+        glbUrl = new URL(`/glb/${currentFileId}.glb`, location.origin).toString();
+      }
+    } catch {
+      glbUrl = j.glb_url || (currentFileId ? `/glb/${currentFileId}.glb` : null);
+    }
+    await loadXKT(xktUrl, f.name, { fileId: currentFileId, glbUrl });
   } catch (e) {
     console.error(e);
     alert("Erreur conversion/chargement (voir Console).");

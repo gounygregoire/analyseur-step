@@ -1,6 +1,6 @@
 # web.py
 
-import os, uuid, pathlib, json, requests, re, glob, socket, time, subprocess
+import os, uuid, pathlib, json, re, glob, socket, time, subprocess
 from urllib.parse import urlparse, urlunparse, unquote
 
 from flask import Flask, request, jsonify, send_from_directory, abort, render_template
@@ -14,6 +14,7 @@ from redis import from_url
 
 # S3 helpers
 from s3io import put_file  # utilisé pour les XKT (upload)
+from converter import convert_step_to_xkt as _convert_step_to_xkt_local
 
 # (Optionnel) converter local — ignoré s'il n'est pas présent ou incomplet
 try:
@@ -336,6 +337,7 @@ def upload():
 
     in_path  = os.path.join(UPLOAD_FOLDER, f"{file_id}{ext}")
     out_xkt  = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+    out_glb  = os.path.join(OUTPUT_FOLDER, f"{file_id}.glb")
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
     os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
@@ -390,8 +392,54 @@ def upload():
                 detail = (resp.text or "")[:1000]
             return jsonify(error="convert_fail", status_code=resp.status_code, detail=detail), 500
 
+        resp_ct = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        allowed_ct = {"application/octet-stream", "model/xkt"}
+        if resp_ct and resp_ct not in allowed_ct:
+            detail = (resp.text or "")[:1000]
+            app.logger.error(
+                "[upload] converter returned unexpected Content-Type=%s for %s", resp_ct, file_id
+            )
+            return (
+                jsonify(
+                    error="convert_fail",
+                    detail="unexpected content-type",
+                    content_type=resp_ct,
+                    preview=detail,
+                ),
+                502,
+            )
+
+        def _looks_like_html(data: bytes) -> bool:
+            sample = data[:128].lstrip().lower()
+            return sample.startswith(b"<!doctype") or sample.startswith(b"<html") or b"<html" in sample[:64]
+
+        chunk_iter = resp.iter_content(chunk_size=1024 * 1024)
+        first_chunk = b""
+        while True:
+            try:
+                first_chunk = next(chunk_iter)
+            except StopIteration:
+                first_chunk = b""
+                break
+            if first_chunk:
+                break
+
+        if _looks_like_html(first_chunk):
+            preview = first_chunk[:512].decode("utf-8", errors="ignore")
+            app.logger.error("[upload] converter returned HTML-looking payload for %s", file_id)
+            return (
+                jsonify(
+                    error="convert_fail",
+                    detail="converter returned HTML payload",
+                    preview=preview,
+                ),
+                502,
+            )
+
         with open(out_xkt, "wb") as out:
-            for chunk in resp.iter_content(chunk_size=1024 * 1024):
+            if first_chunk:
+                out.write(first_chunk)
+            for chunk in chunk_iter:
                 if chunk:
                     out.write(chunk)
         if not os.path.isfile(out_xkt):
@@ -414,6 +462,16 @@ def upload():
     except Exception as e:
         app.logger.warning("[upload] S3 upload XKT failed for %s: %s", file_id, e)
 
+    glb_exists_local = os.path.isfile(out_glb)
+    s3_uploaded_glb = False
+    if glb_exists_local:
+        try:
+            if _s3_enabled() and put_file:
+                put_file(out_glb, f"glb/{file_id}.glb", content_type="model/gltf-binary")
+                s3_uploaded_glb = True
+        except Exception as e:
+            app.logger.warning("[upload] S3 upload GLB failed for %s: %s", file_id, e)
+
     # 5) optional warm RQ stats job
     warm_job_id = None
     if os.getenv("WARM_STATS_ON_UPLOAD", "0").lower() in ("1", "true", "yes", "on"):
@@ -435,13 +493,18 @@ def upload():
 
     xkt_rel = f"/xkt/{file_id}.xkt"
     xkt_abs = _abs_url(xkt_rel)
+    glb_rel = f"/glb/{file_id}.glb"
+    glb_abs = _abs_url(glb_rel)
     return jsonify(
         file_id=file_id,
         status="ready",
         xktUrl=xkt_abs,
         xkt_url=xkt_abs,
+        glb_url=glb_abs,
+        glb_exists=glb_exists_local,
         s3_uploaded_src=s3_uploaded_src,
         s3_uploaded_xkt=s3_uploaded_xkt,
+        s3_uploaded_glb=s3_uploaded_glb,
         warm_job_id=warm_job_id,
     )
 
@@ -467,6 +530,44 @@ def serve_xkt(file_id: str):
             app.logger.warning("S3 fallback miss for XKT key=%s", key)
         except Exception as e:
             app.logger.warning("S3 fallback error for XKT %s: %s", file_id, e)
+    return abort(404)
+
+
+@app.get("/glb/<file_id>.glb")
+def serve_glb(file_id: str):
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", file_id):
+        return abort(400)
+    path = os.path.join(OUTPUT_FOLDER, f"{file_id}.glb")
+    if os.path.isfile(path):
+        return send_from_directory(
+            OUTPUT_FOLDER,
+            f"{file_id}.glb",
+            mimetype="model/gltf-binary",
+            as_attachment=False,
+            max_age=0,
+            etag=False,
+            conditional=False,
+        )
+    if _s3_enabled():
+        try:
+            from s3io import get_file
+
+            os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+            key = f"glb/{file_id}.glb"
+            ok = get_file(key, path)
+            if ok and os.path.isfile(path):
+                return send_from_directory(
+                    OUTPUT_FOLDER,
+                    f"{file_id}.glb",
+                    mimetype="model/gltf-binary",
+                    as_attachment=False,
+                    max_age=0,
+                    etag=False,
+                    conditional=False,
+                )
+            app.logger.warning("S3 fallback miss for GLB key=%s", key)
+        except Exception as e:
+            app.logger.warning("S3 fallback error for GLB %s: %s", file_id, e)
     return abort(404)
 
 # ---------- Helper: lecture stats depuis Redis (clé publiée par le worker) ----------
@@ -991,10 +1092,33 @@ def debug_xkt(file_id: str):
         except Exception:
             return -1
 
+    def _probe_xkt(path: str) -> dict[str, object]:
+        if not os.path.exists(path):
+            return {}
+
+        mime_guess = mimetypes.guess_type(path)[0]
+        head_bytes = b""
+        try:
+            with open(path, "rb") as fh:
+                head_bytes = fh.read(256)
+        except Exception:
+            head_bytes = b""
+
+        ascii_sample = head_bytes.decode("utf-8", errors="ignore") if head_bytes else ""
+        ascii_sample = ascii_sample[:128]
+        lower_sample = ascii_sample.lower()
+        looks_html = any(tag in lower_sample for tag in ("<html", "<!doctype"))
+
+        return {
+            "xkt_mime_guess": mime_guess,
+            "xkt_head_preview": ascii_sample,
+            "xkt_looks_like_html": looks_html,
+        }
+
     glb_exists = os.path.exists(glb_path)
     xkt_exists = os.path.exists(xkt_path)
 
-    data = {
+    data: dict[str, object] = {
         "file_id": file_id,
         "glb_exists": glb_exists,
         "xkt_exists": xkt_exists,
@@ -1004,9 +1128,52 @@ def debug_xkt(file_id: str):
         "converter": _get_converter_version(),
     }
 
+    if xkt_exists:
+        data.update(_probe_xkt(xkt_path))
+    else:
+        data.update({
+            "xkt_mime_guess": None,
+            "xkt_head_preview": "",
+            "xkt_looks_like_html": False,
+        })
+
     return app.response_class(
         response=json.dumps(data), status=200, mimetype="application/json"
     )
+
+
+@app.post("/reconvert/<file_id>")
+def reconvert(file_id: str):
+    if not file_id:
+        return jsonify(ok=False, error="file_id manquant"), 400
+
+    xkt_path = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+    if os.path.exists(xkt_path):
+        try:
+            os.remove(xkt_path)
+        except OSError as exc:
+            app.logger.warning(
+                "[web][reconvert] failed to remove old XKT id=%s err=%s", file_id, exc
+            )
+
+    try:
+        result = _convert_step_to_xkt_local(file_id)
+    except FileNotFoundError as exc:
+        return jsonify(ok=False, error=str(exc)), 404
+    except RuntimeError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    except Exception as exc:  # pragma: no cover - defensive logging
+        app.logger.exception("[web][reconvert] unexpected failure id=%s", file_id)
+        return jsonify(ok=False, error="internal_error", detail=str(exc)), 500
+
+    payload = {
+        "ok": True,
+        "faces": result.get("faces", 0),
+        "xkt_size": result.get("xkt_size", 0),
+        "glb": result.get("glb"),
+        "xkt": result.get("xkt"),
+    }
+    return jsonify(payload)
 
 
 @app.get("/__s3_env")
