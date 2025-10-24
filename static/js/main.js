@@ -62,20 +62,174 @@ function showHeatmapToast(message, type = "info") {
   }
 }
 
+let reconvertInFlight = false;
+
+function resolveCurrentFileId() {
+  if (typeof window === "undefined") return null;
+  const meta = typeof fileMeta !== "undefined" && fileMeta ? fileMeta : null;
+  const candidates = [
+    window.currentFileId,
+    window.currentConversionId,
+    meta?.file_id,
+    window.CAD?.fileIdStep,
+    window.CAD?.modelId,
+    window.CADLYTICS?.current?.fileId
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return null;
+}
+
+function ensureNoMeshWarningElement() {
+  let host = document.getElementById("heatmapNoMeshWarning");
+  if (host) return host;
+
+  host = document.createElement("div");
+  host.id = "heatmapNoMeshWarning";
+  host.className = "alert alert-warning mt-2 d-flex align-items-center gap-3";
+  host.style.display = "none";
+  host.setAttribute("role", "alert");
+
+  const messageSpan = document.createElement("span");
+  messageSpan.dataset.role = "no-mesh-message";
+  messageSpan.className = "flex-fill";
+  host.appendChild(messageSpan);
+
+  const retryBtn = document.createElement("button");
+  retryBtn.type = "button";
+  retryBtn.className = "btn btn-sm btn-link p-0";
+  retryBtn.dataset.role = "retry-convert";
+  retryBtn.textContent = "Réessayer la conversion";
+  retryBtn.addEventListener("click", (event) => {
+    event.preventDefault();
+    const fileId = host.dataset.fileId || resolveCurrentFileId();
+    if (!fileId) {
+      showHeatmapToast("Impossible d'identifier le fichier à reconvertir.", "error");
+      return;
+    }
+    triggerReconvert(fileId, { source: "no-mesh" }).catch(() => {});
+  });
+  host.appendChild(retryBtn);
+
+  const anchor = document.querySelector("#btnHeatmap") || document.querySelector("#dfmBtnHeatmapDraft");
+  if (anchor && anchor.parentElement) {
+    anchor.parentElement.insertAdjacentElement("afterend", host);
+  } else {
+    (document.getElementById("analysisPanel") || document.body).appendChild(host);
+  }
+
+  return host;
+}
+
+async function triggerReconvert(fileId, { source } = {}) {
+  if (!fileId) {
+    showHeatmapToast("Identifiant de conversion manquant.", "error");
+    return null;
+  }
+  if (reconvertInFlight) {
+    showHeatmapToast("Reconversion déjà en cours…", "info");
+    return null;
+  }
+
+  reconvertInFlight = true;
+  const host = ensureNoMeshWarningElement();
+  const retryBtn = host.querySelector('[data-role="retry-convert"]');
+  if (retryBtn) {
+    retryBtn.disabled = true;
+    retryBtn.classList.add("disabled");
+  }
+
+  const url = `/reconvert/${encodeURIComponent(fileId)}`;
+  try {
+    console.info("[reconvert] restart requested", { fileId, source });
+    const res = await fetch(url, { method: "POST", headers: { Accept: "application/json" } });
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    let payload = null;
+    const contentType = res.headers?.get?.("content-type");
+    if (contentType && /json/i.test(contentType)) {
+      payload = await res.json();
+    }
+    showHeatmapToast("Conversion relancée. Patiente quelques instants avant de rafraîchir.", "info");
+    return payload;
+  } catch (err) {
+    console.error("[reconvert] failed", err);
+    showHeatmapToast("Échec de la relance de conversion.", "error");
+    throw err;
+  } finally {
+    reconvertInFlight = false;
+    if (retryBtn) {
+      retryBtn.disabled = false;
+      retryBtn.classList.remove("disabled");
+    }
+  }
+}
+
+function showNoMeshWarning({ fileId, meshCount }) {
+  const host = ensureNoMeshWarningElement();
+  const messageSpan = host.querySelector('[data-role="no-mesh-message"]');
+  const retryBtn = host.querySelector('[data-role="retry-convert"]');
+  const resolvedCount = Number.isFinite(meshCount) ? meshCount : Number(meshCount) || 0;
+  if (messageSpan) {
+    messageSpan.textContent = resolvedCount > 0
+      ? `Le modèle chargé ne contient pas de maillage exploitable (Mesh: ${resolvedCount}).`
+      : "Le modèle chargé ne contient aucune géométrie (Mesh: 0).";
+  }
+  host.dataset.fileId = fileId || "";
+  if (retryBtn) {
+    const hasFileId = typeof fileId === "string" && fileId.trim().length > 0;
+    retryBtn.style.display = hasFileId ? "" : "none";
+    retryBtn.disabled = !hasFileId || reconvertInFlight;
+    if (!hasFileId) {
+      retryBtn.classList.add("disabled");
+    } else {
+      retryBtn.classList.remove("disabled");
+    }
+  }
+  host.style.display = "";
+  host.dataset.toastShown = host.dataset.toastShown || "1";
+}
+
+function hideNoMeshWarning() {
+  const host = document.getElementById("heatmapNoMeshWarning");
+  if (!host) return;
+  host.style.display = "none";
+  host.dataset.fileId = "";
+  delete host.dataset.toastShown;
+}
+
 function handleSceneAuditAfterLoad(viewerInstance) {
   const hist = sceneTypeHistogram(viewerInstance);
   console.log("[scene][histogram]", hist);
   const heatmapBtn = document.querySelector("#btnHeatmap");
-  if (!hasMeshes(viewerInstance)) {
+  const meshCount = Number.isFinite(Number(hist?.Mesh)) ? Number(hist.Mesh) : 0;
+  const hasMesh = hasMeshes(viewerInstance);
+  if (!hasMesh || meshCount <= 0) {
     console.warn("[scene] no Mesh detected -> disable heatmap");
-    window?.notify?.("Le fichier XKT semble vide (0 faces). Relance la conversion.", "warn");
+    setHeatmapButtonsDisabled(true, "mesh");
+    const warningHost = document.getElementById("heatmapNoMeshWarning");
+    const alreadyWarned = warningHost?.dataset?.toastShown === "1";
+    if (!alreadyWarned) {
+      showHeatmapToast("Le viewer ne détecte aucun mesh. Relance la conversion pour corriger.", "warn");
+    }
+    showNoMeshWarning({ fileId: resolveCurrentFileId(), meshCount });
     if (heatmapBtn) {
       heatmapBtn.disabled = true;
       heatmapBtn.dataset.sceneAuditNoMesh = "1";
+      heatmapBtn.dataset.sceneAuditNoMeshToast = "1";
     }
-  } else if (heatmapBtn?.dataset?.sceneAuditNoMesh === "1") {
-    heatmapBtn.disabled = false;
-    delete heatmapBtn.dataset.sceneAuditNoMesh;
+  } else {
+    setHeatmapButtonsDisabled(false, "mesh");
+    hideNoMeshWarning();
+    if (heatmapBtn?.dataset?.sceneAuditNoMesh === "1") {
+      heatmapBtn.disabled = false;
+      delete heatmapBtn.dataset.sceneAuditNoMesh;
+      delete heatmapBtn.dataset.sceneAuditNoMeshToast;
+    }
   }
 }
 
@@ -335,17 +489,23 @@ function getHeatmapButtons() {
 }
 
 function setHeatmapButtonsDisabled(disabled, reason = "ready") {
-  const lock = reason === "wait" ? "wait" : "ready";
+  const lock = reason === "wait" ? "wait" : (reason === "mesh" ? "mesh" : "ready");
   const buttons = getHeatmapButtons();
   for (const btn of buttons) {
     if (!btn || typeof btn.disabled === "undefined") continue;
     let meta = heatmapButtonMeta.get(btn);
     if (!meta) {
-      meta = { prevDisabled: btn.disabled, locks: { ready: false, wait: false } };
+      meta = { prevDisabled: btn.disabled, locks: { ready: false, wait: false, mesh: false } };
       heatmapButtonMeta.set(btn, meta);
+    } else if (!meta.locks) {
+      meta.locks = { ready: false, wait: false, mesh: false };
+    } else {
+      if (typeof meta.locks.ready !== "boolean") meta.locks.ready = false;
+      if (typeof meta.locks.wait !== "boolean") meta.locks.wait = false;
+      if (typeof meta.locks.mesh !== "boolean") meta.locks.mesh = false;
     }
     meta.locks[lock] = !!disabled;
-    const shouldDisable = meta.locks.ready || meta.locks.wait;
+    const shouldDisable = meta.locks.ready || meta.locks.wait || meta.locks.mesh;
     if (shouldDisable) {
       btn.disabled = true;
       if (meta.locks.wait) {

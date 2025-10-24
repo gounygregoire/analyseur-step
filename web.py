@@ -1,6 +1,6 @@
 # web.py
 
-import os, uuid, pathlib, json, requests, re, glob, socket, time
+import os, uuid, pathlib, json, requests, re, glob, socket, time, subprocess
 from urllib.parse import urlparse, urlunparse, unquote
 
 from flask import Flask, request, jsonify, send_from_directory, abort, render_template
@@ -938,6 +938,40 @@ def __diag():
     return jsonify(info)
 
 
+_XEOKIT_VERSION_CACHE = None  # cache for converter version info
+_XEOKIT_VERSION_TTL = 600  # 10 minutes
+
+
+def _get_converter_version() -> dict:
+    global _XEOKIT_VERSION_CACHE
+
+    now = time.time()
+    if isinstance(_XEOKIT_VERSION_CACHE, dict) and (
+        now - _XEOKIT_VERSION_CACHE.get("ts", 0) < _XEOKIT_VERSION_TTL
+    ):
+        return _XEOKIT_VERSION_CACHE.get("value", {})
+
+    result: dict[str, str] = {}
+    try:
+        proc = subprocess.run(
+            ["npx", "--yes", "xeokit-gltf-to-xkt", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
+        version = (proc.stdout or proc.stderr or "").strip()
+        if version:
+            result["version"] = version
+        else:
+            result["version"] = ""
+    except Exception as exc:
+        result["error"] = str(exc)
+
+    _XEOKIT_VERSION_CACHE = {"ts": now, "value": result}
+    return result
+
+
 @app.route("/debug/xkt/<file_id>")
 def debug_xkt(file_id: str):
     glb_path = os.path.join(OUTPUT_FOLDER, f"{file_id}.glb")
@@ -957,13 +991,17 @@ def debug_xkt(file_id: str):
         except Exception:
             return -1
 
+    glb_exists = os.path.exists(glb_path)
+    xkt_exists = os.path.exists(xkt_path)
+
     data = {
         "file_id": file_id,
-        "exists_glb": os.path.exists(glb_path),
-        "exists_xkt": os.path.exists(xkt_path),
-        "glb_faces": _count_faces(glb_path) if os.path.exists(glb_path) else -1,
-        "glb_size": os.path.getsize(glb_path) if os.path.exists(glb_path) else 0,
-        "xkt_size": os.path.getsize(xkt_path) if os.path.exists(xkt_path) else 0,
+        "glb_exists": glb_exists,
+        "xkt_exists": xkt_exists,
+        "glb_faces": _count_faces(glb_path) if glb_exists else -1,
+        "glb_size": os.path.getsize(glb_path) if glb_exists else 0,
+        "xkt_size": os.path.getsize(xkt_path) if xkt_exists else 0,
+        "converter": _get_converter_version(),
     }
 
     return app.response_class(
