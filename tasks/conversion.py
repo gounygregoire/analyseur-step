@@ -4,6 +4,7 @@ import shutil
 import io
 import time
 from datetime import datetime
+from typing import Optional
 
 import cadquery as cq
 import trimesh
@@ -21,6 +22,12 @@ from observability.metrics import (
     final_size_bytes,
 )
 from app.storage.storage import Storage
+from converter import (
+    glb_to_xkt,
+    count_glb_faces,
+    file_size,
+    step_to_glb,
+)
 logger = get_logger(__name__)
 MAX_RETRIES = 3
 PREVIEW_MAX_FACES = 300_000
@@ -103,23 +110,56 @@ def generate_final(self, job_id: str) -> None:
     if not step_path:
         logger.error("step file missing: file_id=%s", job.id)
         return
-    tmp_dir = tempfile.mkdtemp(prefix="final_")
+    output_dir = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
+    os.makedirs(output_dir, exist_ok=True)
+
+    glb_path = os.path.join(output_dir, f"{job.id}.glb")
+    xkt_path = os.path.join(output_dir, f"{job.id}.xkt")
+
     try:
-        shape = cq.importers.importStep(step_path)
-        solids = shape.solids().toList() if hasattr(shape, "solids") else []
-        if len(solids) > 1:
-            from xkt_converter import convert_step_to_xkt
-            out_path = os.path.join(tmp_dir, "final.xkt")
-            convert_step_to_xkt(step_path, out_path)
+        faces = -1
+        size_glb = 0
+        mesh_count = 0
+        last_exc: Optional[Exception] = None
+        for tol in (0.2, 0.1, 0.05):
+            try:
+                mesh_count = step_to_glb(step_path, glb_path, tol=tol)
+            except Exception as exc:  # pragma: no cover - cadquery runtime errors
+                last_exc = exc
+                logger.warning(
+                    "[convert][glb] tessellation attempt failed tol=%s err=%s",
+                    tol,
+                    exc,
+                )
+                continue
+            faces = count_glb_faces(glb_path)
+            size_glb = file_size(glb_path)
+            logger.info(
+                "[convert][glb] tol=%s meshes=%s faces=%s size=%s",
+                tol,
+                mesh_count,
+                faces,
+                size_glb,
+            )
+            if faces > 0:
+                break
+        if faces <= 0:
+            raise RuntimeError("GLB has 0 faces - triangulation failed") from last_exc
+
+        out_path = glb_path
+        key = f"models/{job.sha256}/final.glb"
+        ctype = "model/gltf-binary"
+
+        if mesh_count > 1:
+            glb_to_xkt(glb_path, xkt_path)
+            size_xkt = file_size(xkt_path)
+            logger.info("[convert][xkt] size=%s", size_xkt)
+            if size_xkt < 100 * 1024:
+                raise RuntimeError("XKT too small (<100KB) - likely empty")
+            out_path = xkt_path
             key = f"models/{job.sha256}/final.xkt"
             ctype = "application/octet-stream"
-        else:
-            vertices, faces = shape.val().tessellate(0.2)
-            mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
-            out_path = os.path.join(tmp_dir, "final.glb")
-            mesh.export(out_path, file_type="glb")
-            key = f"models/{job.sha256}/final.glb"
-            ctype = "model/gltf-binary"
+
         put_asset(out_path, key, ctype)
         job.final_url = key
         advance_model_job_status(job, "final_ready")
@@ -136,5 +176,3 @@ def generate_final(self, job_id: str) -> None:
             _notify_status(job)
             raise
         raise self.retry(exc=exc, countdown=2 ** self.request.retries)
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
