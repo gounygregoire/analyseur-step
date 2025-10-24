@@ -3,6 +3,8 @@ console.log("main.js loaded ✅");
 // force l’ID de la vraie modale matière (utilisé par DFMOrchestrator & app.html)
 window.DFM_MATERIAL_MODAL_SELECTOR = window.DFM_MATERIAL_MODAL_SELECTOR || '#materialQuestionnaireModal';
 
+const XEOKIT_VERSION = "2.6.86";
+
 import {
   Viewer,
   XKTLoaderPlugin,
@@ -12,8 +14,8 @@ import {
   AnnotationsPlugin,
   DistanceMeasurementsPlugin,
   DistanceMeasurementsMouseControl
-} from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@<PINNED_VERSION>/dist/xeokit-sdk.es.min.js?v=2025-10-24";
-console.log("[xeokit] pinned version = <PINNED_VERSION>");
+} from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@2.6.86/dist/xeokit-sdk.es.min.js";
+console.log(`[xeokit] version = ${XEOKIT_VERSION}`);
 import {
   register as registerModel,
   markModelReady,
