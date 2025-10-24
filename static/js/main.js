@@ -655,7 +655,9 @@ onModelChange((entry) => {
   window.CAD.modelId = metaId;
   const heatmapState = window.CAD.heatmap || (window.CAD.heatmap = {});
   heatmapState.ready = false;
-  heatmapState.waiting = false;
+  if (heatmapState.waiting !== true) {
+    heatmapState.waiting = false;
+  }
   enableHeatmapButtons(false);
 
   if (!sceneModel || !entry?.ready) {
@@ -665,29 +667,46 @@ onModelChange((entry) => {
   if (!__loggedModelEntries.has(entry)) {
     __loggedModelEntries.add(entry);
     const logId = metaId ?? sceneModel?.id ?? "unknown";
-    console.info("[loader] model set", { id: logId });
+    console.info("[diag] model set", { id: logId });
   }
 
   const loaderModel = entry?.meta?.loaderModel || entry?.meta?.model || entry?.model || sceneModel;
   window.CAD.loaderModel = loaderModel;
 
-  const releaseWait = acquireHeatmapWaitLock();
-  const readinessPromise = ensureGeometryReady(window.CAD, { maxWaitMs: 15000 });
+  let readinessPromise = heatmapState.initialReadyPromise;
+  let releaseWait = () => {};
+  let startedWait = false;
+  if (!readinessPromise) {
+    releaseWait = acquireHeatmapWaitLock();
+    heatmapState.waiting = true;
+    startedWait = true;
+    try {
+      document.dispatchEvent(new CustomEvent("dfm:heatmap-wait", { detail: { waiting: true, modelId: metaId } }));
+    } catch {}
+    readinessPromise = Promise.resolve(ensureGeometryReady(window.CAD, { maxWaitMs: 15000 }));
+    heatmapState.initialReadyPromise = readinessPromise;
+  }
+
   Promise.resolve(readinessPromise)
+    .then((ready) => {
+      if (ready !== false) {
+        heatmapState.ready = true;
+        window.CAD.ui?.enableHeatmapButton?.(true);
+      }
+    })
     .catch(() => {})
     .finally(() => {
+      if (heatmapState.initialReadyPromise === readinessPromise) {
+        delete heatmapState.initialReadyPromise;
+      }
       releaseWait();
+      if (startedWait) {
+        heatmapState.waiting = false;
+        try {
+          document.dispatchEvent(new CustomEvent("dfm:heatmap-wait", { detail: { waiting: false, modelId: metaId } }));
+        } catch {}
+      }
     });
-
-  scheduleMicrotask(() => {
-    Promise.resolve(readinessPromise)
-      .then((ready) => {
-        if (ready) {
-          window.CAD.ui?.enableHeatmapButton?.(true);
-        }
-      })
-      .catch(() => {});
-  });
 });
 
 /** Axe sélectionné (X/Y/Z) — robuste à plusieurs implémentations possibles */
@@ -1167,17 +1186,22 @@ bindClick("#btnHeatmapDepouille", async (event) => {
   }
 
   const releaseWait = acquireHeatmapWaitLock();
+  let geometryReady = false;
   try {
     const viewerRef = currentViewer() || viewer;
-    await ensureModelGeometryReady({ model, viewer: viewerRef, maxWaitMs: 15000 }); // marge ↑
+    await ensureModelGeometryReady({ model, viewer: viewerRef, maxWaitMs: 4000 });
+    geometryReady = true;
   } catch (err) {
     console.warn("[heatmap] geometry wait failed", err);
     showHeatmapToast("Préparation de la géométrie…", "info");
+  } finally {
     releaseWait();
+  }
+
+  if (!geometryReady) {
     setHeatmapCooldown(1500);
     return;
   }
-  releaseWait();
 
   let pending = null;
   const toggleResult = layer.toggle({
@@ -1420,21 +1444,22 @@ function logModelSceneBinding(model, viewer, meta = {}) {
     modelId: meta.id || model?.id || null,
     src: meta.src || null,
     modelSceneId: modelScene?.id || null,
-    viewerSceneId: viewerScene?.id || null
+    viewerSceneId: viewerScene?.id || null,
+    same: modelScene && viewerScene ? modelScene === viewerScene : null
   };
   if (!modelScene) {
-    console.warn("[loader][diag] load() returned model without scene", payload);
+    console.warn("[diag] scene binding missing model scene", payload);
     return false;
   }
   if (!viewerScene) {
-    console.warn("[loader][diag] viewer missing scene for binding", payload);
+    console.warn("[diag] scene binding missing viewer scene", payload);
     return false;
   }
-  if (modelScene === viewerScene) {
-    console.info("[loader][diag] load() scene binding OK", payload);
+  if (payload.same) {
+    console.info("[diag] scene binding OK", payload);
     return true;
   }
-  console.warn("[loader][diag] load() scene binding mismatch", payload);
+  console.warn("[diag] scene binding mismatch", payload);
   return false;
 }
 
@@ -1466,10 +1491,65 @@ async function loadXKT(url, nameHint){
     models.set(stableId,{model,name:nameHint||stableId,src:url}); lastModelId=stableId;
     if (chkEdges?.checked) viewer.scene.edgeMaterial.edgesEnabled=true;
 
+    const heatmapState = window.CAD.heatmap || (window.CAD.heatmap = {});
+    heatmapState.ready = false;
+    const alreadyWaiting = heatmapState.waiting === true;
+    const releaseInitialWait = alreadyWaiting ? () => {} : acquireHeatmapWaitLock();
+    if (!alreadyWaiting) {
+      heatmapState.waiting = true;
+      try {
+        document.dispatchEvent(new CustomEvent("dfm:heatmap-wait", { detail: { waiting: true, modelId: stableId } }));
+      } catch {}
+    }
+    enableHeatmapButtons(false);
+    const readinessModel = model?.sceneModel || model;
+    const viewerRef = (typeof currentViewer === "function" && currentViewer()) || viewer;
+    const initialReadiness = Promise.resolve(
+      ensureModelGeometryReady({ model: readinessModel, viewer: viewerRef, maxWaitMs: 15000 })
+    );
+    heatmapState.initialReadyPromise = initialReadiness;
+
+    initialReadiness
+      .then(() => {
+        if (heatmapState.initialReadyPromise !== initialReadiness) {
+          return;
+        }
+        heatmapState.ready = true;
+        if (heatmapState.layer && typeof heatmapState.layer.setReadyState === "function") {
+          try { heatmapState.layer.setReadyState(true); } catch (err) { console.warn("[heatmap] ready broadcast failed", err); }
+        } else if (heatmapState.layer) {
+          heatmapState.layer.isReady = true;
+        }
+        enableHeatmapButtons(true);
+        try {
+          document.dispatchEvent(new CustomEvent("dfm:heatmap-ready", { detail: { ready: true, modelId: stableId } }));
+        } catch {}
+      })
+      .catch((err) => {
+        if (heatmapState.initialReadyPromise === initialReadiness) {
+          heatmapState.ready = false;
+        }
+        console.warn("[heatmap] initial geometry wait failed", err);
+        showHeatmapToast("Heatmap indisponible : géométrie en préparation.", "info");
+        enableHeatmapButtons(false);
+      })
+      .finally(() => {
+        if (heatmapState.initialReadyPromise === initialReadiness) {
+          delete heatmapState.initialReadyPromise;
+        }
+        releaseInitialWait();
+        if (!alreadyWaiting) {
+          heatmapState.waiting = false;
+          try {
+            document.dispatchEvent(new CustomEvent("dfm:heatmap-wait", { detail: { waiting: false, modelId: stableId } }));
+          } catch {}
+        }
+      });
+
     markModelReady(model, { id: stableId, src: url, name: nameHint || stableId });
 
     window.CAD.viewer = viewer;
-    window.CAD.model = model?.sceneModel || model;
+    window.CAD.model = readinessModel;
     window.CAD.modelId = stableId;
 
     // init unités + heuristique AABB

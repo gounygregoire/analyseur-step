@@ -1,6 +1,30 @@
 import { Viewer as XEViewer, XKTLoaderPlugin as XEXKTLoaderPlugin }
   from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
 
+const DEFAULT_XKT_LOADER_OPTIONS = {
+  dracoDecompressorPath:
+    "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/resources/draco/",
+  storeGeometry: true,
+  keepGeometry: true,
+  parseGeometryStreams: true,
+  readGeometry: true,
+  decodeGeometry: true,
+  decompressGeometry: true
+};
+
+function buildLoadConfig(config = {}) {
+  return {
+    edges: true,
+    storeGeometry: true,
+    keepGeometry: true,
+    parseGeometryStreams: true,
+    readGeometry: true,
+    decodeGeometry: true,
+    decompressGeometry: true,
+    ...config
+  };
+}
+
 // PATCH START: optional camera preset
 export async function loadCameraPresetOptional(u){
   try { const r = await fetch(u, {cache:'no-store'}); return r.ok ? await r.json() : null; }
@@ -53,7 +77,7 @@ if (!window.__XE_VIEWER_BOOT__) {
     }
     const viewer = new XEViewer({ canvasElement: canvas });
     try { viewer.canvas.canvas.style.background = '#e9ecef'; } catch (e) {}
-    const xktLoader = new XEXKTLoaderPlugin(viewer);
+    const xktLoader = new XEXKTLoaderPlugin(viewer, DEFAULT_XKT_LOADER_OPTIONS);
 
     async function pickUrl(id) {
       const urls = [
@@ -76,7 +100,7 @@ if (!window.__XE_VIEWER_BOOT__) {
       if (!url) { console.error('[viewer] no reachable XKT for', fileId); return false; }
       console.log('[viewer] load', url);
       console.time('[viewer] xkt load');
-      const model = await xktLoader.load({ src: url });
+      const model = await xktLoader.load(buildLoadConfig({ src: url }));
       console.timeEnd('[viewer] xkt load');
       const aabb = (model && model.aabb) || viewer.scene.aabb;
       if (aabb) viewer.cameraFlight.fit(aabb);

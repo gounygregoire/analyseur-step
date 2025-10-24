@@ -33,10 +33,12 @@ function scheduleSceneBindingLog(entry) {
     if (metaId) payload.id = metaId;
     if (modelScene?.id) payload.modelSceneId = modelScene.id;
     if (viewerScene?.id) payload.viewerSceneId = viewerScene.id;
-    if (modelScene === viewerScene) {
-      console.info("[loader][diag] model.scene === viewer.scene", payload);
+    const same = modelScene === viewerScene;
+    payload.same = same;
+    if (same) {
+      console.info("[diag] scene binding OK", payload);
     } else {
-      console.warn("[loader][diag] model.scene !== viewer.scene", payload);
+      console.warn("[diag] scene binding mismatch", payload);
     }
     return true;
   };

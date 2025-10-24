@@ -1,6 +1,30 @@
 const XEOKIT_CDN_URL = "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
 
 let _viewer, _loader;
+
+const DEFAULT_XKT_LOADER_OPTIONS = {
+  dracoDecompressorPath:
+    "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/resources/draco/",
+  storeGeometry: true,
+  keepGeometry: true,
+  parseGeometryStreams: true,
+  readGeometry: true,
+  decodeGeometry: true,
+  decompressGeometry: true
+};
+
+function buildLoadConfig(config = {}) {
+  return {
+    edges: true,
+    storeGeometry: true,
+    keepGeometry: true,
+    parseGeometryStreams: true,
+    readGeometry: true,
+    decodeGeometry: true,
+    decompressGeometry: true,
+    ...config
+  };
+}
 const bus = new EventTarget();
 export function onModelLoaded(cb){ bus.addEventListener('model-loaded', cb); }
 
@@ -38,14 +62,14 @@ export async function startViewer(){
   _viewer.scene.gammaInput = true;
   _viewer.scene.gammaOutput = true;
   new ResizeObserver(()=>{ try{ _viewer.resize(); }catch{} }).observe(document.getElementById('viewerContainer'));
-  _loader = new XKTLoaderPlugin(_viewer);
+  _loader = new XKTLoaderPlugin(_viewer, DEFAULT_XKT_LOADER_OPTIONS);
   console.info('[viewer] prêt');
   return _viewer;
 }
 
 export async function loadXKT(url){
   if (!_viewer) throw new Error('viewer non initialisé');
-  const model = await _loader.load({ id:'model', src:url, edges:true });
+  const model = await _loader.load(buildLoadConfig({ id: 'model', src: url }));
   if (_viewer.cameraFlight) _viewer.cameraFlight.flyTo(model); else if (_viewer.fitAll) _viewer.fitAll();
   bus.dispatchEvent(new CustomEvent('model-loaded', { detail:{ url, model }}));
   return model;

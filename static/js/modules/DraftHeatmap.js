@@ -21,6 +21,77 @@ function safeAccess(getter) {
   }
 }
 
+function len(x) {
+  if (!x) return 0;
+  if (typeof x.length === "number") return x.length;
+  if (typeof x.numItems === "number") return x.numItems;
+  if (x.array && typeof x.array.length === "number") return x.array.length;
+  return 0;
+}
+
+function geometryMetrics(geom) {
+  if (!geom) {
+    return { pos: 0, idx: 0 };
+  }
+  const positions = geom.positions
+    ?? geom.arrays?.positions
+    ?? geom._positions
+    ?? geom.geometry?.positions
+    ?? geom.geometryData?.positions;
+  const indicesPrimary = geom.indices
+    ?? geom.arrays?.indices
+    ?? geom._indices
+    ?? geom.geometry?.indices
+    ?? geom.geometryData?.indices;
+  const indicesFallback = geom.edgeIndices
+    ?? geom.arrays?.edgeIndices
+    ?? geom._edgeIndices
+    ?? geom.geometry?.edgeIndices
+    ?? geom.geometryData?.edgeIndices;
+  const posLen = len(positions);
+  const idxLen = len(indicesPrimary) || len(indicesFallback);
+  return { pos: posLen, idx: idxLen };
+}
+
+function hasUsableGeometry(geom) {
+  const metrics = geometryMetrics(geom);
+  return metrics.pos > 0 && metrics.idx > 0;
+}
+
+export function* iterMeshes(scene, model) {
+  if (!scene) return;
+
+  if (typeof scene.iterateComponents === "function") {
+    const list = [];
+    scene.iterateComponents("Mesh", (m) => {
+      if (model?.id && m?.model?.id && m.model.id !== model.id) return;
+      list.push(m);
+    });
+    for (const mesh of list) {
+      yield mesh;
+    }
+    if (list.length) return;
+  }
+
+  if (scene.meshes && typeof scene.meshes.values === "function") {
+    let any = false;
+    for (const mesh of scene.meshes.values()) {
+      any = true;
+      if (model?.id && mesh?.model?.id && mesh.model.id !== model.id) continue;
+      yield mesh;
+    }
+    if (any) return;
+  }
+
+  const values = scene.meshes ? Object.values(scene.meshes) : [];
+  if (values.length) {
+    for (const mesh of values) {
+      if (model?.id && mesh?.model?.id && mesh.model.id !== model.id) continue;
+      yield mesh;
+    }
+  }
+}
+
 // Attente robuste de la géométrie, sans API privée Xeokit
 // Usage:
 //   await ensureModelGeometryReady({ model, viewer, maxWaitMs: 15000 });
@@ -29,15 +100,13 @@ export async function ensureModelGeometryReady({ model, viewer, maxWaitMs = 1500
     throw new Error("GEOMETRY_WAIT_INVALID_MODEL");
   }
 
-  // Priorité absolue : la scène liée au modèle (single source of truth)
   const scene = model?.scene || viewer?.scene;
   if (!scene) {
     throw new Error("NO_SCENE_BOUND_TO_MODEL");
   }
 
-  const t0 = nowMs();
+  const start = nowMs();
 
-  // Diagnostic : détection d'un mismatch entre viewer passé et scène réelle
   if (viewer && scene !== viewer.scene) {
     const mismatchErr = new Error("[heatmap][ALERTE] viewer-scene mismatch");
     console.error("[heatmap][ALERTE] model.scene !== viewer.scene", {
@@ -65,357 +134,89 @@ export async function ensureModelGeometryReady({ model, viewer, maxWaitMs = 1500
     raf(() => resolve());
   });
 
-  function aabbVolume(aabb) {
+  const meshCollectionType = (() => {
+    const meshes = scene?.meshes;
+    if (!meshes) return "none";
+    if (meshes instanceof Map) return "Map";
+    if (typeof meshes.values === "function") return "iterable";
+    if (Array.isArray(meshes)) return "Array";
+    return typeof meshes;
+  })();
+
+  const aabbVolume = (aabb) => {
     if (!aabb) return 0;
     const dx = (aabb[3] - aabb[0]) || 0;
     const dy = (aabb[4] - aabb[1]) || 0;
     const dz = (aabb[5] - aabb[2]) || 0;
     return dx * dy * dz;
-  }
-
-  const lengthOf = (value) => {
-    if (!value) return 0;
-    if (typeof value.length === "number") {
-      return value.length;
-    }
-    if (ArrayBuffer.isView(value)) {
-      return value.length;
-    }
-    if (Array.isArray(value)) {
-      return value.length;
-    }
-    if (value.array && value.array !== value) {
-      return lengthOf(value.array);
-    }
-    return 0;
   };
 
-  const callMaybe = (fn) => {
-    if (typeof fn !== "function") {
-      return undefined;
-    }
-    try {
-      return fn();
-    } catch (err) {
-      return undefined;
-    }
-  };
-
-  const extractGeomMetrics = (geometry) => {
-    if (!geometry) {
-      return { positionsLength: 0, indicesLength: 0 };
-    }
-    const positionSources = [
-      geometry.positions,
-      callMaybe(() => geometry.getPositions?.()),
-      geometry.positionsCompressed,
-      geometry.vertexPositions,
-      geometry.localPositions,
-      geometry.arrays?.positions,
-      geometry.arrays?.vertexPositions
-    ];
-    const indexSources = [
-      geometry.indices,
-      callMaybe(() => geometry.getIndices?.()),
-      geometry.edgeIndices,
-      geometry.indicesCompressed,
-      geometry.arrays?.indices,
-      geometry.arrays?.edgeIndices
-    ];
-
-    const firstLength = (sources) => {
-      for (const source of sources) {
-        const len = lengthOf(source);
-        if (len > 0) {
-          return len;
-        }
-      }
-      return 0;
-    };
-
-    return {
-      positionsLength: firstLength(positionSources),
-      indicesLength: firstLength(indexSources)
-    };
-  };
-
-  const hasGeom = (geometry) => {
-    const metrics = extractGeomMetrics(geometry);
-    return metrics.positionsLength > 0 && metrics.indicesLength > 0;
-  };
-
-  const meshMatchesModel = (meshCandidate) => {
-    if (!meshCandidate) return false;
-    const meshModelId = meshCandidate?.model?.id
-      || meshCandidate?.sceneModel?.id
-      || meshCandidate?.parent?.id
-      || meshCandidate?.meta?.modelId
-      || null;
-    if (!model?.id || !meshModelId) {
-      return true;
-    }
-    if (meshModelId === model.id) {
-      return true;
-    }
-    const modelCount = Object.keys(scene.models || {}).length;
-    return modelCount <= 1;
-  };
-
-  const resolveGeomFromMesh = (meshCandidate) => (
-    callMaybe(() => meshCandidate?.geometry)
-    || callMaybe(() => meshCandidate?.getGeometry?.())
-    || callMaybe(() => meshCandidate?.mesh?.geometry)
-    || callMaybe(() => meshCandidate?.mesh?.getGeometry?.())
-    || callMaybe(() => meshCandidate?.geometry?.geometry)
-    || null
-  );
-
-  const collectMeshesForModel = () => {
-    const seen = new Set();
-    const result = [];
-    const push = (meshCandidate) => {
-      if (!meshCandidate || seen.has(meshCandidate)) return;
-      if (!meshMatchesModel(meshCandidate)) return;
-      seen.add(meshCandidate);
-      result.push(meshCandidate);
-    };
-
-    const gather = (collection, mapper) => {
-      if (!collection) return;
-      const mapFn = typeof mapper === "function" ? mapper : ((value) => value);
-      if (Array.isArray(collection)) {
-        collection.forEach((item) => push(mapFn(item)));
-        return;
-      }
-      if (typeof collection.forEach === "function") {
-        try { collection.forEach((item) => push(mapFn(item))); } catch {}
-        return;
-      }
-      if (typeof collection === "object") {
-        for (const key in collection) {
-          if (Object.prototype.hasOwnProperty.call(collection, key)) {
-            push(mapFn(collection[key]));
-          }
-        }
-      }
-    };
-
-    if (typeof scene?.iterateComponents === "function") {
-      try {
-        scene.iterateComponents("Mesh", (mesh) => {
-          push(mesh);
-        });
-      } catch (err) {
-        // noop
-      }
-    }
-
-    gather(scene.meshes);
-    gather(model?.meshes);
-    gather(model?.meshList);
-    gather(model?.meshArray);
-    gather(scene.objects, (obj) => obj?.mesh || obj);
-    gather(model?.scene?.objects, (obj) => obj?.mesh || obj);
-    gather(model?.scene?.meshes);
-
-    if (!result.length) {
-      // compat: certains viewers exposent seulement scene.entities avec un mesh interne
-      gather(scene.entities, (entity) => entity?.mesh || entity);
-    }
-
-    return result;
-  };
-
-  const collectEntitiesForModel = () => {
-    const out = [];
-    const seen = new Set();
-    const push = (entity) => {
-      if (!entity || seen.has(entity)) return;
-      const meshGeom = entity?.mesh?.geometry;
-      const geom = entity?.geometry || meshGeom;
-      if (!geom) return;
-      if (!meshMatchesModel(entity) && !meshMatchesModel(entity?.mesh)) return;
-      seen.add(entity);
-      out.push(entity);
-    };
-
-    const gather = (collection) => {
-      if (!collection) return;
-      if (Array.isArray(collection)) {
-        collection.forEach(push);
-        return;
-      }
-      if (typeof collection.forEach === "function") {
-        try { collection.forEach(push); } catch {}
-        return;
-      }
-      if (typeof collection === "object") {
-        for (const key in collection) {
-          if (Object.prototype.hasOwnProperty.call(collection, key)) {
-            push(collection[key]);
-          }
-        }
-      }
-    };
-
-    gather(scene.entities);
-    gather(scene.objects);
-    gather(model?.scene?.entities);
-    gather(model?.scene?.objects);
-
-    if (!out.length) {
-      const modelCount = Object.keys(scene.models || {}).length;
-      if (modelCount === 1) {
-        gather(scene.entities);
-        gather(scene.objects);
-      }
-    }
-
-    return out;
-  };
-
-  function conditionsOK() {
-    // A) volume AABB non nul
-    const vol = aabbVolume(model?.aabb || scene?.aabb);
-    if (!isFinite(vol) || vol <= 0) return false;
-
-    lastDiagSnapshot.readySample = null;
-
-    // B) d’abord via meshes (chemin le plus fiable avec @latest)
-    const meshes = collectMeshesForModel();
-    lastDiagSnapshot.meshesTotal = meshes.length;
-    lastDiagSnapshot.meshSample = meshes.slice(0, 3).map((mesh, i) => {
-      const geometry = resolveGeomFromMesh(mesh);
-      const metrics = extractGeomMetrics(geometry);
-      return {
-        i,
-        meshId: mesh?.id,
-        modelId: mesh?.sceneModel?.id || mesh?.model?.id || mesh?.entity?.modelId || mesh?.parent?.id || null,
-        positions: metrics.positionsLength,
-        indices: metrics.indicesLength
-      };
-    });
-    for (const mesh of meshes) {
-      const geometry = resolveGeomFromMesh(mesh);
-      if (hasGeom(geometry)) {
-        const metrics = extractGeomMetrics(geometry);
-        lastDiagSnapshot.readySource = "mesh";
-        lastDiagSnapshot.readySample = {
-          type: "mesh",
-          meshId: mesh?.id || null,
-          modelId: mesh?.sceneModel?.id || mesh?.model?.id || null,
-          positions: metrics.positionsLength,
-          indices: metrics.indicesLength
-        };
-        return true;
-      }
-    }
-
-    // C) fallback via entities (certaines versions exposent surtout entities)
-    const entities = collectEntitiesForModel();
-    lastDiagSnapshot.entitySample = entities.slice(0, 3).map((entity, i) => {
-      const geometry = entity?.mesh?.geometry || entity?.geometry;
-      const metrics = extractGeomMetrics(geometry);
-      return {
-        i,
-        entityId: entity?.id,
-        meshId: entity?.mesh?.id,
-        modelId: entity?.model?.id || entity?.mesh?.model?.id || null,
-        positions: metrics.positionsLength,
-        indices: metrics.indicesLength
-      };
-    });
-    for (const entity of entities) {
-      const geometry = entity?.mesh?.geometry || entity?.geometry;
-      if (hasGeom(geometry)) {
-        const metrics = extractGeomMetrics(geometry);
-        lastDiagSnapshot.readySource = "entity";
-        lastDiagSnapshot.readySample = {
-          type: "entity",
-          entityId: entity?.id || null,
-          meshId: entity?.mesh?.id || null,
-          modelId: entity?.model?.id || entity?.mesh?.model?.id || null,
-          positions: metrics.positionsLength,
-          indices: metrics.indicesLength
-        };
-        return true;
-      }
-    }
-
-    lastDiagSnapshot.readySource = "none";
-    return false;
-  }
-
-  const lastDiagSnapshot = {
-    meshesTotal: 0,
-    meshSample: [],
-    entitySample: [],
-    readySource: "none",
+  const stats = {
+    sample: [],
+    iterated: 0,
     readySample: null
-  };
-
-  const getSceneModelCount = () => {
-    if (scene?.models && typeof scene.models === "object") {
-      try {
-        return Object.keys(scene.models).length;
-      } catch (err) {
-        return 0;
-      }
-    }
-    return 0;
-  };
-
-  const getComponentMeshCount = () => {
-    if (typeof scene?.getNumComponents === "function") {
-      try {
-        const value = scene.getNumComponents("Mesh");
-        const numeric = Number(value);
-        if (Number.isFinite(numeric)) {
-          return numeric;
-        }
-        return null;
-      } catch (err) {
-        return null;
-      }
-    }
-    return null;
   };
 
   let diagLogged = false;
 
-  while (nowMs() - t0 < maxWaitMs) {
-    if (conditionsOK()) {
-      const dt = Math.round(nowMs() - t0);
-      const payload = {
-        modelId: model?.id,
-        readySource: lastDiagSnapshot.readySource,
-        sample: lastDiagSnapshot.readySample
-      };
-      if (!payload.sample || payload.sample.positions <= 0 || payload.sample.indices <= 0) {
-        console.warn("[heatmap][diag] readiness sample invalid", payload);
+  while (nowMs() - start < maxWaitMs) {
+    const volume = aabbVolume(model?.aabb || model?.sceneModel?.aabb || scene?.aabb);
+    const hasVolume = isFinite(volume) && volume > 0;
+    let found = false;
+    stats.sample = [];
+    stats.iterated = 0;
+    stats.readySample = null;
+
+    if (hasVolume) {
+      for (const mesh of iterMeshes(scene, model)) {
+        stats.iterated += 1;
+        const geometry = mesh?.geometry
+          || (typeof mesh?.getGeometry === "function" ? mesh.getGeometry() : null);
+        const metrics = geometryMetrics(geometry);
+        if (stats.sample.length < 3) {
+          stats.sample.push({ pos: metrics.pos, idx: metrics.idx });
+        }
+        if (!found && hasUsableGeometry(geometry)) {
+          found = true;
+          stats.readySample = {
+            meshId: mesh?.id ?? null,
+            pos: metrics.pos,
+            idx: metrics.idx
+          };
+          break;
+        }
       }
-      console.log(`[heatmap] ready after ${dt} ms (model=${model?.id})`, payload);
+    }
+
+    if (hasVolume && found) {
+      const dt = Math.round(nowMs() - start);
+      console.log(`[heatmap] ready after ${dt} ms (model=${model?.id})`, {
+        modelId: model?.id,
+        meshIterated: stats.iterated,
+        sample: stats.readySample,
+        aabbVolume: volume
+      });
       return;
     }
-    const elapsed = nowMs() - t0;
-    if (elapsed > maxWaitMs * 0.6 && !diagLogged) {
+
+    const elapsed = nowMs() - start;
+    if (!diagLogged && elapsed > maxWaitMs * 0.6) {
       diagLogged = true;
       console.warn("[heatmap][diag] geometry wait nearing timeout", {
         modelId: model?.id,
         elapsed: Math.round(elapsed),
         maxWaitMs,
-        sceneModelCount: getSceneModelCount(),
-        componentMeshCount: getComponentMeshCount(),
-        meshesTotal: lastDiagSnapshot.meshesTotal,
-        readySource: lastDiagSnapshot.readySource,
-        meshSample: lastDiagSnapshot.meshSample,
-        entitySample: lastDiagSnapshot.entitySample
+        meshCollectionType,
+        meshIterated: stats.iterated,
+        samples: stats.sample,
+        aabbVolume: hasVolume ? volume : 0
       });
     }
+
     await new Promise(raf);
   }
 
-  const dt = Math.round(nowMs() - t0);
+  const dt = Math.round(nowMs() - start);
   const err = new Error("GEOMETRY_WAIT_TIMEOUT");
   console.warn(`[loader] geometry readiness wait failed (dt=${dt}ms)`, err);
   throw err;
