@@ -12,7 +12,8 @@ import {
   AnnotationsPlugin,
   DistanceMeasurementsPlugin,
   DistanceMeasurementsMouseControl
-} from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@latest/dist/xeokit-sdk.es.min.js";
+} from "https://cdn.jsdelivr.net/npm/@xeokit/xeokit-sdk@<PINNED_VERSION>/dist/xeokit-sdk.es.min.js?v=2025-10-24";
+console.log("[xeokit] pinned version = <PINNED_VERSION>");
 import {
   register as registerModel,
   markModelReady,
@@ -27,6 +28,7 @@ import {
   ensureHeatmapLayer,
   ensureModelGeometryReady
 } from "./modules/DraftHeatmap.js";
+import { waitForGeometryReady } from "./modules/geomWait.js";
 import { ensureGeometryReady } from "./DFMOrchestrator.js";
 import { installProbeSafe } from "./modules/probeSafe.js";
 
@@ -114,6 +116,114 @@ if (typeof window.CAD.model === 'undefined') window.CAD.model = null;
 if (typeof window.CAD.modelId === 'undefined') window.CAD.modelId = null;
 if (typeof window.CAD.heatmap.waiting !== 'boolean') window.CAD.heatmap.waiting = false;
 if (!window.CAD.ui || typeof window.CAD.ui !== 'object') window.CAD.ui = {};
+
+let geometryReadyFlag = false;
+let geometryReadyPromiseRef = null;
+
+function getHeatmapState() {
+  const cad = window.CAD || (window.CAD = {});
+  if (!cad.heatmap || typeof cad.heatmap !== "object") {
+    cad.heatmap = {};
+  }
+  return cad.heatmap;
+}
+
+function setGeometryReadyFlag(flag) {
+  geometryReadyFlag = !!flag;
+  const heatmapState = getHeatmapState();
+  heatmapState.geometryReady = geometryReadyFlag;
+  heatmapState.ready = geometryReadyFlag;
+}
+
+function setGeometryReadyPromise(promise) {
+  geometryReadyPromiseRef = promise || null;
+  const heatmapState = getHeatmapState();
+  if (promise) {
+    heatmapState.geometryReadyPromise = promise;
+  } else {
+    delete heatmapState.geometryReadyPromise;
+  }
+}
+
+function getGeometryReadyPromise() {
+  return geometryReadyPromiseRef;
+}
+
+function resetGeometryReadyState() {
+  setGeometryReadyFlag(false);
+  setGeometryReadyPromise(null);
+}
+
+function isGeometryReady() {
+  return geometryReadyFlag === true;
+}
+
+function beginGeometryReadySequence({ modelId, viewerCandidate, fallbackScene }) {
+  const heatmapState = getHeatmapState();
+  setGeometryReadyFlag(false);
+  const alreadyWaiting = heatmapState.waiting === true;
+  const releaseInitialWait = alreadyWaiting ? () => {} : acquireHeatmapWaitLock();
+  if (!alreadyWaiting) {
+    heatmapState.waiting = true;
+    try {
+      document.dispatchEvent(new CustomEvent("dfm:heatmap-wait", { detail: { waiting: true, modelId } }));
+    } catch {}
+  }
+  enableHeatmapButtons(false);
+
+  const viewerForWait = viewerCandidate || { scene: fallbackScene };
+  const waitOptions = { maxWaitMs: 60000, checkEvery: 100 };
+  const readinessPromise = Promise.resolve(
+    waitForGeometryReady(viewerForWait, waitOptions)
+  );
+  getHeatmapState().initialReadyPromise = readinessPromise;
+  setGeometryReadyPromise(readinessPromise);
+
+  readinessPromise
+    .then(() => {
+      if (getHeatmapState().initialReadyPromise !== readinessPromise) {
+        return;
+      }
+      setGeometryReadyFlag(true);
+      console.log("[heatmap] geometry ready");
+      const state = getHeatmapState();
+      if (state.layer && typeof state.layer.setReadyState === "function") {
+        try { state.layer.setReadyState(true); } catch (err) { console.warn("[heatmap] ready broadcast failed", err); }
+      } else if (state.layer) {
+        state.layer.isReady = true;
+      }
+      enableHeatmapButtons(true);
+      try {
+        document.dispatchEvent(new CustomEvent("dfm:heatmap-ready", { detail: { ready: true, modelId } }));
+      } catch {}
+    })
+    .catch((err) => {
+      if (getHeatmapState().initialReadyPromise === readinessPromise) {
+        setGeometryReadyFlag(false);
+      }
+      console.warn("[heatmap] geometry not ready", err);
+      showHeatmapToast("Heatmap indisponible : géométrie en préparation.", "info");
+      enableHeatmapButtons(false);
+    })
+    .finally(() => {
+      const state = getHeatmapState();
+      if (state.initialReadyPromise === readinessPromise) {
+        delete state.initialReadyPromise;
+      }
+      if (getGeometryReadyPromise() === readinessPromise) {
+        setGeometryReadyPromise(null);
+      }
+      releaseInitialWait();
+      if (!alreadyWaiting) {
+        state.waiting = false;
+        try {
+          document.dispatchEvent(new CustomEvent("dfm:heatmap-wait", { detail: { waiting: false, modelId } }));
+        } catch {}
+      }
+    });
+
+  return readinessPromise;
+}
 
 const DEFAULT_HEATMAP_BUTTON_SELECTORS = [
   "#btnHeatmapDraft",
@@ -412,6 +522,19 @@ document.dispatchEvent(new Event('dfm:viewer-ready'));
 window.viewer = viewer;
 window.CAD.viewer = viewer;
 
+const canvas = document.getElementById("myCanvas") || viewer?.canvas;
+if (canvas) {
+  try {
+    const rect = canvas.getBoundingClientRect();
+    console.log("[viewer][canvas] size =", rect.width, "x", rect.height);
+    if (rect.width === 0 || rect.height === 0) {
+      console.warn("[viewer][canvas] WARNING: canvas has zero size at load time");
+    }
+  } catch (err) {
+    console.warn("[viewer][canvas] size check failed", err);
+  }
+}
+
 new FastNavPlugin(viewer, { flyToDuration: 0.9, hideEdges:false, autoHideEdges:false });
 
 /* -----------------------------------------------------------------------
@@ -689,9 +812,11 @@ onModelChange((entry) => {
 
   Promise.resolve(readinessPromise)
     .then((ready) => {
-      if (ready !== false) {
+      if (ready !== false && isGeometryReady()) {
         heatmapState.ready = true;
         window.CAD.ui?.enableHeatmapButton?.(true);
+      } else if (!isGeometryReady()) {
+        heatmapState.ready = false;
       }
     })
     .catch(() => {})
@@ -1171,6 +1296,12 @@ bindClick("#btnHeatmapDepouille", async (event) => {
     return;
   }
 
+  if (!isGeometryReady()) {
+    showHeatmapToast("Heatmap indisponible : géométrie en préparation.", "info");
+    setHeatmapCooldown();
+    return;
+  }
+
   if (!layer.isReady || !registry?.heatmap?.ready) {
     showHeatmapToast("Préparation de la géométrie…", "info");
     if (typeof layer.awaitReadyAndMaybeWarmup === "function") {
@@ -1437,6 +1568,70 @@ function buildXKTLoadConfig({ id, src }) {
   };
 }
 
+const loggedXKTContentSources = new Set();
+
+function normalizeXKTSrc(src) {
+  if (!src) return null;
+  try {
+    const url = new URL(src, typeof location !== "undefined" ? location.href : undefined);
+    return url.toString();
+  } catch {
+    return src;
+  }
+}
+
+function isHttpLikeURL(src) {
+  if (!src) return false;
+  if (src.startsWith("blob:")) return false;
+  try {
+    const url = new URL(src, typeof location !== "undefined" ? location.href : undefined);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+async function logXKTContentDiagnostics({ src, file, label }) {
+  try {
+    if (file && typeof file.size === "number") {
+      console.log("[viewer][xkt] content =", { label: label || file.name || null, sizeBytes: file.size });
+      return;
+    }
+    if (!src) return;
+    const normalized = normalizeXKTSrc(src);
+    if (!normalized) return;
+    if (loggedXKTContentSources.has(normalized)) return;
+    loggedXKTContentSources.add(normalized);
+    if (!isHttpLikeURL(normalized)) {
+      console.log("[viewer][xkt] content =", { src: normalized, sizeBytes: null, note: "non-http source" });
+      return;
+    }
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timeout = controller ? setTimeout(() => {
+      try { controller.abort(); } catch {}
+    }, 7000) : null;
+    let res;
+    try {
+      res = await fetch(normalized, { method: "HEAD", cache: "no-store", signal: controller?.signal });
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+    if (!res || !res.ok) {
+      console.warn("[viewer][xkt] HEAD failed", { src: normalized, status: res?.status });
+      return;
+    }
+    const len = res.headers.get("content-length");
+    const size = len ? Number(len) : null;
+    console.log("[viewer][xkt] content =", {
+      src: normalized,
+      sizeBytes: Number.isFinite(size) ? size : null,
+      rawContentLength: len || null
+    });
+  } catch (err) {
+    console.warn("[viewer][xkt] content size unavailable", err);
+  }
+}
+
 function logModelSceneBinding(model, viewer, meta = {}) {
   const modelScene = model?.scene || model?.sceneModel?.scene || model?.sceneModel || null;
   const viewerScene = viewer?.scene || null;
@@ -1474,7 +1669,9 @@ async function loadXKT(url, nameHint){
   window.CAD.heatmap.ready = false;
   window.CAD.model = null;
   window.CAD.modelId = null;
+  resetGeometryReadyState();
   clearModelRegistry();
+  logXKTContentDiagnostics({ src: url, label: nameHint || stableId }).catch(() => {});
   const model = xktLoader.load(buildXKTLoadConfig({ id: stableId, src: url }));
 
   logModelSceneBinding(model, viewer, { id: stableId, src: url });
@@ -1491,60 +1688,13 @@ async function loadXKT(url, nameHint){
     models.set(stableId,{model,name:nameHint||stableId,src:url}); lastModelId=stableId;
     if (chkEdges?.checked) viewer.scene.edgeMaterial.edgesEnabled=true;
 
-    const heatmapState = window.CAD.heatmap || (window.CAD.heatmap = {});
-    heatmapState.ready = false;
-    const alreadyWaiting = heatmapState.waiting === true;
-    const releaseInitialWait = alreadyWaiting ? () => {} : acquireHeatmapWaitLock();
-    if (!alreadyWaiting) {
-      heatmapState.waiting = true;
-      try {
-        document.dispatchEvent(new CustomEvent("dfm:heatmap-wait", { detail: { waiting: true, modelId: stableId } }));
-      } catch {}
-    }
-    enableHeatmapButtons(false);
     const readinessModel = model?.sceneModel || model;
     const viewerRef = (typeof currentViewer === "function" && currentViewer()) || viewer;
-    const initialReadiness = Promise.resolve(
-      ensureModelGeometryReady({ model: readinessModel, viewer: viewerRef, maxWaitMs: 15000 })
-    );
-    heatmapState.initialReadyPromise = initialReadiness;
-
-    initialReadiness
-      .then(() => {
-        if (heatmapState.initialReadyPromise !== initialReadiness) {
-          return;
-        }
-        heatmapState.ready = true;
-        if (heatmapState.layer && typeof heatmapState.layer.setReadyState === "function") {
-          try { heatmapState.layer.setReadyState(true); } catch (err) { console.warn("[heatmap] ready broadcast failed", err); }
-        } else if (heatmapState.layer) {
-          heatmapState.layer.isReady = true;
-        }
-        enableHeatmapButtons(true);
-        try {
-          document.dispatchEvent(new CustomEvent("dfm:heatmap-ready", { detail: { ready: true, modelId: stableId } }));
-        } catch {}
-      })
-      .catch((err) => {
-        if (heatmapState.initialReadyPromise === initialReadiness) {
-          heatmapState.ready = false;
-        }
-        console.warn("[heatmap] initial geometry wait failed", err);
-        showHeatmapToast("Heatmap indisponible : géométrie en préparation.", "info");
-        enableHeatmapButtons(false);
-      })
-      .finally(() => {
-        if (heatmapState.initialReadyPromise === initialReadiness) {
-          delete heatmapState.initialReadyPromise;
-        }
-        releaseInitialWait();
-        if (!alreadyWaiting) {
-          heatmapState.waiting = false;
-          try {
-            document.dispatchEvent(new CustomEvent("dfm:heatmap-wait", { detail: { waiting: false, modelId: stableId } }));
-          } catch {}
-        }
-      });
+    beginGeometryReadySequence({
+      modelId: stableId,
+      viewerCandidate: viewerRef || viewer,
+      fallbackScene: readinessModel?.scene || viewer?.scene
+    });
 
     markModelReady(model, { id: stableId, src: url, name: nameHint || stableId });
 
@@ -1591,6 +1741,7 @@ async function loadLocalXKT(file) {
   window.CAD.heatmap.ready = false;
   window.CAD.model = null;
   window.CAD.modelId = null;
+  resetGeometryReadyState();
   clearModelRegistry();
 
   // 1) Nettoyage éventuel du précédent blob
@@ -1606,12 +1757,13 @@ async function loadLocalXKT(file) {
   const blobURL = URL.createObjectURL(file);
   currentBlobURL = blobURL;
 
+  const stableIdLocal = window.currentFileId || currentFileId || `local_xkt_${Date.now()}`;
   console.log("[viewer] loading XKT (local) :", blobURL);
+  logXKTContentDiagnostics({ src: blobURL, file, label: file?.name || stableIdLocal }).catch(() => {});
 
   // 3) Charger UNE SEULE FOIS via XKTLoader
   //    Assure-toi d'avoir ton instance déjà créée :
   //    const xktLoader = new XKTLoaderPlugin(viewer);
-  const stableIdLocal = window.currentFileId || currentFileId || `local_xkt_${Date.now()}`;
   const model = xktLoader.load(buildXKTLoadConfig({ id: stableIdLocal, src: blobURL }));
   logModelSceneBinding(model, viewer, { id: stableIdLocal, src: blobURL });
   currentModel = model;
@@ -1621,6 +1773,14 @@ async function loadLocalXKT(file) {
   registerModel({ viewer, model, meta: { id: stableIdLocal, src: blobURL, fileName: file.name } });
 
   onModelLoadedOnce(model, () => {
+    const readinessModel = model?.sceneModel || model;
+    const viewerRef = (typeof currentViewer === "function" && currentViewer()) || viewer;
+    beginGeometryReadySequence({
+      modelId: stableIdLocal,
+      viewerCandidate: viewerRef || viewer,
+      fallbackScene: readinessModel?.scene || viewer?.scene
+    });
+
     viewer.cameraFlight.flyTo(model);
     models.set(stableIdLocal, { model, name: file?.name || stableIdLocal, src: blobURL });
     lastModelId = stableIdLocal;
@@ -1628,7 +1788,7 @@ async function loadLocalXKT(file) {
     markModelReady(model, { id: stableIdLocal, src: blobURL, name: file?.name || stableIdLocal });
 
     window.CAD.viewer = viewer;
-    window.CAD.model = model?.sceneModel || model;
+    window.CAD.model = readinessModel;
     window.CAD.modelId = stableIdLocal;
   });
 
@@ -1677,6 +1837,7 @@ async function uploadAndShow(file) {
         clearModelRegistry();
       }
       console.log("[viewer] loading XKT (local):", fileURL);
+      logXKTContentDiagnostics({ src: fileURL, file: f, label: f.name }).catch(() => {});
       StatsPoller.cancel();
       await loadXKT(fileURL, f.name);
       return;
@@ -1706,6 +1867,7 @@ async function uploadAndShow(file) {
     }
 
     console.log("[viewer] loading XKT]:", xktUrl);
+    logXKTContentDiagnostics({ src: xktUrl, label: f.name || currentFileId }).catch(() => {});
     StatsPoller.cancel();
     await loadXKT(xktUrl, f.name);
   } catch (e) {

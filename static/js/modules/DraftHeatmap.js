@@ -4,6 +4,8 @@
 // les overlays via HeatmapLayer sans modifier les matériaux d'origine.
 
 import HeatmapLayer from "../HeatmapLayer.js";
+import { listMeshes, countMeshes } from "./geomUtils.js";
+import { waitForGeometryReady } from "./geomWait.js";
 
 function nowMs() {
   if (typeof performance !== "undefined" && typeof performance.now === "function") {
@@ -21,81 +23,10 @@ function safeAccess(getter) {
   }
 }
 
-function len(x) {
-  if (!x) return 0;
-  if (typeof x.length === "number") return x.length;
-  if (typeof x.numItems === "number") return x.numItems;
-  if (x.array && typeof x.array.length === "number") return x.array.length;
-  return 0;
-}
-
-function geometryMetrics(geom) {
-  if (!geom) {
-    return { pos: 0, idx: 0 };
-  }
-  const positions = geom.positions
-    ?? geom.arrays?.positions
-    ?? geom._positions
-    ?? geom.geometry?.positions
-    ?? geom.geometryData?.positions;
-  const indicesPrimary = geom.indices
-    ?? geom.arrays?.indices
-    ?? geom._indices
-    ?? geom.geometry?.indices
-    ?? geom.geometryData?.indices;
-  const indicesFallback = geom.edgeIndices
-    ?? geom.arrays?.edgeIndices
-    ?? geom._edgeIndices
-    ?? geom.geometry?.edgeIndices
-    ?? geom.geometryData?.edgeIndices;
-  const posLen = len(positions);
-  const idxLen = len(indicesPrimary) || len(indicesFallback);
-  return { pos: posLen, idx: idxLen };
-}
-
-function hasUsableGeometry(geom) {
-  const metrics = geometryMetrics(geom);
-  return metrics.pos > 0 && metrics.idx > 0;
-}
-
-export function* iterMeshes(scene, model) {
-  if (!scene) return;
-
-  if (typeof scene.iterateComponents === "function") {
-    const list = [];
-    scene.iterateComponents("Mesh", (m) => {
-      if (model?.id && m?.model?.id && m.model.id !== model.id) return;
-      list.push(m);
-    });
-    for (const mesh of list) {
-      yield mesh;
-    }
-    if (list.length) return;
-  }
-
-  if (scene.meshes && typeof scene.meshes.values === "function") {
-    let any = false;
-    for (const mesh of scene.meshes.values()) {
-      any = true;
-      if (model?.id && mesh?.model?.id && mesh.model.id !== model.id) continue;
-      yield mesh;
-    }
-    if (any) return;
-  }
-
-  const values = scene.meshes ? Object.values(scene.meshes) : [];
-  if (values.length) {
-    for (const mesh of values) {
-      if (model?.id && mesh?.model?.id && mesh.model.id !== model.id) continue;
-      yield mesh;
-    }
-  }
-}
-
 // Attente robuste de la géométrie, sans API privée Xeokit
 // Usage:
-//   await ensureModelGeometryReady({ model, viewer, maxWaitMs: 15000 });
-export async function ensureModelGeometryReady({ model, viewer, maxWaitMs = 15000 }) {
+//   await ensureModelGeometryReady({ model, viewer, maxWaitMs: 60000 });
+export async function ensureModelGeometryReady({ model, viewer, maxWaitMs = 60000 }) {
   if (!model) {
     throw new Error("GEOMETRY_WAIT_INVALID_MODEL");
   }
@@ -134,92 +65,17 @@ export async function ensureModelGeometryReady({ model, viewer, maxWaitMs = 1500
     raf(() => resolve());
   });
 
-  const meshCollectionType = (() => {
-    const meshes = scene?.meshes;
-    if (!meshes) return "none";
-    if (meshes instanceof Map) return "Map";
-    if (typeof meshes.values === "function") return "iterable";
-    if (Array.isArray(meshes)) return "Array";
-    return typeof meshes;
-  })();
+  const resolveViewer = () => viewer || model?.viewer || (typeof window !== "undefined" ? window?.CAD?.viewer : null);
+  const activeViewer = resolveViewer() || { scene };
+  const waitBudget = typeof maxWaitMs === "number" && isFinite(maxWaitMs) && maxWaitMs > 0 ? maxWaitMs : 60000;
 
-  const aabbVolume = (aabb) => {
-    if (!aabb) return 0;
-    const dx = (aabb[3] - aabb[0]) || 0;
-    const dy = (aabb[4] - aabb[1]) || 0;
-    const dz = (aabb[5] - aabb[2]) || 0;
-    return dx * dy * dz;
-  };
-
-  const stats = {
-    sample: [],
-    iterated: 0,
-    readySample: null
-  };
-
-  let diagLogged = false;
-
-  while (nowMs() - start < maxWaitMs) {
-    const volume = aabbVolume(model?.aabb || model?.sceneModel?.aabb || scene?.aabb);
-    const hasVolume = isFinite(volume) && volume > 0;
-    let found = false;
-    stats.sample = [];
-    stats.iterated = 0;
-    stats.readySample = null;
-
-    if (hasVolume) {
-      for (const mesh of iterMeshes(scene, model)) {
-        stats.iterated += 1;
-        const geometry = mesh?.geometry
-          || (typeof mesh?.getGeometry === "function" ? mesh.getGeometry() : null);
-        const metrics = geometryMetrics(geometry);
-        if (stats.sample.length < 3) {
-          stats.sample.push({ pos: metrics.pos, idx: metrics.idx });
-        }
-        if (!found && hasUsableGeometry(geometry)) {
-          found = true;
-          stats.readySample = {
-            meshId: mesh?.id ?? null,
-            pos: metrics.pos,
-            idx: metrics.idx
-          };
-          break;
-        }
-      }
-    }
-
-    if (hasVolume && found) {
-      const dt = Math.round(nowMs() - start);
-      console.log(`[heatmap] ready after ${dt} ms (model=${model?.id})`, {
-        modelId: model?.id,
-        meshIterated: stats.iterated,
-        sample: stats.readySample,
-        aabbVolume: volume
-      });
-      return;
-    }
-
-    const elapsed = nowMs() - start;
-    if (!diagLogged && elapsed > maxWaitMs * 0.6) {
-      diagLogged = true;
-      console.warn("[heatmap][diag] geometry wait nearing timeout", {
-        modelId: model?.id,
-        elapsed: Math.round(elapsed),
-        maxWaitMs,
-        meshCollectionType,
-        meshIterated: stats.iterated,
-        samples: stats.sample,
-        aabbVolume: hasVolume ? volume : 0
-      });
-    }
-
-    await new Promise(raf);
-  }
+  await waitForGeometryReady(activeViewer, { maxWaitMs: Math.max(waitBudget, 60000), checkEvery: 100 });
 
   const dt = Math.round(nowMs() - start);
-  const err = new Error("GEOMETRY_WAIT_TIMEOUT");
-  console.warn(`[loader] geometry readiness wait failed (dt=${dt}ms)`, err);
-  throw err;
+  console.log(`[heatmap] ready after ${dt} ms (model=${model?.id})`, {
+    modelId: model?.id,
+    meshTotal: countMeshes(activeViewer)
+  });
 }
 
 const geometryCache = new WeakMap(); // mesh -> { geom, data }
@@ -348,47 +204,6 @@ function makeCacheKey(model, axisVec, thresholdDeg) {
   return `${modelId}|${makeAxisKey(axisVec)}|${Number(thresholdDeg || 0).toFixed(3)}`;
 }
 
-function collectMeshesFromRegistry(registry) {
-  const meshes = [];
-  const seen = new Set();
-  const push = (mesh) => {
-    if (!mesh || seen.has(mesh) || mesh.destroyed) return;
-    if (!mesh.geometry) return;
-    seen.add(mesh);
-    meshes.push(mesh);
-  };
-
-  const model = registry?.model;
-  const collections = [
-    model?.meshes,
-    model?.meshList,
-    model?.meshArray,
-    model?.scene?.meshes,
-    model?.scene?.objects,
-    model?.viewer?.scene?.meshes,
-    model?.viewer?.scene?.objects
-  ];
-  for (const col of collections) {
-    if (!col) continue;
-    if (Array.isArray(col)) {
-      col.forEach(push);
-    } else if (typeof col.forEach === "function") {
-      try { col.forEach(push); } catch {}
-    } else if (typeof col === "object") {
-      for (const key in col) push(col[key]);
-    }
-  }
-
-  const iterators = [model, model?.scene, registry?.viewer?.scene];
-  for (const ctx of iterators) {
-    if (ctx && typeof ctx.iterate === "function") {
-      try { ctx.iterate((node) => push(node)); } catch {}
-    }
-  }
-
-  return meshes;
-}
-
 function pickGeometryArray(src) {
   if (!src) return null;
   if (ArrayBuffer.isView(src)) return src;
@@ -471,44 +286,14 @@ function resolveGeometryArray(mesh, geom, type) {
   push(safeAccess(() => geom?.arrays?.[type]));
   push(safeAccess(() => geom?.arrays?.[type]?.data));
   push(safeAccess(() => geom?.arrays?.[type]?.array));
-  push(safeAccess(() => geom?.geometryData?.[type]));
-  push(safeAccess(() => geom?.geometryData?.[type]?.data));
-  push(safeAccess(() => geom?.geometryData?.[type]?.array));
-  push(safeAccess(() => geom?.data?.[type]));
-  push(safeAccess(() => geom?.data?.[type]?.data));
-  push(safeAccess(() => geom?.data?.[type]?.array));
   push(safeAccess(() => geom?.geometry?.[type]));
-  push(safeAccess(() => geom?.geometry?.[type]?.data));
-  push(safeAccess(() => geom?.geometry?.[type]?.array));
+  push(safeAccess(() => geom?.geometry?.arrays?.[type]));
+  push(safeAccess(() => geom?.geometry?.arrays?.[type]?.data));
 
   const publicMeshGeom = safeAccess(() => mesh?.geometry);
   push(safeAccess(() => publicMeshGeom?.[type]));
   push(safeAccess(() => publicMeshGeom?.arrays?.[type]));
   push(safeAccess(() => publicMeshGeom?.arrays?.[type]?.data));
-
-  const stateCandidate = safeAccess(() => geom?.state) || safeAccess(() => geom?._state);
-  push(safeAccess(() => stateCandidate?.[type]));
-  push(safeAccess(() => stateCandidate?.geometry?.[type]));
-  push(safeAccess(() => stateCandidate?.geometry?.[type]?.data));
-  push(safeAccess(() => stateCandidate?.geometry?.[type]?.array));
-
-  const compressedKey = `compressed${type.charAt(0).toUpperCase()}${type.slice(1)}`;
-  const decompressedKey = `decompressed${type.charAt(0).toUpperCase()}${type.slice(1)}`;
-  push(safeAccess(() => geom?.[compressedKey]));
-  push(safeAccess(() => geom?.[decompressedKey]));
-  push(safeAccess(() => geom?.[`${type}Compressed`]));
-  push(safeAccess(() => geom?.[`${type}Decompressed`]));
-  push(safeAccess(() => stateCandidate?.[compressedKey]));
-  push(safeAccess(() => stateCandidate?.[decompressedKey]));
-
-  // Optionnel : anciens hooks privés, ignorés silencieusement si absents.
-  if (type === "positions") {
-    push(safeAccess(() => mesh && mesh.__dfmPositions));
-  } else if (type === "indices") {
-    push(safeAccess(() => mesh && mesh.__dfmIndices));
-  }
-  push(safeAccess(() => geom && geom[`__dfm${type.charAt(0).toUpperCase()}${type.slice(1)}`]));
-  push(safeAccess(() => geom && geom[`_${type}`]));
 
   for (const candidate of candidates) {
     const arr = pickGeometryArray(candidate);
@@ -522,9 +307,7 @@ function resolveGeometryArray(mesh, geom, type) {
 function captureGeometry(mesh) {
   if (!mesh || mesh.destroyed) return null;
   const geom = mesh.geometry
-    || safeAccess(() => mesh._geometry)
-    || safeAccess(() => mesh._state?.geometry)
-    || safeAccess(() => mesh.state?.geometry)
+    || (typeof mesh.getGeometry === "function" ? safeAccess(() => mesh.getGeometry()) : null)
     || null;
   if (!geom) return null;
 
@@ -660,7 +443,14 @@ function computeRawDraft(registry, axisInfo, thresholdDeg) {
   const totals = { ok: 0, zero: 0, undercut: 0 };
   let totalFaces = 0;
 
-  const meshes = collectMeshesFromRegistry(registry);
+  const viewer = registry?.viewer || registry?.model?.viewer || (typeof window !== "undefined" ? window?.CAD?.viewer : null);
+  const targetModelId = registry?.model?.id || null;
+  const meshes = listMeshes(viewer).filter((mesh) => {
+    if (!targetModelId) return true;
+    const meshModelId = mesh?.model?.id;
+    return !meshModelId || meshModelId === targetModelId;
+  });
+
   for (const mesh of meshes) {
     const draft = classifyMeshDraft(mesh, axisInfo.vector, thresholdDeg);
     if (!draft) continue;
