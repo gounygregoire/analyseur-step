@@ -33,6 +33,7 @@ import {
 import { waitForGeometryReady } from "./modules/geomWait.js";
 import { ensureGeometryReady } from "./DFMOrchestrator.js";
 import { installProbeSafe } from "./modules/probeSafe.js";
+import { sceneTypeHistogram, hasMeshes } from "./modules/sceneAudit.js";
 
 /* ---------- utils DOM ---------- */
 const $  = (s) => document.querySelector(s);
@@ -58,6 +59,23 @@ function showHeatmapToast(message, type = "info") {
     logger.call(console, message);
   } catch {
     console.log(message);
+  }
+}
+
+function handleSceneAuditAfterLoad(viewerInstance) {
+  const hist = sceneTypeHistogram(viewerInstance);
+  console.log("[scene][histogram]", hist);
+  const heatmapBtn = document.querySelector("#btnHeatmap");
+  if (!hasMeshes(viewerInstance)) {
+    console.warn("[scene] no Mesh detected -> disable heatmap");
+    window?.notify?.("Le fichier XKT semble vide (0 faces). Relance la conversion.", "warn");
+    if (heatmapBtn) {
+      heatmapBtn.disabled = true;
+      heatmapBtn.dataset.sceneAuditNoMesh = "1";
+    }
+  } else if (heatmapBtn?.dataset?.sceneAuditNoMesh === "1") {
+    heatmapBtn.disabled = false;
+    delete heatmapBtn.dataset.sceneAuditNoMesh;
   }
 }
 
@@ -1704,6 +1722,8 @@ async function loadXKT(url, nameHint){
     window.CAD.model = readinessModel;
     window.CAD.modelId = stableId;
 
+    handleSceneAuditAfterLoad(viewer);
+
     // init unités + heuristique AABB
     MM_PER_WU = 0.001;
     console.log("[units] init forced to µm→mm");
@@ -1792,6 +1812,8 @@ async function loadLocalXKT(file) {
     window.CAD.viewer = viewer;
     window.CAD.model = readinessModel;
     window.CAD.modelId = stableIdLocal;
+
+    handleSceneAuditAfterLoad(viewer);
   });
 
   model.on("error", (err) => {

@@ -11,13 +11,25 @@ from werkzeug.utils import secure_filename
 from app.storage.storage import Storage
 from app.storage import history as History
 from functools import lru_cache
+from types import SimpleNamespace
+
+
+_xkt_converter_proxy = SimpleNamespace(convert_step_to_xkt=None)
+xkt_converter = _xkt_converter_proxy
 
 
 @lru_cache(maxsize=1)
-def _convert_step_to_xkt():
-    from xkt_converter import convert_step_to_xkt
+def _load_xkt_module():
+    import xkt_converter as real_module
 
-    return convert_step_to_xkt
+    return real_module
+
+
+def _convert_step_to_xkt():
+    module = _load_xkt_module()
+    if getattr(_xkt_converter_proxy, "convert_step_to_xkt", None) is None:
+        _xkt_converter_proxy.convert_step_to_xkt = module.convert_step_to_xkt
+    return _xkt_converter_proxy.convert_step_to_xkt
 
 UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
 OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
@@ -112,8 +124,14 @@ def convert_step() -> tuple[Any, int]:
             current_app.logger.error("[convert] failed %s", exc)
             return jsonify({"error": "convert_failed"}), 500
 
-        if not os.path.exists(xkt_out_path):
-            current_app.logger.error("[convert] output missing %s", xkt_out_path)
+        try:
+            size_out = os.path.getsize(xkt_out_path)
+        except OSError:
+            size_out = 0
+        if not os.path.exists(xkt_out_path) or size_out <= 0:
+            current_app.logger.error(
+                "[convert] output invalid path=%s size=%s", xkt_out_path, size_out
+            )
             return jsonify({"error": "convert_failed"}), 500
 
         current_app.logger.info(

@@ -1,6 +1,6 @@
 # worker_tasks.py
 from __future__ import annotations
-import os, io, json, math, tempfile, pathlib, logging
+import os, io, json, math, tempfile, pathlib, logging, shlex, subprocess
 from typing import Optional, Tuple, List
 from datetime import timedelta
 
@@ -12,6 +12,198 @@ logging.basicConfig(
     level=getattr(logging, os.getenv("LOGLEVEL", "INFO").upper(), logging.INFO),
     format="%(asctime)s %(levelname)s [worker] %(message)s"
 )
+
+
+try:  # pragma: no cover - optional OCC dependency
+    from OCP.BRepMesh import BRepMesh_IncrementalMesh  # type: ignore
+except Exception:  # pragma: no cover - OCC absent
+    BRepMesh_IncrementalMesh = None  # type: ignore
+
+
+def _with_node_path(env: Optional[dict] = None) -> dict:
+    env = dict(env or os.environ)
+    extra_paths = []
+    project_root = pathlib.Path(__file__).resolve().parent
+    local_bin = project_root / "node_modules" / ".bin"
+    if local_bin.exists():
+        extra_paths.append(str(local_bin))
+    extra_paths.append("/opt/render/project/nodes/node-20.19.5/bin")
+    existing = env.get("PATH", "")
+    env["PATH"] = os.pathsep.join([p for p in (*extra_paths, existing) if p])
+    return env
+
+
+def _xeokit_command(input_path: str, output_path: str) -> list[str]:
+    exe = (os.environ.get("XEOKIT_CONVERT") or "npx").strip() or "npx"
+    extra = shlex.split(os.environ.get("XEOKIT_ARGS", ""))
+    if extra:
+        blocked = {"--edges-only", "--lines-only", "--wireframe"}
+        filtered: list[str] = []
+        removed: list[str] = []
+        for token in extra:
+            lowered = token.lower()
+            if lowered in blocked or any(lowered.startswith(f"{flag}=") for flag in blocked):
+                removed.append(token)
+                continue
+            filtered.append(token)
+        if removed:
+            logger.warning(
+                "[convert][xkt] ignoring geometry-filtering args: %s",
+                ", ".join(removed),
+            )
+        extra = filtered
+    if exe == "npx":
+        base = ["npx", "-y", "@xeokit/xeokit-convert@latest"]
+    else:
+        base = shlex.split(exe)
+    return base + extra + [input_path, "--output", output_path]
+
+
+def _count_glb_faces(glb_path: str) -> int:
+    import trimesh
+
+    if not os.path.exists(glb_path):
+        return -1
+    scene = trimesh.load(glb_path, force="scene")
+    if hasattr(scene, "geometry"):
+        return sum(getattr(g, "faces", []).shape[0] for g in scene.geometry.values())
+    try:
+        return int(getattr(scene, "faces", []).shape[0])
+    except Exception:
+        return 0
+
+
+def _force_triangulation(shape_obj, linear_deflection: float, angular_deflection: float = 0.5) -> None:
+    """Force OCC tessellation before cadquery.tessellate()."""
+
+    if BRepMesh_IncrementalMesh is None:
+        return
+    try:
+        occ_shape = getattr(shape_obj, "wrapped", None)
+        if occ_shape is None and hasattr(shape_obj, "val"):
+            try:
+                candidate = shape_obj.val()
+                occ_shape = getattr(candidate, "wrapped", None)
+            except Exception:
+                occ_shape = None
+        if occ_shape is None:
+            return
+        mesh = BRepMesh_IncrementalMesh(
+            occ_shape,
+            float(linear_deflection),
+            True,
+            float(angular_deflection),
+            True,
+        )
+        if hasattr(mesh, "Perform"):
+            mesh.Perform()
+    except Exception as exc:
+        logger.warning("[convert] OCC triangulation failed: %s", exc)
+
+
+def convert_step_to_xkt(step_path: str, xkt_path: str, *, stl_tolerance: float = 0.1) -> None:
+    """Convertit un STEP en XKT avec garde-fous sur le GLB intermédiaire."""
+
+    import cadquery as cq
+    import trimesh
+
+    if not step_path or not os.path.exists(step_path):
+        raise FileNotFoundError(f"STEP introuvable: {step_path}")
+
+    out_dir = os.path.dirname(xkt_path or "")
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+
+    tol = float(stl_tolerance or 0.1)
+
+    with tempfile.TemporaryDirectory(prefix="step2xkt_") as tmp_dir:
+        glb_path = os.path.join(tmp_dir, "scene.glb")
+
+        logger.info("[convert] tessellate step=%s tol=%s", step_path, tol)
+        wp = cq.importers.importStep(step_path)
+        meshes: List[trimesh.Trimesh] = []
+
+        solids: List = []
+        try:
+            solids = wp.solids().toList()  # type: ignore[attr-defined]
+        except Exception:
+            solids = []
+
+        if solids:
+            targets = solids
+        else:
+            fallback_shape = wp.val()
+            targets = [fallback_shape] if fallback_shape else []
+
+        for solid in targets:
+            try:
+                _force_triangulation(solid, tol)
+                verts, faces = solid.tessellate(tol)
+            except Exception as exc:
+                logger.warning("[convert] tessellate failed on solid: %s", exc)
+                continue
+            if not len(faces):
+                continue
+            mesh = trimesh.Trimesh(vertices=verts, faces=faces, process=False)
+            if mesh.is_empty:
+                continue
+            try:
+                mesh.remove_degenerate_faces()
+                mesh.remove_unreferenced_vertices()
+            except Exception:
+                pass
+            meshes.append(mesh)
+
+        if not meshes:
+            logger.warning("[convert] tessellation produced no meshes")
+            raise RuntimeError("GLB has 0 faces -> triangulation failed. Aborting XKT convert.")
+
+        if len(meshes) == 1:
+            export_mesh = meshes[0]
+        else:
+            export_mesh = trimesh.util.concatenate(meshes)
+
+        export_mesh.export(glb_path, file_type="glb")
+
+        nfaces = _count_glb_faces(glb_path)
+        logger.info("[convert][glb] faces=%s path=%s", nfaces, glb_path)
+        if nfaces <= 0:
+            raise RuntimeError("GLB has 0 faces -> triangulation failed. Aborting XKT convert.")
+
+        if os.path.exists(xkt_path):
+            try:
+                os.remove(xkt_path)
+            except OSError:
+                pass
+
+        cmd = _xeokit_command(glb_path, xkt_path)
+        logger.info("[convert][xkt] cmd=%s", " ".join(shlex.quote(c) for c in cmd))
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=_with_node_path(os.environ),
+        )
+        stdout = proc.stdout.strip()
+        stderr = proc.stderr.strip()
+        if stdout:
+            logger.info("[convert][xkt] stdout=%s", stdout)
+        if stderr:
+            logger.info("[convert][xkt] stderr=%s", stderr)
+        if proc.returncode != 0:
+            raise RuntimeError(
+                "xeokit-convert failed (rc={})\nSTDOUT:\n{}\nSTDERR:\n{}".format(
+                    proc.returncode,
+                    stdout,
+                    stderr,
+                )
+            )
+
+        size_xkt = os.path.getsize(xkt_path) if os.path.exists(xkt_path) else 0
+        logger.info("[convert][xkt] size_bytes=%s path=%s", size_xkt, xkt_path)
+        if size_xkt < 100 * 1024:
+            raise RuntimeError("XKT too small (<100KB) -> likely empty. Aborting.")
 
 # =========================
 # Dossiers (mêmes valeurs que côté web)
