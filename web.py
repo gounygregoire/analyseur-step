@@ -31,6 +31,8 @@ from rq.job import Job
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
+redis = from_url(os.environ["REDIS_URL"])
+q = Queue("convert", connection=redis)
 
 # ---------- Config ----------
 def env_int(name: str, default: int) -> int:
@@ -365,12 +367,59 @@ def upload():
     except Exception as e:
         app.logger.warning("[upload] S3 upload (src) failed: %s", e)
 
-    # 3) call converter → XKT
-    conv_url = os.getenv("CONVERTER_URL", "").rstrip("/")
-    if not conv_url:
-        app.logger.error("[upload] CONVERTER_URL is not set")
-        return jsonify(error="convert_fail", detail="CONVERTER_URL not set"), 500
+    # ====== MODE DE CONVERSION ======
+    mode_env = (os.getenv("CONVERTER_MODE", "") or "").lower()
+    conv_url = (os.getenv("CONVERTER_URL", "") or "").rstrip("/")
+    use_rq = (mode_env in {"rq", "worker", "queue", "background"}) or (not conv_url)
 
+    if use_rq:
+        # 3-RQ) enqueue la conversion dans le worker Docker (pas d'HTTP)
+        try:
+            from rq import Queue
+            from redis import from_url as _rfromurl
+            # on accepte REDIS_URL avec ou sans "rediss://"
+            rurl = _normalize_redis_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+            qname = os.getenv("RQ_CONVERT_QUEUE", "convert")
+            conn = _rfromurl(rurl, ssl_cert_reqs=None)
+            job_timeout = int(os.getenv("RQ_JOB_TIMEOUT_SEC", "1800"))
+
+            # on tente l'import direct, sinon on passe par la string de chemin
+            try:
+                from converter import convert_step_to_xkt as _fn
+                job = Queue(qname, connection=conn).enqueue(
+                    _fn, file_id, job_timeout=job_timeout, result_ttl=3600, failure_ttl=3600, ttl=job_timeout
+                )
+            except Exception:
+                job = Queue(qname, connection=conn).enqueue(
+                    "converter.convert_step_to_xkt", file_id,
+                    job_timeout=job_timeout, result_ttl=3600, failure_ttl=3600, ttl=job_timeout
+                )
+
+            app.logger.info("[upload] enqueued convert job queue=%s id=%s file_id=%s", qname, job.id, file_id)
+
+            # URLs utiles pour le front
+            xkt_rel = f"/xkt/{file_id}.xkt"
+            glb_rel = f"/glb/{file_id}.glb"
+            return jsonify(
+                file_id=file_id,
+                status="enqueued",
+                job_id=job.id,
+                xktUrl=_abs_url(xkt_rel),
+                xkt_url=_abs_url(xkt_rel),
+                glb_url=_abs_url(glb_rel),
+                glb_exists=False,
+                s3_uploaded_src=s3_uploaded_src,
+                s3_uploaded_xkt=False,
+                s3_uploaded_glb=False,
+                debugUrl=_abs_url(f"/debug/xkt/{file_id}"),
+            ), 202
+
+        except Exception as e:
+            app.logger.exception("[upload] rq_enqueue_fail for %s: %s", file_id, e)
+            return jsonify(error="convert_enqueue_fail", detail=str(e)), 500
+
+    # ----- sinon: LEGACY HTTP (microservice) -----
+    # 3-HTTP) call converter → XKT (ton implémentation d’origine conservée)
     try:
         send_ct = "model/step" if ext == ".step" else ("model/stl" if ext == ".stl" else f.mimetype or "application/octet-stream")
         app.logger.info("[upload] sending to converter %s (in_path=%s, out_xkt=%s)", conv_url, in_path, out_xkt)
@@ -396,18 +445,13 @@ def upload():
         allowed_ct = {"application/octet-stream", "model/xkt"}
         if resp_ct and resp_ct not in allowed_ct:
             detail = (resp.text or "")[:1000]
-            app.logger.error(
-                "[upload] converter returned unexpected Content-Type=%s for %s", resp_ct, file_id
-            )
-            return (
-                jsonify(
-                    error="convert_fail",
-                    detail="unexpected content-type",
-                    content_type=resp_ct,
-                    preview=detail,
-                ),
-                502,
-            )
+            app.logger.error("[upload] converter returned unexpected Content-Type=%s for %s", resp_ct, file_id)
+            return jsonify(
+                error="convert_fail",
+                detail="unexpected content-type",
+                content_type=resp_ct,
+                preview=detail,
+            ), 502
 
         def _looks_like_html(data: bytes) -> bool:
             sample = data[:128].lstrip().lower()
@@ -427,14 +471,11 @@ def upload():
         if _looks_like_html(first_chunk):
             preview = first_chunk[:512].decode("utf-8", errors="ignore")
             app.logger.error("[upload] converter returned HTML-looking payload for %s", file_id)
-            return (
-                jsonify(
-                    error="convert_fail",
-                    detail="converter returned HTML payload",
-                    preview=preview,
-                ),
-                502,
-            )
+            return jsonify(
+                error="convert_fail",
+                detail="converter returned HTML payload",
+                preview=preview,
+            ), 502
 
         with open(out_xkt, "wb") as out:
             if first_chunk:
@@ -453,7 +494,7 @@ def upload():
         app.logger.exception("[upload] unexpected converter error: %s", e)
         return jsonify(error="convert_fail", detail=str(e)), 500
 
-    # 4) optional S3 upload of XKT (for CDN)
+    # 4) optional S3 upload of XKT/GLB (only in HTTP/legacy path: on a le fichier)
     s3_uploaded_xkt = False
     try:
         if _s3_enabled() and put_file:
@@ -472,42 +513,20 @@ def upload():
         except Exception as e:
             app.logger.warning("[upload] S3 upload GLB failed for %s: %s", file_id, e)
 
-    # 5) optional warm RQ stats job
-    warm_job_id = None
-    if os.getenv("WARM_STATS_ON_UPLOAD", "0").lower() in ("1", "true", "yes", "on"):
-        try:
-            from rq import Queue
-            from redis import from_url as _rfromurl
-            rurl = _normalize_redis_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
-            qq = Queue(os.getenv("RQ_QUEUE_NAME", "default"), connection=_rfromurl(rurl, ssl_cert_reqs=None))
-            job_timeout = int(os.getenv("RQ_JOB_TIMEOUT_SEC", "1200"))
-            job = qq.enqueue(
-                "worker_tasks.compute_and_cache_stats",
-                kwargs=dict(file_id=file_id, axis="Z", step_path=None, step_ext=ext.lstrip("."), cache_dir=OUTPUT_FOLDER),
-                job_timeout=job_timeout, result_ttl=3600, failure_ttl=3600, ttl=job_timeout,
-            )
-            warm_job_id = job.id
-            app.logger.info("[upload] warm stats enqueued job_id=%s", warm_job_id)
-        except Exception as e:
-            app.logger.info("[upload] warm stats skipped: %s", e)
-
     xkt_rel = f"/xkt/{file_id}.xkt"
-    xkt_abs = _abs_url(xkt_rel)
     glb_rel = f"/glb/{file_id}.glb"
-    glb_abs = _abs_url(glb_rel)
     return jsonify(
         file_id=file_id,
         status="ready",
-        xktUrl=xkt_abs,
-        xkt_url=xkt_abs,
-        glb_url=glb_abs,
+        xktUrl=_abs_url(xkt_rel),
+        xkt_url=_abs_url(xkt_rel),
+        glb_url=_abs_url(glb_rel),
         glb_exists=glb_exists_local,
         s3_uploaded_src=s3_uploaded_src,
         s3_uploaded_xkt=s3_uploaded_xkt,
         s3_uploaded_glb=s3_uploaded_glb,
-        warm_job_id=warm_job_id,
+        # pas de warm stats ici (tu peux remettre si tu en as besoin)
     )
-
 @app.get("/xkt/<file_id>.xkt")
 def serve_xkt(file_id: str):
     if not re.fullmatch(r"[0-9a-fA-F-]{36}", file_id):
