@@ -54,38 +54,44 @@ def _with_node_path(env: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
-def _xeokit_command(input_path: str, output_path: str) -> list[str]:
-    exe = (os.environ.get("XEOKIT_CONVERT") or "npx").strip() or "npx"
-    extra_args = shlex.split(os.environ.get("XEOKIT_ARGS", ""))
-    if extra_args:
-        blocked = {"--edges-only", "--lines-only", "--wireframe"}
-        filtered: list[str] = []
-        removed: list[str] = []
-        for token in extra_args:
-            lowered = token.lower()
-            if lowered in blocked or any(lowered.startswith(f"{flag}=") for flag in blocked):
-                removed.append(token)
-                continue
-            filtered.append(token)
-        if removed:
-            logger.warning(
-                "[convert][xkt] ignoring geometry-filtering args: %s",
-                ", ".join(removed),
-            )
-        extra_args = filtered
-    if exe == "npx":
-        base = ["npx", "-y", "xeokit-gltf-to-xkt"]
-    else:
-        base = shlex.split(exe)
-    return base + extra_args + [
-        "--input",
-        input_path,
-        "--output",
-        output_path,
-        "--logLevel",
-        "debug",
-    ]
+from shutil import which
 
+def _find_xeokit_exe() -> list[str]:
+    # 1) Override explicite par env
+    exe_env = (os.environ.get("XEOKIT_CONVERT") or "").strip()
+    if exe_env:
+        return shlex.split(exe_env)
+
+    # 2) Binaire local du projet (installé à build: npm i xeokit-gltf-to-xkt)
+    project_root = os.path.dirname(__file__)
+    local_bin = os.path.join(project_root, "node_modules", ".bin", "xeokit-gltf-to-xkt")
+    if os.path.exists(local_bin):
+        return [local_bin]
+
+    # 3) Global PATH
+    global_bin = which("xeokit-gltf-to-xkt")
+    if global_bin:
+        return [global_bin]
+
+    # 4) Ultime recours: npx (à éviter en prod)
+    return ["npx", "-y", "xeokit-gltf-to-xkt"]
+
+def _xeokit_command(input_path: str, output_path: str) -> list[str]:
+    base = _find_xeokit_exe()
+    extra_args = shlex.split(os.environ.get("XEOKIT_ARGS", ""))
+
+    # filtre les flags qui tuent la géo
+    blocked = {"--edges-only", "--lines-only", "--wireframe"}
+    filtered, removed = [], []
+    for token in extra_args:
+        t = token.lower()
+        if t in blocked or any(t.startswith(f"{b}=") for b in blocked):
+            removed.append(token); continue
+        filtered.append(token)
+    if removed:
+        logger.warning("[convert][xkt] ignoring geometry-filtering args: %s", ", ".join(removed))
+
+    return base + filtered + ["--input", input_path, "--output", output_path, "--logLevel", "debug"]
 
 def _tessellate_to_glb(
     step_path: str,
@@ -225,3 +231,66 @@ def convert_step_to_xkt(file_id: str) -> dict[str, int | str]:
 
     return {"glb": glb_path, "xkt": xkt_path, "faces": faces, "xkt_size": xkt_bytes}
 
+def _assert_xeokit_available(cmd_base: list[str]) -> None:
+    try:
+        test_cmd = cmd_base + ["--version"]
+        proc = subprocess.run(
+            test_cmd,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env=_with_node_path(os.environ), check=False
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"xeokit CLI not available rc={proc.returncode}: {proc.stderr.strip()}")
+        logger.info("[xkt] cli=%s version=%s", " ".join(shlex.quote(c) for c in cmd_base), proc.stdout.strip())
+    except FileNotFoundError as e:
+        raise RuntimeError(f"xeokit CLI not found: {e}")
+
+def glb_to_xkt(glb_path: str, xkt_path: str) -> None:
+    if not glb_path or not os.path.exists(glb_path):
+        raise FileNotFoundError(f"GLB introuvable: {glb_path}")
+
+    out_dir = os.path.dirname(xkt_path or "")
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+
+    if os.path.exists(xkt_path):
+        try: os.remove(xkt_path)
+        except OSError: pass
+
+    cmd = _xeokit_command(glb_path, xkt_path)
+    _assert_xeokit_available(cmd[:1] if len(cmd)==1 else (cmd if cmd[0]!="npx" else ["npx", "-y", "xeokit-gltf-to-xkt"]))
+
+    cmd_display = " ".join(shlex.quote(c) for c in cmd)
+    logger.info("[convert][xkt] cmd=%s", cmd_display)
+    t0 = time.time()
+    proc = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env=_with_node_path(os.environ), check=False
+    )
+    dt = time.time() - t0
+    if proc.stdout.strip(): logger.info("[xkt][stdout]\n%s", proc.stdout.strip())
+    if proc.stderr.strip(): logger.warning("[xkt][stderr]\n%s", proc.stderr.strip())
+    if proc.returncode != 0:
+        # pas de fichier pourri qui traîne
+        try: os.remove(xkt_path)
+        except OSError: pass
+        raise RuntimeError(f"xeokit-gltf-to-xkt failed rc={proc.returncode}")
+
+    size = file_size(xkt_path)
+    logger.info("[xkt] done in %.2fs size=%s", dt, size)
+
+    # coupe-circuit “faux XKT”
+    if size < MIN_XKT_BYTES or size == KNOWN_BAD_XKT_BYTES:
+        try: os.remove(xkt_path)
+        except OSError: pass
+        raise RuntimeError(f"XKT too small or known bad size ({size} B) - abort")
+
+def convert_step_to_xkt(file_id: str) -> dict[str, int | str]:
+    ...
+    return {
+        "glb": glb_path, "xkt": xkt_path,
+        "faces": faces,
+        "glb_size": file_size(glb_path),
+        "xkt_size": xkt_bytes
+    }
