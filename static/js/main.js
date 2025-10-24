@@ -2263,6 +2263,60 @@ async function uploadAndShow(file) {
   }
 }
 
+async function waitForXKT(fileId, opts = {}) {
+  const minSize  = opts.minSize  ?? 120 * 1024;   // >100KB pour éviter les fichiers vides
+  const maxWait  = opts.maxWait  ?? 10 * 60 * 1000; // 10 minutes max
+  const pollMs   = opts.pollMs   ?? 1500;         // 1.5s entre requêtes
+  const badSize  = 46204;                         // taille connue "mauvaise"
+  const t0 = performance.now();
+
+  while (true) {
+    const r = await fetch(`/debug/xkt/${fileId}`, { cache: "no-store" });
+    if (!r.ok) throw new Error(`debug_xkt_failed ${r.status}`);
+    const j = await r.json();
+
+    // prêt quand: le fichier existe, taille suffisante et ≠ taille “mauvaise”
+    if (j.xkt_exists && j.xkt_size >= minSize && j.xkt_size !== badSize) {
+      return `${window.location.origin}/xkt/${fileId}.xkt`;
+    }
+
+    if (performance.now() - t0 > maxWait) {
+      throw new Error("GEOMETRY_WAIT_TIMEOUT");
+    }
+    await new Promise(res => setTimeout(res, pollMs));
+  }
+}
+
+async function handleUpload(formData) {
+  const res = await fetch("/upload", { method: "POST", body: formData });
+  const data = await res.json();
+  if (!res.ok) {
+    console.error("[upload] failed", data);
+    throw new Error(data?.error || "upload_failed");
+  }
+
+  let xktUrl;
+  if (data.status === "enqueued") {
+    // Mode RQ: on attend que la conversion aboutisse
+    setUiProgress("Conversion en cours…"); // (facultatif) afficher un spinner
+    xktUrl = await waitForXKT(data.file_id);
+  } else {
+    // Mode HTTP legacy (convertisseur direct)
+    xktUrl = data.xktUrl || data.xkt_url;
+  }
+
+  return { fileId: data.file_id, xktUrl };
+}
+
+const { fileId, xktUrl } = await handleUpload(formData);
+
+// exemple d’intégration (à adapter à ton viewer)
+viewerModel = viewer.scene; // ou ton wrapper
+await viewer.loadXKT(xktUrl);   // ou la méthode de ton plugin XKT
+setUiProgress("");              // enlève le spinner
+
+// maintenant la heatmap pourra s’activer (les Mesh seront présents)
+
 /* ---------- FICHIERS UI ---------- */
 function openFileChooser(){
   try{
