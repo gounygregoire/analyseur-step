@@ -359,7 +359,7 @@ export default class HeatmapLayer {
     this.clear();
 
     let faceId = 0;
-    const meshes = Array.isArray(model.meshes) ? model.meshes : model.meshList || [];
+    const meshes = this._collectMeshes(model);
 
     for (const mesh of meshes) {
       if (!mesh || mesh.destroyed) {
@@ -623,6 +623,62 @@ export default class HeatmapLayer {
         }
       }
     }
+  }
+
+  _collectMeshes(model) {
+    const targetModel = model || this.registry?.model || this.registry?.loaderModel || null;
+    const sceneModel = targetModel?.sceneModel || targetModel || null;
+    const ctxScene = sceneModel?.scene || targetModel?.scene || this.scene;
+    const out = [];
+    const seen = new Set();
+
+    const push = (meshCandidate) => {
+      if (!meshCandidate || seen.has(meshCandidate)) return;
+      seen.add(meshCandidate);
+      out.push(meshCandidate);
+    };
+
+    const visitCollection = (collection, mapper) => {
+      if (!collection) return;
+      const mapFn = typeof mapper === "function" ? mapper : (value) => value;
+      if (Array.isArray(collection)) {
+        collection.forEach((item) => push(mapFn(item)));
+        return;
+      }
+      if (typeof collection.forEach === "function") {
+        try { collection.forEach((item) => push(mapFn(item))); } catch {}
+        return;
+      }
+      if (typeof collection === "object") {
+        for (const key in collection) {
+          if (Object.prototype.hasOwnProperty.call(collection, key)) {
+            push(mapFn(collection[key]));
+          }
+        }
+      }
+    };
+
+    visitCollection(targetModel?.meshes);
+    visitCollection(targetModel?.meshList);
+    visitCollection(targetModel?.meshArray);
+    visitCollection(sceneModel?.meshes);
+    visitCollection(sceneModel?.meshList);
+    visitCollection(sceneModel?.meshArray);
+    visitCollection(ctxScene?.meshes);
+    visitCollection(ctxScene?.meshList);
+    visitCollection(ctxScene?.meshArray);
+    visitCollection(ctxScene?.objects, (obj) => obj?.mesh || obj);
+    visitCollection(sceneModel?.scene?.objects, (obj) => obj?.mesh || obj);
+    visitCollection(targetModel?.scene?.objects, (obj) => obj?.mesh || obj);
+    visitCollection(sceneModel?.entities, (entity) => entity?.mesh || entity);
+    visitCollection(sceneModel?.scene?.entities, (entity) => entity?.mesh || entity);
+    visitCollection(ctxScene?.entities, (entity) => entity?.mesh || entity);
+
+    if (typeof ctxScene?.iterateComponents === "function") {
+      try { ctxScene.iterateComponents("Mesh", (mesh) => push(mesh)); } catch {}
+    }
+
+    return out.filter((mesh) => mesh && !mesh.destroyed);
   }
 
   _pickGeometryArray(src) {

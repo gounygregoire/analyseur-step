@@ -15,6 +15,11 @@ export class HeatmapLayer {
     this._visible = true;
     this._signature = null;
     this._seq = 0;
+    this._lastToggleKey = null;
+    this.isReady = false;
+    this._waiting = false;
+    this._lastReadyBroadcast = null;
+    this._lastWaitingBroadcast = null;
     this.colors = {
       ok: [0.20, 0.80, 0.20],       // vert
       zero: [0.98, 0.80, 0.15],     // jaune
@@ -95,6 +100,7 @@ export class HeatmapLayer {
     this._signature = null;
     this._visible = false;
     this._seq = 0;
+    this._lastToggleKey = null;
   }
 
   setVisible(flag) {
@@ -108,6 +114,62 @@ export class HeatmapLayer {
         handle.mesh.visible = this._visible;
       }
     }
+  }
+
+  setReadyState(flag) {
+    const ready = !!flag;
+    const prev = this.isReady;
+    this.isReady = ready;
+    const heatmapState = this.registry?.heatmap;
+    if (heatmapState && typeof heatmapState === "object") {
+      heatmapState.ready = ready;
+    }
+    if (prev !== ready) {
+      this._dispatchReadyEvent(ready);
+    }
+    return ready;
+  }
+
+  setWaiting(waiting) {
+    const next = !!waiting;
+    const prev = this._waiting;
+    this._waiting = next;
+    const heatmapState = this.registry?.heatmap;
+    if (heatmapState && typeof heatmapState === "object") {
+      heatmapState.waiting = next;
+    }
+    if (prev !== next) {
+      this._dispatchWaitingEvent(next);
+    }
+    return next;
+  }
+
+  toggle({ model, axis, renderFn } = {}) {
+    const modelId = model?.id
+      ?? this.registry?.model?.id
+      ?? this.registry?.loaderModel?.id
+      ?? this._currentModelId();
+    const axisKey = this._normalizeAxisKey(axis);
+    const key = `${modelId}|${axisKey}`;
+    const same = key === this._lastToggleKey;
+    const hasOverlays = this._overlays.length > 0;
+
+    if (same && hasOverlays) {
+      this._visible = !this._visible;
+      this._setVisible(this._visible);
+      if (typeof renderFn === "function") {
+        renderFn({ visibleOnly: true, show: this._visible });
+      }
+      return this._visible;
+    }
+
+    this._lastToggleKey = key;
+    this._visible = true;
+    this._setVisible(true);
+    if (typeof renderFn === "function") {
+      renderFn({ recompute: true, axis, show: true });
+    }
+    return true;
   }
 
   _createOverlay(scene, mesh, triIndices, mode) {
@@ -342,6 +404,32 @@ export class HeatmapLayer {
       model?.meta?.id ||
       "model"
     );
+  }
+
+  _dispatchReadyEvent(ready) {
+    if (this._lastReadyBroadcast === ready) {
+      return;
+    }
+    this._lastReadyBroadcast = ready;
+    if (typeof document !== "undefined" && typeof document.dispatchEvent === "function") {
+      try {
+        document.dispatchEvent(new CustomEvent("dfm:heatmap-ready", { detail: { ready } }));
+      } catch {}
+    }
+  }
+
+  _dispatchWaitingEvent(waiting) {
+    if (this._lastWaitingBroadcast === waiting) {
+      return;
+    }
+    this._lastWaitingBroadcast = waiting;
+    if (typeof document !== "undefined" && typeof document.dispatchEvent === "function") {
+      try {
+        document.dispatchEvent(new CustomEvent("dfm:heatmap-wait", {
+          detail: { waiting, ready: this.isReady }
+        }));
+      } catch {}
+    }
   }
 }
 
