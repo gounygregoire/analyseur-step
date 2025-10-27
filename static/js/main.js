@@ -2366,7 +2366,7 @@ function getUploadFormData() {
   }
   const fd = new FormData();
   fd.append("file", file);
-  return fd;
+  return { fd, file };
 }
 
 async function waitForXKTReady(fileId, opts = {}) {
@@ -2429,11 +2429,7 @@ async function handleUpload(formData) {
     throw new Error(msg);
   }
 
-  // robustesse: on attend TOUJOURS que l’XKT existe réellement
-  // (même si le backend renvoie "ready", on vérifie quand même).
-  setUiProgress?.("Conversion en cours…");
-  const xktUrl = await waitForXKTReady(fileId);
-  return { fileId, xktUrl };
+  return { fileId };
 }
 
 btnVisualiser?.addEventListener("click", async (event) => {
@@ -2441,10 +2437,10 @@ btnVisualiser?.addEventListener("click", async (event) => {
   event.stopImmediatePropagation();
   try {
     setUiProgress?.("Upload…");
-    const input = fileInput || document.querySelector('input[type="file"]');
-    const file = input?.files?.[0] || null;
-    const fd = getUploadFormData();
-    const { fileId, xktUrl } = await handleUpload(fd);
+    const { fd, file } = getUploadFormData();
+    const { fileId } = await handleUpload(fd);
+    setUiProgress?.("Conversion en cours…");
+    const xktUrl = await waitForXKTReady(fileId);
     if (fileId) {
       currentFileId = fileId;
       window.currentFileId = fileId;
