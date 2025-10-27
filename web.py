@@ -18,7 +18,10 @@ from rq.job import Job
 from rq.registry import StartedJobRegistry, FailedJobRegistry
 
 # Conversion locale (utilisée par /reconvert)
-from converter import convert_step_to_xkt as _convert_step_to_xkt_local
+from converter import (
+    convert_step_to_xkt as _convert_step_to_xkt_local,
+    KNOWN_BAD_XKT_BYTES,
+)
 
 # (Optionnel) converter local — ignoré s'il n'est pas présent ou incomplet
 try:
@@ -526,7 +529,28 @@ def serve_xkt(file_id: str):
     if not re.fullmatch(r"[0-9a-fA-F-]{36}", file_id):
         return abort(400)
     path = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+
+    def _abort_known_bad(local_path: str):
+        try:
+            size = os.path.getsize(local_path)
+        except OSError:
+            size = 0
+        if size == KNOWN_BAD_XKT_BYTES and size > 0:
+            app.logger.warning("[xkt] known bad artifact blocked", {
+                "file_id": file_id,
+                "size": size,
+            })
+            return jsonify({
+                "error": "known_bad_xkt",
+                "file_id": file_id,
+                "size": size,
+            }), 409
+        return None
+
     if os.path.isfile(path):
+        blocked = _abort_known_bad(path)
+        if blocked:
+            return blocked
         return send_from_directory(
             OUTPUT_FOLDER, f"{file_id}.xkt",
             mimetype="application/octet-stream",
@@ -539,6 +563,9 @@ def serve_xkt(file_id: str):
             key = f"xkt/{file_id}.xkt"
             ok = get_file(key, path)
             if ok and os.path.isfile(path):
+                blocked = _abort_known_bad(path)
+                if blocked:
+                    return blocked
                 return send_from_directory(
                     OUTPUT_FOLDER, f"{file_id}.xkt",
                     mimetype="application/octet-stream",
@@ -882,13 +909,15 @@ def debug_xkt(file_id: str):
     glb_exists = os.path.exists(glb_path)
     xkt_exists = os.path.exists(xkt_path)
 
+    xkt_size = os.path.getsize(xkt_path) if xkt_exists else 0
     data: dict[str, object] = {
         "file_id": file_id,
         "glb_exists": glb_exists,
         "xkt_exists": xkt_exists,
         "glb_faces": _count_faces(glb_path) if glb_exists else -1,
         "glb_size": os.path.getsize(glb_path) if glb_exists else 0,
-        "xkt_size": os.path.getsize(xkt_path) if xkt_exists else 0,
+        "xkt_size": xkt_size,
+        "known_bad_xkt": bool(xkt_exists and xkt_size == KNOWN_BAD_XKT_BYTES),
         "converter": _get_converter_version(),
     }
     if xkt_exists:
