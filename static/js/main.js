@@ -597,7 +597,7 @@ if (typeof document !== "undefined") {
 /* ---------- sélecteurs ---------- */
 const fileInput     = $("#fileInput");
 const btnChoose     = $("#btnChoose");
-const btnVisualiser = $("#btnVisualiser");
+const btnVisualiser = $("#btnVisualiser") || document.getElementById("btn-visualiser");
 const chkAdditive   = $("#chkAdditive");
 const fileNameLbl   = $("#fileName");
 
@@ -2413,9 +2413,9 @@ async function handleUpload(formData) {
   return { fileId: data.file_id, xktUrl };
 }
 
-const btnVisualiser = document.getElementById("btn-visualiser");
 btnVisualiser?.addEventListener("click", async (event) => {
   event.preventDefault();
+  event.stopImmediatePropagation();
   try {
     setUiProgress?.("Upload…");
     const input = fileInput || document.querySelector('input[type="file"]');
