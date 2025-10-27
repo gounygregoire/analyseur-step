@@ -2329,6 +2329,24 @@ async function uploadAndShow(file) {
     const xktUrl = new URL(j.xkt_url, location.origin).toString();
     console.log("[upload] ok:", { file_id: currentFileId, xktUrl });
 
+    let resolvedXktUrl = xktUrl;
+    if (currentFileId) {
+      try {
+        if (typeof setUiProgress === "function") {
+          setUiProgress("Conversion en cours…");
+        }
+        resolvedXktUrl = await waitForXKTReady(currentFileId);
+        console.log("[viewer] XKT prêt", { fileId: currentFileId, resolvedXktUrl });
+      } catch (waitErr) {
+        console.error("[viewer] waitForXKTReady failed", waitErr);
+        throw waitErr;
+      } finally {
+        if (typeof setUiProgress === "function") {
+          setUiProgress("");
+        }
+      }
+    }
+
     if (!chkAdditive?.checked) {
       for (const [, i] of models) { try { i.model.destroy(); } catch {} }
       models.clear(); selectedIds.clear();
@@ -2348,11 +2366,17 @@ async function uploadAndShow(file) {
     } catch {
       glbUrl = j.glb_url || (currentFileId ? `/glb/${currentFileId}.glb` : null);
     }
-    await loadXKT(xktUrl, f.name, { fileId: currentFileId, glbUrl });
+    if (typeof setUiProgress === "function") {
+      setUiProgress("Chargement du modèle…");
+    }
+    await loadXKT(resolvedXktUrl, f.name, { fileId: currentFileId, glbUrl });
   } catch (e) {
     console.error(e);
     alert("Erreur conversion/chargement (voir Console).");
   } finally {
+    if (typeof setUiProgress === "function") {
+      setUiProgress("");
+    }
     if (btnVisualiser) { btnVisualiser.disabled = false; btnVisualiser.textContent = "VISUALISER"; }
     setProgress(0);
   }
