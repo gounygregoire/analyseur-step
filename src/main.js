@@ -430,12 +430,25 @@ if (typeof window !== 'undefined') {
 }
 
 (function wireUploadAndPreview(){
-  const uploadArea = document.getElementById('uploadArea') || document.querySelector('.upload-area');
-  if (!uploadArea || uploadArea.dataset.previewBound === '1') return;
+  const uploadArea =
+    document.getElementById('uploadArea') ||
+    document.querySelector('.upload-area') ||
+    document.querySelector('[data-dropzone]');
+
+  if (!uploadArea) {
+    return;
+  }
+
+  if (uploadArea.dataset.previewBound === '1') return;
   uploadArea.dataset.previewBound = '1';
 
-  const fileInput = document.getElementById('fileInput') || uploadArea.querySelector('input[type="file"]');
-  const dropzone  = document.getElementById('dropzone')  || uploadArea.querySelector('.dropzone');
+  const fileInput =
+    document.getElementById('fileInput') ||
+    uploadArea.querySelector('input[type="file"]');
+  const dropzone =
+    document.getElementById('dropzone') ||
+    uploadArea.querySelector('.dropzone') ||
+    uploadArea;
   const visualizeBtn = document.getElementById('visualizeBtn');
 
   // ---- Helpers ----
