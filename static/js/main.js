@@ -63,6 +63,17 @@ function showHeatmapToast(message, type = "info") {
   }
 }
 
+function setUiProgress(msg) {
+  const el = document.querySelector("#progressLabel");
+  if (el) {
+    el.textContent = msg || "";
+  }
+}
+
+function showErrorToast(msg) {
+  alert(msg);
+}
+
 let reconvertInFlight = false;
 
 function resolveCurrentFileId() {
@@ -203,6 +214,18 @@ function hideNoMeshWarning() {
   delete host.dataset.toastShown;
 }
 
+function setHeatmapEnabled(enabled) {
+  if (typeof document === "undefined") return;
+  const flag = !!enabled;
+  document.querySelectorAll("[data-role=heatmap-btn], #btn-heatmap").forEach((el) => {
+    try {
+      el.toggleAttribute("disabled", !flag);
+    } catch (err) {
+      console.warn("[heatmap] toggle failed", err);
+    }
+  });
+}
+
 function handleSceneAuditAfterLoad(viewerInstance) {
   const hist = sceneTypeHistogram(viewerInstance);
   console.log("[scene][histogram]", hist);
@@ -211,6 +234,7 @@ function handleSceneAuditAfterLoad(viewerInstance) {
   const hasMesh = hasMeshes(viewerInstance);
   if (!hasMesh || meshCount <= 0) {
     console.warn("[scene] no Mesh detected -> disable heatmap");
+    setHeatmapEnabled(false);
     setHeatmapButtonsDisabled(true, "mesh");
     const warningHost = document.getElementById("heatmapNoMeshWarning");
     const alreadyWarned = warningHost?.dataset?.toastShown === "1";
@@ -224,6 +248,7 @@ function handleSceneAuditAfterLoad(viewerInstance) {
       heatmapBtn.dataset.sceneAuditNoMeshToast = "1";
     }
   } else {
+    setHeatmapEnabled(true);
     setHeatmapButtonsDisabled(false, "mesh");
     hideNoMeshWarning();
     if (heatmapBtn?.dataset?.sceneAuditNoMesh === "1") {
@@ -1810,6 +1835,16 @@ function waitForModelLoad(model) {
   });
 }
 
+async function urlExists(url) {
+  try {
+    const res = await fetch(url, { method: "HEAD", cache: "no-store" });
+    return !!res?.ok;
+  } catch (err) {
+    console.warn("[viewer] urlExists check failed", err);
+    return false;
+  }
+}
+
 async function tryLoadXKTThenGLB({
   viewerInstance,
   stableId,
@@ -1862,6 +1897,10 @@ async function tryLoadXKTThenGLB({
     const cause = firstErr?.error || firstErr;
     console.warn("[viewer] XKT load failed, tentative GLB", cause);
     if (!glbUrl) {
+      throw firstErr;
+    }
+    if (!(await urlExists(glbUrl))) {
+      console.warn("[viewer] GLB fallback skipped (404).", { glbUrl });
       throw firstErr;
     }
     try {
@@ -1982,7 +2021,7 @@ function resolveFallbackGlbUrl({ explicitUrl, fileId }) {
   return `/glb/${candidate}.glb`;
 }
 
-function finalizeModelLoad({ model, stableId, src, nameHint, loaderType }) {
+async function finalizeModelLoad({ model, stableId, src, nameHint, loaderType }) {
   setProgress(100);
   setTimeout(() => setProgress(0), 350);
   try {
@@ -2010,6 +2049,15 @@ function finalizeModelLoad({ model, stableId, src, nameHint, loaderType }) {
   window.CAD.model = readinessModel;
   window.CAD.modelId = stableId;
   window.CAD.lastLoadedFormat = loaderType;
+
+  try {
+    const meshCount = await waitForMeshes(viewer);
+    console.log(`[viewer] meshes ready: ${meshCount}`);
+    setHeatmapEnabled(true);
+  } catch (err) {
+    console.warn("[viewer] meshes not ready in time", err);
+    setHeatmapEnabled(false);
+  }
 
   handleSceneAuditAfterLoad(viewer);
 
@@ -2058,6 +2106,7 @@ async function loadXKT(url, nameHint, options = {}) {
     window.CAD.glbUrl = fallbackGlbUrl;
   }
 
+  setHeatmapEnabled(false);
   resetGeometryReadyState();
   clearModelRegistry();
   logXKTContentDiagnostics({ src: url, label: nameHint || stableId }).catch(() => {});
@@ -2089,7 +2138,7 @@ async function loadXKT(url, nameHint, options = {}) {
     const meta = { id: stableId, src, name: nameHint || stableId, loader: type };
     registerGlobalModel({ viewer, model, meta });
     registerModel({ viewer, model, meta });
-    finalizeModelLoad({ model, stableId, src, nameHint, loaderType: type });
+    await finalizeModelLoad({ model, stableId, src, nameHint, loaderType: type });
     return stableId;
   } catch (err) {
     const error = err?.error || err;
@@ -2097,6 +2146,21 @@ async function loadXKT(url, nameHint, options = {}) {
     setProgress(0);
     alert("Erreur chargement modèle (XKT/GLB).");
     throw error;
+  }
+}
+
+async function waitForMeshes(viewerInstance, maxWaitMs = 30000) {
+  const startedAt = performance.now();
+  while (true) {
+    const meshes = viewerInstance?.scene?.meshes || {};
+    const count = Object.keys(meshes).length;
+    if (count > 0) {
+      return count;
+    }
+    if (performance.now() - startedAt > maxWaitMs) {
+      throw new Error("MESH_WAIT_TIMEOUT");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
   }
 }
 
@@ -2113,6 +2177,7 @@ async function loadLocalXKT(file) {
   window.CAD.heatmap.ready = false;
   window.CAD.model = null;
   window.CAD.modelId = null;
+  setHeatmapEnabled(false);
   resetGeometryReadyState();
   clearModelRegistry();
 
@@ -2144,7 +2209,7 @@ async function loadLocalXKT(file) {
 
   registerModel({ viewer, model, meta: { id: stableIdLocal, src: blobURL, fileName: file.name } });
 
-  onModelLoadedOnce(model, () => {
+  onModelLoadedOnce(model, async () => {
     const readinessModel = model?.sceneModel || model;
     const viewerRef = (typeof currentViewer === "function" && currentViewer()) || viewer;
     beginGeometryReadySequence({
@@ -2162,6 +2227,15 @@ async function loadLocalXKT(file) {
     window.CAD.viewer = viewer;
     window.CAD.model = readinessModel;
     window.CAD.modelId = stableIdLocal;
+
+    try {
+      const meshCount = await waitForMeshes(viewer);
+      console.log(`[viewer] meshes ready: ${meshCount}`);
+      setHeatmapEnabled(true);
+    } catch (err) {
+      console.warn("[viewer] meshes not ready in time", err);
+      setHeatmapEnabled(false);
+    }
 
     handleSceneAuditAfterLoad(viewer);
   });
@@ -2263,6 +2337,17 @@ async function uploadAndShow(file) {
   }
 }
 
+function getUploadFormData() {
+  const input = fileInput || document.querySelector('input[type="file"]');
+  const file = input?.files?.[0] || null;
+  if (!file) {
+    throw new Error("Aucun fichier sélectionné");
+  }
+  const fd = new FormData();
+  fd.append("file", file);
+  return fd;
+}
+
 async function waitForXKT(fileId, opts = {}) {
   const minSize  = opts.minSize  ?? 120 * 1024;   // >100KB pour éviter les fichiers vides
   const maxWait  = opts.maxWait  ?? 10 * 60 * 1000; // 10 minutes max
@@ -2277,7 +2362,7 @@ async function waitForXKT(fileId, opts = {}) {
 
     // prêt quand: le fichier existe, taille suffisante et ≠ taille “mauvaise”
     if (j.xkt_exists && j.xkt_size >= minSize && j.xkt_size !== badSize) {
-      return `${window.location.origin}/xkt/${fileId}.xkt`;
+      return `${location.origin}/xkt/${fileId}.xkt`;
     }
 
     if (performance.now() - t0 > maxWait) {
@@ -2287,35 +2372,71 @@ async function waitForXKT(fileId, opts = {}) {
   }
 }
 
+async function showDebugXKT(fileId) {
+  if (!fileId) {
+    console.warn("[debug] showDebugXKT appelé sans fileId");
+    return;
+  }
+  try {
+    const r = await fetch(`/debug/xkt/${fileId}`, { cache: "no-store" });
+    if (!r.ok) {
+      console.warn("[debug] /debug/xkt renvoie", r.status);
+      return;
+    }
+    const j = await r.json();
+    console.table(j);
+  } catch (err) {
+    console.warn("[debug] showDebugXKT a échoué", err);
+  }
+}
+
 async function handleUpload(formData) {
   const res = await fetch("/upload", { method: "POST", body: formData });
   const data = await res.json();
   if (!res.ok) {
     console.error("[upload] failed", data);
-    throw new Error(data?.error || "upload_failed");
+    const msg = data?.detail || data?.error || `Upload/convert failed (${res.status})`;
+    showErrorToast(msg);
+    throw new Error(msg);
   }
 
-  let xktUrl;
-  if (data.status === "enqueued") {
-    // Mode RQ: on attend que la conversion aboutisse
-    setUiProgress("Conversion en cours…"); // (facultatif) afficher un spinner
-    xktUrl = await waitForXKT(data.file_id);
-  } else {
-    // Mode HTTP legacy (convertisseur direct)
-    xktUrl = data.xktUrl || data.xkt_url;
+  if (data.status === "enqueued" && data.file_id) {
+    setUiProgress?.("Conversion en cours…");
+    const xktUrl = await waitForXKT(data.file_id);
+    return { fileId: data.file_id, xktUrl };
   }
 
+  const xktUrl = data.xktUrl || data.xkt_url;
+  if (!xktUrl) {
+    throw new Error("Aucune URL XKT dans la réponse.");
+  }
   return { fileId: data.file_id, xktUrl };
 }
 
-const { fileId, xktUrl } = await handleUpload(formData);
-
-// exemple d’intégration (à adapter à ton viewer)
-viewerModel = viewer.scene; // ou ton wrapper
-await viewer.loadXKT(xktUrl);   // ou la méthode de ton plugin XKT
-setUiProgress("");              // enlève le spinner
-
-// maintenant la heatmap pourra s’activer (les Mesh seront présents)
+const btnVisualiser = document.getElementById("btn-visualiser");
+btnVisualiser?.addEventListener("click", async (event) => {
+  event.preventDefault();
+  try {
+    setUiProgress?.("Upload…");
+    const input = fileInput || document.querySelector('input[type="file"]');
+    const file = input?.files?.[0] || null;
+    const fd = getUploadFormData();
+    const { fileId, xktUrl } = await handleUpload(fd);
+    if (fileId) {
+      currentFileId = fileId;
+      window.currentFileId = fileId;
+      console.log("[debug] fileId", fileId);
+      showDebugXKT(fileId).catch(() => {});
+    }
+    setUiProgress?.("Chargement du modèle…");
+    await loadXKT(xktUrl, file?.name, { fileId });
+    setUiProgress?.("");
+  } catch (err) {
+    console.error(err);
+    setUiProgress?.("");
+    showErrorToast(err?.message || "Erreur d'upload");
+  }
+});
 
 /* ---------- FICHIERS UI ---------- */
 function openFileChooser(){
