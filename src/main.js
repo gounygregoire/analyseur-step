@@ -721,8 +721,24 @@ async function loadXKTFromConvertResponse(response) {
 
     const { model, type, src } = await tryLoadXKTThenGLB(fileId, xktUrl);
     viewer.model = model;
+    try {
+      const aabb = viewer.scene.getAABB();
+      if (cameraControl?.fit) {
+        cameraControl.fit({ aabb });
+      } else if (viewer.cameraFlight?.fit) {
+        viewer.cameraFlight.fit({ aabb });
+      }
+    } catch (fitErr) {
+      console.warn('[VIEW] camera fit failed', fitErr);
+    }
     console.info('[VIEW] modèle chargé', { type, src });
     await handleHeatmapAvailability(viewer);
+    state.fileLoaded = true;
+    window.dispatchEvent(
+      new CustomEvent('viewer:modelLoaded', {
+        detail: { fileId, src, type }
+      })
+    );
   } catch (e) {
     console.error('[VIEW] Visualization error', e);
     (window.UI?.error ? UI.error : alert)('Échec de la visualisation. Merci de réessayer.\n' + (e.message || String(e)));
