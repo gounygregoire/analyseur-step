@@ -34,7 +34,13 @@ import {
 import { waitForGeometryReady } from "./modules/geomWait.js";
 import { ensureGeometryReady } from "./DFMOrchestrator.js";
 import { installProbeSafe } from "./modules/probeSafe.js";
-import { sceneTypeHistogram, hasMeshes } from "./modules/sceneAudit.js";
+import {
+  sceneTypeHistogram,
+  hasMeshes,
+  sceneVisibilityStats,
+  sceneThemeState,
+  sceneOpacitySample
+} from "./modules/sceneAudit.js";
 
 /* ---------- utils DOM ---------- */
 const $  = (s) => document.querySelector(s);
@@ -276,6 +282,272 @@ function handleSceneAuditAfterLoad(viewerInstance) {
       delete heatmapBtn.dataset.sceneAuditNoMesh;
       delete heatmapBtn.dataset.sceneAuditNoMeshToast;
     }
+  }
+}
+
+function forceAllEntitiesVisible(viewerInstance) {
+  const objects = viewerInstance?.scene?.objects || {};
+  let processed = 0;
+  let changed = 0;
+
+  for (const id in objects) {
+    const obj = objects[id];
+    if (!obj) continue;
+    processed++;
+    if (obj.visible === false) {
+      try {
+        obj.visible = true;
+        changed++;
+      } catch (err) {
+        console.warn("[viewer][visibility] unable to force visible", { id, err });
+      }
+    }
+  }
+
+  return { processed, changed };
+}
+
+function logSceneVisibilityDiagnostics(viewerInstance, { stableId } = {}) {
+  try {
+    const statsBefore = sceneVisibilityStats(viewerInstance, { sampleLimit: 5 });
+    if (!statsBefore) {
+      console.warn("[viewer][visibility] diagnostic indisponible", { stableId: stableId || null });
+      return;
+    }
+
+    const themeState = sceneThemeState(viewerInstance, { sampleLimit: 5 }) || {};
+    if (
+      themeState.xrayedCount > 0 ||
+      themeState.ghostedCount > 0 ||
+      !!chkXray?.checked ||
+      !!chkGhost?.checked
+    ) {
+      console.warn("[viewer][visibility] thème actif", {
+        stableId: stableId || null,
+        checkbox: {
+          xray: !!chkXray?.checked,
+          ghost: !!chkGhost?.checked
+        },
+        xrayedEntities: themeState.xrayedCount || 0,
+        ghostedEntities: themeState.ghostedCount || 0,
+        sampleXrayed: themeState.sampleXrayed || [],
+        sampleGhosted: themeState.sampleGhosted || []
+      });
+    }
+
+    const summaryBefore = {
+      total: statsBefore.total,
+      visible: statsBefore.visible,
+      hidden: statsBefore.hidden,
+      culled: statsBefore.culled
+    };
+    console.log("[viewer][visibility] compte initial", {
+      stableId: stableId || null,
+      ...summaryBefore,
+      sampleHidden: statsBefore.sampleHidden,
+      sampleCulled: statsBefore.sampleCulled
+    });
+    console.table({ initial: summaryBefore });
+
+    const forced = forceAllEntitiesVisible(viewerInstance);
+    const statsAfter = sceneVisibilityStats(viewerInstance, { sampleLimit: 5 }) || {};
+
+    const summaryAfter = {
+      total: statsAfter.total,
+      visible: statsAfter.visible,
+      hidden: statsAfter.hidden,
+      culled: statsAfter.culled
+    };
+    console.log("[viewer][visibility] après forçage", {
+      stableId: stableId || null,
+      ...summaryAfter,
+      sampleHidden: statsAfter.sampleHidden,
+      sampleCulled: statsAfter.sampleCulled,
+      forcedVisible: forced.changed,
+      processed: forced.processed
+    });
+    console.table({ apres_force: summaryAfter });
+  } catch (err) {
+    console.warn("[viewer][visibility] diagnostic failed", err);
+  }
+}
+
+function logOpacityMaterialDiagnostics(viewerInstance, { stableId } = {}) {
+  try {
+    const result = sceneOpacitySample(viewerInstance, { sampleLimit: 5, lowOpacityThreshold: 0.2 });
+    if (!result) {
+      console.warn("[viewer][materials] diagnostic indisponible", { stableId: stableId || null });
+      return;
+    }
+
+    const { sample, summary } = result;
+    const payload = {
+      stableId: stableId || null,
+      total: summary.total,
+      withOpacity: summary.withOpacity,
+      zeroOpacity: summary.zeroOpacity,
+      lowOpacity: summary.lowOpacity,
+      minOpacity: summary.minOpacity,
+      maxOpacity: summary.maxOpacity,
+      avgOpacity: summary.avgOpacity
+    };
+
+    console.log("[viewer][materials] opacites", payload);
+
+    if (Array.isArray(sample) && sample.length > 0) {
+      const table = {};
+      sample.forEach((entry, index) => {
+        table[`sample_${index + 1}`] = {
+          id: entry.id,
+          effectiveOpacity: entry.effectiveOpacity,
+          objectOpacity: entry.objectOpacity,
+          materialOpacity: entry.materialOpacity,
+          materialId: entry.materialId,
+          materialType: entry.materialType || null
+        };
+      });
+      console.table(table);
+    }
+
+    const lowAvgThreshold = 0.3;
+    const lowMaxThreshold = 0.1;
+    if (
+      summary.withOpacity > 0 && (
+        summary.zeroOpacity > 0 ||
+        (typeof summary.avgOpacity === "number" && summary.avgOpacity <= lowAvgThreshold) ||
+        (typeof summary.maxOpacity === "number" && summary.maxOpacity <= lowMaxThreshold)
+      )
+    ) {
+      console.warn("[viewer][materials] opacite globale faible", {
+        stableId: stableId || null,
+        zeroOpacity: summary.zeroOpacity,
+        lowOpacity: summary.lowOpacity,
+        avgOpacity: summary.avgOpacity,
+        maxOpacity: summary.maxOpacity
+      });
+    }
+  } catch (err) {
+    console.warn("[viewer][materials] diagnostic failed", err);
+  }
+}
+
+let viewerDiagnosticsHudEl = null;
+let viewerDiagnosticsHudTimer = null;
+
+function formatHudNumber(value, { minFractionDigits = 0, maxFractionDigits = 3, fallback = "—" } = {}) {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+  try {
+    return Number(value).toLocaleString(undefined, {
+      minimumFractionDigits: minFractionDigits,
+      maximumFractionDigits: maxFractionDigits
+    });
+  } catch {
+    const rounded = roundNumber(value, maxFractionDigits);
+    return Number.isFinite(rounded) ? String(rounded) : fallback;
+  }
+}
+
+function ensureViewerDiagnosticsHud(viewerInstance) {
+  if (viewerDiagnosticsHudEl && viewerDiagnosticsHudEl.isConnected) {
+    return viewerDiagnosticsHudEl;
+  }
+  const hud = document.createElement("div");
+  hud.id = "viewer-diag-hud";
+  Object.assign(hud.style, {
+    position: "fixed",
+    top: "16px",
+    left: "16px",
+    zIndex: "2147483000",
+    background: "rgba(8, 8, 8, 0.75)",
+    color: "#f5f5f5",
+    padding: "8px 12px",
+    borderRadius: "6px",
+    fontFamily: "'SFMono-Regular', 'Roboto Mono', 'Fira Code', monospace",
+    fontSize: "12px",
+    lineHeight: "1.35",
+    boxShadow: "0 4px 16px rgba(0,0,0,0.35)",
+    pointerEvents: "none",
+    opacity: "0",
+    transition: "opacity 160ms ease",
+    visibility: "hidden"
+  });
+  document.body.appendChild(hud);
+  viewerDiagnosticsHudEl = hud;
+  return hud;
+}
+
+function hideViewerDiagnosticsHud() {
+  if (!viewerDiagnosticsHudEl) return;
+  viewerDiagnosticsHudEl.style.opacity = "0";
+  viewerDiagnosticsHudEl.style.visibility = "hidden";
+}
+
+function positionViewerDiagnosticsHud(viewerInstance) {
+  if (!viewerDiagnosticsHudEl) return;
+  const canvasRect = viewerInstance?.canvas?.getBoundingClientRect?.();
+  if (!canvasRect) {
+    viewerDiagnosticsHudEl.style.top = "16px";
+    viewerDiagnosticsHudEl.style.left = "16px";
+    return;
+  }
+  viewerDiagnosticsHudEl.style.top = `${Math.max(16, canvasRect.top + 16)}px`;
+  viewerDiagnosticsHudEl.style.left = `${Math.max(16, canvasRect.left + 16)}px`;
+}
+
+function showViewerDiagnosticsHud(viewerInstance, { model, stableId, ttlMs = 10000 } = {}) {
+  try {
+    const hud = ensureViewerDiagnosticsHud(viewerInstance);
+    if (!hud) return;
+
+    positionViewerDiagnosticsHud(viewerInstance);
+
+    const histogram = sceneTypeHistogram(viewerInstance) || {};
+    const meshCount = Number(histogram.Mesh) || 0;
+    const entityCount = Number(histogram.Entity) || Object.keys(viewerInstance?.scene?.objects || {}).length || 0;
+    const { diagonal } = computeAABBInfo(model, viewerInstance);
+    const diagWu = Number.isFinite(diagonal) ? diagonal : null;
+    const diagMm = Number.isFinite(diagonal) ? mmFromWU(diagonal) : null;
+    const camera = viewerInstance?.camera || null;
+    const nearVal = camera ? Number(camera.near) : null;
+    const farVal = camera ? Number(camera.far) : null;
+    const opacitySummary = sceneOpacitySample(viewerInstance, { sampleLimit: 0, lowOpacityThreshold: 0.2 })?.summary || null;
+    const avgOpacity = opacitySummary ? Number(opacitySummary.avgOpacity) : null;
+
+    const mmPerWuDisplay = formatHudNumber(MM_PER_WU, {
+      minFractionDigits: 0,
+      maxFractionDigits: 6
+    });
+    const diagDisplay = `${formatHudNumber(diagMm, { maxFractionDigits: 2 })} mm (${formatHudNumber(diagWu, { maxFractionDigits: 3 })} wu)`;
+    const nearDisplay = formatHudNumber(nearVal, { maxFractionDigits: 3 });
+    const farDisplay = formatHudNumber(farVal, { maxFractionDigits: 3 });
+    const opacityDisplay = formatHudNumber(avgOpacity, { maxFractionDigits: 3 });
+
+    hud.innerHTML = `
+      <div style="font-weight:600;margin-bottom:4px;">diag viewer</div>
+      <div>meshes&nbsp;: <strong>${meshCount}</strong></div>
+      <div>entities&nbsp;: <strong>${entityCount}</strong></div>
+      <div>mmPerWU&nbsp;: <strong>${mmPerWuDisplay}</strong></div>
+      <div>AABB diag&nbsp;: <strong>${diagDisplay}</strong></div>
+      <div>camera near/far&nbsp;: <strong>${nearDisplay}</strong> / <strong>${farDisplay}</strong></div>
+      <div>opacity avg&nbsp;: <strong>${opacityDisplay}</strong></div>
+      ${stableId ? `<div style="margin-top:4px;font-size:11px;opacity:0.7;">${stableId}</div>` : ""}
+    `;
+
+    hud.style.visibility = "visible";
+    requestAnimationFrame(() => {
+      hud.style.opacity = "1";
+    });
+
+    if (viewerDiagnosticsHudTimer) {
+      clearTimeout(viewerDiagnosticsHudTimer);
+    }
+    viewerDiagnosticsHudTimer = setTimeout(() => {
+      hideViewerDiagnosticsHud();
+    }, Math.max(1000, Number(ttlMs) || 10000));
+  } catch (err) {
+    console.warn("[viewer][hud] affichage impossible", err);
   }
 }
 
@@ -1963,6 +2235,48 @@ function isHttpLikeURL(src) {
   }
 }
 
+const ALLOWED_XKT_CONTENT_TYPES = ["application/octet-stream", "model/xkt"];
+
+function normalizeContentType(contentType) {
+  if (!contentType || typeof contentType !== "string") return null;
+  return contentType.split(";")[0].trim().toLowerCase();
+}
+
+async function fetchXKTHead(url, { signal } = {}) {
+  return fetch(url, { method: "HEAD", cache: "no-store", signal });
+}
+
+async function fetchXKTProbeChunk(url, { signal } = {}) {
+  const headers = { Range: "bytes=0-255" };
+  try {
+    const res = await fetch(url, { method: "GET", headers, cache: "no-store", signal });
+    if (!res || !res.ok) {
+      return { snippet: null, status: res?.status ?? null };
+    }
+    let buffer = null;
+    if (res.body && typeof res.body.getReader === "function") {
+      const reader = res.body.getReader();
+      const { value } = await reader.read();
+      try { reader.cancel(); } catch {}
+      buffer = value instanceof Uint8Array ? value : (value ? new Uint8Array(value) : null);
+    } else {
+      buffer = new Uint8Array(await res.arrayBuffer());
+    }
+    if (!buffer) return { snippet: null, status: res.status };
+    const limited = buffer.slice(0, 128);
+    let snippet = null;
+    try {
+      const decoder = typeof TextDecoder !== "undefined" ? new TextDecoder("utf-8", { fatal: false }) : null;
+      if (decoder) {
+        snippet = decoder.decode(limited);
+      }
+    } catch {}
+    return { snippet, status: res.status };
+  } catch (err) {
+    throw err;
+  }
+}
+
 async function logXKTContentDiagnostics({ src, file, label }) {
   try {
     if (file && typeof file.size === "number") {
@@ -1983,8 +2297,10 @@ async function logXKTContentDiagnostics({ src, file, label }) {
       try { controller.abort(); } catch {}
     }, 7000) : null;
     let res;
+    let contentType = null;
+    let len = null;
     try {
-      res = await fetch(normalized, { method: "HEAD", cache: "no-store", signal: controller?.signal });
+      res = await fetchXKTHead(normalized, { signal: controller?.signal });
     } finally {
       if (timeout) clearTimeout(timeout);
     }
@@ -1992,13 +2308,51 @@ async function logXKTContentDiagnostics({ src, file, label }) {
       console.warn("[viewer][xkt] HEAD failed", { src: normalized, status: res?.status });
       return;
     }
-    const len = res.headers.get("content-length");
+    contentType = res.headers.get("content-type");
+    len = res.headers.get("content-length");
     const size = len ? Number(len) : null;
+    const normalizedType = normalizeContentType(contentType);
+    const typeAllowed = normalizedType ? ALLOWED_XKT_CONTENT_TYPES.includes(normalizedType) : false;
     console.log("[viewer][xkt] content =", {
       src: normalized,
       sizeBytes: Number.isFinite(size) ? size : null,
-      rawContentLength: len || null
+      rawContentLength: len || null,
+      contentType: contentType || null
     });
+    let suspiciousReasons = [];
+    if (normalizedType && !typeAllowed) {
+      suspiciousReasons.push(`content-type:${normalizedType}`);
+    }
+
+    let snippetInfo = null;
+    const probeController = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const probeTimeout = probeController ? setTimeout(() => {
+      try { probeController.abort(); } catch {}
+    }, 5000) : null;
+    try {
+      snippetInfo = await fetchXKTProbeChunk(normalized, { signal: probeController?.signal });
+    } catch (probeErr) {
+      console.warn("[viewer][xkt] probe fetch failed", { src: normalized, error: probeErr });
+    } finally {
+      if (probeTimeout) clearTimeout(probeTimeout);
+    }
+
+    if (snippetInfo?.snippet) {
+      const snippetLower = snippetInfo.snippet.toLowerCase();
+      if (snippetLower.includes("<!doctype")) {
+        suspiciousReasons.push("doctype-payload");
+      }
+    }
+
+    if (suspiciousReasons.length > 0) {
+      console.warn("[xkt] suspicious payload", {
+        src: normalized,
+        reasons: suspiciousReasons,
+        contentType: contentType || null,
+        contentLength: len || null,
+        snippet: snippetInfo?.snippet ? snippetInfo.snippet.slice(0, 128) : null
+      });
+    }
   } catch (err) {
     console.warn("[viewer][xkt] content size unavailable", err);
   }
@@ -2028,6 +2382,575 @@ function logModelSceneBinding(model, viewer, meta = {}) {
   }
   console.warn("[diag] scene binding mismatch", payload);
   return false;
+}
+
+function computeElementVisibility(el) {
+  if (!el || typeof el.getBoundingClientRect !== "function") {
+    return { visible: false, rect: null, style: null };
+  }
+  const rect = el.getBoundingClientRect();
+  let style = null;
+  try { style = window.getComputedStyle(el); } catch {}
+  const hasArea = rect.width > 0 && rect.height > 0;
+  const displayOk = style ? style.display !== "none" : true;
+  const visibilityOk = style ? style.visibility !== "hidden" : true;
+  const opacityOk = style ? Number(style.opacity || "1") > 0 : true;
+  const visible = hasArea && displayOk && visibilityOk && opacityOk;
+  return { visible, rect, style };
+}
+
+function describeOverlayElement(el) {
+  const { rect, style } = computeElementVisibility(el);
+  const classes = el?.classList ? Array.from(el.classList) : [];
+  const roundedRect = rect
+    ? {
+        top: Math.round(rect.top),
+        left: Math.round(rect.left),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
+      }
+    : null;
+  return {
+    tag: el?.tagName?.toLowerCase?.() || null,
+    id: el?.id || null,
+    classList: classes.join(" ") || null,
+    rect: roundedRect,
+    zIndex: style?.zIndex || null,
+    opacity: style?.opacity || null
+  };
+}
+
+function collectVisibleOverlays() {
+  if (typeof document === "undefined") return [];
+  const selectors = [
+    ".spinner",
+    ".modal.show",
+    ".modal-backdrop",
+    "[data-overlay]",
+    "[data-loading-overlay]",
+    ".overlay",
+    "[role=dialog].show"
+  ];
+  const seen = new Set();
+  const results = [];
+  for (const selector of selectors) {
+    try {
+      document.querySelectorAll(selector).forEach((el) => {
+        if (seen.has(el)) return;
+        seen.add(el);
+        const { visible } = computeElementVisibility(el);
+        if (visible) {
+          results.push(describeOverlayElement(el));
+        }
+      });
+    } catch {}
+  }
+  return results;
+}
+
+function logCanvasAndOverlayDiagnostics(viewerInstance) {
+  try {
+    const canvasCandidate = viewerInstance?.canvas || document.getElementById("xeokit-canvas");
+    if (!canvasCandidate) {
+      console.warn("[viewer][canvas] diagnostic: aucun canvas trouvé");
+      return;
+    }
+    const rect = canvasCandidate.getBoundingClientRect();
+    const clientWidth = canvasCandidate.clientWidth;
+    const clientHeight = canvasCandidate.clientHeight;
+    const overlays = collectVisibleOverlays();
+    const payload = {
+      clientWidth,
+      clientHeight,
+      rect: {
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        top: Math.round(rect.top),
+        left: Math.round(rect.left)
+      },
+      devicePixelRatio: typeof window !== "undefined" ? window.devicePixelRatio : null,
+      overlaysVisible: overlays.length
+    };
+    console.log("[viewer][canvas] diagnostic", payload);
+    if (!clientWidth || !clientHeight || !rect.width || !rect.height) {
+      console.warn("[viewer][canvas] diagnostic: surface nulle", payload);
+    }
+    if (overlays.length > 0) {
+      console.warn("[viewer][canvas] overlays visibles détectés");
+      console.table(overlays);
+    } else {
+      console.log("[viewer][canvas] aucun overlay visible détecté");
+      console.table(overlays);
+    }
+  } catch (err) {
+    console.warn("[viewer][canvas] diagnostic failed", err);
+  }
+}
+
+function normalizeAABB(raw) {
+  if (!raw) return null;
+  try {
+    if (Array.isArray(raw)) {
+      if (raw.length >= 6) {
+        return raw.slice(0, 6).map((n) => Number(n));
+      }
+      return null;
+    }
+    if (typeof raw === "object" && typeof raw.length === "number" && raw.length >= 6) {
+      return Array.from(raw).slice(0, 6).map((n) => Number(n));
+    }
+  } catch {}
+  return null;
+}
+
+function computeAABBInfo(model, viewerInstance) {
+  const aabb = normalizeAABB(
+    model?.aabb ||
+      model?.sceneModel?.aabb ||
+      viewerInstance?.scene?.aabb
+  );
+  if (!aabb) {
+    return { aabb: null, center: null, diagonal: null };
+  }
+  const sizeX = aabb[3] - aabb[0];
+  const sizeY = aabb[4] - aabb[1];
+  const sizeZ = aabb[5] - aabb[2];
+  const diagonal = Math.sqrt(sizeX ** 2 + sizeY ** 2 + sizeZ ** 2);
+  const center = [
+    aabb[0] + sizeX / 2,
+    aabb[1] + sizeY / 2,
+    aabb[2] + sizeZ / 2
+  ];
+  return { aabb, center, diagonal };
+}
+
+function buildDebugCubeGeometry({ center, size }) {
+  const hx = size / 2;
+  const hy = hx;
+  const hz = hx;
+  const [cx, cy, cz] = center;
+  const faces = [
+    { normal: [0, 0, 1], corners: [[-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]] },
+    { normal: [0, 0, -1], corners: [[1, -1, -1], [-1, -1, -1], [-1, 1, -1], [1, 1, -1]] },
+    { normal: [0, 1, 0], corners: [[-1, 1, 1], [1, 1, 1], [1, 1, -1], [-1, 1, -1]] },
+    { normal: [0, -1, 0], corners: [[-1, -1, -1], [1, -1, -1], [1, -1, 1], [-1, -1, 1]] },
+    { normal: [1, 0, 0], corners: [[1, -1, 1], [1, -1, -1], [1, 1, -1], [1, 1, 1]] },
+    { normal: [-1, 0, 0], corners: [[-1, -1, -1], [-1, -1, 1], [-1, 1, 1], [-1, 1, -1]] }
+  ];
+
+  const positions = [];
+  const normals = [];
+  const indices = [];
+
+  faces.forEach((face, faceIndex) => {
+    const baseIndex = faceIndex * 4;
+    face.corners.forEach((corner) => {
+      positions.push(
+        cx + corner[0] * hx,
+        cy + corner[1] * hy,
+        cz + corner[2] * hz
+      );
+      normals.push(face.normal[0], face.normal[1], face.normal[2]);
+    });
+    indices.push(
+      baseIndex,
+      baseIndex + 1,
+      baseIndex + 2,
+      baseIndex,
+      baseIndex + 2,
+      baseIndex + 3
+    );
+  });
+
+  return { positions, normals, indices };
+}
+
+function normalizeDebugColor(color) {
+  if (!Array.isArray(color) || color.length < 3) {
+    return [1, 0.2, 0.2];
+  }
+  return color.slice(0, 3).map((value, index) => {
+    const num = Number(value);
+    if (!Number.isFinite(num)) {
+      return index === 0 ? 1 : 0.2;
+    }
+    return Math.min(Math.max(num, 0), 1);
+  });
+}
+
+function clampDebugCenter(centerCandidate, fallback) {
+  if (!Array.isArray(centerCandidate) || centerCandidate.length < 3) {
+    return fallback;
+  }
+  const resolved = [];
+  for (let i = 0; i < 3; i++) {
+    const num = Number(centerCandidate[i]);
+    resolved.push(Number.isFinite(num) ? num : fallback[i] || 0);
+  }
+  return resolved;
+}
+
+function addDebugCubeToScene({ viewerInstance, modelCandidate, size, center, color } = {}) {
+  const viewerRef = viewerInstance || (typeof currentViewer === "function" && currentViewer()) || viewer;
+  const scene = viewerRef?.scene;
+  if (!viewerRef || !scene) {
+    console.warn("[viewer][debugCube] viewer ou scène indisponible");
+    return null;
+  }
+
+  const meshesBefore = Object.keys(scene.meshes || {}).length;
+  const info = computeAABBInfo(modelCandidate || window.CAD?.model, viewerRef);
+  const resolvedCenter = clampDebugCenter(center, info.center || [0, 0, 0]);
+  if (!info.aabb) {
+    console.warn("[viewer][debugCube] AABB indisponible, placement origine", { center: resolvedCenter });
+  }
+
+  const diag = Number.isFinite(info.diagonal) && info.diagonal > 0 ? info.diagonal : null;
+  const requestedSize = Number.isFinite(size) && size > 0 ? size : null;
+  let cubeSize = requestedSize ?? (diag ? diag * 0.05 : 50);
+  if (!Number.isFinite(cubeSize) || cubeSize <= 0) {
+    cubeSize = diag ? Math.max(diag * 0.02, 1) : 50;
+  }
+  if (diag) {
+    const minSize = Math.max(diag * 0.01, 1e-3);
+    const maxSize = Math.max(diag * 0.5, minSize);
+    if (cubeSize < minSize) cubeSize = minSize;
+    if (cubeSize > maxSize) cubeSize = maxSize;
+  }
+
+  const { positions, normals, indices } = buildDebugCubeGeometry({ center: resolvedCenter, size: cubeSize });
+  const finalColor = normalizeDebugColor(color);
+
+  const modelId = `debugCube_${Date.now()}`;
+  const geometryId = `${modelId}_geom`;
+  const materialId = `${modelId}_mat`;
+  const meshId = `${modelId}_mesh`;
+  const entityId = `${modelId}_entity`;
+
+  const model = scene.createModel({ id: modelId, isDefault: false });
+  model.createGeometry({
+    id: geometryId,
+    primitive: "triangles",
+    positions,
+    normals,
+    indices
+  });
+  model.createMaterial({
+    id: materialId,
+    color: finalColor,
+    opacity: 1,
+    metallic: 0,
+    roughness: 1
+  });
+  model.createMesh({
+    id: meshId,
+    geometryId,
+    materialId
+  });
+  model.createEntity({
+    id: entityId,
+    meshIds: [meshId]
+  });
+  model.finalize();
+
+  scene.setDirty?.(true);
+  scene.scheduleRender?.();
+
+  const meshesAfter = Object.keys(scene.meshes || {}).length;
+  const entity = scene.objects?.[entityId] || null;
+  const mesh = scene.meshes?.[meshId] || null;
+  const entityState = {
+    visible: entity ? entity.visible !== false : null,
+    culled: entity ? !!entity.culled : null
+  };
+
+  console.log("[viewer][debugCube] créé", {
+    modelId,
+    entityId,
+    meshId,
+    cubeSize,
+    center: resolvedCenter,
+    diagonal: diag,
+    hasAABB: !!info.aabb
+  });
+  const meshDelta = meshesAfter - meshesBefore;
+  console.log("[viewer][debugCube] mesh count", { before: meshesBefore, after: meshesAfter, delta: meshDelta });
+  console.table({ debugCube: { before: meshesBefore, after: meshesAfter, delta: meshDelta } });
+  console.log("[viewer][debugCube] état rendu", {
+    entityState,
+    meshVisible: mesh ? mesh.visible !== false : null
+  });
+  if (entityState.visible === false || entityState.culled || (mesh && mesh.visible === false)) {
+    console.warn("[viewer][debugCube] visibilité douteuse", {
+      entityVisible: entityState.visible,
+      entityCulled: entityState.culled,
+      meshVisible: mesh ? mesh.visible !== false : null
+    });
+  } else if (entityState.visible) {
+    console.log("[viewer][debugCube] cube affiché (visible && non culled)");
+  }
+
+  return {
+    modelId,
+    entityId,
+    meshId,
+    cubeSize,
+    center: resolvedCenter,
+    diagonal: diag,
+    meshesBefore,
+    meshesAfter,
+    entityState,
+    meshVisible: mesh ? mesh.visible !== false : null
+  };
+}
+
+if (typeof window !== "undefined") {
+  window.__addDebugCube = function debugCubeCommand(options = {}) {
+    try {
+      const result = addDebugCubeToScene({
+        viewerInstance: options.viewerInstance,
+        modelCandidate: options.modelCandidate,
+        size: options.size,
+        center: options.center,
+        color: options.color
+      });
+      if (!result) {
+        console.warn("[viewer][debugCube] commande sans résultat");
+      }
+      return result;
+    } catch (err) {
+      console.error("[viewer][debugCube] ajout échoué", err);
+      throw err;
+    }
+  };
+}
+
+function roundNumber(value, decimals = 3) {
+  if (!Number.isFinite(value)) return null;
+  const factor = 10 ** decimals;
+  return Math.round(value * factor) / factor;
+}
+
+function roundVector(vector, decimals = 3) {
+  if (!vector || typeof vector.length !== "number") return null;
+  try {
+    return Array.from(vector).slice(0, 3).map((n) => roundNumber(Number(n), decimals));
+  } catch {
+    return null;
+  }
+}
+
+function isPointInsideAABB(point, aabb) {
+  if (!point || !aabb || aabb.length < 6) return false;
+  try {
+    const [minX, minY, minZ, maxX, maxY, maxZ] = aabb;
+    const [x, y, z] = Array.from(point).slice(0, 3).map((n) => Number(n));
+    return (
+      Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z) &&
+      x >= minX && x <= maxX &&
+      y >= minY && y <= maxY &&
+      z >= minZ && z <= maxZ
+    );
+  } catch {
+    return false;
+  }
+}
+
+function extractVector3(vector) {
+  if (!vector || typeof vector.length !== "number") return null;
+  try {
+    const arr = Array.from(vector).slice(0, 3).map((n) => Number(n));
+    return arr.every((n) => Number.isFinite(n)) ? arr : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeVector(vec) {
+  if (!Array.isArray(vec)) return null;
+  const length = Math.sqrt(vec.reduce((acc, value) => acc + value ** 2, 0));
+  if (!length) return null;
+  return vec.map((value) => value / length);
+}
+
+function manualCameraFit(viewerInstance, info = {}) {
+  const camera = viewerInstance?.camera;
+  if (!camera) {
+    console.warn("[viewer] manual camera fit impossible: caméra absente");
+    return false;
+  }
+  const { center, diagonal } = info;
+  if (!center || !Array.isArray(center) || center.length < 3 || !Number.isFinite(diagonal) || diagonal <= 0) {
+    console.warn("[viewer] manual camera fit impossible: AABB invalide");
+    return false;
+  }
+  const distance = diagonal * 2;
+  if (!Number.isFinite(distance) || distance <= 0) {
+    console.warn("[viewer] manual camera fit impossible: distance invalide", { diagonal });
+    return false;
+  }
+
+  const eyeVec = extractVector3(camera.eye);
+  const lookVec = extractVector3(camera.look);
+  let direction = null;
+  if (eyeVec && lookVec) {
+    direction = normalizeVector(eyeVec.map((value, idx) => value - lookVec[idx]));
+  }
+  if (!direction) {
+    direction = normalizeVector([1, 1, 1]) || [0, 0, 1];
+  }
+
+  const newEye = center.map((value, idx) => value + direction[idx] * distance);
+  camera.eye = newEye;
+  camera.look = center.slice(0, 3);
+  const upVec = normalizeVector(extractVector3(camera.up) || [0, 1, 0]) || [0, 1, 0];
+  camera.up = upVec;
+
+  const near = Math.max(distance * 0.01, diagonal * 0.01, 0.001);
+  const far = Math.max(distance * 6, near * 10);
+  if (Number.isFinite(near)) {
+    camera.near = near;
+  }
+  if (Number.isFinite(far)) {
+    camera.far = far;
+  }
+  return true;
+}
+
+function logCameraAndClippingDiagnostics(viewerInstance, model) {
+  try {
+    const camera = viewerInstance?.camera || null;
+    const { aabb, center, diagonal } = computeAABBInfo(model, viewerInstance);
+    if (!aabb) {
+      console.warn("[viewer][camera] diagnostic: AABB indisponible");
+    }
+
+    if (aabb) {
+      console.log("[viewer][camera] AABB", {
+        min: { x: roundNumber(aabb[0]), y: roundNumber(aabb[1]), z: roundNumber(aabb[2]) },
+        max: { x: roundNumber(aabb[3]), y: roundNumber(aabb[4]), z: roundNumber(aabb[5]) },
+        diagonal: roundNumber(diagonal)
+      });
+      if (!diagonal || diagonal <= 0) {
+        console.warn("[viewer][camera] WARNING: AABB diagonal nulle", { diagonal });
+      }
+    }
+
+    if (!camera) {
+      console.warn("[viewer][camera] diagnostic: caméra indisponible");
+      return;
+    }
+
+    const nearVal = Number(camera.near);
+    const farVal = Number(camera.far);
+    const eye = roundVector(camera.eye);
+    const look = roundVector(camera.look);
+    const up = roundVector(camera.up);
+
+    let eyeToCenter = null;
+    if (center && camera.eye) {
+      try {
+        const [ex, ey, ez] = Array.from(camera.eye).slice(0, 3).map((n) => Number(n));
+        if ([ex, ey, ez].every((n) => Number.isFinite(n))) {
+          const dx = ex - center[0];
+          const dy = ey - center[1];
+          const dz = ez - center[2];
+          eyeToCenter = Math.sqrt(dx ** 2 + dy ** 2 + dz ** 2);
+        }
+      } catch {}
+    }
+
+    console.log("[viewer][camera] params", {
+      projection: camera.projection || null,
+      near: Number.isFinite(nearVal) ? roundNumber(nearVal) : null,
+      far: Number.isFinite(farVal) ? roundNumber(farVal) : null,
+      eye,
+      look,
+      up,
+      eyeDistanceToCenter: roundNumber(eyeToCenter)
+    });
+
+    if (aabb && camera.eye && isPointInsideAABB(camera.eye, aabb)) {
+      console.warn("[viewer][camera] WARNING: eye position inside AABB", { eye });
+    }
+
+    if (Number.isFinite(nearVal) && Number.isFinite(farVal)) {
+      if (!(farVal > nearVal)) {
+        console.warn("[viewer][camera] WARNING: far <= near", { near: nearVal, far: farVal });
+      }
+      if (diagonal && farVal < diagonal * 0.25) {
+        console.warn("[viewer][camera] WARNING: far plane très proche du modèle", {
+          far: farVal,
+          diagonal
+        });
+      }
+      if (eyeToCenter && nearVal > eyeToCenter) {
+        console.warn("[viewer][camera] WARNING: near plane au-delà de l'œil", {
+          near: nearVal,
+          eyeDistanceToCenter: eyeToCenter
+        });
+      }
+    } else {
+      console.warn("[viewer][camera] WARNING: near/far non numériques", {
+        near: camera.near,
+        far: camera.far
+      });
+    }
+  } catch (err) {
+    console.warn("[viewer][camera] diagnostic failed", err);
+  }
+}
+
+async function ensureCameraFitAfterLoad({ viewerInstance, model, stableId }) {
+  const info = computeAABBInfo(model, viewerInstance);
+  const cameraFlight = viewerInstance?.cameraFlight;
+  let fitInvoked = false;
+  let fitReturned = false;
+  let manualFallback = false;
+
+  if (cameraFlight && typeof cameraFlight.fit === "function") {
+    fitInvoked = true;
+    let fitResult = null;
+    try {
+      const target = info.aabb || model || viewerInstance?.scene?.aabb || undefined;
+      fitResult = target !== undefined ? cameraFlight.fit(target) : cameraFlight.fit();
+    } catch (err) {
+      console.warn("[viewer] camera fit failed", err);
+    }
+
+    if (fitResult && typeof fitResult.then === "function") {
+      try {
+        await fitResult;
+        fitReturned = true;
+      } catch (err) {
+        console.warn("[viewer] camera fit promise rejected", err);
+      }
+    } else if (fitResult !== undefined && fitResult !== null) {
+      fitReturned = true;
+    }
+
+    if (!fitReturned) {
+      manualFallback = manualCameraFit(viewerInstance, info);
+    }
+  } else {
+    manualFallback = manualCameraFit(viewerInstance, info);
+  }
+
+  console.log("[viewer] camera fit done", {
+    stableId: stableId || null,
+    manualFallback,
+    fitInvoked,
+    diagonal: Number.isFinite(info.diagonal) ? roundNumber(info.diagonal) : null
+  });
+
+  logCameraAndClippingDiagnostics(viewerInstance, model);
+  const displayOk = !!hasMeshes(viewerInstance);
+  console.log("[viewer] post-fit display", {
+    stableId: stableId || null,
+    hasMeshes: displayOk
+  });
+
+  return { manualFallback, displayOk };
 }
 
 function resolveFallbackGlbUrl({ explicitUrl, fileId }) {
@@ -2141,6 +3064,14 @@ async function loadXKT(url, nameHint, options = {}) {
     setProgress(8 + Math.round(Math.max(0, Math.min(1, ratio)) * 84));
   };
 
+  const loadStartedIso = new Date().toISOString();
+  const loadStartedAt = performance.now();
+  console.log(`[viewer] ${loadStartedIso} start load`, {
+    stableId,
+    url,
+    glbFallback: fallbackGlbUrl || null
+  });
+
   try {
     const { model, type, src } = await tryLoadXKTThenGLB({
       viewerInstance: viewer,
@@ -2160,10 +3091,35 @@ async function loadXKT(url, nameHint, options = {}) {
     registerGlobalModel({ viewer, model, meta });
     registerModel({ viewer, model, meta });
     await finalizeModelLoad({ model, stableId, src, nameHint, loaderType: type });
+
+    const loadDurationMs = Math.round(performance.now() - loadStartedAt);
+    const hist = sceneTypeHistogram(viewer) || {};
+    const toCount = (value) => {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : 0;
+    };
+    const condensedHist = {
+      Mesh: toCount(hist.Mesh),
+      Entity: toCount(hist.Entity),
+      Object: toCount(hist.Object),
+      Texture: toCount(hist.Texture)
+    };
+    console.log(`[viewer] ${new Date().toISOString()} success`, {
+      stableId,
+      loader: type,
+      durationMs: loadDurationMs
+    });
+    console.table(condensedHist);
+    logCameraAndClippingDiagnostics(viewer, model);
+    await ensureCameraFitAfterLoad({ viewerInstance: viewer, model, stableId });
+    logCanvasAndOverlayDiagnostics(viewer);
+    logSceneVisibilityDiagnostics(viewer, { stableId });
+    logOpacityMaterialDiagnostics(viewer, { stableId });
+    showViewerDiagnosticsHud(viewer, { model, stableId });
     return stableId;
   } catch (err) {
     const error = err?.error || err;
-    console.error("[viewer] chargement modèle échoué", error);
+    console.error(`[viewer] ${new Date().toISOString()} error: ${error?.message || error}`, error);
     setProgress(0);
     alert("Erreur chargement modèle (XKT/GLB).");
     throw error;
@@ -2259,6 +3215,11 @@ async function loadLocalXKT(file) {
     }
 
     handleSceneAuditAfterLoad(viewer);
+    logCameraAndClippingDiagnostics(viewer, model);
+    await ensureCameraFitAfterLoad({ viewerInstance: viewer, model, stableId: stableIdLocal });
+    logSceneVisibilityDiagnostics(viewer, { stableId: stableIdLocal });
+    logOpacityMaterialDiagnostics(viewer, { stableId: stableIdLocal });
+    showViewerDiagnosticsHud(viewer, { model, stableId: stableIdLocal });
   });
 
   model.on("error", (err) => {
@@ -2353,6 +3314,22 @@ async function uploadAndShow(file) {
       clearModelRegistry();
     }
 
+    if (currentFileId) {
+      try {
+        const debugUrl = `/debug/xkt/${encodeURIComponent(currentFileId)}`;
+        const debugRes = await fetch(debugUrl, { cache: "no-store" });
+        if (!debugRes.ok) {
+          console.warn("[viewer] debug /debug/xkt status", debugRes.status);
+        } else {
+          const debugPayload = await debugRes.json();
+          console.log("[viewer] /debug/xkt snapshot juste avant loadXKT", { fileId: currentFileId });
+          console.table(debugPayload);
+        }
+      } catch (debugErr) {
+        console.warn("[viewer] debug /debug/xkt fetch a échoué", debugErr);
+      }
+    }
+
     console.log("[viewer] loading XKT]:", xktUrl);
     logXKTContentDiagnostics({ src: xktUrl, label: f.name || currentFileId }).catch(() => {});
     StatsPoller.cancel();
@@ -2372,7 +3349,11 @@ async function uploadAndShow(file) {
     await loadXKT(resolvedXktUrl, f.name, { fileId: currentFileId, glbUrl });
   } catch (e) {
     console.error(e);
-    alert("Erreur conversion/chargement (voir Console).");
+    if (e?.code === "known_bad_xkt") {
+      alert("Conversion XKT invalide détectée (known_bad_xkt). Vérifie la chaîne de conversion.");
+    } else {
+      alert("Erreur conversion/chargement (voir Console).");
+    }
   } finally {
     if (typeof setUiProgress === "function") {
       setUiProgress("");
@@ -2394,16 +3375,46 @@ function getUploadFormData() {
 }
 
 async function waitForXKTReady(fileId, opts = {}) {
-  const minSize  = opts.minSize  ?? 120 * 1024;   // >100KB pour éviter les fichiers vides
-  const maxWait  = opts.maxWait  ?? 10 * 60 * 1000; // 10 minutes max
-  const pollMs   = opts.pollMs   ?? 1500;         // 1.5s entre requêtes
-  const badSize  = 46204;                         // taille connue "mauvaise"
+  const minSize   = opts.minSize   ?? 120 * 1024;      // >100KB pour éviter les fichiers vides
+  const maxWait   = opts.maxWait   ?? 15 * 60 * 1000;  // 15 minutes max
+  const pollMs    = opts.pollMs    ?? 1500;            // 1.5s entre requêtes
+  const badSize   = opts.badSize   ?? 46204;           // taille connue "mauvaise"
   const t0 = performance.now();
+  let attempt = 0;
 
   while (true) {
+    attempt += 1;
     const r = await fetch(`/debug/xkt/${fileId}`, { cache: "no-store" });
-    if (!r.ok) throw new Error(`debug_xkt_failed ${r.status}`);
+    if (!r.ok) {
+      const err = new Error(`debug_xkt_failed ${r.status}`);
+      err.code = "debug_xkt_failed";
+      throw err;
+    }
     const j = await r.json();
+
+    const elapsedMs = Math.round(performance.now() - t0);
+    const payload = {
+      attempt,
+      elapsedMs,
+      exists: !!j.xkt_exists,
+      size: Number(j.xkt_size) || 0,
+      glb_faces: Number(j.glb_faces) || 0,
+      known_bad: Boolean(j.known_bad_xkt)
+    };
+    console.log(`[wait][xkt] poll #${attempt}`, payload);
+
+    if (typeof setUiProgress === "function") {
+      const seconds = Math.floor(elapsedMs / 1000);
+      const status = payload.exists ? `${payload.size} B` : "en attente…";
+      setUiProgress(`Conversion en cours (${seconds}s, XKT ${status})`);
+    }
+
+    if (j.known_bad_xkt) {
+      const err = new Error("Conversion XKT invalide (known_bad_xkt)");
+      err.code = "known_bad_xkt";
+      err.debug = j;
+      throw err;
+    }
 
     // prêt quand: le fichier existe, taille suffisante et ≠ taille “mauvaise”
     if (j.xkt_exists && j.xkt_size >= minSize && j.xkt_size !== badSize) {
@@ -2413,7 +3424,7 @@ async function waitForXKTReady(fileId, opts = {}) {
     if (performance.now() - t0 > maxWait) {
       throw new Error("GEOMETRY_WAIT_TIMEOUT");
     }
-    await new Promise(res => setTimeout(res, pollMs));
+    await new Promise((res) => setTimeout(res, pollMs));
   }
 }
 
@@ -2477,7 +3488,11 @@ btnVisualiser?.addEventListener("click", async (event) => {
   } catch (err) {
     console.error(err);
     setUiProgress?.("");
-    showErrorToast(err?.message || "Erreur d'upload");
+    if (err?.code === "known_bad_xkt") {
+      showErrorToast("Conversion XKT invalide (known_bad_xkt). Conversion à rejouer côté serveur.");
+    } else {
+      showErrorToast(err?.message || "Erreur d'upload");
+    }
   }
 });
 
