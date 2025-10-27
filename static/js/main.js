@@ -214,16 +214,38 @@ function hideNoMeshWarning() {
   delete host.dataset.toastShown;
 }
 
-function setHeatmapEnabled(enabled) {
+function setHeatmapEnabled(enabled, reason = "ready") {
   if (typeof document === "undefined") return;
   const flag = !!enabled;
-  document.querySelectorAll("[data-role=heatmap-btn], #btn-heatmap").forEach((el) => {
+  const selectors = [
+    "[data-role=heatmap-btn]",
+    "#btn-heatmap",
+    "#btnHeatmap",
+    "#dfmBtnHeatmapDraft"
+  ];
+  const seen = new Set();
+  for (const selector of selectors) {
     try {
-      el.toggleAttribute("disabled", !flag);
+      document.querySelectorAll(selector).forEach((el) => {
+        if (!el || seen.has(el)) return;
+        seen.add(el);
+        try {
+          el.toggleAttribute("disabled", !flag);
+        } catch (err) {
+          console.warn("[heatmap] toggle failed", err);
+        }
+      });
     } catch (err) {
-      console.warn("[heatmap] toggle failed", err);
+      console.warn("[heatmap] selector failed", { selector, err });
     }
-  });
+  }
+  if (typeof setHeatmapButtonsDisabled === "function") {
+    try {
+      setHeatmapButtonsDisabled(!flag, reason);
+    } catch (err) {
+      console.warn("[heatmap] lock update failed", err);
+    }
+  }
 }
 
 function handleSceneAuditAfterLoad(viewerInstance) {
@@ -234,8 +256,7 @@ function handleSceneAuditAfterLoad(viewerInstance) {
   const hasMesh = hasMeshes(viewerInstance);
   if (!hasMesh || meshCount <= 0) {
     console.warn("[scene] no Mesh detected -> disable heatmap");
-    setHeatmapEnabled(false);
-    setHeatmapButtonsDisabled(true, "mesh");
+    setHeatmapEnabled(false, "mesh");
     const warningHost = document.getElementById("heatmapNoMeshWarning");
     const alreadyWarned = warningHost?.dataset?.toastShown === "1";
     if (!alreadyWarned) {
@@ -248,8 +269,7 @@ function handleSceneAuditAfterLoad(viewerInstance) {
       heatmapBtn.dataset.sceneAuditNoMeshToast = "1";
     }
   } else {
-    setHeatmapEnabled(true);
-    setHeatmapButtonsDisabled(false, "mesh");
+    setHeatmapEnabled(true, "mesh");
     hideNoMeshWarning();
     if (heatmapBtn?.dataset?.sceneAuditNoMesh === "1") {
       heatmapBtn.disabled = false;
@@ -1836,13 +1856,8 @@ function waitForModelLoad(model) {
 }
 
 async function urlExists(url) {
-  try {
-    const res = await fetch(url, { method: "HEAD", cache: "no-store" });
-    return !!res?.ok;
-  } catch (err) {
-    console.warn("[viewer] urlExists check failed", err);
-    return false;
-  }
+  const res = await fetch(url, { method: "HEAD", cache: "no-store" });
+  return res.ok;
 }
 
 async function tryLoadXKTThenGLB({
@@ -1899,7 +1914,13 @@ async function tryLoadXKTThenGLB({
     if (!glbUrl) {
       throw firstErr;
     }
-    if (!(await urlExists(glbUrl))) {
+    let glbExists = false;
+    try {
+      glbExists = await urlExists(glbUrl);
+    } catch (probeErr) {
+      console.warn("[viewer] GLB HEAD check failed", probeErr);
+    }
+    if (!glbExists) {
       console.warn("[viewer] GLB fallback skipped (404).", { glbUrl });
       throw firstErr;
     }
@@ -2053,10 +2074,10 @@ async function finalizeModelLoad({ model, stableId, src, nameHint, loaderType })
   try {
     const meshCount = await waitForMeshes(viewer);
     console.log(`[viewer] meshes ready: ${meshCount}`);
-    setHeatmapEnabled(true);
+    setHeatmapEnabled(true, "mesh");
   } catch (err) {
     console.warn("[viewer] meshes not ready in time", err);
-    setHeatmapEnabled(false);
+    setHeatmapEnabled(false, "mesh");
   }
 
   handleSceneAuditAfterLoad(viewer);
@@ -2106,7 +2127,7 @@ async function loadXKT(url, nameHint, options = {}) {
     window.CAD.glbUrl = fallbackGlbUrl;
   }
 
-  setHeatmapEnabled(false);
+  setHeatmapEnabled(false, "ready");
   resetGeometryReadyState();
   clearModelRegistry();
   logXKTContentDiagnostics({ src: url, label: nameHint || stableId }).catch(() => {});
@@ -2177,7 +2198,7 @@ async function loadLocalXKT(file) {
   window.CAD.heatmap.ready = false;
   window.CAD.model = null;
   window.CAD.modelId = null;
-  setHeatmapEnabled(false);
+  setHeatmapEnabled(false, "ready");
   resetGeometryReadyState();
   clearModelRegistry();
 
@@ -2231,10 +2252,10 @@ async function loadLocalXKT(file) {
     try {
       const meshCount = await waitForMeshes(viewer);
       console.log(`[viewer] meshes ready: ${meshCount}`);
-      setHeatmapEnabled(true);
+      setHeatmapEnabled(true, "mesh");
     } catch (err) {
       console.warn("[viewer] meshes not ready in time", err);
-      setHeatmapEnabled(false);
+      setHeatmapEnabled(false, "mesh");
     }
 
     handleSceneAuditAfterLoad(viewer);
@@ -2348,7 +2369,7 @@ function getUploadFormData() {
   return fd;
 }
 
-async function waitForXKT(fileId, opts = {}) {
+async function waitForXKTReady(fileId, opts = {}) {
   const minSize  = opts.minSize  ?? 120 * 1024;   // >100KB pour éviter les fichiers vides
   const maxWait  = opts.maxWait  ?? 10 * 60 * 1000; // 10 minutes max
   const pollMs   = opts.pollMs   ?? 1500;         // 1.5s entre requêtes
@@ -2400,17 +2421,19 @@ async function handleUpload(formData) {
     throw new Error(msg);
   }
 
-  if (data.status === "enqueued" && data.file_id) {
-    setUiProgress?.("Conversion en cours…");
-    const xktUrl = await waitForXKT(data.file_id);
-    return { fileId: data.file_id, xktUrl };
+  const fileId = data.file_id;
+  if (!fileId) {
+    const msg = "Réponse upload sans file_id.";
+    console.error("[upload] missing file_id", data);
+    showErrorToast(msg);
+    throw new Error(msg);
   }
 
-  const xktUrl = data.xktUrl || data.xkt_url;
-  if (!xktUrl) {
-    throw new Error("Aucune URL XKT dans la réponse.");
-  }
-  return { fileId: data.file_id, xktUrl };
+  // robustesse: on attend TOUJOURS que l’XKT existe réellement
+  // (même si le backend renvoie "ready", on vérifie quand même).
+  setUiProgress?.("Conversion en cours…");
+  const xktUrl = await waitForXKTReady(fileId);
+  return { fileId, xktUrl };
 }
 
 btnVisualiser?.addEventListener("click", async (event) => {
@@ -2469,7 +2492,6 @@ fileInput?.addEventListener("change",()=>{
   if (f && fileNameLbl) fileNameLbl.textContent=f.name;
   if (f) uploadAndShow(f);
 });
-btnVisualiser?.addEventListener("click",(e)=>{ e.preventDefault(); uploadAndShow(); });
 
 ["dragenter","dragover"].forEach(ev=>{
   viewerContainer?.addEventListener(ev,(e)=>{ e.preventDefault(); e.dataTransfer.dropEffect="copy"; }, false);
