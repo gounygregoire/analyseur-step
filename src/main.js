@@ -16,7 +16,7 @@ let viewer, cameraControl, xktLoader, gltfLoader, dist, sections, canvas;
 // ---- Waiter: attend que l'XKT existe et soit "valide" ----
 async function waitForXKTReady(fileId, opts = {}) {
   if (!fileId) throw new Error("file_id absent pour waitForXKTReady");
-  const minSize = opts.minSize ?? 120 * 1024; // >100KB
+  const minSize = opts.minSize ?? 24 * 1024; // ~24KB : permet les petits modèles légitimes
   const badSize = opts.badSize ?? 46204; // taille connue "fausse"
   const maxWait = opts.maxWait ?? 10 * 60 * 1000; // 10 min
   const pollMs = opts.pollMs ?? 1500;
@@ -26,8 +26,19 @@ async function waitForXKTReady(fileId, opts = {}) {
     const r = await fetch(`/debug/xkt/${fileId}`, { cache: "no-store" });
     if (!r.ok) throw new Error(`debug_xkt_failed ${r.status}`);
     const j = await r.json();
-    if (j.xkt_exists && j.xkt_size >= minSize && j.xkt_size !== badSize) {
-      return `/xkt/${fileId}.xkt`;
+    const { xkt_exists, xkt_size = 0, known_bad_xkt, xkt_looks_like_html } = j;
+    if (xkt_exists) {
+      if (xkt_looks_like_html) {
+        throw new Error("XKT_INVALID_HTML");
+      }
+      if (known_bad_xkt || xkt_size === badSize) {
+        console.warn("[wait][xkt] known bad artifact", { fileId, xkt_size });
+      } else if (xkt_size > 0) {
+        if (xkt_size < minSize) {
+          console.warn("[wait][xkt] small XKT detected, accepting anyway", { fileId, xkt_size, minSize });
+        }
+        return `/xkt/${fileId}.xkt`;
+      }
     }
     if (performance.now() - t0 > maxWait) {
       throw new Error("GEOMETRY_WAIT_TIMEOUT");
