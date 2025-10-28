@@ -95,14 +95,33 @@ def _redis_conn() -> redis.Redis:
 
 # --- S3 helpers (download + upload) ---
 def _s3_enabled() -> bool:
-    return all(os.environ.get(k) for k in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "S3_BUCKET"))
+    return all(
+        os.environ.get(k)
+        for k in (
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_REGION",
+            "S3_BUCKET",
+        )
+    )
+
+
+def _s3_env_snapshot() -> Dict[str, Any]:
+    return {
+        "AWS_ACCESS_KEY_ID_set": bool(os.environ.get("AWS_ACCESS_KEY_ID")),
+        "AWS_REGION": os.environ.get("AWS_REGION"),
+        "S3_BUCKET": os.environ.get("S3_BUCKET"),
+        "S3_ENDPOINT": os.environ.get("S3_ENDPOINT"),
+        "S3_FORCE_PATH_STYLE": os.environ.get("S3_FORCE_PATH_STYLE"),
+    }
+
 
 def _s3_put(local_path: str, key: str, content_type: Optional[str] = None) -> bool:
     if not _s3_enabled():
         return False
     try:
         from s3io import put_file
-        return bool(put_file(local_path, f"converted/{os.path.basename(key)}", content_type=content_type))
+        return bool(put_file(local_path, key, content_type=content_type))
     except Exception:
         return False
 
@@ -617,6 +636,7 @@ def compute_and_cache_stats(
         "cwd": os.getcwd(),
         "path0": sys.path[:5],
     })
+    bump_stage("s3_env", _s3_env_snapshot())
 
     axis = (axis or "Z").upper()
     if axis not in AXES:
@@ -725,10 +745,10 @@ def compute_and_cache_stats(
     # 8) S3 (optionnel)
     if _s3_enabled():
         try:
-            _s3_put(base_path, f"{file_id}.stats.json", content_type="application/json")
-            _s3_put(proj_path, f"{file_id}.proj.{axis}.json", content_type="application/json")
+            _s3_put(base_path, f"converted/{file_id}.stats.json", content_type="application/json")
+            _s3_put(proj_path, f"converted/{file_id}.proj.{axis}.json", content_type="application/json")
             if tmin is not None and tmax is not None:
-                _s3_put(thick_path, f"{file_id}.thick.json", content_type="application/json")
+                _s3_put(thick_path, f"converted/{file_id}.thick.json", content_type="application/json")
         except Exception:
             pass
 

@@ -864,7 +864,7 @@ def _get_converter_version() -> dict:
     result: dict[str, str] = {}
     try:
         proc = subprocess.run(
-            ["npx", "--yes", "xeokit-gltf-to-xkt", "--version"],
+            ["npx", "-y", "@xeokit/xeokit-convert", "--version"],
             capture_output=True, text=True, timeout=30, check=True
         )
         version = (proc.stdout or proc.stderr or "").strip()

@@ -44,6 +44,40 @@ def file_size(path: str) -> int:
     return os.path.getsize(path) if os.path.exists(path) else 0
 
 
+def _s3_enabled() -> bool:
+    return all(
+        os.environ.get(k)
+        for k in (
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_REGION",
+            "S3_BUCKET",
+        )
+    )
+
+
+def _s3_env_snapshot() -> dict[str, object]:
+    return {
+        "AWS_ACCESS_KEY_ID_set": bool(os.environ.get("AWS_ACCESS_KEY_ID")),
+        "AWS_REGION": os.environ.get("AWS_REGION"),
+        "S3_BUCKET": os.environ.get("S3_BUCKET"),
+        "S3_ENDPOINT": os.environ.get("S3_ENDPOINT"),
+        "S3_FORCE_PATH_STYLE": os.environ.get("S3_FORCE_PATH_STYLE"),
+    }
+
+
+def _s3_put_if_exists(local_path: str, key: str, content_type: str | None = None) -> bool:
+    if not os.path.isfile(local_path):
+        return False
+    try:
+        from s3io import put_file
+
+        return bool(put_file(local_path, key, content_type=content_type))
+    except Exception as exc:  # pragma: no cover - boto errors not easily reproducible in CI
+        logger.warning("[convert][s3] upload_failed path=%s key=%s err=%s", local_path, key, exc)
+        return False
+
+
 def count_glb_faces(glb_path: str) -> int:
     import trimesh  # type: ignore
 
@@ -97,7 +131,7 @@ def _log_step_mesh_diagnostics(step_path: str, tolerances: Iterable[float]) -> N
         from OCP.STEPControl import STEPControl_Reader  # type: ignore
         from OCP.IFSelect import IFSelect_RetDone  # type: ignore
         from OCP.BRepMesh import BRepMesh_IncrementalMesh  # type: ignore
-        from OCP.BRepBndLib import BRepBndLib  # type: ignore
+        from OCP.BRepBndLib import brepbndlib_Add  # type: ignore
         from OCP.Bnd import Bnd_Box  # type: ignore
         from OCP.TopExp import TopExp_Explorer  # type: ignore
         from OCP.TopAbs import TopAbs_FACE, TopAbs_SOLID  # type: ignore
@@ -224,7 +258,7 @@ def _log_step_mesh_diagnostics(step_path: str, tolerances: Iterable[float]) -> N
     except Exception:
         pass
     try:
-        BRepBndLib.Add(shape, bbox, True)
+        brepbndlib_Add(shape, bbox, True)
         xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
         diag = math.sqrt(
             max(0.0, (xmax - xmin) ** 2 + (ymax - ymin) ** 2 + (zmax - zmin) ** 2)
@@ -287,7 +321,7 @@ def _log_step_mesh_diagnostics(step_path: str, tolerances: Iterable[float]) -> N
             total += 1
             face = topods_Face(exp.Current())
             loc = TopLoc_Location()
-            triangulation = BRep_Tool.Triangulation(face, loc)
+            triangulation = BRep_Tool.Triangulation_s(face, loc)
             if triangulation is not None:
                 tri += 1
                 try:
@@ -419,8 +453,27 @@ def _tessellate_to_glb(
     glb_path: str,
     tolerances: Iterable[float],
 ) -> Tuple[int, int]:
-    import cadquery as cq  # type: ignore
     import trimesh  # type: ignore
+    from OCP.Bnd import Bnd_Box  # type: ignore
+    from OCP.BRep import BRep_Tool  # type: ignore
+    from OCP.BRepBndLib import brepbndlib_Add  # type: ignore
+    from OCP.BRepMesh import BRepMesh_IncrementalMesh  # type: ignore
+    from OCP.IFSelect import IFSelect_RetDone  # type: ignore
+    from OCP.STEPControl import STEPControl_Reader  # type: ignore
+    from OCP.TopAbs import TopAbs_FACE, TopAbs_REVERSED, TopAbs_SOLID  # type: ignore
+    from OCP.TopExp import TopExp_Explorer  # type: ignore
+    from OCP.TopLoc import TopLoc_Location  # type: ignore
+
+    try:
+        from OCP.TopoDS import topods_Face, topods_Solid  # type: ignore
+    except Exception:  # pragma: no cover - fallback according to OCP build
+        from OCP.TopoDS import TopoDS  # type: ignore
+
+        def topods_Face(shape):  # type: ignore
+            return TopoDS.Face_s(shape)
+
+        def topods_Solid(shape):  # type: ignore
+            return TopoDS.Solid_s(shape)
 
     if not step_path or not os.path.exists(step_path):
         raise FileNotFoundError(f"STEP introuvable: {step_path}")
@@ -440,49 +493,155 @@ def _tessellate_to_glb(
     except Exception:  # pragma: no cover - diagnostics must not break conversion
         logger.exception("[mesh][diag] unexpected failure during diagnostics")
 
-    asm = cq.importers.importStep(step_path)
-    shapes = asm if isinstance(asm, (list, tuple)) else [asm]
-    shapes = [shape for shape in shapes if shape is not None]
+    reader = STEPControl_Reader()
+    status = reader.ReadFile(step_path)
+    if status != IFSelect_RetDone:
+        raise RuntimeError(f"step_read_failed status={status}")
+    transfers = reader.TransferRoots()
+    if transfers == 0:
+        raise RuntimeError("step_transfer_failed")
+    root_shape = reader.OneShape()
 
-    def _tess(tol: float) -> list[trimesh.Trimesh]:
-        meshes: list[trimesh.Trimesh] = []
+    solids: list = []
+    explorer = TopExp_Explorer(root_shape, TopAbs_SOLID)
+    while explorer.More():
+        solids.append(topods_Solid(explorer.Current()))
+        explorer.Next()
+    shapes = solids or [root_shape]
+
+    bbox = Bnd_Box()
+    for shape in shapes:
+        brepbndlib_Add(shape, bbox, True)
+    diag = bbox.Diagonal()
+    if diag <= 0:
+        diag = 1.0
+
+    def _iter_faces(shape):
+        face_exp = TopExp_Explorer(shape, TopAbs_FACE)
+        while face_exp.More():
+            yield topods_Face(face_exp.Current())
+            face_exp.Next()
+
+    total_faces = sum(1 for shape in shapes for _ in _iter_faces(shape))
+
+    tol_values = list(tolerances)
+
+    attempts = [
+        (0.002, 0.25),
+        (0.005, 0.35),
+        (0.01, 0.50),
+    ]
+
+    extra_attempts: list[tuple[float, float]] = []
+    for tol in tol_values:
+        try:
+            tol_val = float(tol)
+        except (TypeError, ValueError):
+            continue
+        if tol_val <= 0:
+            continue
+        rel = max(tol_val / diag, 1e-9)
+        extra_attempts.append((rel, 0.50))
+    attempts.extend(extra_attempts)
+
+    chosen_defl: float | None = None
+    chosen_ang: float | None = None
+    triangulated_faces = 0
+
+    def _count_triangulated_faces() -> int:
+        count = 0
         for shp in shapes:
-            if not hasattr(shp, "tessellate"):
-                continue
+            for face in _iter_faces(shp):
+                loc = TopLoc_Location()
+                tri = BRep_Tool.Triangulation_s(face, loc)
+                if tri is None:
+                    continue
+                if tri.NbTriangles() > 0:
+                    count += 1
+        return count
+
+    for defl_rel, ang in attempts:
+        for shp in shapes:
+            mesher = BRepMesh_IncrementalMesh(shp, defl_rel, True, ang, True)
             try:
-                verts, faces = shp.tessellate(tol)
-            except Exception as exc:  # pragma: no cover - cadquery runtime errors
-                logger.warning("[convert][glb] tessellate failed tol=%s err=%s", tol, exc)
+                mesher.Perform()
+            except Exception:  # pragma: no cover - mesher optional perform call
+                pass
+        triangulated_faces = _count_triangulated_faces()
+        logger.debug(
+            "[convert][mesh] attempt defl_rel=%s ang=%s tri_faces=%s/%s",
+            defl_rel,
+            ang,
+            triangulated_faces,
+            total_faces,
+        )
+        if triangulated_faces > 0:
+            chosen_defl = defl_rel
+            chosen_ang = ang
+            break
+
+    if triangulated_faces == 0:
+        raise RuntimeError("no_faces_after_meshing")
+
+    meshes: list[trimesh.Trimesh] = []
+    for shp in shapes:
+        vertices: list[tuple[float, float, float]] = []
+        faces_idx: list[tuple[int, int, int]] = []
+        vertex_cache: dict[tuple[int, int], int] = {}
+
+        for face in _iter_faces(shp):
+            loc = TopLoc_Location()
+            triangulation = BRep_Tool.Triangulation_s(face, loc)
+            if triangulation is None or triangulation.NbTriangles() == 0:
                 continue
-            if len(faces) == 0:
-                continue
-            mesh = trimesh.Trimesh(vertices=verts, faces=faces, process=False)
+            trsf = loc.Transformation()
+            nodes = triangulation.Nodes()
+            orientation = face.Orientation()
+
+            for tri_index in range(1, triangulation.NbTriangles() + 1):
+                tri = triangulation.Triangle(tri_index)
+                n1, n2, n3 = tri.Get()
+                indices = [n1, n2, n3]
+                if orientation == TopAbs_REVERSED:
+                    indices = [n1, n3, n2]
+
+                tri_vertices: list[int] = []
+                for node_id in indices:
+                    key = (id(triangulation), node_id)
+                    if key not in vertex_cache:
+                        pnt = nodes.Value(node_id)
+                        pnt = pnt.Transformed(trsf)
+                        vertex_cache[key] = len(vertices)
+                        vertices.append((pnt.X(), pnt.Y(), pnt.Z()))
+                    tri_vertices.append(vertex_cache[key])
+                faces_idx.append(tuple(tri_vertices))
+
+        if faces_idx:
+            mesh = trimesh.Trimesh(vertices=vertices, faces=faces_idx, process=False)
             if not mesh.is_empty:
                 meshes.append(mesh)
-        return meshes
 
-    for tol in tolerances:
-        meshes = _tess(float(tol))
-        if not meshes:
-            continue
-        scene = trimesh.Scene()
-        for i, mesh in enumerate(meshes):
-            scene.add_geometry(mesh, node_name=f"part_{i}")
-        with open(glb_path, "wb") as fh:
-            fh.write(scene.export(file_type="glb"))
-        faces = count_glb_faces(glb_path)
-        logger.info(
-            "[convert][glb] tol=%s meshes=%s faces=%s size=%s",
-            tol,
-            len(meshes),
-            faces,
-            file_size(glb_path),
-        )
-        if faces > 0:
-            return len(meshes), faces
-    raise RuntimeError(
-        "No faces after tessellation at tol=" + "/".join(str(t) for t in tolerances)
+    if not meshes:
+        raise RuntimeError("no_meshes_built")
+
+    scene = trimesh.Scene()
+    for i, mesh in enumerate(meshes):
+        scene.add_geometry(mesh, node_name=f"part_{i}")
+    with open(glb_path, "wb") as fh:
+        fh.write(scene.export(file_type="glb"))
+    faces = count_glb_faces(glb_path)
+    abs_defl = diag * chosen_defl if chosen_defl is not None else None
+    logger.info(
+        "[convert][glb] faces_tot=%s faces_triang=%s bbox_diag=%s defl_rel=%s defl_abs=%s ang=%s size=%s",
+        total_faces,
+        triangulated_faces,
+        diag,
+        chosen_defl,
+        abs_defl,
+        chosen_ang,
+        file_size(glb_path),
     )
+    return len(meshes), faces
 
 
 def step_to_glb(step_path: str, glb_path: str, tol: float = 0.1) -> int:
@@ -646,12 +805,41 @@ def convert_step_to_xkt(file_id: str) -> dict[str, int | str]:
             xkt_path,
         )
 
+        s3_uploaded: dict[str, bool] | None = None
+        if _s3_enabled():
+            s3_uploaded = {
+                "stats": False,
+                "xkt": False,
+                "glb": False,
+            }
+            logger.info("[convert][s3] enabled env=%s", _s3_env_snapshot())
+            stats_path = os.path.join(CONVERT_DIR, f"{file_id}.stats.json")
+            s3_uploaded["stats"] = _s3_put_if_exists(
+                stats_path,
+                f"converted/{file_id}.stats.json",
+                content_type="application/json",
+            )
+            s3_uploaded["xkt"] = _s3_put_if_exists(
+                xkt_path,
+                f"xkt/{file_id}.xkt",
+                content_type="application/octet-stream",
+            )
+            s3_uploaded["glb"] = _s3_put_if_exists(
+                glb_path,
+                f"glb/{file_id}.glb",
+                content_type="model/gltf-binary",
+            )
+            logger.info("[convert][s3] uploaded=%s", s3_uploaded)
+        else:
+            logger.info("[convert][s3] disabled_missing_env")
+
         return {
             "glb": glb_path,
             "glb_size": glb_bytes,
             "xkt": xkt_path,
             "xkt_size": xkt_bytes,
             "faces": faces,
+            "s3_uploaded": s3_uploaded,
         }
 
     except ConversionError as exc:
