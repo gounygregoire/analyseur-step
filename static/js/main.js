@@ -3451,6 +3451,17 @@ async function handleUpload(formData) {
   const data = await res.json();
   if (!res.ok) {
     console.error("[upload] failed", data);
+    if (data?.error === "convert_fail" && (data?.detail === "no_faces_after_meshing" || data?.code === "no_faces_after_meshing")) {
+      const toastMessage = "Impossible de mailler ce STEP avec les paramètres par défaut (probable échelle/unité).";
+      try {
+        showHeatmapToast(toastMessage, "error");
+      } catch {
+        showErrorToast(toastMessage);
+      }
+      const err = new Error("no_faces_after_meshing");
+      err.code = "no_faces_after_meshing";
+      throw err;
+    }
     const msg = data?.detail || data?.error || `Upload/convert failed (${res.status})`;
     showErrorToast(msg);
     throw new Error(msg);
