@@ -11,7 +11,8 @@ if [[ ! -x "$VENV/bin/python" ]]; then
 fi
 
 export PYTHONPATH=/opt/render/project/src
-export RQ_QUEUE_NAME="${RQ_QUEUE_NAME:-default}"
+QUEUE_NAME="${RQ_QUEUE_NAME:-default}"
+export RQ_QUEUE_NAME="$QUEUE_NAME"
 export REDIS_URL="${REDIS_URL:-redis://localhost:6379/0}"
 
 echo "[info] Python: $("$VENV/bin/python" -V)"
@@ -31,4 +32,4 @@ except Exception as e:
 PY
 
 echo "[info] Starting RQ worker on queue: ${RQ_QUEUE_NAME}"
-exec "$VENV/bin/python" -m rq worker -u "$REDIS_URL" -P /opt/render/project/src "$RQ_QUEUE_NAME"
+exec "$VENV/bin/rq" worker -u "$REDIS_URL" -P /opt/render/project/src "$QUEUE_NAME"

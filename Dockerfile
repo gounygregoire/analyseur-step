@@ -11,7 +11,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
 
 # Python deps (ou via ton requirements.txt)
 # Astuce: si tu as déjà un requirements.txt lourd, COPY + pip install ce fichier.
-RUN pip install --no-cache-dir cadquery trimesh pygltflib numpy shapely redis rq
+COPY requirements-worker.txt /tmp/requirements-worker.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-worker.txt
 
 # Outil XKT
 RUN npm install -g xeokit-gltf-to-xkt && xeokit-gltf-to-xkt --help || true

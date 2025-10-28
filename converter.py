@@ -8,7 +8,19 @@ import subprocess
 import time
 from typing import Iterable, Tuple
 
-from observability.logging import get_logger
+try:
+    from observability.logging import get_logger  # peut dépendre de Flask côté web
+except Exception:
+    import logging
+
+    def get_logger(name: str):
+        logger = logging.getLogger(name)
+        if not logger.handlers:
+            logging.basicConfig(
+                level=logging.INFO,
+                format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+            )
+        return logger
 
 
 logger = get_logger("convert")
