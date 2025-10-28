@@ -612,6 +612,8 @@ def _tessellate_to_glb(
         )
 
     meshes: list[trimesh.Trimesh] = []
+    total_mesh_vertices = 0
+    total_mesh_faces = 0
     for shp in shapes:
         vertices: list[tuple[float, float, float]] = []
         faces_idx: list[tuple[int, int, int]] = []
@@ -620,37 +622,68 @@ def _tessellate_to_glb(
         for face in _iter_faces(shp):
             loc = TopLoc_Location()
             triangulation = BRep_Tool.Triangulation_s(face, loc)
-            if triangulation is None or triangulation.NbTriangles() == 0:
+            if triangulation is None:
                 continue
             trsf = loc.Transformation()
-            nodes = triangulation.Nodes()
+            apply_transform = not loc.IsIdentity()
+            npts = int(triangulation.NbNodes())
+            ntri = int(triangulation.NbTriangles())
+            logger.debug(
+                "[mesh][face] triangulation_counts tri_id=%s npts=%s ntri=%s",
+                id(triangulation),
+                npts,
+                ntri,
+            )
+            if ntri == 0 or npts == 0:
+                continue
             orientation = face.Orientation()
 
-            for tri_index in range(1, triangulation.NbTriangles() + 1):
+            node_points: dict[int, tuple[float, float, float]] = {}
+            for node_id in range(1, npts + 1):
+                pnt = triangulation.Node(node_id)
+                if apply_transform:
+                    pnt = pnt.Transformed(trsf)
+                node_points[node_id] = (pnt.X(), pnt.Y(), pnt.Z())
+
+            for tri_index in range(1, ntri + 1):
                 tri = triangulation.Triangle(tri_index)
                 n1, n2, n3 = tri.Get()
-                indices = [n1, n2, n3]
+                indices = [int(n1), int(n2), int(n3)]
                 if orientation == TopAbs_REVERSED:
-                    indices = [n1, n3, n2]
+                    indices = [indices[0], indices[2], indices[1]]
 
                 tri_vertices: list[int] = []
+                skip_triangle = False
                 for node_id in indices:
                     key = (id(triangulation), node_id)
                     if key not in vertex_cache:
-                        pnt = nodes.Value(node_id)
-                        pnt = pnt.Transformed(trsf)
+                        coords = node_points.get(node_id)
+                        if coords is None:
+                            skip_triangle = True
+                            break
                         vertex_cache[key] = len(vertices)
-                        vertices.append((pnt.X(), pnt.Y(), pnt.Z()))
+                        vertices.append(coords)
                     tri_vertices.append(vertex_cache[key])
+                if skip_triangle:
+                    continue
                 faces_idx.append(tuple(tri_vertices))
 
         if faces_idx:
             mesh = trimesh.Trimesh(vertices=vertices, faces=faces_idx, process=False)
             if not mesh.is_empty:
                 meshes.append(mesh)
+                total_mesh_vertices += int(len(mesh.vertices))
+                total_mesh_faces += int(len(mesh.faces))
 
-    if not meshes:
-        raise RuntimeError("no_meshes_built")
+    if total_mesh_vertices == 0 or total_mesh_faces == 0:
+        raise RuntimeError(
+            "empty_mesh_after_ocp_extract "
+            f"tri_faces={triangulated_faces} "
+            f"total_faces={total_faces} "
+            f"defl_rel={chosen_defl} "
+            f"ang={chosen_ang} "
+            f"diag={diag}"
+        )
 
     scene = trimesh.Scene()
     for i, mesh in enumerate(meshes):
