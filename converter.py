@@ -131,7 +131,7 @@ def _log_step_mesh_diagnostics(step_path: str, tolerances: Iterable[float]) -> N
         from OCP.STEPControl import STEPControl_Reader  # type: ignore
         from OCP.IFSelect import IFSelect_RetDone  # type: ignore
         from OCP.BRepMesh import BRepMesh_IncrementalMesh  # type: ignore
-        from OCP.BRepBndLib import brepbndlib_Add  # type: ignore
+        from OCP.BRepBndLib import BRepBndLib  # type: ignore
         from OCP.Bnd import Bnd_Box  # type: ignore
         from OCP.TopExp import TopExp_Explorer  # type: ignore
         from OCP.TopAbs import TopAbs_FACE, TopAbs_SOLID  # type: ignore
@@ -258,11 +258,13 @@ def _log_step_mesh_diagnostics(step_path: str, tolerances: Iterable[float]) -> N
     except Exception:
         pass
     try:
-        brepbndlib_Add(shape, bbox, True)
+        BRepBndLib.Add_s(shape, bbox, True)
         xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
-        diag = math.sqrt(
-            max(0.0, (xmax - xmin) ** 2 + (ymax - ymin) ** 2 + (zmax - zmin) ** 2)
+        span_sq = max(
+            0.0,
+            (xmax - xmin) ** 2 + (ymax - ymin) ** 2 + (zmax - zmin) ** 2,
         )
+        diag = max(1e-9, span_sq ** 0.5)
         logger.info(
             "[mesh][bbox] min=(%.6f, %.6f, %.6f) max=(%.6f, %.6f, %.6f) diag=%.6f",
             xmin,
@@ -362,7 +364,12 @@ def _log_step_mesh_diagnostics(step_path: str, tolerances: Iterable[float]) -> N
     for idx, (defl_rel, ang) in enumerate(tries, start=1):
         defl_abs = defl_rel * diag
         logger.info(
-            "[mesh][mesher] try=%s defl_rel=%.4f defl_abs=%.6f ang=%.2f", idx, defl_rel, defl_abs, ang
+            "[mesh][mesher] try=%s defl_rel=%.4f defl_abs=%.6f ang=%.2f diag=%.6f",
+            idx,
+            defl_rel,
+            defl_abs,
+            ang,
+            diag,
         )
         total_faces = 0
         total_tri = 0
@@ -386,7 +393,7 @@ def _log_step_mesh_diagnostics(step_path: str, tolerances: Iterable[float]) -> N
                 )
             try:
                 mesher = BRepMesh_IncrementalMesh(
-                    target_shape, float(defl_rel), True, float(ang), True
+                    target_shape, float(defl_abs), True, float(ang), True
                 )
                 perform = getattr(mesher, "Perform", None)
                 if callable(perform):
@@ -417,8 +424,12 @@ def _log_step_mesh_diagnostics(step_path: str, tolerances: Iterable[float]) -> N
         last_sizes = size_samples
 
         logger.info(
-            "[mesh][faces] try=%s shapes=%s triangulated_shapes=%s total_faces=%s triangulated=%s samples=%s",
+            "[mesh][faces] try=%s defl_rel=%.4f ang=%.2f diag=%.6f shapes=%s "
+            "triangulated_shapes=%s total_faces=%s tri_faces=%s samples=%s",
             idx,
+            defl_rel,
+            ang,
+            diag,
             len(shapes_to_mesh),
             shapes_with_tri,
             total_faces,
@@ -456,7 +467,7 @@ def _tessellate_to_glb(
     import trimesh  # type: ignore
     from OCP.Bnd import Bnd_Box  # type: ignore
     from OCP.BRep import BRep_Tool  # type: ignore
-    from OCP.BRepBndLib import brepbndlib_Add  # type: ignore
+    from OCP.BRepBndLib import BRepBndLib  # type: ignore
     from OCP.BRepMesh import BRepMesh_IncrementalMesh  # type: ignore
     from OCP.IFSelect import IFSelect_RetDone  # type: ignore
     from OCP.STEPControl import STEPControl_Reader  # type: ignore
@@ -510,10 +521,24 @@ def _tessellate_to_glb(
     shapes = solids or [root_shape]
 
     bbox = Bnd_Box()
-    for shape in shapes:
-        brepbndlib_Add(shape, bbox, True)
-    diag = bbox.Diagonal()
-    if diag <= 0:
+    try:
+        bbox.SetGap(0.0)
+    except Exception:
+        pass
+    try:
+        for shape in shapes:
+            BRepBndLib.Add_s(shape, bbox, True)
+        xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
+        span_sq = max(
+            0.0,
+            (xmax - xmin) ** 2 + (ymax - ymin) ** 2 + (zmax - zmin) ** 2,
+        )
+        diag = max(1e-9, span_sq ** 0.5)
+    except Exception as exc:
+        logger.warning("[mesh][bbox] failed to compute: %s", exc)
+        diag = 1.0
+    if not math.isfinite(diag) or diag <= 0.0:
+        logger.warning("[mesh][bbox] invalid diag=%s, forcing to 1.0", diag)
         diag = 1.0
 
     def _iter_faces(shape):
@@ -524,29 +549,16 @@ def _tessellate_to_glb(
 
     total_faces = sum(1 for shape in shapes for _ in _iter_faces(shape))
 
-    tol_values = list(tolerances)
-
     attempts = [
         (0.002, 0.25),
         (0.005, 0.35),
         (0.01, 0.50),
     ]
 
-    extra_attempts: list[tuple[float, float]] = []
-    for tol in tol_values:
-        try:
-            tol_val = float(tol)
-        except (TypeError, ValueError):
-            continue
-        if tol_val <= 0:
-            continue
-        rel = max(tol_val / diag, 1e-9)
-        extra_attempts.append((rel, 0.50))
-    attempts.extend(extra_attempts)
-
     chosen_defl: float | None = None
     chosen_ang: float | None = None
     triangulated_faces = 0
+    attempt_results: list[tuple[float, float, int]] = []
 
     def _count_triangulated_faces() -> int:
         count = 0
@@ -561,27 +573,43 @@ def _tessellate_to_glb(
         return count
 
     for defl_rel, ang in attempts:
+        defl_abs = defl_rel * diag
         for shp in shapes:
-            mesher = BRepMesh_IncrementalMesh(shp, defl_rel, True, ang, True)
+            mesher = BRepMesh_IncrementalMesh(shp, defl_abs, True, ang, True)
             try:
                 mesher.Perform()
             except Exception:  # pragma: no cover - mesher optional perform call
                 pass
         triangulated_faces = _count_triangulated_faces()
-        logger.debug(
-            "[convert][mesh] attempt defl_rel=%s ang=%s tri_faces=%s/%s",
+        logger.info(
+            "[convert][mesh] attempt defl_rel=%.4f ang=%.2f diag=%.6f "
+            "tri_faces=%s total_faces=%s",
             defl_rel,
             ang,
+            diag,
             triangulated_faces,
             total_faces,
         )
+        attempt_results.append((defl_rel, ang, triangulated_faces))
         if triangulated_faces > 0:
             chosen_defl = defl_rel
             chosen_ang = ang
+            logger.info(
+                "[convert][mesh] selected defl_rel=%.4f ang=%.2f diag=%.6f "
+                "tri_faces=%s total_faces=%s",
+                defl_rel,
+                ang,
+                diag,
+                triangulated_faces,
+                total_faces,
+            )
             break
 
     if triangulated_faces == 0:
-        raise RuntimeError("no_faces_after_meshing")
+        raise RuntimeError(
+            "no_faces_after_meshing attempts="
+            + str([(rel, ang) for rel, ang, _ in attempt_results])
+        )
 
     meshes: list[trimesh.Trimesh] = []
     for shp in shapes:
@@ -739,6 +767,24 @@ def convert_glb_to_xkt(glb_path: str, xkt_path: str) -> None:
 
 
 def convert_step_to_xkt(file_id: str) -> dict[str, int | str]:
+    try:
+        from OCP.BRepBndLib import BRepBndLib  # type: ignore
+        from OCP.BRep import BRep_Tool  # type: ignore
+    except Exception as exc:
+        logger.error("[convert][backend] failed to import OCP symbols err=%s", exc)
+        raise RuntimeError("OCP symbols not found: check imports") from exc
+
+    has_add_s = hasattr(BRepBndLib, "Add_s")
+    has_triangulation_s = hasattr(BRep_Tool, "Triangulation_s")
+    logger.info(
+        "[convert][backend] backend=%s has_Add_s=%s has_Triangulation_s=%s",
+        "OCP",
+        has_add_s,
+        has_triangulation_s,
+    )
+    if not (has_add_s and has_triangulation_s):
+        raise RuntimeError("OCP symbols not found: check imports")
+
     step_path = os.path.join(UPLOAD_DIR, f"{file_id}.step")
 
     try:
