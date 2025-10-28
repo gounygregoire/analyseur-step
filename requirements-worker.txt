@@ -1,6 +1,7 @@
 # --- Infra / file IO ---
 redis==4.6.0
 rq==1.15.1
+Flask==3.0.3
 boto3==1.35.0
 requests==2.32.4
 
