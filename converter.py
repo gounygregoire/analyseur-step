@@ -228,11 +228,34 @@ def convert_step_to_xkt(file_id: str) -> dict[str, int | str]:
     xkt_path = os.path.join(CONVERT_DIR, f"{file_id}.xkt")
     os.makedirs(CONVERT_DIR, exist_ok=True)
 
+    if not os.path.exists(step_path):
+        try:
+            from s3io import get_file
+
+            os.makedirs(UPLOAD_DIR, exist_ok=True)
+            got = get_file(
+                f"uploads/{file_id}.step",
+                os.path.join(UPLOAD_DIR, f"{file_id}.step"),
+            )
+            if not got:
+                got = get_file(
+                    f"uploads/{file_id}.stp",
+                    os.path.join(UPLOAD_DIR, f"{file_id}.step"),
+                )
+            if not got or not os.path.exists(step_path):
+                raise FileNotFoundError("STEP introuvable local/S3")
+            logger.info("[convert][src] pulled from S3.")
+        except Exception as exc:  # pragma: no cover - dépendances S3 externes
+            raise FileNotFoundError(f"S3 fallback fail: {exc}") from exc
+
     _, faces = _tessellate_to_glb(step_path, glb_path, (0.2, 0.1, 0.05))
     if faces <= 0:
         raise RuntimeError("GLB has 0 faces - abort")
 
+    t_xkt = time.time()
     glb_to_xkt(glb_path, xkt_path)
+    xkt_duration = time.time() - t_xkt
+    glb_bytes = file_size(glb_path)
     xkt_bytes = file_size(xkt_path)
     if xkt_bytes < MIN_XKT_BYTES:
         raise RuntimeError(f"XKT too small ({xkt_bytes} B) - abort")
@@ -241,7 +264,24 @@ def convert_step_to_xkt(file_id: str) -> dict[str, int | str]:
             f"Known bad XKT size ({KNOWN_BAD_XKT_BYTES} B): refusing publish"
         )
 
-    return {"glb": glb_path, "xkt": xkt_path, "faces": faces, "xkt_size": xkt_bytes}
+    logger.info(
+        "[convert][done] glb_faces=%s glb_size=%s xkt_size=%s xkt_dt=%.2fs xkt_path=%s",
+        faces,
+        glb_bytes,
+        xkt_bytes,
+        xkt_duration,
+        xkt_path,
+    )
+
+    return {
+        "glb": glb_path,
+        "xkt": xkt_path,
+        "faces": faces,
+        "xkt_size": xkt_bytes,
+    }
+
+
+_convert_step_to_xkt_impl = convert_step_to_xkt
 
 def _assert_xeokit_available(cmd_base: list[str]) -> None:
     try:
@@ -299,10 +339,7 @@ def glb_to_xkt(glb_path: str, xkt_path: str) -> None:
         raise RuntimeError(f"XKT too small or known bad size ({size} B) - abort")
 
 def convert_step_to_xkt(file_id: str) -> dict[str, int | str]:
-    ...
-    return {
-        "glb": glb_path, "xkt": xkt_path,
-        "faces": faces,
-        "glb_size": file_size(glb_path),
-        "xkt_size": xkt_bytes
-    }
+    result = dict(_convert_step_to_xkt_impl(file_id))
+    result["glb_size"] = file_size(result["glb"])
+    result["xkt_size"] = file_size(result["xkt"])
+    return result
