@@ -12,12 +12,12 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
  && rm -rf /var/lib/apt/lists/* \
  && node -v && npm -v && npx -v
 
+# Prime le cache npx pour xeokit-convert
+RUN npx -y @xeokit/xeokit-convert --version
+
 # Dépendances Python du worker
 COPY requirements-worker.txt /tmp/requirements-worker.txt
 RUN pip install --no-cache-dir -r /tmp/requirements-worker.txt
-
-# Vérification de l'accès à xeokit-gltf-to-xkt via npx
-RUN npx --yes xeokit-gltf-to-xkt --help || true
 
 WORKDIR /app
 COPY . /app
