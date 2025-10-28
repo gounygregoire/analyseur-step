@@ -6,7 +6,6 @@ import math
 import os
 import shlex
 import subprocess
-import time
 from typing import Iterable, Tuple
 
 try:
@@ -25,6 +24,7 @@ except Exception:
 
 
 logger = get_logger("convert")
+log = logger
 
 
 class ConversionError(RuntimeError):
@@ -721,107 +721,90 @@ def convert_step_to_glb(step_path: str, glb_path: str, *, linear_deflection: flo
     return step_to_glb(step_path, glb_path, tol=linear_deflection)
 
 
-def _assert_xeokit_available(cmd_base: list[str]) -> None:
+def _run_xeokit_convert_version() -> str:
+    """
+    Renvoie la version du CLI @xeokit/xeokit-convert, ou chaîne vide si échec.
+    """
     try:
-        test_cmd = cmd_base + ["--version"]
         proc = subprocess.run(
-            test_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=_with_node_path(os.environ),
-            check=False,
+            ["npx", "-y", "@xeokit/xeokit-convert", "--version"],
+            capture_output=True, text=True, timeout=20, check=False
         )
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"xeokit CLI not available rc={proc.returncode}: {proc.stderr.strip()}"
-            )
-        logger.info(
-            "[xkt] cli=%s version=%s",
-            " ".join(shlex.quote(c) for c in cmd_base),
-            proc.stdout.strip(),
-        )
-    except FileNotFoundError as exc:
-        raise RuntimeError(f"xeokit CLI not found: {exc}")
+        out = (proc.stdout or proc.stderr or "").strip()
+        return out
+    except Exception as exc:
+        log.warning("[convert][xkt] version detect failed: %s", exc)
+        return ""
 
 
 def glb_to_xkt(glb_path: str, xkt_path: str) -> None:
-    if not glb_path or not os.path.exists(glb_path):
-        raise FileNotFoundError(f"GLB introuvable: {glb_path}")
+    """
+    Convertit GLB -> XKT via @xeokit/xeokit-convert.
+    - Entrée GLB en positionnel
+    - Sortie XKT via --output
+    - PAS de --logLevel (non supporté)
+    Lève RuntimeError en cas d'échec.
+    """
+    glb_abs = os.path.abspath(glb_path)
+    xkt_abs = os.path.abspath(xkt_path)
 
-    abs_glb = os.path.abspath(glb_path)
-    abs_xkt = os.path.abspath(xkt_path)
-    out_dir = os.path.dirname(abs_xkt or "")
-    if out_dir:
-        os.makedirs(out_dir, exist_ok=True)
+    # version (log only)
+    ver = _run_xeokit_convert_version()
+    if ver:
+        log.info("[xkt] cli=npx -y @xeokit/xeokit-convert version=%s", ver)
+    else:
+        log.info("[xkt] cli=npx -y @xeokit/xeokit-convert (version: unknown)")
 
-    if os.path.exists(abs_xkt):
-        try:
-            os.remove(abs_xkt)
-        except OSError:
-            pass
+    cmd = ["npx", "-y", "@xeokit/xeokit-convert", glb_abs, "--output", xkt_abs]
+    log.info("[convert][xkt] input=%s output=%s", glb_abs, xkt_abs)
+    log.info("[convert][xkt] cmd=%s", " ".join(cmd))
 
-    base_cmd, cli_label = _xeokit_cli_base()
-    logger.info("[convert][xkt] using cli=%s", cli_label)
-    _assert_xeokit_available(base_cmd)
-    cmd = _xeokit_command(abs_glb, abs_xkt, base_cmd=base_cmd)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("xeokit convert CLI timeout (>300s)")
+    except Exception as exc:
+        raise RuntimeError(f"xeokit convert CLI spawn failed: {exc}")
 
-    cmd_display = " ".join(shlex.quote(c) for c in cmd)
-    logger.info(
-        "[convert][xkt] input=%s output=%s",
-        abs_glb,
-        abs_xkt,
-    )
-    logger.info("[convert][xkt] cmd=%s", cmd_display)
-    t0 = time.time()
-    proc = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=_with_node_path(os.environ),
-        check=False,
-    )
-    dt = time.time() - t0
-    stdout = proc.stdout.strip()
-    stderr = proc.stderr.strip()
-    if stdout:
-        logger.info("[xkt][stdout]\n%s", stdout)
-    if stderr:
-        logger.warning("[xkt][stderr]\n%s", stderr)
-    xkt_size_after_run = file_size(abs_xkt) if os.path.exists(abs_xkt) else 0
-    logger.info(
-        "[convert][xkt] cli_finished rc=%s duration=%.2fs size=%s",
-        proc.returncode,
-        dt,
-        xkt_size_after_run,
-    )
-    if proc.returncode != 0:
-        try:
-            os.remove(abs_xkt)
-        except OSError:
-            pass
-        details: list[str] = [f"rc={proc.returncode}", f"cmd={cmd_display}"]
-        if stdout:
-            details.append(f"stdout={_truncate_output(stdout, limit=1024)}")
+    stderr = (proc.stderr or "").strip()
+    stdout = (proc.stdout or "").strip()
+    log.warning("[xkt][stderr]\n%s", stderr[:2000]) if stderr else None
+
+    size = os.path.getsize(xkt_abs) if os.path.exists(xkt_abs) else 0
+    log.info("[convert][xkt] cli_finished rc=%s size=%s", proc.returncode, size)
+
+    if proc.returncode != 0 or size <= 0:
+        details = [
+            f"rc={proc.returncode}",
+            f"cmd={' '.join(cmd)}",
+        ]
         if stderr:
-            details.append(f"stderr={_truncate_output(stderr, limit=1024)}")
+            details.append("stderr=" + stderr.splitlines()[-1][:500])
         raise RuntimeError("xeokit convert CLI failed: " + " | ".join(details))
 
-    if not os.path.exists(abs_xkt):
-        raise RuntimeError(f"xeokit convert CLI succeeded but output missing: {abs_xkt}")
 
-    size = file_size(abs_xkt)
-    if size <= 0:
-        raise RuntimeError(f"xeokit convert CLI succeeded but output empty: {abs_xkt}")
-    logger.info("[xkt] done in %.2fs size=%s", dt, size)
+def _maybe_put_s3(local_path: str, key: str, content_type: str) -> bool:
+    """
+    Upload S3 optionnel (ne fait pas échouer la conversion si ça rate).
+    """
+    try:
+        from s3io import put_file
+    except Exception:
+        log.warning("[convert][s3] s3io.put_file unavailable")
+        return False
 
-    if size < MIN_XKT_BYTES or size == KNOWN_BAD_XKT_BYTES:
-        try:
-            os.remove(abs_xkt)
-        except OSError:
-            pass
-        raise RuntimeError(f"XKT too small or known bad size ({size} B) - abort")
+    if not (os.path.exists(local_path) and os.path.getsize(local_path) > 0):
+        log.warning("[convert][s3] skip upload (missing/empty): %s", local_path)
+        return False
+
+    try:
+        ok = put_file(local_path, key, content_type=content_type)
+        log.info("[convert][s3] uploaded key=%s size=%s ok=%s",
+                 key, os.path.getsize(local_path), ok)
+        return bool(ok)
+    except Exception as exc:
+        log.warning("[convert][s3] upload failed key=%s err=%s", key, exc)
+        return False
 
 
 def convert_glb_to_xkt(glb_path: str, xkt_path: str) -> None:
@@ -901,103 +884,24 @@ def convert_step_to_xkt(file_id: str) -> dict[str, int | str]:
             raise ConversionError("no_faces_after_meshing")
         faces = glb_faces_total
 
-        t_xkt = time.time()
+        # 3) Convert GLB -> XKT via CLI
+        log.info("[convert][xkt] using cli=@xeokit/xeokit-convert")
         glb_to_xkt(glb_path, xkt_path)
-        xkt_duration = time.time() - t_xkt
-        xkt_bytes = file_size(xkt_path)
-        logger.info(
-            "[convert][xkt] file=%s duration=%.2fs size=%s path=%s",
-            file_id,
-            xkt_duration,
-            xkt_bytes,
-            xkt_path,
-        )
 
-        s3_uploaded: dict[str, bool] | None = None
-        if not _s3_enabled():
-            logger.warning("[convert][s3] disabled env=%s", _s3_env_snapshot())
-        else:
-            try:
-                from s3io import put_file
-            except Exception as exc:  # pragma: no cover - import guarded for worker only
-                logger.warning("[convert][s3] put_file_import_failed err=%s", exc)
-                put_file = None  # type: ignore
+        # 4) Vérification locale
+        if not (os.path.exists(xkt_path) and os.path.getsize(xkt_path) > 0):
+            raise RuntimeError("XKT not produced or empty")
 
-            s3_uploaded = {
-                "stats": False,
-                "xkt": False,
-                "glb": False,
-            }
-            if put_file is None:
-                logger.warning("[convert][s3] upload_skipped put_file_unavailable")
-            else:
-                logger.info("[convert][s3] begin env=%s", _s3_env_snapshot())
-
-                def _upload(label: str, local_path: str, key: str, *, content_type: str) -> bool:
-                    size = file_size(local_path) if os.path.exists(local_path) else 0
-                    if size <= 0:
-                        logger.warning(
-                            "[convert][s3] skip_%s missing_or_empty path=%s key=%s size=%s",
-                            label,
-                            local_path,
-                            key,
-                            size,
-                        )
-                        return False
-                    try:
-                        uploaded = bool(put_file(local_path, key, content_type=content_type))
-                    except Exception as err:  # pragma: no cover - boto errors
-                        logger.warning(
-                            "[convert][s3] upload_failed label=%s key=%s size=%s err=%s",
-                            label,
-                            key,
-                            size,
-                            err,
-                        )
-                        return False
-                    if uploaded:
-                        logger.info(
-                            "[convert][s3] upload_ok label=%s key=%s size=%s",
-                            label,
-                            key,
-                            size,
-                        )
-                        return True
-                    logger.warning(
-                        "[convert][s3] upload_failed label=%s key=%s size=%s",
-                        label,
-                        key,
-                        size,
-                    )
-                    return False
-
-                stats_path = os.path.join(CONVERT_DIR, f"{file_id}.stats.json")
-                s3_uploaded["stats"] = _upload(
-                    "stats",
-                    stats_path,
-                    f"converted/{file_id}.stats.json",
-                    content_type="application/json",
-                )
-                s3_uploaded["xkt"] = _upload(
-                    "xkt",
-                    xkt_path,
-                    f"xkt/{file_id}.xkt",
-                    content_type="application/octet-stream",
-                )
-                s3_uploaded["glb"] = _upload(
-                    "glb",
-                    glb_path,
-                    f"glb/{file_id}.glb",
-                    content_type="model/gltf-binary",
-                )
+        # 5) Upload S3 (optionnel mais recommandé car web/worker n'ont pas le même disque)
+        _maybe_put_s3(xkt_path, f"xkt/{file_id}.xkt", "application/octet-stream")
+        if os.path.exists(glb_path) and os.path.getsize(glb_path) > 0:
+            _maybe_put_s3(glb_path, f"glb/{file_id}.glb", "model/gltf-binary")
 
         return {
             "glb": glb_path,
-            "glb_size": glb_bytes,
             "xkt": xkt_path,
-            "xkt_size": xkt_bytes,
-            "faces": faces,
-            "s3_uploaded": s3_uploaded,
+            "faces": int(glb_faces_total) if 'glb_faces_total' in locals() else None,
+            "xkt_size": os.path.getsize(xkt_path),
         }
 
     except ConversionError as exc:

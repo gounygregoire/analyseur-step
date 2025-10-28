@@ -863,20 +863,29 @@ _XEOKIT_VERSION_CACHE = None
 _XEOKIT_VERSION_TTL = 600
 
 def _get_converter_version() -> dict:
+    """
+    Retourne {"version": "..."} pour @xeokit/xeokit-convert, sinon {"error": "..."}.
+    Cache 10 min comme avant.
+    """
     global _XEOKIT_VERSION_CACHE
     now = time.time()
     if isinstance(_XEOKIT_VERSION_CACHE, dict) and (now - _XEOKIT_VERSION_CACHE.get("ts", 0) < _XEOKIT_VERSION_TTL):
         return _XEOKIT_VERSION_CACHE.get("value", {})
+
     result: dict[str, str] = {}
     try:
         proc = subprocess.run(
             ["npx", "--yes", "@xeokit/xeokit-convert", "--version"],
-            capture_output=True, text=True, timeout=30, check=True
+            capture_output=True, text=True, timeout=30, check=False
         )
-        version = (proc.stdout or proc.stderr or "").strip()
-        result["version"] = version
+        ver = (proc.stdout or proc.stderr or "").strip()
+        if proc.returncode == 0 and ver:
+            result["version"] = ver
+        else:
+            result["error"] = (proc.stderr or proc.stdout or "").strip() or f"rc={proc.returncode}"
     except Exception as exc:
         result["error"] = str(exc)
+
     _XEOKIT_VERSION_CACHE = {"ts": now, "value": result}
     return result
 
