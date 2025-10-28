@@ -371,7 +371,12 @@ def upload():
     # ====== MODE DE CONVERSION ======
     mode_env = (os.getenv("CONVERTER_MODE", "") or "").lower()
     conv_url = (os.getenv("CONVERTER_URL", "") or "").rstrip("/")
-    use_rq = (mode_env in {"rq", "worker", "queue", "background"}) or (not conv_url)
+
+    force_rq = not mode_env and not conv_url
+    if force_rq:
+        use_rq = True
+    else:
+        use_rq = (mode_env in {"rq", "worker", "queue", "background"}) or (not conv_url)
 
     if use_rq:
         # 3-RQ) enqueue la conversion dans le worker Docker (pas d'HTTP)
@@ -409,6 +414,7 @@ def upload():
                 s3_uploaded_xkt=False,
                 s3_uploaded_glb=False,
                 debugUrl=_abs_url(f"/debug/xkt/{file_id}"),
+                note="XKT sera dispo quand le worker aura upload S3",
             ), 202
 
         except Exception as e:
@@ -864,7 +870,7 @@ def _get_converter_version() -> dict:
     result: dict[str, str] = {}
     try:
         proc = subprocess.run(
-            ["npx", "-y", "@xeokit/xeokit-convert", "--version"],
+            ["npx", "--yes", "@xeokit/xeokit-convert", "--version"],
             capture_output=True, text=True, timeout=30, check=True
         )
         version = (proc.stdout or proc.stderr or "").strip()
