@@ -66,44 +66,20 @@ def _with_node_path(env: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
-from shutil import which
-
-def _find_xeokit_exe() -> list[str]:
-    # 1) Override explicite par env
+def _xeokit_command(input_path: str, output_path: str) -> list[str]:
     exe_env = (os.environ.get("XEOKIT_CONVERT") or "").strip()
     if exe_env:
-        return shlex.split(exe_env)
+        base = shlex.split(exe_env)
+        cli_label = exe_env
+    else:
+        base = ["npx", "-y", "@xeokit/xeokit-convert"]
+        cli_label = "@xeokit/xeokit-convert"
 
-    # 2) Binaire local du projet (installé à build: npm i xeokit-gltf-to-xkt)
-    project_root = os.path.dirname(__file__)
-    local_bin = os.path.join(project_root, "node_modules", ".bin", "xeokit-gltf-to-xkt")
-    if os.path.exists(local_bin):
-        return [local_bin]
+    logger.info("[convert][xkt] using cli=%s", cli_label)
 
-    # 3) Global PATH
-    global_bin = which("xeokit-gltf-to-xkt")
-    if global_bin:
-        return [global_bin]
-
-    # 4) Ultime recours: npx (à éviter en prod)
-    return ["npx", "-y", "xeokit-gltf-to-xkt"]
-
-def _xeokit_command(input_path: str, output_path: str) -> list[str]:
-    base = _find_xeokit_exe()
     extra_args = shlex.split(os.environ.get("XEOKIT_ARGS", ""))
 
-    # filtre les flags qui tuent la géo
-    blocked = {"--edges-only", "--lines-only", "--wireframe"}
-    filtered, removed = [], []
-    for token in extra_args:
-        t = token.lower()
-        if t in blocked or any(t.startswith(f"{b}=") for b in blocked):
-            removed.append(token); continue
-        filtered.append(token)
-    if removed:
-        logger.warning("[convert][xkt] ignoring geometry-filtering args: %s", ", ".join(removed))
-
-    return base + filtered + ["--input", input_path, "--output", output_path, "--logLevel", "debug"]
+    return base + extra_args + ["--input", input_path, "--output", output_path, "--logLevel", "debug"]
 
 def _tessellate_to_glb(
     step_path: str,
@@ -180,6 +156,30 @@ def convert_step_to_glb(step_path: str, glb_path: str, *, linear_deflection: flo
     return step_to_glb(step_path, glb_path, tol=linear_deflection)
 
 
+def _assert_xeokit_available(cmd_base: list[str]) -> None:
+    try:
+        test_cmd = cmd_base + ["--version"]
+        proc = subprocess.run(
+            test_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=_with_node_path(os.environ),
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"xeokit CLI not available rc={proc.returncode}: {proc.stderr.strip()}"
+            )
+        logger.info(
+            "[xkt] cli=%s version=%s",
+            " ".join(shlex.quote(c) for c in cmd_base),
+            proc.stdout.strip(),
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"xeokit CLI not found: {exc}")
+
+
 def glb_to_xkt(glb_path: str, xkt_path: str) -> None:
     if not glb_path or not os.path.exists(glb_path):
         raise FileNotFoundError(f"GLB introuvable: {glb_path}")
@@ -195,6 +195,12 @@ def glb_to_xkt(glb_path: str, xkt_path: str) -> None:
             pass
 
     cmd = _xeokit_command(glb_path, xkt_path)
+    _assert_xeokit_available(
+        cmd[:1]
+        if len(cmd) == 1
+        else (cmd if cmd[0] != "npx" else ["npx", "-y", "@xeokit/xeokit-convert"])
+    )
+
     cmd_display = " ".join(shlex.quote(c) for c in cmd)
     logger.info("[convert][xkt] cmd=%s", cmd_display)
     t0 = time.time()
@@ -206,7 +212,7 @@ def glb_to_xkt(glb_path: str, xkt_path: str) -> None:
         env=_with_node_path(os.environ),
         check=False,
     )
-    duration = time.time() - t0
+    dt = time.time() - t0
     stdout = proc.stdout.strip()
     stderr = proc.stderr.strip()
     if stdout:
@@ -214,8 +220,21 @@ def glb_to_xkt(glb_path: str, xkt_path: str) -> None:
     if stderr:
         logger.warning("[xkt][stderr]\n%s", stderr)
     if proc.returncode != 0:
-        raise RuntimeError(f"xeokit-gltf-to-xkt failed rc={proc.returncode}")
-    logger.info("[xkt] done in %.2fs size=%s", duration, file_size(xkt_path))
+        try:
+            os.remove(xkt_path)
+        except OSError:
+            pass
+        raise RuntimeError(f"xeokit convert CLI failed rc={proc.returncode}")
+
+    size = file_size(xkt_path)
+    logger.info("[xkt] done in %.2fs size=%s", dt, size)
+
+    if size < MIN_XKT_BYTES or size == KNOWN_BAD_XKT_BYTES:
+        try:
+            os.remove(xkt_path)
+        except OSError:
+            pass
+        raise RuntimeError(f"XKT too small or known bad size ({size} B) - abort")
 
 
 def convert_glb_to_xkt(glb_path: str, xkt_path: str) -> None:
@@ -224,122 +243,65 @@ def convert_glb_to_xkt(glb_path: str, xkt_path: str) -> None:
 
 def convert_step_to_xkt(file_id: str) -> dict[str, int | str]:
     step_path = os.path.join(UPLOAD_DIR, f"{file_id}.step")
-    glb_path = os.path.join(CONVERT_DIR, f"{file_id}.glb")
-    xkt_path = os.path.join(CONVERT_DIR, f"{file_id}.xkt")
-    os.makedirs(CONVERT_DIR, exist_ok=True)
 
-    if not os.path.exists(step_path):
-        try:
+    try:
+        if not os.path.exists(step_path):
             from s3io import get_file
 
             os.makedirs(UPLOAD_DIR, exist_ok=True)
-            got = get_file(
-                f"uploads/{file_id}.step",
-                os.path.join(UPLOAD_DIR, f"{file_id}.step"),
-            )
-            if not got:
-                got = get_file(
-                    f"uploads/{file_id}.stp",
-                    os.path.join(UPLOAD_DIR, f"{file_id}.step"),
-                )
-            if not got or not os.path.exists(step_path):
-                raise FileNotFoundError("STEP introuvable local/S3")
-            logger.info("[convert][src] pulled from S3.")
-        except Exception as exc:  # pragma: no cover - dépendances S3 externes
-            raise FileNotFoundError(f"S3 fallback fail: {exc}") from exc
+            got = get_file(f"uploads/{file_id}.step", step_path)
+            if not got and not os.path.exists(step_path):
+                got = get_file(f"uploads/{file_id}.stp", step_path)
+            if not os.path.exists(step_path):
+                raise FileNotFoundError(f"STEP introuvable local/S3 pour {file_id}")
+            logger.info("[convert][src] pulled STEP from S3 for %s", file_id)
 
-    _, faces = _tessellate_to_glb(step_path, glb_path, (0.2, 0.1, 0.05))
-    if faces <= 0:
-        raise RuntimeError("GLB has 0 faces - abort")
-
-    t_xkt = time.time()
-    glb_to_xkt(glb_path, xkt_path)
-    xkt_duration = time.time() - t_xkt
-    glb_bytes = file_size(glb_path)
-    xkt_bytes = file_size(xkt_path)
-    if xkt_bytes < MIN_XKT_BYTES:
-        raise RuntimeError(f"XKT too small ({xkt_bytes} B) - abort")
-    if xkt_bytes == KNOWN_BAD_XKT_BYTES:
-        raise RuntimeError(
-            f"Known bad XKT size ({KNOWN_BAD_XKT_BYTES} B): refusing publish"
+        step_exists = os.path.exists(step_path)
+        step_bytes = file_size(step_path)
+        logger.info(
+            "[convert][step] file=%s path=%s exists=%s size=%s",
+            file_id,
+            step_path,
+            step_exists,
+            step_bytes,
         )
 
-    logger.info(
-        "[convert][done] glb_faces=%s glb_size=%s xkt_size=%s xkt_dt=%.2fs xkt_path=%s",
-        faces,
-        glb_bytes,
-        xkt_bytes,
-        xkt_duration,
-        xkt_path,
-    )
+        glb_path = os.path.join(CONVERT_DIR, f"{file_id}.glb")
+        xkt_path = os.path.join(CONVERT_DIR, f"{file_id}.xkt")
+        os.makedirs(CONVERT_DIR, exist_ok=True)
 
-    return {
-        "glb": glb_path,
-        "xkt": xkt_path,
-        "faces": faces,
-        "xkt_size": xkt_bytes,
-    }
-
-
-_convert_step_to_xkt_impl = convert_step_to_xkt
-
-def _assert_xeokit_available(cmd_base: list[str]) -> None:
-    try:
-        test_cmd = cmd_base + ["--version"]
-        proc = subprocess.run(
-            test_cmd,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            env=_with_node_path(os.environ), check=False
+        mesh_count, faces = _tessellate_to_glb(step_path, glb_path, (0.2, 0.1, 0.05))
+        glb_bytes = file_size(glb_path)
+        logger.info(
+            "[convert][glb] file=%s meshes=%s faces=%s size=%s",
+            file_id,
+            mesh_count,
+            faces,
+            glb_bytes,
         )
-        if proc.returncode != 0:
-            raise RuntimeError(f"xeokit CLI not available rc={proc.returncode}: {proc.stderr.strip()}")
-        logger.info("[xkt] cli=%s version=%s", " ".join(shlex.quote(c) for c in cmd_base), proc.stdout.strip())
-    except FileNotFoundError as e:
-        raise RuntimeError(f"xeokit CLI not found: {e}")
+        if faces <= 0:
+            raise RuntimeError("GLB has 0 faces - abort")
 
-def glb_to_xkt(glb_path: str, xkt_path: str) -> None:
-    if not glb_path or not os.path.exists(glb_path):
-        raise FileNotFoundError(f"GLB introuvable: {glb_path}")
+        t_xkt = time.time()
+        glb_to_xkt(glb_path, xkt_path)
+        xkt_duration = time.time() - t_xkt
+        xkt_bytes = file_size(xkt_path)
+        logger.info(
+            "[convert][xkt] file=%s duration=%.2fs size=%s path=%s",
+            file_id,
+            xkt_duration,
+            xkt_bytes,
+            xkt_path,
+        )
 
-    out_dir = os.path.dirname(xkt_path or "")
-    if out_dir:
-        os.makedirs(out_dir, exist_ok=True)
+        return {
+            "glb": glb_path,
+            "glb_size": glb_bytes,
+            "xkt": xkt_path,
+            "xkt_size": xkt_bytes,
+            "faces": faces,
+        }
 
-    if os.path.exists(xkt_path):
-        try: os.remove(xkt_path)
-        except OSError: pass
-
-    cmd = _xeokit_command(glb_path, xkt_path)
-    _assert_xeokit_available(cmd[:1] if len(cmd)==1 else (cmd if cmd[0]!="npx" else ["npx", "-y", "xeokit-gltf-to-xkt"]))
-
-    cmd_display = " ".join(shlex.quote(c) for c in cmd)
-    logger.info("[convert][xkt] cmd=%s", cmd_display)
-    t0 = time.time()
-    proc = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        env=_with_node_path(os.environ), check=False
-    )
-    dt = time.time() - t0
-    if proc.stdout.strip(): logger.info("[xkt][stdout]\n%s", proc.stdout.strip())
-    if proc.stderr.strip(): logger.warning("[xkt][stderr]\n%s", proc.stderr.strip())
-    if proc.returncode != 0:
-        # pas de fichier pourri qui traîne
-        try: os.remove(xkt_path)
-        except OSError: pass
-        raise RuntimeError(f"xeokit-gltf-to-xkt failed rc={proc.returncode}")
-
-    size = file_size(xkt_path)
-    logger.info("[xkt] done in %.2fs size=%s", dt, size)
-
-    # coupe-circuit “faux XKT”
-    if size < MIN_XKT_BYTES or size == KNOWN_BAD_XKT_BYTES:
-        try: os.remove(xkt_path)
-        except OSError: pass
-        raise RuntimeError(f"XKT too small or known bad size ({size} B) - abort")
-
-def convert_step_to_xkt(file_id: str) -> dict[str, int | str]:
-    result = dict(_convert_step_to_xkt_impl(file_id))
-    result["glb_size"] = file_size(result["glb"])
-    result["xkt_size"] = file_size(result["xkt"])
-    return result
+    except Exception as exc:
+        logger.exception("[convert][error] file=%s err=%s", file_id, exc)
+        raise
