@@ -115,7 +115,7 @@ def _xeokit_cli_base() -> tuple[list[str], str]:
         base = shlex.split(exe_env)
         cli_label = exe_env
     else:
-        base = ["npx", "-y", "@xeokit/xeokit-convert"]
+        base = ["npx", "--yes", "@xeokit/xeokit-convert"]
         cli_label = "@xeokit/xeokit-convert"
     return base, cli_label
 
@@ -721,72 +721,103 @@ def convert_step_to_glb(step_path: str, glb_path: str, *, linear_deflection: flo
     return step_to_glb(step_path, glb_path, tol=linear_deflection)
 
 
-def _run_xeokit_convert_version() -> str:
-    """
-    Renvoie la version du CLI @xeokit/xeokit-convert, ou chaîne vide si échec.
-    """
+def _run_xeokit_convert_version(base_cmd: Iterable[str]) -> str:
     try:
         proc = subprocess.run(
-            ["npx", "-y", "@xeokit/xeokit-convert", "--version"],
-            capture_output=True, text=True, timeout=20, check=False
+            [*base_cmd, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+            env=_with_node_path(),
         )
-        out = (proc.stdout or proc.stderr or "").strip()
-        return out
+        return (proc.stdout or proc.stderr or "").strip()
     except Exception as exc:
-        log.warning("[convert][xkt] version detect failed: %s", exc)
+        log.warning("[xkt] version detect failed: %s", exc)
         return ""
 
 
+def _try_cmd(cmd, env=None, timeout=300):
+    """Exécute une commande, renvoie (rc, stdout, stderr)."""
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
+        return proc.returncode, (proc.stdout or ""), (proc.stderr or "")
+    except subprocess.TimeoutExpired:
+        return 124, "", "timeout"
+    except Exception as exc:
+        return 255, "", f"spawn_failed: {exc}"
+
+
 def glb_to_xkt(glb_path: str, xkt_path: str) -> None:
-    """
-    Convertit GLB -> XKT via @xeokit/xeokit-convert.
-    - Entrée GLB en positionnel
-    - Sortie XKT via --output
-    - PAS de --logLevel (non supporté)
-    Lève RuntimeError en cas d'échec.
-    """
+    """Convertit un GLB en XKT via @xeokit/xeokit-convert, avec variantes de syntaxe."""
+
     glb_abs = os.path.abspath(glb_path)
     xkt_abs = os.path.abspath(xkt_path)
-
-    # version (log only)
-    ver = _run_xeokit_convert_version()
-    if ver:
-        log.info("[xkt] cli=npx -y @xeokit/xeokit-convert version=%s", ver)
-    else:
-        log.info("[xkt] cli=npx -y @xeokit/xeokit-convert (version: unknown)")
-
-    cmd = ["npx", "-y", "@xeokit/xeokit-convert", glb_abs, "--output", xkt_abs]
-    log.info("[convert][xkt] input=%s output=%s", glb_abs, xkt_abs)
-    log.info("[convert][xkt] cmd=%s", " ".join(cmd))
-
+    os.makedirs(os.path.dirname(xkt_abs), exist_ok=True)
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("xeokit convert CLI timeout (>300s)")
-    except Exception as exc:
-        raise RuntimeError(f"xeokit convert CLI spawn failed: {exc}")
+        if os.path.exists(xkt_abs):
+            os.remove(xkt_abs)
+    except OSError:
+        pass
 
-    stderr = (proc.stderr or "").strip()
-    stdout = (proc.stdout or "").strip()
-    log.warning("[xkt][stderr]\n%s", stderr[:2000]) if stderr else None
+    base_cmd, cli_label = _xeokit_cli_base()
+    version = _run_xeokit_convert_version(base_cmd)
+    if version:
+        log.info("[xkt] cli=%s version=%s", cli_label, version)
+    else:
+        log.info("[xkt] cli=%s version unknown", cli_label)
 
-    size = os.path.getsize(xkt_abs) if os.path.exists(xkt_abs) else 0
-    log.info("[convert][xkt] cli_finished rc=%s size=%s", proc.returncode, size)
+    extra_args = shlex.split(os.environ.get("XEOKIT_ARGS", ""))
+    variants = [
+        [glb_abs, "--output", xkt_abs],
+        ["--input", glb_abs, "--output", xkt_abs],
+        ["--src", glb_abs, "--output", xkt_abs],
+        ["-i", glb_abs, "-o", xkt_abs],
+        [glb_abs, "-o", xkt_abs],
+        ["convert", glb_abs, "--output", xkt_abs],
+        ["convert2xkt", glb_abs, "--output", xkt_abs],
+    ]
 
-    if proc.returncode != 0 or size <= 0:
-        details = [
-            f"rc={proc.returncode}",
-            f"cmd={' '.join(cmd)}",
-        ]
-        if stderr:
-            details.append("stderr=" + stderr.splitlines()[-1][:500])
-        raise RuntimeError("xeokit convert CLI failed: " + " | ".join(details))
+    env = _with_node_path()
+    node_opts = env.get("NODE_OPTIONS", "").strip()
+    if "--max-old-space-size" not in node_opts:
+        env["NODE_OPTIONS"] = (node_opts + " --max-old-space-size=2048").strip()
+
+    errors = []
+    for variant in variants:
+        cmd = [*base_cmd, *extra_args, *variant]
+        log.info("[convert][xkt] try: %s", " ".join(shlex.quote(c) for c in cmd))
+        rc, out, err = _try_cmd(cmd, env=env, timeout=300)
+        stdout_trimmed = _truncate_output(out)
+        stderr_trimmed = _truncate_output(err)
+        if stdout_trimmed.strip():
+            log.debug("[xkt][stdout]\n%s", stdout_trimmed)
+        if stderr_trimmed.strip():
+            log.warning("[xkt][stderr]\n%s", stderr_trimmed)
+
+        size = os.path.getsize(xkt_abs) if os.path.exists(xkt_abs) else 0
+        log.info("[convert][xkt] rc=%s size=%s", rc, size)
+
+        if rc == 0 and size > 0:
+            log.info("[convert][xkt] success variant=%s", " ".join(variant))
+            return
+
+        try:
+            if os.path.exists(xkt_abs) and size == 0:
+                os.remove(xkt_abs)
+        except Exception:
+            pass
+
+        last_line = (err or out or "").strip().splitlines()
+        last = last_line[-1][:500] if last_line else ""
+        errors.append(f"rc={rc} | variant={' '.join(variant)} | last='{last}'")
+
+    raise RuntimeError(
+        "xeokit convert CLI failed (all attempts): " + " || ".join(errors)
+    )
 
 
 def _maybe_put_s3(local_path: str, key: str, content_type: str) -> bool:
-    """
-    Upload S3 optionnel (ne fait pas échouer la conversion si ça rate).
-    """
     try:
         from s3io import put_file
     except Exception:
@@ -884,15 +915,14 @@ def convert_step_to_xkt(file_id: str) -> dict[str, int | str]:
             raise ConversionError("no_faces_after_meshing")
         faces = glb_faces_total
 
-        # 3) Convert GLB -> XKT via CLI
+        # 3) Convert GLB -> XKT (robuste)
         log.info("[convert][xkt] using cli=@xeokit/xeokit-convert")
         glb_to_xkt(glb_path, xkt_path)
 
-        # 4) Vérification locale
+        # 4) Vérifs + Upload S3
         if not (os.path.exists(xkt_path) and os.path.getsize(xkt_path) > 0):
             raise RuntimeError("XKT not produced or empty")
 
-        # 5) Upload S3 (optionnel mais recommandé car web/worker n'ont pas le même disque)
         _maybe_put_s3(xkt_path, f"xkt/{file_id}.xkt", "application/octet-stream")
         if os.path.exists(glb_path) and os.path.getsize(glb_path) > 0:
             _maybe_put_s3(glb_path, f"glb/{file_id}.glb", "model/gltf-binary")
@@ -900,7 +930,6 @@ def convert_step_to_xkt(file_id: str) -> dict[str, int | str]:
         return {
             "glb": glb_path,
             "xkt": xkt_path,
-            "faces": int(glb_faces_total) if 'glb_faces_total' in locals() else None,
             "xkt_size": os.path.getsize(xkt_path),
         }
 
