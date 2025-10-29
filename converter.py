@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import time
 import os
 import shlex
 import subprocess
@@ -748,64 +749,41 @@ def _try_cmd(cmd, env=None, timeout=300):
         return 255, "", f"spawn_failed: {exc}"
 
 
-def glb_to_xkt(glb_path: str, xkt_path: str, timeout_sec: int = 120):
-    """
-    Convertit un GLB en XKT via @xeokit/xeokit-convert (v1.3.1).
-    ATTENTION: cette version attend le flag --source (pas --input).
-    On tente d'abord via npx, puis via le binaire local si présent.
-    On considère un RC=0 mais size=0 comme un ECHEC.
-    """
-    assert os.path.isabs(glb_path) and os.path.isabs(xkt_path)
-    os.makedirs(os.path.dirname(xkt_path), exist_ok=True)
+def glb_to_xkt(glb_path: str, xkt_path: str) -> None:
+    import os, shlex, subprocess, logging
 
+    env = os.environ.copy()
+    # si nécessaire : env.setdefault("NODE_OPTIONS", "--no-warnings")
+
+    # Matrice d'essais : commence par glb2xkt (v1.3.1)
     variants = [
-        # 1) npx avec flags corrects
-        f"npx --yes @xeokit/xeokit-convert --source {shlex.quote(glb_path)} --output {shlex.quote(xkt_path)}",
-        # 2) binaire local (installé par `npm ci`) si présent
-        f"./node_modules/.bin/xeokit-convert --source {shlex.quote(glb_path)} --output {shlex.quote(xkt_path)}",
-        # 3) sous-commande explicite (équivalent dans certains builds)
-        f"npx --yes @xeokit/xeokit-convert convert2xkt --source {shlex.quote(glb_path)} --output {shlex.quote(xkt_path)}",
-        f"./node_modules/.bin/xeokit-convert convert2xkt --source {shlex.quote(glb_path)} --output {shlex.quote(xkt_path)}",
+        ["npx", "--yes", "@xeokit/xeokit-convert", "glb2xkt", glb_path, xkt_path],
+        ["npx", "--yes", "@xeokit/xeokit-convert", glb_path, "--output", xkt_path],
+        ["npx", "--yes", "@xeokit/xeokit-convert", "convert", glb_path, "--output", xkt_path],
+        ["npx", "--yes", "@xeokit/xeokit-convert", "convert2xkt", glb_path, "--output", xkt_path],
+        ["npx", "--yes", "@xeokit/xeokit-convert", "-i", glb_path, "-o", xkt_path],
     ]
 
-    last_rc = None
-    last_err = None
+    t0 = time.time()
+    last = None
+    for i, cmd in enumerate(variants, 1):
+        logging.info("[convert][xkt] try #%d: %s", i, " ".join(shlex.quote(c) for c in cmd))
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        logging.warning("[convert][xkt][stdout]\n%s", (proc.stdout or "").strip())
+        logging.warning("[convert][xkt][stderr]\n%s", (proc.stderr or "").strip())
 
-    for cmd in variants:
-        t0 = time.time()
-        log.info("[convert][xkt] try: %s", cmd)
-        proc = subprocess.Popen(
-            cmd, shell=True, cwd=os.getcwd(),
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-        )
-        try:
-            stdout, stderr = proc.communicate(timeout=timeout_sec)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            stdout, stderr = proc.communicate()
-            log.warning("[convert][xkt] timeout: %s", cmd)
-            last_rc, last_err = 124, "timeout"
-            continue
-
-        rc = proc.returncode
         size = os.path.getsize(xkt_path) if os.path.exists(xkt_path) else 0
+        logging.info("[convert][xkt] rc=%s size=%s", proc.returncode, size)
 
-        if stderr:
-            # utile en debug Render
-            log.warning("[convert][xkt][stderr]\n%s", stderr)
-
-        log.info("[convert][xkt] rc=%s size=%s", rc, size)
-
-        # Succès réel = rc==0 ET fichier non vide
-        if rc == 0 and size > 0:
+        if proc.returncode == 0 and size > 0:
+            logging.info("[convert][xkt] OK variant #%d size=%dB duration=%.2fs", i, size, time.time() - t0)
             return
 
-        last_rc, last_err = rc, (stderr.strip() or stdout.strip() or "unknown error")
+        last = f"rc={proc.returncode} | stderr={(proc.stderr or '').strip()!r}"
 
-    # Si on est là, toutes les variantes ont échoué
-    details = f"rc={last_rc} | last='{last_err}'"
-    raise RuntimeError(f"xeokit convert CLI failed (all attempts): {details}")
-# --- end patch: glb_to_xkt ----
+    raise RuntimeError("xeokit convert failed: all variants tried | last=" + (last or "n/a"))
+
+    
 def _maybe_put_s3(local_path: str, key: str, content_type: str) -> bool:
     try:
         from s3io import put_file
