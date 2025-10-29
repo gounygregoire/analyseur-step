@@ -19,18 +19,12 @@ services:
         value: "50"
       - key: OMP_NUM_THREADS
         value: "1"
-    buildCommand: |
-      npm ci && npm run build || true
-      pip install --no-cache-dir -r requirements.txt
+    buildCommand: npm ci && npm run build && pip install -r requirements.txt
     startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers=1 --threads=2 --timeout=600
 
   - type: worker
     name: cadlytics-worker
     env: python
-    buildCommand: |
-      pip install -r requirements.txt
-      npm ci
-    startCommand: rq worker -u "$REDIS_URL" -P /opt/render/project/src default
     envVars:
       - key: REDIS_URL
         sync: false
@@ -52,8 +46,7 @@ services:
         value: "default"
       - key: RQ_JOB_TIMEOUT_SEC
         value: "1200"
-    buildCommand: |
-      pip install --no-cache-dir -r requirements-worker.txt
+    buildCommand: pip install -r requirements.txt
     startCommand: python rq_worker.py
 
 databases:

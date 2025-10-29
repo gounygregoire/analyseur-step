@@ -5,9 +5,9 @@ import os, uuid, pathlib, json, re, glob, socket, time, subprocess, mimetypes
 from urllib.parse import urlparse, urlunparse, unquote
 from pathlib import Path
 import boto3
-from botocore.exceptions import ClientError
+import botocore
 
-from flask import Flask, request, jsonify, send_from_directory, abort, render_template
+from flask import Flask, request, jsonify, make_response, send_from_directory, abort, render_template, redirect
 from flask_cors import CORS
 from dotenv import load_dotenv
 import requests
@@ -950,21 +950,57 @@ def debug_xkt(file_id: str):
 
 @app.get("/exists/xkt/<file_id>")
 def exists_xkt(file_id: str):
-    """
-    Renvoie l'existence et la taille d'un XKT dans S3.
-    Réponse: {"exists": bool, "size": int}
-    """
     key = f"xkt/{file_id}.xkt"
     try:
         r = s3.head_object(Bucket=S3_BUCKET, Key=key)
         size = int(r.get("ContentLength", 0))
-        return jsonify({"exists": True, "size": size})
-    except ClientError as e:
+        resp = make_response(
+            jsonify({
+                "file_id": file_id,
+                "exists": True,
+                "size": size,
+            }),
+            200,
+        )
+    except botocore.exceptions.ClientError as e:
         code = e.response.get("Error", {}).get("Code", "")
         if code in ("404", "NoSuchKey", "NotFound"):
-            return jsonify({"exists": False, "size": 0})
-        app.logger.exception("S3 head_object failed")
-        return jsonify({"exists": False, "size": 0})
+            resp = make_response(
+                jsonify({
+                    "file_id": file_id,
+                    "exists": False,
+                    "size": 0,
+                }),
+                200,
+            )
+        else:
+            app.logger.warning("[exists][xkt] head_object error: %s", code)
+            resp = make_response(
+                jsonify({
+                    "file_id": file_id,
+                    "exists": False,
+                    "size": 0,
+                }),
+                200,
+            )
+
+    resp.headers["Cache-Control"] = "no-store, max-age=0"
+    return resp
+
+
+@app.get("/xkt/<file_id>.xkt")
+def xkt_presigned_redirect(file_id: str):
+    key = f"xkt/{file_id}.xkt"
+    try:
+        url = s3.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": S3_BUCKET, "Key": key},
+            ExpiresIn=300,
+        )
+        return redirect(url, code=302)
+    except Exception as e:
+        app.logger.error("[xkt][presign] failed: %s", e)
+        return ("", 404)
 @app.post("/reconvert/<file_id>")
 def reconvert(file_id: str):
     if not file_id:

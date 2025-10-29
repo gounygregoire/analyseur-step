@@ -2038,7 +2038,7 @@ if (btnAnnot) { btnAnnot.style.display = "none"; btnAnnot.disabled = true; }
 (function hookGeometryCapture(){
   const sc = viewer.scene;
   const orig = sc.createGeometry?.bind(sc);
-  if (!orig) { console.warn('[geom-capture] createGeometry indisponible'); return; }
+  if (!orig) { console.debug('[geom-capture] createGeometry indisponible'); return; }
   sc.createGeometry = function(params){
     const g = orig(params);
     try {
@@ -3276,78 +3276,35 @@ async function uploadAndShow(file) {
     const fd = new FormData();
     fd.append("file", f);
     const res = await fetch("/upload", { method: "POST", body: fd });
-    let j = null; try { j = await res.json(); } catch {}
+    let data = null;
+    try { data = await res.json(); } catch {}
 
-    if (!res.ok || !j || !j.xkt_url) {
-      console.error("[upload] bad response", res.status, j);
+    if (!res.ok || !data || (!data.xkt_url && !data.xktUrl)) {
+      console.error("[upload] bad response", res.status, data);
       throw new Error(`upload failed (${res.status})`);
     }
 
-    if (j.s3_uploaded === false) console.warn("[upload] S3 non disponible.");
+    if (data.s3_uploaded === false) console.warn("[upload] S3 non disponible.");
 
-    currentFileId = j.file_id || null;
+    currentFileId = data.file_id || data.fileId || data.id || null;
     window.currentFileId = currentFileId;
-    const xktUrl = new URL(j.xkt_url, location.origin).toString();
-    console.log("[upload] ok:", { file_id: currentFileId, xktUrl });
-
-    let resolvedXktUrl = xktUrl;
-    if (currentFileId) {
-      try {
-        if (typeof setUiProgress === "function") {
-          setUiProgress("Conversion en cours…");
-        }
-        resolvedXktUrl = await waitForXKTReady(currentFileId);
-        console.log("[viewer] XKT prêt", { fileId: currentFileId, resolvedXktUrl });
-      } catch (waitErr) {
-        console.error("[viewer] waitForXKTReady failed", waitErr);
-        throw waitErr;
-      } finally {
-        if (typeof setUiProgress === "function") {
-          setUiProgress("");
-        }
-      }
-    }
-
-    if (!chkAdditive?.checked) {
-      for (const [, i] of models) { try { i.model.destroy(); } catch {} }
-      models.clear(); selectedIds.clear();
-      clearModelRegistry();
-    }
-
-    if (currentFileId) {
-      try {
-        const debugUrl = `/debug/xkt/${encodeURIComponent(currentFileId)}`;
-        const debugRes = await fetch(debugUrl, { cache: "no-store" });
-        if (!debugRes.ok) {
-          console.warn("[viewer] debug /debug/xkt status", debugRes.status);
-        } else {
-          const debugPayload = await debugRes.json();
-          console.log("[viewer] /debug/xkt snapshot juste avant loadXKT", { fileId: currentFileId });
-          console.table(debugPayload);
-        }
-      } catch (debugErr) {
-        console.warn("[viewer] debug /debug/xkt fetch a échoué", debugErr);
-      }
-    }
-
-    console.log("[viewer] loading XKT]:", xktUrl);
-    logXKTContentDiagnostics({ src: xktUrl, label: f.name || currentFileId }).catch(() => {});
-    StatsPoller.cancel();
-    let glbUrl = null;
-    try {
-      if (j.glb_url) {
-        glbUrl = new URL(j.glb_url, location.origin).toString();
-      } else if (currentFileId) {
-        glbUrl = new URL(`/glb/${currentFileId}.glb`, location.origin).toString();
-      }
-    } catch {
-      glbUrl = j.glb_url || (currentFileId ? `/glb/${currentFileId}.glb` : null);
-    }
+    window.__lastUploadNameHint = f?.name || null;
     if (typeof setUiProgress === "function") {
-      setUiProgress("Chargement du modèle…");
+      setUiProgress("Conversion en cours…");
     }
-    await loadXKT(resolvedXktUrl, f.name, { fileId: currentFileId, glbUrl });
+
+    // === Après l'upload ===
+    // On normalise l'id et construit une URL fiable pour le XKT.
+    const fileId = data.file_id || data.fileId || data.id;
+    let xktUrl = data.xktUrl || data.xkt_url || `/xkt/${fileId}.xkt`;
+
+    console.log('[upload] ok:', { file_id: fileId, xktUrl });
+
+    // On attend la dispo du XKT (poll sur /exists/xkt/:id, fallback HEAD), puis on charge le modèle.
+    const readyUrl = await waitForXKT(fileId, xktUrl);
+    await loadXKTIntoViewer(readyUrl);
   } catch (e) {
+    window.__lastUploadNameHint = null;
     console.error(e);
     if (e?.code === "known_bad_xkt") {
       alert("Conversion XKT invalide détectée (known_bad_xkt). Vérifie la chaîne de conversion.");
@@ -3374,45 +3331,112 @@ function getUploadFormData() {
   return { fd, file };
 }
 
-// main.js
-async function waitForXKT(url, { timeoutMs = 120000, intervalMs = 1500 } = {}) {
-  const t0 = performance.now();
-  while (performance.now() - t0 < timeoutMs) {
-    try {
-      // Cache-buster pour éviter un 404 mis en cache
-      const res = await fetch(url + "?_=" + Date.now(), {
-        method: "HEAD",
-        cache: "no-store",
-        mode: "same-origin", // même origine => ok
-      });
-      if (res.ok) {
-        const len = parseInt(res.headers.get("content-length") || "0", 10);
-        if (len > 0) return { ok: true, size: len };
-      }
-    } catch (e) {
-      // ignore et réessaye
-    }
-    await new Promise(r => setTimeout(r, intervalMs));
+async function waitForXKT(fileId, initialUrl, opts = {}) {
+  const resolvedId = fileId || resolveCurrentFileId();
+  const baseUrl = initialUrl || (resolvedId ? `/xkt/${resolvedId}.xkt` : null);
+  if (!baseUrl) {
+    throw new Error("Missing XKT URL");
   }
-  return { ok: false, size: 0 };
+
+  let absoluteUrl = baseUrl;
+  try {
+    absoluteUrl = new URL(baseUrl, location.origin).toString();
+  } catch {
+    absoluteUrl = baseUrl;
+  }
+
+  const max = opts.max ?? 120;          // ~3 min si interval=1500ms
+  const interval = opts.interval ?? 1500;
+
+  for (let attempt = 1; attempt <= max; attempt++) {
+    let exists = false, size = 0;
+
+    try {
+      // 1) Endpoint backend dédié (idéal)
+      if (resolvedId) {
+        const r = await fetch(`/exists/xkt/${resolvedId}`, { cache: 'no-store' });
+        if (r.ok) {
+          const j = await r.json();
+          exists = !!j.exists;
+          size = Number(j.size || 0);
+        } else {
+          // 2) Fallback: HEAD direct (avec buster pour éviter cache)
+          const head = await fetch(absoluteUrl + `?t=${Date.now()}`, { method: 'HEAD' });
+          exists = head.ok;
+          size = Number(head.headers.get('content-length') || 0);
+        }
+      } else {
+        const head = await fetch(absoluteUrl + `?t=${Date.now()}`, { method: 'HEAD' });
+        exists = head.ok;
+        size = Number(head.headers.get('content-length') || 0);
+      }
+    } catch (_e) {
+      // ignore et retente
+    }
+
+    console.log('[wait][xkt]', { attempt, exists, size });
+
+    if (exists && size > 0) {
+      // Ajoute un cache-buster pour contourner toute mise en cache réseau/CDN
+      return absoluteUrl + `?t=${Date.now()}`;
+    }
+
+    await new Promise(res => setTimeout(res, interval));
+  }
+
+  throw new Error('XKT not available after polling');
 }
 
-// Après avoir reçu { file_id, xktUrl } de ton /upload
-console.log("[wait][xkt] start", { xktUrl });
+async function loadXKTIntoViewer(xktUrl) {
+  if (!window.viewer || !window.viewer.scene) {
+    console.warn('[viewer] not ready');
+    return;
+  }
 
-const res = await waitForXKT(xktUrl, { timeoutMs: 120000, intervalMs: 1500 });
-if (!res.ok) {
-  console.warn("[wait][xkt] TIMEOUT: XKT pas disponible à temps");
-  // affiche un message utilisateur si besoin
-} else {
-  console.log("[wait][xkt] ready size=", res.size);
-  // charge le XKT dans xeokit
-  const xktLoader = new XKTLoaderPlugin(viewer); // déjà importé dans ton code
-  xktLoader.load({
-    id: file_id,
-    src: xktUrl,
-    edges: true, // tes options
-  });
+  let absoluteUrl = xktUrl;
+  try {
+    absoluteUrl = new URL(xktUrl, location.origin).toString();
+  } catch {
+    absoluteUrl = xktUrl;
+  }
+
+  const fileId = window.currentFileId || resolveCurrentFileId();
+  const nameHint = window.__lastUploadNameHint || fileId || undefined;
+
+  try {
+    if (typeof setUiProgress === 'function') {
+      setUiProgress('Chargement du modèle…');
+    }
+
+    if (!chkAdditive?.checked) {
+      for (const [, entry] of models) { try { entry.model.destroy(); } catch {} }
+      models.clear();
+      selectedIds.clear();
+      clearModelRegistry();
+    }
+
+    if (fileId) {
+      showDebugXKT(fileId).catch(() => {});
+    }
+
+    try {
+      StatsPoller.cancel();
+    } catch {
+      StatsPoller?.cancel?.();
+    }
+
+    const prev = window.viewer.scene.models?.uploadedModel;
+    if (prev && typeof prev.destroy === 'function') prev.destroy();
+
+    await loadXKT(absoluteUrl, nameHint, { fileId });
+
+    console.log('[viewer] XKT loaded', { xktUrl: absoluteUrl });
+  } catch (e) {
+    console.error('[viewer] load failed', e);
+    throw e;
+  } finally {
+    window.__lastUploadNameHint = null;
+  }
 }
 
 async function showDebugXKT(fileId) {
@@ -3471,19 +3495,19 @@ btnVisualiser?.addEventListener("click", async (event) => {
   try {
     setUiProgress?.("Upload…");
     const { fd, file } = getUploadFormData();
+    window.__lastUploadNameHint = file?.name || null;
     const { fileId } = await handleUpload(fd);
     setUiProgress?.("Conversion en cours…");
-    const xktUrl = await waitForXKTReady(fileId);
+    const readyUrl = await waitForXKT(fileId, `/xkt/${fileId}.xkt`);
     if (fileId) {
       currentFileId = fileId;
       window.currentFileId = fileId;
       console.log("[debug] fileId", fileId);
-      showDebugXKT(fileId).catch(() => {});
     }
-    setUiProgress?.("Chargement du modèle…");
-    await loadXKT(xktUrl, file?.name, { fileId });
+    await loadXKTIntoViewer(readyUrl);
     setUiProgress?.("");
   } catch (err) {
+    window.__lastUploadNameHint = null;
     console.error(err);
     setUiProgress?.("");
     if (err?.code === "known_bad_xkt") {
