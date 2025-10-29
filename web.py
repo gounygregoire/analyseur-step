@@ -33,6 +33,10 @@ except Exception:
 
 load_dotenv()
 
+S3_BUCKET = os.environ.get("S3_BUCKET", "")
+S3_REGION = os.environ.get("S3_REGION", "eu-west-3")
+s3 = boto3.client("s3", region_name=S3_REGION)
+
 app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
 
@@ -945,8 +949,11 @@ def debug_xkt(file_id: str):
     return app.response_class(response=json.dumps(data), status=200, mimetype="application/json")
 
 @app.get("/exists/xkt/<file_id>")
-def exists_xkt(file_id):
-    """Vérifie l'existence du XKT dans S3, renvoie {exists, size}."""
+def exists_xkt(file_id: str):
+    """
+    Renvoie l'existence et la taille d'un XKT dans S3.
+    Réponse: {"exists": bool, "size": int}
+    """
     key = f"xkt/{file_id}.xkt"
     try:
         r = s3.head_object(Bucket=S3_BUCKET, Key=key)
@@ -956,8 +963,8 @@ def exists_xkt(file_id):
         code = e.response.get("Error", {}).get("Code", "")
         if code in ("404", "NoSuchKey", "NotFound"):
             return jsonify({"exists": False, "size": 0})
-        # autre erreur → remonter pour logs / sentry
-        raise
+        app.logger.exception("S3 head_object failed")
+        return jsonify({"exists": False, "size": 0})
 @app.post("/reconvert/<file_id>")
 def reconvert(file_id: str):
     if not file_id:
@@ -991,10 +998,9 @@ def __s3_env():
         "AWS_ACCESS_KEY_ID_set": bool(os.environ.get("AWS_ACCESS_KEY_ID")),
         "AWS_SECRET_ACCESS_KEY_set": bool(os.environ.get("AWS_SECRET_ACCESS_KEY")),
         "AWS_REGION": os.environ.get("AWS_REGION"),
-        "S3_BUCKET": os.environ.get("S3_BUCKET"),
+        "S3_BUCKET": S3_BUCKET,
+        "S3_REGION": S3_REGION,
         "S3_ENDPOINT": os.environ.get("S3_ENDPOINT"),
-        S3_REGION = os.environ.get("S3_REGION", "eu-west-3")  # adapte si besoin
-        s3 = boto3.client("s3", region_name=S3_REGION)
         "S3_FORCE_PATH_STYLE": os.environ.get("S3_FORCE_PATH_STYLE"),
         "PULL_CONVERTED_FROM_S3": PULL_CONVERTED_FROM_S3,
     })
