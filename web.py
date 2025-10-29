@@ -4,6 +4,8 @@ from __future__ import annotations
 import os, uuid, pathlib, json, re, glob, socket, time, subprocess, mimetypes
 from urllib.parse import urlparse, urlunparse, unquote
 from pathlib import Path
+import boto3
+from botocore.exceptions import ClientError
 
 from flask import Flask, request, jsonify, send_from_directory, abort, render_template
 from flask_cors import CORS
@@ -942,6 +944,20 @@ def debug_xkt(file_id: str):
 
     return app.response_class(response=json.dumps(data), status=200, mimetype="application/json")
 
+@app.get("/exists/xkt/<file_id>")
+def exists_xkt(file_id):
+    """Vérifie l'existence du XKT dans S3, renvoie {exists, size}."""
+    key = f"xkt/{file_id}.xkt"
+    try:
+        r = s3.head_object(Bucket=S3_BUCKET, Key=key)
+        size = int(r.get("ContentLength", 0))
+        return jsonify({"exists": True, "size": size})
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "")
+        if code in ("404", "NoSuchKey", "NotFound"):
+            return jsonify({"exists": False, "size": 0})
+        # autre erreur → remonter pour logs / sentry
+        raise
 @app.post("/reconvert/<file_id>")
 def reconvert(file_id: str):
     if not file_id:
@@ -977,6 +993,8 @@ def __s3_env():
         "AWS_REGION": os.environ.get("AWS_REGION"),
         "S3_BUCKET": os.environ.get("S3_BUCKET"),
         "S3_ENDPOINT": os.environ.get("S3_ENDPOINT"),
+        S3_REGION = os.environ.get("S3_REGION", "eu-west-3")  # adapte si besoin
+        s3 = boto3.client("s3", region_name=S3_REGION)
         "S3_FORCE_PATH_STYLE": os.environ.get("S3_FORCE_PATH_STYLE"),
         "PULL_CONVERTED_FROM_S3": PULL_CONVERTED_FROM_S3,
     })

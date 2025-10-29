@@ -3374,58 +3374,45 @@ function getUploadFormData() {
   return { fd, file };
 }
 
-async function waitForXKTReady(fileId, opts = {}) {
-  const minSize   = opts.minSize   ?? 120 * 1024;      // >100KB pour éviter les fichiers vides
-  const maxWait   = opts.maxWait   ?? 15 * 60 * 1000;  // 15 minutes max
-  const pollMs    = opts.pollMs    ?? 1500;            // 1.5s entre requêtes
-  const badSize   = opts.badSize   ?? 46204;           // taille connue "mauvaise"
+// main.js
+async function waitForXKT(url, { timeoutMs = 120000, intervalMs = 1500 } = {}) {
   const t0 = performance.now();
-  let attempt = 0;
-
-  while (true) {
-    attempt += 1;
-    const r = await fetch(`/debug/xkt/${fileId}`, { cache: "no-store" });
-    if (!r.ok) {
-      const err = new Error(`debug_xkt_failed ${r.status}`);
-      err.code = "debug_xkt_failed";
-      throw err;
+  while (performance.now() - t0 < timeoutMs) {
+    try {
+      // Cache-buster pour éviter un 404 mis en cache
+      const res = await fetch(url + "?_=" + Date.now(), {
+        method: "HEAD",
+        cache: "no-store",
+        mode: "same-origin", // même origine => ok
+      });
+      if (res.ok) {
+        const len = parseInt(res.headers.get("content-length") || "0", 10);
+        if (len > 0) return { ok: true, size: len };
+      }
+    } catch (e) {
+      // ignore et réessaye
     }
-    const j = await r.json();
-
-    const elapsedMs = Math.round(performance.now() - t0);
-    const payload = {
-      attempt,
-      elapsedMs,
-      exists: !!j.xkt_exists,
-      size: Number(j.xkt_size) || 0,
-      glb_faces: Number(j.glb_faces) || 0,
-      known_bad: Boolean(j.known_bad_xkt)
-    };
-    console.log(`[wait][xkt] poll #${attempt}`, payload);
-
-    if (typeof setUiProgress === "function") {
-      const seconds = Math.floor(elapsedMs / 1000);
-      const status = payload.exists ? `${payload.size} B` : "en attente…";
-      setUiProgress(`Conversion en cours (${seconds}s, XKT ${status})`);
-    }
-
-    if (j.known_bad_xkt) {
-      const err = new Error("Conversion XKT invalide (known_bad_xkt)");
-      err.code = "known_bad_xkt";
-      err.debug = j;
-      throw err;
-    }
-
-    // prêt quand: le fichier existe, taille suffisante et ≠ taille “mauvaise”
-    if (j.xkt_exists && j.xkt_size >= minSize && j.xkt_size !== badSize) {
-      return `${location.origin}/xkt/${fileId}.xkt`;
-    }
-
-    if (performance.now() - t0 > maxWait) {
-      throw new Error("GEOMETRY_WAIT_TIMEOUT");
-    }
-    await new Promise((res) => setTimeout(res, pollMs));
+    await new Promise(r => setTimeout(r, intervalMs));
   }
+  return { ok: false, size: 0 };
+}
+
+// Après avoir reçu { file_id, xktUrl } de ton /upload
+console.log("[wait][xkt] start", { xktUrl });
+
+const res = await waitForXKT(xktUrl, { timeoutMs: 120000, intervalMs: 1500 });
+if (!res.ok) {
+  console.warn("[wait][xkt] TIMEOUT: XKT pas disponible à temps");
+  // affiche un message utilisateur si besoin
+} else {
+  console.log("[wait][xkt] ready size=", res.size);
+  // charge le XKT dans xeokit
+  const xktLoader = new XKTLoaderPlugin(viewer); // déjà importé dans ton code
+  xktLoader.load({
+    id: file_id,
+    src: xktUrl,
+    edges: true, // tes options
+  });
 }
 
 async function showDebugXKT(fileId) {
