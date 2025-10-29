@@ -4,13 +4,7 @@
   "description": "Ce dépôt contient le code du MVP de Cadlytics, SaaS d'analyse DFM et de visualisation 3D pour fichiers STEP. Le viewer 3D repose désormais sur **Xeokit** et rend les modèles au format **XKT** (conversion réalisée via `xkt_converter.py`).",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "vite build",
-    "dev": "vite build --watch",
-    "postinstall": "npm run build",
-    "test:e2e": "playwright test",
-    "test:e2e:headed": "PWDEBUG=1 playwright test",
-    "smoke:dfm": "pytest tests/test_dfm_smoke.py -q"
+    "build": "vite build"
   },
   "keywords": [],
   "author": "",
