@@ -750,18 +750,19 @@ def _try_cmd(cmd, env=None, timeout=300):
 
 
 def glb_to_xkt(glb_path: str, xkt_path: str) -> None:
-    import os, shlex, subprocess, logging
+    import os, shlex, subprocess, logging, time
 
     env = os.environ.copy()
-    # si nécessaire : env.setdefault("NODE_OPTIONS", "--no-warnings")
 
-    # Matrice d'essais : commence par glb2xkt (v1.3.1)
+    # IMPORTANT : v1.3.1 nécessite -s/--source, et mieux vaut préciser -f gltf.
     variants = [
-        ["npx", "--yes", "@xeokit/xeokit-convert", "glb2xkt", glb_path, xkt_path],
-        ["npx", "--yes", "@xeokit/xeokit-convert", glb_path, "--output", xkt_path],
-        ["npx", "--yes", "@xeokit/xeokit-convert", "convert", glb_path, "--output", xkt_path],
-        ["npx", "--yes", "@xeokit/xeokit-convert", "convert2xkt", glb_path, "--output", xkt_path],
-        ["npx", "--yes", "@xeokit/xeokit-convert", "-i", glb_path, "-o", xkt_path],
+        ["npx", "--yes", "@xeokit/xeokit-convert", "-s", glb_path, "-f", "gltf", "-o", xkt_path],
+        ["npx", "--yes", "@xeokit/xeokit-convert", "--source", glb_path, "--format", "gltf", "--output", xkt_path],
+        ["npx", "--yes", "@xeokit/xeokit-convert", "-s", glb_path, "-o", xkt_path],
+        ["npx", "--yes", "@xeokit/xeokit-convert", "--source", glb_path, "--output", xkt_path],
+        # Fallbacks verbeux si jamais leur wrapper interne est requis :
+        ["npx", "--yes", "@xeokit/xeokit-convert", "convert", "-s", glb_path, "-f", "gltf", "-o", xkt_path],
+        ["npx", "--yes", "@xeokit/xeokit-convert", "convert2xkt", "-s", glb_path, "-f", "gltf", "-o", xkt_path],
     ]
 
     t0 = time.time()
@@ -769,20 +770,18 @@ def glb_to_xkt(glb_path: str, xkt_path: str) -> None:
     for i, cmd in enumerate(variants, 1):
         logging.info("[convert][xkt] try #%d: %s", i, " ".join(shlex.quote(c) for c in cmd))
         proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
-        logging.warning("[convert][xkt][stdout]\n%s", (proc.stdout or "").strip())
-        logging.warning("[convert][xkt][stderr]\n%s", (proc.stderr or "").strip())
+        if proc.stdout: logging.warning("[convert][xkt][stdout]\n%s", proc.stdout.strip())
+        if proc.stderr: logging.warning("[convert][xkt][stderr]\n%s", proc.stderr.strip())
 
         size = os.path.getsize(xkt_path) if os.path.exists(xkt_path) else 0
         logging.info("[convert][xkt] rc=%s size=%s", proc.returncode, size)
-
         if proc.returncode == 0 and size > 0:
-            logging.info("[convert][xkt] OK variant #%d size=%dB duration=%.2fs", i, size, time.time() - t0)
+            logging.info("[convert][xkt] OK variant #%d size=%dB duration=%.2fs",
+                         i, size, time.time() - t0)
             return
-
         last = f"rc={proc.returncode} | stderr={(proc.stderr or '').strip()!r}"
 
     raise RuntimeError("xeokit convert failed: all variants tried | last=" + (last or "n/a"))
-
     
 def _maybe_put_s3(local_path: str, key: str, content_type: str) -> bool:
     try:
