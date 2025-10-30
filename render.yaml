@@ -1,15 +1,17 @@
 services:
   - type: web
     name: cadlytics-web
-    plan: starter
     env: python
+    buildCommand: |
+      npm ci
+      npm run build
+      pip install -r requirements.txt
+    startCommand: gunicorn web:app --bind 0.0.0.0:$PORT --workers=1 --threads=2 --timeout=600
     envVars:
-      - key: NODE_VERSION
-        value: 20
       - key: REDIS_URL
         fromService:
-          type: redis
           name: cadlytics-redis
+          type: redis
           property: connectionString
       - key: UPLOAD_FOLDER
         value: /tmp/uploads
@@ -17,17 +19,22 @@ services:
         value: /tmp/converted
       - key: MAX_UPLOAD_MB
         value: "50"
-      - key: OMP_NUM_THREADS
-        value: "1"
-    buildCommand: npm ci && npm run build && pip install -r requirements.txt
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers=1 --threads=2 --timeout=600
 
   - type: worker
     name: cadlytics-worker
     env: python
+    buildCommand: |
+      pip install -r requirements.txt
+      curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+      apt-get update && apt-get install -y nodejs
+      npm ci
+    startCommand: rq worker -u $REDIS_URL cadlytics
     envVars:
       - key: REDIS_URL
-        sync: false
+        fromService:
+          name: cadlytics-redis
+          type: redis
+          property: connectionString
       - key: S3_ENDPOINT
         sync: false
       - key: S3_BUCKET
@@ -40,14 +47,8 @@ services:
         sync: false
       - key: S3_FORCE_PATH_STYLE
         value: "1"
-      - key: PULL_CONVERTED_FROM_S3
-        value: "true"
-      - key: RQ_QUEUE_NAME
-        value: "default"
-      - key: RQ_JOB_TIMEOUT_SEC
-        value: "1200"
-    buildCommand: pip install -r requirements.txt
-    startCommand: python rq_worker.py
 
 databases:
   - name: cadlytics-redis
+    plan: free
+    ipAllowList: []
