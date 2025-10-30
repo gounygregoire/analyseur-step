@@ -1,4 +1,6 @@
 // /static/js/main.js — UTF-8 (NO BOM)
+window.CADLYTICS = window.CADLYTICS || {};
+console.log('[main] CADLYTICS bootstrap ok');
 console.log("main.js loaded ✅");
 // force l’ID de la vraie modale matière (utilisé par DFMOrchestrator & app.html)
 window.DFM_MATERIAL_MODAL_SELECTOR = window.DFM_MATERIAL_MODAL_SELECTOR || '#materialQuestionnaireModal';
@@ -89,6 +91,7 @@ function resolveCurrentFileId() {
     window.currentFileId,
     window.currentConversionId,
     meta?.file_id,
+    window.CADLYTICS?.xkt?.lastFileId,
     window.CAD?.fileIdStep,
     window.CAD?.modelId,
     window.CADLYTICS?.current?.fileId
@@ -1983,7 +1986,29 @@ const btnClearMeas  = measPane.querySelector("#btnClearMeas");
 
 const measMap  = new Map();
 let measCounter = 0;
+let allHidden = false;
 const getMeasId = (m)=> m.id || m._id || (m.__uiId ?? (m.__uiId = "m"+Date.now().toString(36)+Math.random().toString(36).slice(2,6)));
+
+function resetMeasurementState() {
+  try {
+    deactivateMeasure();
+  } catch {}
+  try {
+    if (typeof distancePlugin.clear === "function") {
+      distancePlugin.clear();
+    } else if (typeof distancePlugin.destroyAll === "function") {
+      distancePlugin.destroyAll();
+    }
+  } catch (err) {
+    console.warn("[measure] reset failed", err);
+  }
+  measMap.clear();
+  measCounter = 0;
+  allHidden = false;
+  if (measureListEl) {
+    measureListEl.innerHTML = "";
+  }
+}
 
 function addMeasurementRow(m){
   const id = getMeasId(m);
@@ -2017,15 +2042,12 @@ distancePlugin.on?.("measurementDestroyed", (ev)=>{
   measureListEl.querySelector(`[data-mid="${id}"]`)?.remove();
   measMap.delete(id);
 });
-let allHidden = false;
 btnHideAll.addEventListener("click", ()=>{
   allHidden = !allHidden;
   for (const {m} of measMap.values()) m.visible = !allHidden;
 });
 btnClearMeas.addEventListener("click", ()=>{
-  if (typeof distancePlugin.clear === "function") distancePlugin.clear();
-  else if (typeof distancePlugin.destroyAll === "function") distancePlugin.destroyAll();
-  measureListEl.innerHTML = ""; measMap.clear(); measCounter = 0; allHidden = false;
+  resetMeasurementState();
 });
 function deactivateMeasure() { if (distanceCtrl.active) distanceCtrl.deactivate(); btnMeasure?.classList.remove("btn-primary"); }
 function activateMeasure()   { distanceCtrl.activate();  btnMeasure?.classList.add("btn-primary"); }
@@ -3020,14 +3042,7 @@ async function finalizeModelLoad({ model, stableId, src, nameHint, loaderType })
     }));
   }, 50);
 
-  try {
-    currentAxis = getSelectedAxis();
-    if (currentFileId) {
-      fetchStats(currentFileId, currentAxis);
-    }
-  } catch (e) {
-    console.warn("[analyse] fetch initial ignoré:", e);
-  }
+  initCadlyticsTools(model, { fileId: currentFileId || stableId });
 }
 
 async function loadXKT(url, nameHint, options = {}) {
@@ -3041,7 +3056,6 @@ async function loadXKT(url, nameHint, options = {}) {
   window.CAD.heatmap.ready = false;
   window.CAD.model = null;
   window.CAD.modelId = null;
-  window.CAD.xktUrl = url;
   const fallbackGlbUrl = resolveFallbackGlbUrl({
     explicitUrl: options?.glbUrl,
     fileId: options?.fileId || stableId
@@ -3220,6 +3234,7 @@ async function loadLocalXKT(file) {
     logSceneVisibilityDiagnostics(viewer, { stableId: stableIdLocal });
     logOpacityMaterialDiagnostics(viewer, { stableId: stableIdLocal });
     showViewerDiagnosticsHud(viewer, { model, stableId: stableIdLocal });
+    initCadlyticsTools(model);
   });
 
   model.on("error", (err) => {
@@ -3276,33 +3291,38 @@ async function uploadAndShow(file) {
     const fd = new FormData();
     fd.append("file", f);
     const res = await fetch("/upload", { method: "POST", body: fd });
-    let data = null;
-    try { data = await res.json(); } catch {}
-
-    if (!res.ok || !data || (!data.xkt_url && !data.xktUrl)) {
-      console.error("[upload] bad response", res.status, data);
+    if (!res.ok) {
+      const text = await res.text().catch(() => null);
+      console.error("[upload] http error", res.status, text);
       throw new Error(`upload failed (${res.status})`);
+    }
+
+    let data = null;
+    try {
+      data = await res.json();
+    } catch (err) {
+      console.error("[upload] invalid JSON", err);
+      throw new Error("upload failed (invalid payload)");
+    }
+
+    const fileIdFromResponse = data?.file_id || data?.fileId || data?.id || null;
+    if (!fileIdFromResponse) {
+      console.error("[upload] missing file_id", data);
+      throw new Error("upload failed (missing file_id)");
     }
 
     if (data.s3_uploaded === false) console.warn("[upload] S3 non disponible.");
 
-    currentFileId = data.file_id || data.fileId || data.id || null;
+    currentFileId = fileIdFromResponse;
     window.currentFileId = currentFileId;
     window.__lastUploadNameHint = f?.name || null;
     if (typeof setUiProgress === "function") {
       setUiProgress("Conversion en cours…");
     }
 
-    // === Après l'upload ===
-    // On normalise l'id et construit une URL fiable pour le XKT.
-    const fileId = data.file_id || data.fileId || data.id;
-    let xktUrl = data.xktUrl || data.xkt_url || `/xkt/${fileId}.xkt`;
+    const fileId = currentFileId;
 
-    console.log('[upload] ok:', { file_id: fileId, xktUrl });
-
-    // On attend la dispo du XKT (poll sur /exists/xkt/:id, fallback HEAD), puis on charge le modèle.
-    const readyUrl = await waitForXKT(fileId, xktUrl);
-    await loadXKTIntoViewer(readyUrl);
+    await onUploadResponse({ file_id: fileId });
   } catch (e) {
     window.__lastUploadNameHint = null;
     console.error(e);
@@ -3331,63 +3351,7 @@ function getUploadFormData() {
   return { fd, file };
 }
 
-async function waitForXKT(fileId, initialUrl, opts = {}) {
-  const resolvedId = fileId || resolveCurrentFileId();
-  const baseUrl = initialUrl || (resolvedId ? `/xkt/${resolvedId}.xkt` : null);
-  if (!baseUrl) {
-    throw new Error("Missing XKT URL");
-  }
-
-  let absoluteUrl = baseUrl;
-  try {
-    absoluteUrl = new URL(baseUrl, location.origin).toString();
-  } catch {
-    absoluteUrl = baseUrl;
-  }
-
-  const max = opts.max ?? 120;          // ~3 min si interval=1500ms
-  const interval = opts.interval ?? 1500;
-
-  for (let attempt = 1; attempt <= max; attempt++) {
-    let exists = false, size = 0;
-
-    try {
-      // 1) Endpoint backend dédié (idéal)
-      if (resolvedId) {
-        const r = await fetch(`/exists/xkt/${resolvedId}`, { cache: 'no-store' });
-        if (r.ok) {
-          const j = await r.json();
-          exists = !!j.exists;
-          size = Number(j.size || 0);
-        } else {
-          // 2) Fallback: HEAD direct (avec buster pour éviter cache)
-          const head = await fetch(absoluteUrl + `?t=${Date.now()}`, { method: 'HEAD' });
-          exists = head.ok;
-          size = Number(head.headers.get('content-length') || 0);
-        }
-      } else {
-        const head = await fetch(absoluteUrl + `?t=${Date.now()}`, { method: 'HEAD' });
-        exists = head.ok;
-        size = Number(head.headers.get('content-length') || 0);
-      }
-    } catch (_e) {
-      // ignore et retente
-    }
-
-    console.log('[wait][xkt]', { attempt, exists, size });
-
-    if (exists && size > 0) {
-      // Ajoute un cache-buster pour contourner toute mise en cache réseau/CDN
-      return absoluteUrl + `?t=${Date.now()}`;
-    }
-
-    await new Promise(res => setTimeout(res, interval));
-  }
-
-  throw new Error('XKT not available after polling');
-}
-
-async function loadXKTIntoViewer(xktUrl) {
+async function loadXKTIntoViewer(xktUrl, { fileId: explicitFileId } = {}) {
   if (!window.viewer || !window.viewer.scene) {
     console.warn('[viewer] not ready');
     return;
@@ -3400,7 +3364,7 @@ async function loadXKTIntoViewer(xktUrl) {
     absoluteUrl = xktUrl;
   }
 
-  const fileId = window.currentFileId || resolveCurrentFileId();
+  const fileId = explicitFileId || window.currentFileId || resolveCurrentFileId();
   const nameHint = window.__lastUploadNameHint || fileId || undefined;
 
   try {
@@ -3437,6 +3401,66 @@ async function loadXKTIntoViewer(xktUrl) {
   } finally {
     window.__lastUploadNameHint = null;
   }
+}
+
+function initCadlyticsTools(model, { fileId } = {}) {
+  console.log('[viewer] model loaded, init tools');
+  try {
+    if (typeof resetMeasurementState === 'function') {
+      resetMeasurementState();
+    }
+
+    try {
+      if (typeof setClipAxis === 'function') {
+        setClipAxis(null);
+      }
+    } catch (err) {
+      console.warn('[tools] cut reset failed', err);
+    }
+
+    if (clipRange) {
+      try { clipRange.value = '0'; } catch {}
+    }
+
+    let effectiveId = fileId
+      || window.currentFileId
+      || resolveCurrentFileId()
+      || (window.CADLYTICS?.xkt?.lastFileId ?? null);
+    if (typeof effectiveId === 'string') {
+      effectiveId = effectiveId.trim();
+    }
+
+    let axis = currentAxis || 'Z';
+    try {
+      const selectedAxis = getSelectedAxis();
+      if (selectedAxis) {
+        axis = selectedAxis;
+        currentAxis = selectedAxis;
+      }
+    } catch (err) {
+      console.warn('[tools] axis detection failed', err);
+    }
+
+    if (effectiveId) {
+      if (typeof clearStatsUI === 'function') {
+        try { clearStatsUI(true); } catch (err) { console.warn('[tools] stats clear failed', err); }
+      }
+      try {
+        fetchStats(effectiveId, axis || 'Z');
+      } catch (err) {
+        console.warn('[tools] stats init failed', err);
+      }
+    }
+
+    console.log('[tools] init ok');
+  } catch (err) {
+    console.error('[tools] init failed', err);
+  }
+}
+
+if (typeof window !== "undefined") {
+  window.initCadlyticsTools = initCadlyticsTools;
+  window.loadXKTFromUrl = window.loadXKTFromUrl || ((url, opts = {}) => loadXKTIntoViewer(url, opts));
 }
 
 async function showDebugXKT(fileId) {
@@ -3498,13 +3522,12 @@ btnVisualiser?.addEventListener("click", async (event) => {
     window.__lastUploadNameHint = file?.name || null;
     const { fileId } = await handleUpload(fd);
     setUiProgress?.("Conversion en cours…");
-    const readyUrl = await waitForXKT(fileId, `/xkt/${fileId}.xkt`);
     if (fileId) {
       currentFileId = fileId;
       window.currentFileId = fileId;
       console.log("[debug] fileId", fileId);
     }
-    await loadXKTIntoViewer(readyUrl);
+    await onUploadResponse({ file_id: fileId });
     setUiProgress?.("");
   } catch (err) {
     window.__lastUploadNameHint = null;
@@ -3972,3 +3995,149 @@ window.addEventListener('dfm:fileReady', (ev)=>{
 
 // Export vide (ESM)
 export {};
+
+// ===== XKT DEBUG PANEL & FORCE LOAD =====
+(function () {
+  if (window.CADLYTICS.__xktDebugInstalled) return;
+  window.CADLYTICS.__xktDebugInstalled = true;
+
+  window.CADLYTICS.xkt = {
+    lastFileId: null,
+    setFileId(id) {
+      this.lastFileId = id;
+      const el = document.getElementById('xkt-debug-id');
+      if (el) el.textContent = id || '(none)';
+    }
+  };
+
+  function ensurePanel() {
+    if (document.getElementById('xkt-debug')) return;
+    const div = document.createElement('div');
+    div.id = 'xkt-debug';
+    div.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:99999;background:#111;color:#0f0;font:12px monospace;padding:10px;border:1px solid #0f0;border-radius:8px';
+    div.innerHTML = `
+      <div style="margin-bottom:6px">XKT Debug</div>
+      <div>file_id: <code id="xkt-debug-id">(none)</code></div>
+      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+        <button id="btn-head"  style="padding:4px 8px">HEAD /xkt</button>
+        <button id="btn-exists" style="padding:4px 8px">GET /exists</button>
+        <button id="btn-force"  style="padding:4px 8px">Force Load</button>
+      </div>
+      <pre id="xkt-debug-log" style="margin-top:8px;max-width:360px;max-height:160px;overflow:auto;background:#000;padding:6px"></pre>
+    `;
+    document.body.appendChild(div);
+
+    const log = (m) => {
+      const pre = document.getElementById('xkt-debug-log');
+      pre.textContent = (pre.textContent + '\n' + m).trim();
+    };
+
+    document.getElementById('btn-head').onclick = async () => {
+      const idv = window.CADLYTICS.xkt.lastFileId;
+      const res = await fetch(`/xkt/${idv}.xkt?nocache=${Date.now()}`, { method: 'HEAD', cache: 'no-store' });
+      log(`[HEAD] /xkt/${idv}.xkt -> ${res.status} length=${res.headers.get('content-length')}`);
+    };
+
+    document.getElementById('btn-exists').onclick = async () => {
+      const idv = window.CADLYTICS.xkt.lastFileId;
+      const res = await fetch(`/exists/xkt/${idv}?nocache=${Date.now()}`, { cache: 'no-store' });
+      log(`[GET] /exists/xkt/${idv} -> ${res.status} ${await res.text()}`);
+    };
+
+    document.getElementById('btn-force').onclick = () => {
+      const idv = window.CADLYTICS.xkt.lastFileId || resolveCurrentFileId();
+      if (!idv) {
+        log('[LOAD] Aucun file_id actif pour forceLoadXKT');
+        return;
+      }
+      forceLoadXKT(idv);
+      log(`[LOAD] forceLoadXKT(${idv})`);
+    };
+  }
+
+  // loader neutre : adapte à ton viewer/Plugin réel
+  window.forceLoadXKT = function forceLoadXKT(fileId) {
+    const effectiveId = fileId
+      || window.CADLYTICS?.xkt?.lastFileId
+      || resolveCurrentFileId();
+
+    if (!effectiveId) {
+      console.warn('[forceLoadXKT] Aucun file_id disponible pour construire l\'URL.');
+      return;
+    }
+
+    try {
+      window.CADLYTICS?.xkt?.setFileId?.(effectiveId);
+    } catch {}
+
+    window.currentFileId = effectiveId;
+
+    const url = `/xkt/${effectiveId}.xkt?nocache=${Date.now()}`;
+    // 1) Si tu as déjà un wrapper
+    if (typeof window.loadXKTFromUrl === 'function') {
+      return window.loadXKTFromUrl(url, { fileId: effectiveId });
+    }
+    // 2) Cas Xeokit "classique"
+    if (window.viewer && window.viewer.scene && window.viewer.scene.loadXKT) {
+      const model = window.viewer.scene.loadXKT({ src: url });
+      try {
+        onModelLoadedOnce(model, () => initCadlyticsTools(model, { fileId: effectiveId }));
+      } catch (err) {
+        console.warn('[forceLoadXKT] init hook failed', err);
+      }
+      return model;
+    }
+    console.warn('[forceLoadXKT] Aucun loader détecté. Implémente loadXKTFromUrl(url). url=', url);
+  };
+
+  window.addEventListener('DOMContentLoaded', () => {
+    ensurePanel();
+  });
+})();
+
+async function waitForXKT(fileId, { maxMs = 90000, stepMs = 900 } = {}) {
+  const t0 = performance.now();
+  let attempt = 0;
+  while (performance.now() - t0 < maxMs) {
+    attempt++;
+    const qs = `?nocache=${Date.now()}`;
+
+    // HEAD direct
+    try {
+      const head = await fetch(`/xkt/${fileId}.xkt${qs}`, { method: 'HEAD', cache: 'no-store' });
+      const len = Number(head.headers.get('content-length') || '0');
+      console.log('[wait][xkt][head]', { attempt, status: head.status, len });
+      if (head.ok && len > 0) return true;
+    } catch {}
+
+    // /exists
+    try {
+      const ex = await fetch(`/exists/xkt/${fileId}${qs}`, { cache: 'no-store' });
+      if (ex.ok) {
+        const j = await ex.json();
+        console.log('[wait][xkt][exists]', { attempt, ...j });
+        if (j.exists && j.size > 0) return true;
+      }
+    } catch {}
+
+    await new Promise(r => setTimeout(r, stepMs));
+  }
+  return false;
+}
+
+async function onUploadResponse(resp) {
+  // resp doit contenir file_id (et éventuellement xktUrl côté serveur, mais on ne s’y fie pas)
+  const { file_id } = resp;
+  console.log('[upload] ok', { file_id }); // log minimal et fiable
+
+  CADLYTICS.xkt.setFileId(file_id);       // maj panneau debug
+
+  const ready = await waitForXKT(file_id);
+  if (!ready) {
+    console.warn('[wait] timeout — XKT non prêt, utilisez le bouton "Force Load" dans le panneau debug');
+    return;
+  }
+
+  // charge automatiquement si prêt
+  forceLoadXKT(file_id);
+}
