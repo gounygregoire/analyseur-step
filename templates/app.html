@@ -213,6 +213,19 @@
         return ms.filter(Boolean);
       }
 
+      function getFaceCount(scene){
+        if (scene?.stats?.numTriangles != null) return scene.stats.numTriangles|0;
+        if (scene?.stats?.triangles    != null) return scene.stats.triangles|0;
+        let sum = 0;
+        const meshes = scene?.meshes || scene?.objects || [];
+        for (const m of meshes) {
+          const g = m?.geometry || m?._geometry;
+          const triCount = (g?.numTriangles != null) ? g.numTriangles : ((g?.indices?.length || 0) / 3);
+          sum += (triCount|0);
+        }
+        return sum|0;
+      }
+
       function getGeomArrays(m){
         const G = [
           m.geometry, m._geometry, m._mesh?.geometry, m._rendererMesh?.geometry,
@@ -235,7 +248,7 @@
         if (!viewer?.scene) return false;
 
         window.__getFaces = async function(){
-          const faces=[]; let tri=0; const MAX=40000;
+          const faceRecords=[]; let tri=0; const MAX=40000;
           const ms = collectMeshes(viewer.scene);
           for (const m of ms){
             const gi = getGeomArrays(m); if (!gi) continue;
@@ -249,13 +262,14 @@
               const p2=mul4(wm,[P[c],P[c+1],P[c+2]]);
               const e1=sub(p1,p0), e2=sub(p2,p0);
               const n=norm(cross(e1,e2)); const area=0.5*vlen(cross(e1,e2));
-              faces.push({ id: tri, normal:n, area });
+              faceRecords.push({ id: tri, normal:n, area });
               if (++tri>=MAX) break;
             }
             if (tri>=MAX) break;
           }
-          console.log('[probe safe] faces =', faces.length);
-          return faces;
+          const faces = getFaceCount(viewer.scene);
+          console.log('[probe safe] faces =', faces);
+          return faceRecords;
         };
 
         console.log('[probe safe] installed');

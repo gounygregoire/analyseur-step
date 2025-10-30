@@ -514,6 +514,30 @@ function buildDraftState(registry, axisInfo, thresholdDeg) {
 }
 
 function applyMode({ layer, registry, entries, axisInfo, thresholdDeg, requestedMode }) {
+  // Anti-race: attendre que la scène soit prête (meshes + camera proj)
+  const scene = layer?.scene || registry?.viewer?.scene || registry?.model?.scene || null;
+  if (scene) {
+    const meshCount = Number(scene.stats?.numMeshes ?? scene.numMeshes ?? 0);
+    const hasMeshes = Number.isFinite(meshCount) && meshCount > 0;
+    const cam = scene.camera;
+    const projOk = !!(cam && cam.projection === "perspective" && cam.perspective &&
+      Number.isFinite(cam.perspective.near) && Number.isFinite(cam.perspective.far));
+
+    if (!hasMeshes || !projOk) {
+      const scheduler = typeof requestAnimationFrame === "function"
+        ? requestAnimationFrame
+        : (cb) => setTimeout(cb, 16);
+      scheduler(() => {
+        try {
+          applyMode({ layer, registry, entries, axisInfo, thresholdDeg, requestedMode });
+        } catch (err) {
+          console.warn("[heatmap] deferred render skipped", err);
+        }
+      });
+      return registry?.heatmap?.mode || MODE_OK;
+    }
+  }
+
   const mode = VALID_MODES.has(requestedMode) ? requestedMode : MODE_OK;
   const axisLetter = String(axisInfo?.letter || "Z").toUpperCase();
   const modelCandidate = registry?.modelId

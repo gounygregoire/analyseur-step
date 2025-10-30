@@ -2477,6 +2477,55 @@ function logCanvasAndOverlayDiagnostics(viewerInstance) {
       console.warn("[viewer][canvas] diagnostic: aucun canvas trouvé");
       return;
     }
+    const renderCall = (() => {
+      const renderer = viewerInstance?.renderer || null;
+      if (renderer) {
+        if (typeof renderer.renderFrame === "function") {
+          return { fn: renderer.renderFrame, ctx: renderer };
+        }
+        if (typeof renderer.render === "function") {
+          return { fn: renderer.render, ctx: renderer };
+        }
+      }
+      const sceneRenderer = viewerInstance?.scene?.renderer || null;
+      if (sceneRenderer) {
+        if (typeof sceneRenderer.renderFrame === "function") {
+          return { fn: sceneRenderer.renderFrame, ctx: sceneRenderer };
+        }
+        if (typeof sceneRenderer.render === "function") {
+          return { fn: sceneRenderer.render, ctx: sceneRenderer };
+        }
+      }
+      if (typeof viewerInstance?.renderFrame === "function") {
+        return { fn: viewerInstance.renderFrame, ctx: viewerInstance };
+      }
+      if (typeof viewerInstance?.render === "function") {
+        return { fn: viewerInstance.render, ctx: viewerInstance };
+      }
+      const scene = viewerInstance?.scene || null;
+      if (scene) {
+        if (typeof scene.renderFrame === "function") {
+          return { fn: scene.renderFrame, ctx: scene };
+        }
+        if (typeof scene.render === "function") {
+          return { fn: scene.render, ctx: scene };
+        }
+      }
+      return null;
+    })();
+
+    if (renderCall) {
+      const { fn, ctx } = renderCall;
+      try {
+        fn.call(ctx);
+      } catch (e) {
+        console.warn("[viewer][canvas] render deferred:", e?.message || e);
+        if (typeof requestAnimationFrame === "function") {
+          requestAnimationFrame(() => {});
+        }
+      }
+    }
+
     const rect = canvasCandidate.getBoundingClientRect();
     const clientWidth = canvasCandidate.clientWidth;
     const clientHeight = canvasCandidate.clientHeight;
