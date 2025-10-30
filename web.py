@@ -2,12 +2,23 @@
 from __future__ import annotations
 
 import os, uuid, pathlib, json, re, glob, socket, time, subprocess, mimetypes
+import logging
 from urllib.parse import urlparse, urlunparse, unquote
 from pathlib import Path
 import boto3
 import botocore
 
-from flask import Flask, request, jsonify, make_response, send_from_directory, abort, render_template, redirect
+from flask import (
+    Flask,
+    request,
+    jsonify,
+    make_response,
+    send_from_directory,
+    abort,
+    render_template,
+    redirect,
+    url_for,
+)
 from flask_cors import CORS
 from dotenv import load_dotenv
 import requests
@@ -37,6 +48,8 @@ S3_BUCKET = os.environ.get("S3_BUCKET", "")
 S3_REGION = os.environ.get("S3_REGION", "eu-west-3")
 s3 = boto3.client("s3", region_name=S3_REGION)
 s3_client = s3
+
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
@@ -961,65 +974,39 @@ def exists_xkt(file_id: str):
     exists = False
     size = 0
 
-    if S3_BUCKET:
-        try:
-            resp = s3_client.head_object(Bucket=S3_BUCKET, Key=key)
-            size = int(resp.get("ContentLength", 0) or 0)
-            exists = size > 0
-            app.logger.info(
-                "[exists][s3] bucket=%s key=%s method=s3 size=%s exists=%s",
-                S3_BUCKET,
-                key,
-                size,
-                exists,
-            )
-        except botocore.exceptions.ClientError as exc:
-            app.logger.warning(
-                "[exists][s3] bucket=%s key=%s method=s3 err=%s",
-                S3_BUCKET,
-                key,
-                exc,
-            )
-        except Exception as exc:
-            app.logger.error(
-                "[exists][s3] bucket=%s key=%s method=s3 unexpected_err=%s",
-                S3_BUCKET,
-                key,
-                exc,
-            )
+    try:
+        resp = s3_client.head_object(Bucket=S3_BUCKET, Key=key)
+        size = int(resp.get("ContentLength", 0) or 0)
+        exists = size > 0
+        app.logger.info(f"[exists][s3] key={key} size={size} exists={exists}")
+    except botocore.exceptions.ClientError as e:
+        app.logger.warning(f"[exists][s3] head failed key={key} err={e}")
+    except Exception as e:
+        app.logger.error(f"[exists][s3] unexpected err key={key} err={e}")
 
-    if not exists and S3_BUCKET:
+    if not exists:
         try:
-            url = _public_s3_url(key)
-            response = requests.head(url, timeout=4, allow_redirects=True)
-            clen = (
-                response.headers.get("Content-Length")
-                or response.headers.get("content-length")
-                or "0"
-            )
-            size = int(clen) if str(clen).isdigit() else 0
-            exists = response.status_code == 200 and size > 0
+            xkt_url = url_for("serve_xkt", file_id=file_id, _external=True)
+            r = requests.head(xkt_url, timeout=5, allow_redirects=True)
+            clen = r.headers.get("Content-Length") or r.headers.get("content-length") or "0"
+            try:
+                size = int(str(clen))
+            except (TypeError, ValueError):
+                size = 0
+            exists = (r.status_code == 200 and size > 0)
             app.logger.info(
-                "[exists][http] bucket=%s key=%s method=http url=%s status=%s size=%s exists=%s",
-                S3_BUCKET,
-                key,
-                url,
-                response.status_code,
-                size,
-                exists,
+                f"[exists][http] url={xkt_url} status={r.status_code} size={size} exists={exists}"
             )
-        except Exception as exc:
-            app.logger.warning(
-                "[exists][http] bucket=%s key=%s method=http err=%s",
-                S3_BUCKET,
-                key,
-                exc,
-            )
+        except Exception as e:
+            app.logger.warning(f"[exists][http] head failed key={key} err={e}")
 
     payload = {"file_id": file_id, "exists": exists, "size": size}
     resp = make_response(jsonify(payload), 200)
     resp.headers["Cache-Control"] = "no-cache, max-age=0"
     resp.headers["Access-Control-Allow-Origin"] = "*"
+    logger.info(
+        "[exists][result] file_id=%s key=%s exists=%s size=%s", file_id, key, exists, size
+    )
     return resp
 
 
