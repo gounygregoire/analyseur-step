@@ -36,6 +36,7 @@ load_dotenv()
 S3_BUCKET = os.environ.get("S3_BUCKET", "")
 S3_REGION = os.environ.get("S3_REGION", "eu-west-3")
 s3 = boto3.client("s3", region_name=S3_REGION)
+s3_client = s3
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
@@ -951,40 +952,40 @@ def debug_xkt(file_id: str):
 @app.get("/exists/xkt/<file_id>")
 def exists_xkt(file_id: str):
     key = f"xkt/{file_id}.xkt"
-    try:
-        r = s3.head_object(Bucket=S3_BUCKET, Key=key)
-        size = int(r.get("ContentLength", 0))
-        resp = make_response(
-            jsonify({
-                "file_id": file_id,
-                "exists": True,
-                "size": size,
-            }),
-            200,
-        )
-    except botocore.exceptions.ClientError as e:
-        code = e.response.get("Error", {}).get("Code", "")
-        if code in ("404", "NoSuchKey", "NotFound"):
-            resp = make_response(
-                jsonify({
-                    "file_id": file_id,
-                    "exists": False,
-                    "size": 0,
-                }),
-                200,
-            )
-        else:
-            app.logger.warning("[exists][xkt] head_object error: %s", code)
-            resp = make_response(
-                jsonify({
-                    "file_id": file_id,
-                    "exists": False,
-                    "size": 0,
-                }),
-                200,
-            )
+    exists = False
+    size = 0
 
-    resp.headers["Cache-Control"] = "no-store, max-age=0"
+    if S3_BUCKET:
+        try:
+            resp = s3_client.head_object(Bucket=S3_BUCKET, Key=key)
+            size = int(resp.get("ContentLength", 0) or 0)
+            exists = size > 0
+        except botocore.exceptions.ClientError as exc:
+            err_code = (exc.response or {}).get("Error", {}).get("Code", "")
+            if err_code not in ("404", "NoSuchKey", "NotFound", "403", "AccessDenied"):
+                app.logger.warning("[exists][xkt] head_object unexpected error: %s", err_code)
+            exists = False
+            size = 0
+        except Exception as exc:
+            app.logger.warning("[exists][xkt] head_object failed: %s", exc)
+            exists = False
+            size = 0
+
+    if not exists:
+        local_path = Path(OUTPUT_FOLDER) / f"{file_id}.xkt"
+        try:
+            if local_path.exists():
+                local_size = local_path.stat().st_size
+                if local_size > 0:
+                    exists = True
+                    size = local_size
+        except OSError:
+            pass
+
+    payload = {"file_id": file_id, "exists": exists, "size": size}
+    resp = make_response(jsonify(payload), 200)
+    resp.headers["Cache-Control"] = "no-cache, max-age=0"
+    resp.headers["Access-Control-Allow-Origin"] = "*"
     return resp
 
 
