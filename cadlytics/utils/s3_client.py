@@ -1,176 +1,123 @@
-"""Utilitaires S3 pour Scaleway avec gestion de retries simples."""
+"""S3 client helpers for Scaleway buckets.
+
+This module centralises configuration of the S3 client and provides a
+couple of convenience helpers with minimal retry logic. Configuration is
+loaded from environment variables to remain compatible with Render.
+"""
+
 from __future__ import annotations
 
 import os
-import time
-from functools import lru_cache
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Iterable, Optional
 
-try:
-    import boto3
-    from botocore.config import Config
-    from botocore.exceptions import BotoCoreError, ClientError
-except ImportError as exc:  # pragma: no cover - dépendance obligatoire
-    # boto3 est requis côté worker/web. On lève une erreur explicite au premier usage.
-    boto3 = None  # type: ignore[assignment]
-    Config = None  # type: ignore[assignment]
-    BotoCoreError = ClientError = Exception  # type: ignore[assignment]
-    _IMPORT_ERROR = exc
-else:
-    _IMPORT_ERROR = None
+import boto3
+from botocore.config import Config
+from botocore.exceptions import BotoCoreError, ClientError
 
 
-_S3_ENDPOINT_ENV = "S3_ENDPOINT"
-_S3_BUCKET_ENV = "S3_BUCKET"
-_S3_REGION_ENV = "AWS_REGION"
-_S3_KEY_ENV = "AWS_ACCESS_KEY_ID"
-_S3_SECRET_ENV = "AWS_SECRET_ACCESS_KEY"
-_S3_FORCE_PATH_ENV = "S3_FORCE_PATH_STYLE"
-
-_DEFAULT_REGION = "us-east-1"
-_MAX_RETRIES = 2
-_RETRY_SLEEP_SEC = 0.5
+_CLIENT: Optional[Any] = None
 
 
-class S3ConfigurationError(RuntimeError):
-    """Erreur levée lorsque la configuration S3 est incomplète."""
+def _build_client() -> Any:
+    """Instantiate a boto3 S3 client configured for Scaleway."""
 
+    endpoint_url = os.getenv("S3_ENDPOINT")
+    region = os.getenv("AWS_REGION")
+    access_key = os.getenv("AWS_ACCESS_KEY_ID")
+    secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+    force_path_style = os.getenv("S3_FORCE_PATH_STYLE", "1") not in {"", "0", "false", "False"}
 
-def _ensure_dependencies() -> None:
-    """Vérifie que boto3 est bien importé."""
-    if _IMPORT_ERROR is not None:
-        raise RuntimeError(
-            "boto3 est requis pour utiliser les utilitaires S3"
-        ) from _IMPORT_ERROR
+    if not all([endpoint_url, region, access_key, secret_key]):
+        raise RuntimeError("Missing S3 configuration environment variables")
 
+    config = Config(s3={"addressing_style": "path" if force_path_style else "auto"})
 
-def _get_bucket_name() -> str:
-    bucket = os.environ.get(_S3_BUCKET_ENV)
-    if not bucket:
-        raise S3ConfigurationError(
-            f"Variable d'environnement {_S3_BUCKET_ENV} manquante pour S3"
-        )
-    return bucket
-
-
-def _build_client() -> "boto3.client":
-    _ensure_dependencies()
-
-    access_key = os.environ.get(_S3_KEY_ENV)
-    secret_key = os.environ.get(_S3_SECRET_ENV)
-    if not access_key or not secret_key:
-        missing = [
-            name
-            for name, value in ((_S3_KEY_ENV, access_key), (_S3_SECRET_ENV, secret_key))
-            if not value
-        ]
-        raise S3ConfigurationError(
-            "Variables d'environnement manquantes pour S3: " + ", ".join(missing)
-        )
-
-    endpoint = os.environ.get(_S3_ENDPOINT_ENV)
-    region = os.environ.get(_S3_REGION_ENV, _DEFAULT_REGION)
-    force_path = os.environ.get(_S3_FORCE_PATH_ENV, "0") == "1"
-
-    config_kwargs = {"signature_version": "s3v4"}
-    if force_path:
-        config_kwargs["s3"] = {"addressing_style": "path"}
-
-    config = Config(**config_kwargs)
-
-    session = boto3.session.Session()
-    return session.client(
+    return boto3.client(
         "s3",
-        region_name=region,
-        endpoint_url=endpoint,
+        endpoint_url=endpoint_url,
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
+        region_name=region,
         config=config,
     )
 
 
-@lru_cache(maxsize=1)
-def s3_client() -> "boto3.client":
-    """Retourne un client S3 configuré pour Scaleway."""
-    return _build_client()
+def s3_client() -> Any:
+    """Return a cached boto3 S3 client."""
+
+    global _CLIENT
+    if _CLIENT is None:
+        _CLIENT = _build_client()
+    return _CLIENT
 
 
-def _with_retries(action: str, func: Callable[..., Any], *args, **kwargs):
-    last_error: Optional[Exception] = None
-    for attempt in range(1, _MAX_RETRIES + 1):
+def _bucket_name() -> str:
+    bucket = os.getenv("S3_BUCKET")
+    if not bucket:
+        raise RuntimeError("S3_BUCKET environment variable is not set")
+    return bucket
+
+
+def _retry(action: str, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, 3):
         try:
             return func(*args, **kwargs)
-        except (ClientError, BotoCoreError, OSError) as exc:
-            last_error = exc
-            print(f"[s3] {action} tentative {attempt}/{_MAX_RETRIES} échouée: {exc}")
-            if attempt < _MAX_RETRIES:
-                time.sleep(_RETRY_SLEEP_SEC)
-    if last_error is not None:
-        raise last_error
-    raise RuntimeError(f"Action {action} échouée sans exception explicite")
+        except (ClientError, BotoCoreError) as exc:
+            last_exc = exc
+            print(f"[s3_client] {action} failed (attempt {attempt}/2): {exc}")
+    if last_exc:
+        raise last_exc
+    return None
 
 
 def key_exists(key: str) -> bool:
-    """Retourne True si la clé existe dans le bucket configuré."""
+    """Return True if the object key exists in the configured bucket."""
+
+    bucket = _bucket_name()
+
+    def _head() -> Any:
+        return s3_client().head_object(Bucket=bucket, Key=key)
+
     try:
-        _with_retries(
-            "head_object",
-            s3_client().head_object,
-            Bucket=_get_bucket_name(),
-            Key=key,
-        )
+        _retry("head_object", _head)
         return True
     except ClientError as exc:
-        status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
-        if status == 404:
+        error_code = exc.response.get("Error", {}).get("Code") if hasattr(exc, "response") else None
+        if error_code in {"404", "NoSuchKey", "NotFound"}:
             return False
-        print(f"[s3] head_object erreur inattendue pour {key}: {exc}")
-        return False
-    except BotoCoreError as exc:
-        print(f"[s3] head_object erreur bas niveau pour {key}: {exc}")
-        return False
+        raise
 
 
 def download_to_file(key: str, dest_path: str) -> None:
-    """Télécharge la clé S3 vers le chemin local donné."""
-    os.makedirs(os.path.dirname(dest_path) or ".", exist_ok=True)
-    try:
-        _with_retries(
-            "download_file",
-            s3_client().download_file,
-            _get_bucket_name(),
-            key,
-            dest_path,
-        )
-    except Exception as exc:  # pragma: no cover - défense supplémentaire
-        raise RuntimeError(
-            f"Téléchargement S3 échoué pour {key} -> {dest_path}: {exc}"
-        ) from exc
+    """Download an object to the given local path."""
+
+    bucket = _bucket_name()
+
+    def _download() -> None:
+        s3_client().download_file(bucket, key, dest_path)
+
+    _retry("download_file", _download)
 
 
 def upload_file(src_path: str, key: str, public: bool = True) -> None:
-    """Envoie un fichier local vers S3, éventuellement en lecture publique."""
-    extra_args = {}
-    if public:
-        extra_args["ACL"] = "public-read"
+    """Upload a local file to S3."""
 
-    try:
-        _with_retries(
-            "upload_file",
-            s3_client().upload_file,
-            src_path,
-            _get_bucket_name(),
-            key,
-            ExtraArgs=extra_args if extra_args else None,
-        )
-    except Exception as exc:  # pragma: no cover - défense supplémentaire
-        raise RuntimeError(
-            f"Upload S3 échoué pour {src_path} -> {key}: {exc}"
-        ) from exc
+    bucket = _bucket_name()
+    extra_args = {"ACL": "public-read"} if public else None
+
+    def _upload() -> None:
+        if extra_args:
+            s3_client().upload_file(src_path, bucket, key, ExtraArgs=extra_args)
+        else:
+            s3_client().upload_file(src_path, bucket, key)
+
+    _retry("upload_file", _upload)
 
 
-def find_first_existing(keys: Sequence[str]) -> Optional[str]:
-    """Retourne la première clé existante parmi la liste fournie."""
+def find_first_existing(keys: Iterable[str]) -> Optional[str]:
+    """Return the first key that exists in S3 from the provided iterable."""
+
     for key in keys:
         if key_exists(key):
             return key

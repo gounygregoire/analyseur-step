@@ -53,20 +53,6 @@ s3_client = s3
 
 logger = logging.getLogger(__name__)
 
-try:
-    _reconvert_queue_connection = Redis.from_url(
-        REDIS_URL,
-        ssl_cert_reqs=None,
-        socket_timeout=5,
-    )
-    _reconvert_queue = Queue("cadlytics", connection=_reconvert_queue_connection)
-except Exception as exc:
-    logger.warning("[reconvert] unable to pre-instantiate queue: %s", exc)
-    _reconvert_queue_connection = None
-    _reconvert_queue = None
-
-queue = _reconvert_queue
-
 app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
 
@@ -141,12 +127,20 @@ REDIS_URL = _normalize_redis_url(
 )
 RQ_QUEUE_NAME = os.environ.get("RQ_QUEUE_NAME", "cadlytics")
 
+# RQ Queue globale (utilisée par les endpoints /api/reconvert)
+_queue_redis_url = REDIS_URL or "redis://localhost:6379/0"
+try:
+    redis_conn = Redis.from_url(_queue_redis_url, ssl_cert_reqs=None, socket_timeout=5)
+    queue: Queue | None = Queue("cadlytics", connection=redis_conn)
+except Exception as exc:
+    logger.warning("[reconvert] impossible d'initialiser la queue: %s", exc)
+    redis_conn = None
+    queue = None
+
 _redis_conn: redislib.Redis | None = None
-_q: Queue | None = None
+_q: Queue | None = queue
 _redis_err: str | None = None
 _rq_err: str | None = None
-
-_FILE_ID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 def get_redis() -> redislib.Redis:
     global _redis_conn, _redis_err
@@ -165,105 +159,14 @@ def get_queue() -> Queue:
     global _q, _rq_err
     if _q is not None:
         return _q
-    if '_reconvert_queue' in globals() and _reconvert_queue is not None:
-        _q = _reconvert_queue
-        return _q
     try:
-        _q = Queue(RQ_QUEUE_NAME, connection=get_redis())
+        _q = queue if queue is not None else Queue(RQ_QUEUE_NAME, connection=get_redis())
         _ = _q.count  # touch
     except Exception as e:
         _rq_err = repr(e)
         raise
     return _q
 
-
-@app.post("/api/reconvert")
-def api_reconvert() -> Response:
-    """Enqueue une reconversion XKT à partir du STEP S3."""
-
-    payload = request.get_json(silent=True) or {}
-    file_id = str(payload.get("file_id") or "").strip()
-    if not file_id or not _FILE_ID_RE.match(file_id):
-        return jsonify(error="file_id invalide"), 400
-
-    try:
-        queue = get_queue()
-        if queue is None:
-            raise RuntimeError("queue not configured")
-    except Exception as exc:
-        logger.exception("[reconvert] redis unavailable: %s", exc)
-        return jsonify(error="Queue indisponible"), 503
-
-    try:
-        job = queue.enqueue(
-            "cadlytics.jobs.reconvert.reconvert",
-            file_id,
-            job_timeout=RECONVERT_JOB_TIMEOUT_SEC,
-            result_ttl=3600,
-            description=f"reconvert:{file_id}",
-        )
-    except Exception as exc:
-        logger.exception("[reconvert] enqueue failed file_id=%s: %s", file_id, exc)
-        return jsonify(error="Enqueue impossible"), 500
-
-    logger.info("[reconvert] accepted file_id=%s job_id=%s", file_id, job.id)
-    return jsonify(accepted=True, file_id=file_id, job_id=job.id), 202
-
-
-def _format_job_result(job: Job, status: str) -> dict | list | str | int | float | bool | None:
-    """Prépare un payload JSON-safe pour le résultat du job."""
-
-    if status == "finished":
-        result = job.result
-        if isinstance(result, (str, int, float, bool)) or result is None:
-            return result
-        if isinstance(result, (list, dict)):
-            return result
-        return repr(result)
-
-    if status == "failed":
-        last_line = None
-        if job.exc_info:
-            lines = [line for line in job.exc_info.splitlines() if line.strip()]
-            if lines:
-                last_line = lines[-1]
-        return {"error": last_line or "Conversion échouée"}
-
-    return None
-
-
-@app.get("/api/reconvert/status/<string:job_id>")
-def api_reconvert_status(job_id: str) -> Response:
-    """Retourne l'état d'un job de reconversion."""
-
-    job_id = (job_id or "").strip()
-    if not job_id:
-        return jsonify(error="job_id requis"), 400
-
-    try:
-        queue = get_queue()
-        if queue is None:
-            raise RuntimeError("queue not configured")
-    except Exception as exc:
-        logger.exception("[reconvert] status redis unavailable: %s", exc)
-        return jsonify(error="Queue indisponible"), 503
-
-    try:
-        job = Job.fetch(job_id, connection=queue.connection)
-    except NoSuchJobError:
-        return jsonify(error="Job introuvable"), 404
-    except Exception as exc:
-        logger.exception("[reconvert] status fetch failed job_id=%s: %s", job_id, exc)
-        return jsonify(error="Lecture job impossible"), 500
-
-    status = job.get_status(refresh=False)
-    payload: dict[str, object] = {"status": status}
-    result_payload = _format_job_result(job, status)
-    if result_payload is not None:
-        payload["result"] = result_payload
-
-    logger.info("[reconvert] status job_id=%s status=%s", job_id, status)
-    return jsonify(payload)
 
 # ---------- HTTP helpers ----------
 def _http_timeout():
@@ -1203,6 +1106,75 @@ def __clear_caches():
         except Exception:
             pass
     return jsonify(ok=True, removed=removed)
+
+
+# --- À insérer en fin de fichier : endpoints reconvert ---
+@app.post("/api/reconvert")
+def api_reconvert() -> Response:
+    """Enfile une reconversion XKT et retourne le job RQ associé."""
+
+    payload = request.get_json(silent=True) or {}
+    file_id = str(payload.get("file_id") or "").strip()
+    if not file_id:
+        return jsonify(error="file_id requis"), 400
+
+    try:
+        current_queue = get_queue()
+    except Exception as exc:
+        logger.exception("[reconvert] queue indisponible: %s", exc)
+        return jsonify(error="queue_indisponible"), 503
+
+    try:
+        job = current_queue.enqueue(
+            "cadlytics.jobs.reconvert.reconvert",
+            file_id,
+            job_timeout=RECONVERT_JOB_TIMEOUT_SEC,
+        )
+    except Exception as exc:
+        logger.exception("[reconvert] enqueue failed file_id=%s", file_id)
+        return jsonify(error="enqueue_failed", detail=str(exc)), 503
+
+    return (
+        jsonify(accepted=True, file_id=file_id, job_id=job.id),
+        202,
+    )
+
+
+@app.get("/api/reconvert/status/<string:job_id>")
+def api_reconvert_status(job_id: str) -> Response:
+    """Expose l'état courant d'un job RQ de reconversion."""
+
+    job_id = (job_id or "").strip()
+    if not job_id:
+        return jsonify(error="job_id requis"), 400
+
+    try:
+        current_queue = get_queue()
+    except Exception as exc:
+        logger.exception("[reconvert] queue indisponible pour status: %s", exc)
+        return jsonify(error="queue_indisponible"), 503
+
+    try:
+        job = Job.fetch(job_id, connection=current_queue.connection)
+    except NoSuchJobError:
+        return jsonify(error="Job introuvable"), 404
+    except Exception as exc:
+        logger.exception("[reconvert] status fetch failed job_id=%s", job_id)
+        return jsonify(error="redis_unavailable", detail=str(exc)), 503
+
+    status = job.get_status(refresh=False)
+    payload: dict[str, object] = {"status": status}
+    if status == "finished" and job.result is not None:
+        payload["result"] = job.result
+    elif status == "failed":
+        last_line = None
+        if job.exc_info:
+            lines = [line for line in job.exc_info.splitlines() if line.strip()]
+            if lines:
+                last_line = lines[-1]
+        payload["result"] = {"error": last_line or "Conversion échouée"}
+
+    return jsonify(payload)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8000")))

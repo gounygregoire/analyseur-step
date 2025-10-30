@@ -1,36 +1,42 @@
-"""Tâches RQ pour reconvertir des STEP en XKT.
+"""Tâche RQ pour reconvertir un fichier STEP/STL en XKT.
 
-Lancer un worker dédié avec::
-
-    rq worker -u "$REDIS_URL" cadlytics
+# Run: rq worker -u $REDIS_URL cadlytics
 """
 from __future__ import annotations
 
 import logging
-from typing import Dict
+from typing import Any, Dict
 
-from cadlytics.convert.convert_xkt import ConversionError, convert_to_xkt
+from cadlytics.convert.convert_xkt import convert_to_xkt
 
 logger = logging.getLogger(__name__)
 
 
-def reconvert(file_id: str) -> Dict[str, object]:
-    """Reconvertit le STEP associé à ``file_id`` en XKT via le worker RQ."""
+def reconvert(file_id: str) -> Dict[str, Any]:
+    """Reconvertit le fichier associé à ``file_id`` en XKT via RQ.
+
+    Args:
+        file_id: Identifiant du fichier à reconvertir.
+
+    Returns:
+        Le manifest détaillant la conversion généré par ``convert_to_xkt``.
+
+    Raises:
+        Exception: propage toute exception issue de ``convert_to_xkt`` afin que le job
+            soit marqué en échec.
+    """
     logger.info("[reconvert] start file_id=%s", file_id)
     try:
-        manifest = convert_to_xkt(file_id=file_id, force_geometry=True)
-    except ConversionError:
-        logger.exception("[reconvert] fail conversion_error file_id=%s", file_id)
-        raise
-    except Exception:  # pragma: no cover - garde-fou
-        logger.exception("[reconvert] fail unexpected_error file_id=%s", file_id)
+        payload = convert_to_xkt(file_id=file_id, force_geometry=True)
+    except Exception:
+        logger.exception("[reconvert] fail file_id=%s", file_id)
         raise
 
     logger.info(
         "[reconvert] ok file_id=%s meshes=%s triangles=%s size=%s",
-        manifest.get("file_id"),
-        manifest.get("meshes"),
-        manifest.get("triangles"),
-        manifest.get("xkt_size") or manifest.get("size_bytes"),
+        payload.get("file_id", file_id),
+        payload.get("meshes"),
+        payload.get("triangles"),
+        payload.get("xkt_size") or payload.get("size_bytes"),
     )
-    return manifest
+    return payload
