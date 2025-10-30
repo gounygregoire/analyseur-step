@@ -160,6 +160,12 @@ def _s3_get(key: str, dest_path: str) -> bool:
         app.logger.warning("[web] S3 get_file failed key=%s: %s", key, e)
         return False
 
+def _s3_key_for_xkt(file_id: str) -> str:
+    return f"xkt/{file_id}.xkt"
+
+def _public_s3_url(key: str) -> str:
+    return f"https://{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com/{key}"
+
 # ---------- Helpers métriques ----------
 def _cache_paths(file_id: str, axis: str):
     base = os.path.join(OUTPUT_FOLDER, f"{file_id}.stats.json")
@@ -951,7 +957,7 @@ def debug_xkt(file_id: str):
 
 @app.get("/exists/xkt/<file_id>")
 def exists_xkt(file_id: str):
-    key = f"xkt/{file_id}.xkt"
+    key = _s3_key_for_xkt(file_id)
     exists = False
     size = 0
 
@@ -960,27 +966,55 @@ def exists_xkt(file_id: str):
             resp = s3_client.head_object(Bucket=S3_BUCKET, Key=key)
             size = int(resp.get("ContentLength", 0) or 0)
             exists = size > 0
+            app.logger.info(
+                "[exists][s3] bucket=%s key=%s method=s3 size=%s exists=%s",
+                S3_BUCKET,
+                key,
+                size,
+                exists,
+            )
         except botocore.exceptions.ClientError as exc:
-            err_code = (exc.response or {}).get("Error", {}).get("Code", "")
-            if err_code not in ("404", "NoSuchKey", "NotFound", "403", "AccessDenied"):
-                app.logger.warning("[exists][xkt] head_object unexpected error: %s", err_code)
-            exists = False
-            size = 0
+            app.logger.warning(
+                "[exists][s3] bucket=%s key=%s method=s3 err=%s",
+                S3_BUCKET,
+                key,
+                exc,
+            )
         except Exception as exc:
-            app.logger.warning("[exists][xkt] head_object failed: %s", exc)
-            exists = False
-            size = 0
+            app.logger.error(
+                "[exists][s3] bucket=%s key=%s method=s3 unexpected_err=%s",
+                S3_BUCKET,
+                key,
+                exc,
+            )
 
-    if not exists:
-        local_path = Path(OUTPUT_FOLDER) / f"{file_id}.xkt"
+    if not exists and S3_BUCKET:
         try:
-            if local_path.exists():
-                local_size = local_path.stat().st_size
-                if local_size > 0:
-                    exists = True
-                    size = local_size
-        except OSError:
-            pass
+            url = _public_s3_url(key)
+            response = requests.head(url, timeout=4, allow_redirects=True)
+            clen = (
+                response.headers.get("Content-Length")
+                or response.headers.get("content-length")
+                or "0"
+            )
+            size = int(clen) if str(clen).isdigit() else 0
+            exists = response.status_code == 200 and size > 0
+            app.logger.info(
+                "[exists][http] bucket=%s key=%s method=http url=%s status=%s size=%s exists=%s",
+                S3_BUCKET,
+                key,
+                url,
+                response.status_code,
+                size,
+                exists,
+            )
+        except Exception as exc:
+            app.logger.warning(
+                "[exists][http] bucket=%s key=%s method=http err=%s",
+                S3_BUCKET,
+                key,
+                exc,
+            )
 
     payload = {"file_id": file_id, "exists": exists, "size": size}
     resp = make_response(jsonify(payload), 200)

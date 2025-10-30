@@ -13,38 +13,35 @@ import DFMViewerAdapter from "../static/js/modules/DFMViewerAdapter.js";
 
 let viewer, cameraControl, xktLoader, gltfLoader, dist, sections, canvas;
 
-// ---- Waiter: attend que l'XKT existe et soit "valide" ----
-async function waitForXKTReady(fileId, opts = {}) {
-  if (!fileId) throw new Error("file_id absent pour waitForXKTReady");
-  const minSize = opts.minSize ?? 24 * 1024; // ~24KB : permet les petits modèles légitimes
-  const badSize = opts.badSize ?? 46204; // taille connue "fausse"
-  const maxWait = opts.maxWait ?? 10 * 60 * 1000; // 10 min
-  const pollMs = opts.pollMs ?? 1500;
-  const t0 = performance.now();
-
-  while (true) {
-    const r = await fetch(`/debug/xkt/${fileId}`, { cache: "no-store" });
-    if (!r.ok) throw new Error(`debug_xkt_failed ${r.status}`);
-    const j = await r.json();
-    const { xkt_exists, xkt_size = 0, known_bad_xkt, xkt_looks_like_html } = j;
-    if (xkt_exists) {
-      if (xkt_looks_like_html) {
-        throw new Error("XKT_INVALID_HTML");
-      }
-      if (known_bad_xkt || xkt_size === badSize) {
-        console.warn("[wait][xkt] known bad artifact", { fileId, xkt_size });
-      } else if (xkt_size > 0) {
-        if (xkt_size < minSize) {
-          console.warn("[wait][xkt] small XKT detected, accepting anyway", { fileId, xkt_size, minSize });
-        }
-        return `/xkt/${fileId}.xkt`;
-      }
-    }
-    if (performance.now() - t0 > maxWait) {
-      throw new Error("GEOMETRY_WAIT_TIMEOUT");
-    }
-    await new Promise((res) => setTimeout(res, pollMs));
+async function headExists(url) {
+  try {
+    const res = await fetch(url, { method: "HEAD", cache: "no-store" });
+    const len = parseInt(res.headers.get("Content-Length") || res.headers.get("content-length") || "0", 10);
+    return { ok: res.status === 200 && len > 0, size: len, status: res.status };
+  } catch (e) {
+    return { ok: false, size: 0, status: 0, err: String(e) };
   }
+}
+
+async function waitForXKTReady({ fileId, xktUrl, maxTries = 60, delayMs = 800 }) {
+  // 1) on tente d’abord l’API exists (si elle marche, c’est immédiat)
+  for (let i = 1; i <= maxTries; i++) {
+    try {
+      const r = await fetch(`/exists/xkt/${fileId}`, { cache: "no-store" });
+      if (r.ok) {
+        const j = await r.json();
+        console.log("[wait][xkt][exists]", { attempt: i, fileId, j });
+        if (j.exists && j.size > 0) return true;
+      }
+    } catch {}
+    await new Promise(r => setTimeout(r, 250)); // petite pause avant fallback HEAD
+    // 2) fallback HEAD direct sur /xkt
+    const head = await headExists(xktUrl);
+    console.log("[wait][xkt][head]", { attempt: i, fileId, head });
+    if (head.ok && head.size > 0) return true;
+    await new Promise(r => setTimeout(r, delayMs));
+  }
+  return false;
 }
 
 function setHeatmapEnabled(enabled) {
@@ -217,21 +214,22 @@ export async function initViewer(modelUrl) {
         viewer.model = null;
       }
       setHeatmapEnabled(false);
-      let urls = [
-        `/api/simple/models/${fileId}.xkt`,
-        `/static/converted/${fileId}.xkt`,
-        `/models/${fileId}.xkt`
-      ];
-      try {
-        const awaited = await waitForXKTReady(fileId);
-        urls = [awaited, ...urls.filter((u) => u !== awaited)];
-      } catch (waitErr) {
-        console.error('[viewer] waitForXKTReady failed', waitErr);
+      const xktUrl = `/xkt/${fileId}.xkt?t=${Date.now()}`;
+      const ok = await waitForXKTReady({ fileId, xktUrl });
+      if (!ok) {
+        const waitErr = new Error("XKT_NOT_READY_TIMEOUT");
+        console.error('[viewer] waitForXKTReady timeout', { fileId, xktUrl });
         if (typeof window !== "undefined" && typeof window.showError === "function") {
           window.showError("Conversion en cours. Merci de patienter quelques instants et réessayer.");
         }
         throw waitErr;
       }
+      let urls = [
+        xktUrl,
+        `/api/simple/models/${fileId}.xkt`,
+        `/static/converted/${fileId}.xkt`,
+        `/models/${fileId}.xkt`
+      ];
       let lastErr;
       for (const url of urls) {
         try {
@@ -726,8 +724,15 @@ async function loadXKTFromConvertResponse(response) {
 
     window.setUiProgress?.('Chargement du modèle…');
     setHeatmapEnabled(false);
-    const xktUrl = await waitForXKTReady(fileId);
-    console.debug('[VIEW] will load XKT', { fileId, xktUrl });
+    const xktUrl = `/xkt/${fileId}.xkt?t=${Date.now()}`;
+    const ok = await waitForXKTReady({ fileId, xktUrl });
+    if (!ok) {
+      console.error('[viewer] XKT not ready after timeout', { fileId, xktUrl });
+      const msg = "Modèle en cours de génération. Réessaie dans quelques instants.";
+      window.showToast ? showToast(msg, { type: 'error' }) : alert(msg);
+      return;
+    }
+    console.log('[viewer] XKT ready, loading…', { fileId, xktUrl });
     if (typeof lastXktUrl !== 'undefined') lastXktUrl = xktUrl;
 
     const { model, type, src } = await tryLoadXKTThenGLB(fileId, xktUrl);
