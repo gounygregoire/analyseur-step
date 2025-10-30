@@ -10,6 +10,7 @@ import {
   AxisGizmoPlugin
 } from "@xeokit/xeokit-sdk";
 import DFMViewerAdapter from "../static/js/modules/DFMViewerAdapter.js";
+import { waitFor } from "./js/utils/waits.js";
 
 let viewer, cameraControl, xktLoader, gltfLoader, dist, sections, canvas;
 
@@ -746,6 +747,38 @@ async function loadXKTFromConvertResponse(response) {
       }
     } catch (fitErr) {
       console.warn('[VIEW] camera fit failed', fitErr);
+    }
+    // --- readiness guard: meshes + camera ---
+    const scene = viewer.scene;
+
+    // 1) Attendre la présence de meshes réels
+    await waitFor(() => {
+      const n = (scene.stats?.numMeshes ?? scene.numMeshes ?? 0);
+      return Number.isFinite(n) && n > 0;
+    }, 10000, 50);
+
+    // 2) Fixer near/far si indéfinis (évite projMatrix undefined)
+    const cam = scene.camera;
+    if (cam && cam.projection === "perspective" && cam.perspective) {
+      const p = cam.perspective;
+      const hasNear = Number.isFinite(p.near);
+      const hasFar  = Number.isFinite(p.far);
+      if (!hasNear || !hasFar) {
+        const aabb = scene.aabb || {min:[-1,-1,-1], max:[1,1,1]};
+        const dx = aabb.max[0] - aabb.min[0];
+        const dy = aabb.max[1] - aabb.min[1];
+        const dz = aabb.max[2] - aabb.min[2];
+        const diag = Math.max(1e-3, Math.hypot(dx, dy, dz));
+        p.near = diag / 50;
+        p.far  = diag * 12;
+      }
+    }
+
+    // 3) Laisser un frame de stabilisation (construction matrices/projection)
+    await new Promise(r => requestAnimationFrame(() => r()));
+
+    if (typeof runVolumeSurfacePass === "function") {
+      try { await runVolumeSurfacePass(scene); } catch (e) { console.warn("[metrics] skipped:", e); }
     }
     console.info('[VIEW] modèle chargé', { type, src });
     await handleHeatmapAvailability(viewer);

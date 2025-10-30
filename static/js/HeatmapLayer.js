@@ -20,6 +20,7 @@ export class HeatmapLayer {
     this._waiting = false;
     this._lastReadyBroadcast = null;
     this._lastWaitingBroadcast = null;
+    this._disposed = false;
     this.colors = {
       ok: [0.20, 0.80, 0.20],       // vert
       zero: [0.98, 0.80, 0.15],     // jaune
@@ -54,6 +55,26 @@ export class HeatmapLayer {
       throw new Error("MODEL_NOT_READY");
     }
 
+    const meshCount = Number(scene.stats?.numMeshes ?? scene.numMeshes ?? 0);
+    const hasMeshes = Number.isFinite(meshCount) && meshCount > 0;
+    const cam = scene.camera;
+    const projOk = !!(cam && cam.projection === "perspective" && cam.perspective &&
+      Number.isFinite(cam.perspective.near) && Number.isFinite(cam.perspective.far));
+
+    if (!hasMeshes || !projOk) {
+      const scheduler = typeof requestAnimationFrame === "function"
+        ? requestAnimationFrame
+        : (cb) => setTimeout(cb, 16);
+      const params = { axis, thresholdDeg, entries, mode };
+      scheduler(() => {
+        if (this._disposed) {
+          return;
+        }
+        this.renderDraft(params);
+      });
+      return false;
+    }
+
     const axisKey = this._normalizeAxisKey(axis);
     const thrKey = Number.isFinite(Number(thresholdDeg))
       ? Number(thresholdDeg).toFixed(3)
@@ -67,6 +88,7 @@ export class HeatmapLayer {
     }
 
     this.clear();
+    this._disposed = false;
 
     const sourceEntries = Array.isArray(entries)
       ? entries
@@ -76,6 +98,9 @@ export class HeatmapLayer {
 
     let created = 0;
     for (const entry of sourceEntries) {
+      if (this._disposed) {
+        break;
+      }
       const mesh = entry?.mesh;
       if (!mesh || mesh.destroyed) continue;
       const bucket = entry?.buckets?.[resolvedMode];
@@ -85,12 +110,17 @@ export class HeatmapLayer {
       }
     }
 
+    if (this._disposed) {
+      return false;
+    }
+
     this._signature = signature;
     this._setVisible(created > 0);
     return created > 0;
   }
 
   clear() {
+    this._disposed = true;
     for (const handle of this._overlays) {
       try { handle.mesh?.destroy(); } catch {}
       try { handle.geom?.destroy(); } catch {}
