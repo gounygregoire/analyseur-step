@@ -1110,71 +1110,36 @@ def __clear_caches():
 
 # --- À insérer en fin de fichier : endpoints reconvert ---
 @app.post("/api/reconvert")
-def api_reconvert() -> Response:
-    """Enfile une reconversion XKT et retourne le job RQ associé."""
-
-    payload = request.get_json(silent=True) or {}
-    file_id = str(payload.get("file_id") or "").strip()
+def api_reconvert():
+    data = request.get_json(silent=True) or {}
+    file_id = data.get("file_id")
     if not file_id:
-        return jsonify(error="file_id requis"), 400
+        return jsonify({"accepted": False, "error": "missing file_id"}), 400
 
-    try:
-        current_queue = get_queue()
-    except Exception as exc:
-        logger.exception("[reconvert] queue indisponible: %s", exc)
-        return jsonify(error="queue_indisponible"), 503
-
-    try:
-        job = current_queue.enqueue(
-            "cadlytics.jobs.reconvert.reconvert",
-            file_id,
-            job_timeout=RECONVERT_JOB_TIMEOUT_SEC,
-        )
-    except Exception as exc:
-        logger.exception("[reconvert] enqueue failed file_id=%s", file_id)
-        return jsonify(error="enqueue_failed", detail=str(exc)), 503
-
-    return (
-        jsonify(accepted=True, file_id=file_id, job_id=job.id),
-        202,
+    current_queue = queue or get_queue()
+    job = current_queue.enqueue(
+        "cadlytics.jobs.reconvert.reconvert",
+        file_id,
+        job_timeout=1800,
     )
+    return jsonify({"accepted": True, "file_id": file_id, "job_id": job.id}), 202
 
 
-@app.get("/api/reconvert/status/<string:job_id>")
-def api_reconvert_status(job_id: str) -> Response:
-    """Expose l'état courant d'un job RQ de reconversion."""
+@app.get("/api/reconvert/status/<job_id>")
+def api_reconvert_status(job_id):
+    from rq.job import Job
 
-    job_id = (job_id or "").strip()
-    if not job_id:
-        return jsonify(error="job_id requis"), 400
-
+    connection = redis_conn or get_queue().connection
     try:
-        current_queue = get_queue()
-    except Exception as exc:
-        logger.exception("[reconvert] queue indisponible pour status: %s", exc)
-        return jsonify(error="queue_indisponible"), 503
+        job = Job.fetch(job_id, connection=connection)
+    except Exception:
+        return jsonify({"status": "not_found"}), 404
 
-    try:
-        job = Job.fetch(job_id, connection=current_queue.connection)
-    except NoSuchJobError:
-        return jsonify(error="Job introuvable"), 404
-    except Exception as exc:
-        logger.exception("[reconvert] status fetch failed job_id=%s", job_id)
-        return jsonify(error="redis_unavailable", detail=str(exc)), 503
-
-    status = job.get_status(refresh=False)
-    payload: dict[str, object] = {"status": status}
-    if status == "finished" and job.result is not None:
-        payload["result"] = job.result
-    elif status == "failed":
-        last_line = None
-        if job.exc_info:
-            lines = [line for line in job.exc_info.splitlines() if line.strip()]
-            if lines:
-                last_line = lines[-1]
-        payload["result"] = {"error": last_line or "Conversion échouée"}
-
-    return jsonify(payload)
+    status = job.get_status()
+    result = job.result if status == "finished" else None
+    if isinstance(result, dict):
+        return jsonify({"status": status, "result": result})
+    return jsonify({"status": status})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
