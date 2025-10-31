@@ -18,7 +18,6 @@ const MIN_HEALTHY_XKT = 200000; // 200 KB
 
 let viewer, cameraControl, xktLoader, gltfLoader, dist, sections, canvas;
 let activeConversionTask = null;
-let syncFallbackLogDone = false; // CODENAME: HEAD-FIRST-XKT
 
 function getBaseUrl() {
   if (typeof location !== "undefined" && location.origin) {
@@ -27,60 +26,51 @@ function getBaseUrl() {
   return "";
 }
 
-// IMPORTANT: front loads XKT on HEAD=200 + content-length>0.
-// /exists est purement UX et ne doit jamais bloquer le rendu.
-// Ne réintroduis pas d'appel /api/reconvert/sync ici.
+// CODENAME: HEAD-FIRST-XKT
 async function waitForXKTReady({ fileId, xktUrl, maxTries = 60, onReady }) {
-  if (!syncFallbackLogDone) {
-    console.log("[wait] sync fallback disabled on frontend"); // CODENAME: HEAD-FIRST-XKT
-    syncFallbackLogDone = true;
-  }
+  const maxAttempts = Number.isFinite(maxTries) && maxTries > 0 ? Math.floor(maxTries) : 60;
 
-  const baseUrl = getBaseUrl();
-
-  for (let attempt = 1; attempt <= maxTries; attempt++) {
-    const headUrl = `${baseUrl}/xkt/${fileId}.xkt?nocache=${Date.now()}`;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const headURL = `/xkt/${fileId}.xkt?nocache=${Date.now()}`;
     let headOk = false;
-    let contentLength = 0;
+    let len = 0;
 
     try {
-      const res = await fetch(headUrl, { method: "HEAD", cache: "no-store" });
-      const header = res.headers.get("content-length") || res.headers.get("Content-Length") || "0";
-      contentLength = Number(header) || 0;
-      headOk = res.ok && contentLength > 0;
-    } catch (err) {
-      console.warn("[wait][xkt][head-check-failed]", { attempt, err });
+      const res = await fetch(headURL, { method: "HEAD", cache: "no-store" });
+      const clen = res.headers.get("content-length") || res.headers.get("Content-Length");
+      len = clen ? Number(clen) : 0;
+      console.log("[wait][xkt][head]", { attempt, status: res.status, len });
+      if (res.ok && len > 0) headOk = true;
+    } catch (e) {
+      console.warn("[wait][xkt][head-error]", { attempt, e });
     }
 
-    const attemptLabel = attempt;
-    const existsUrl = `${baseUrl}/exists/xkt/${fileId}`;
-    void (async () => {
-      try {
-        const res = await fetch(existsUrl, { cache: "no-store" });
-        if (!res.ok) {
-          console.log("[wait][xkt][exists]", { attempt: attemptLabel, status: res.status });
-          return;
-        }
-        const payload = await res.json();
-        console.log("[wait][xkt][exists]", { attempt: attemptLabel, ...payload });
-      } catch (e) {
-        console.warn("[wait][xkt][exists-check-failed]", e);
-      }
-    })();
-
     if (headOk) {
-      console.log("[wait][xkt][head-ok] load now", { attempt });
+      console.log("[wait][xkt][head-ok] load now", { attempt, len });
       if (typeof onReady === "function") {
-        const result = await onReady({ attempt, headUrl, xktUrl, contentLength });
+        const result = await onReady({ attempt, headUrl: headURL, xktUrl, contentLength: len });
         return typeof result === "undefined" ? true : result;
       }
       return true;
     }
 
+    try {
+      const exRes = await fetch(`/exists/xkt/${fileId}?nocache=${Date.now()}`, { cache: "no-store" });
+      const exJson = await exRes.json();
+      console.log("[wait][xkt][exists]", { attempt, ...exJson });
+      if (exJson && exJson.exists === false) {
+        console.log("[wait][xkt] exists=false (telemetry only)", { attempt });
+        // Continuer la boucle jusqu’à HEAD=200
+      }
+    } catch (e) {
+      console.warn("[wait][xkt][exists-check-failed]", { attempt, e });
+    }
+
     const delay = Math.min(1000 + attempt * 200, 3000);
-    await new Promise((resolve) => setTimeout(resolve, delay));
+    await new Promise((r) => setTimeout(r, delay));
   }
 
+  console.warn("[wait] timeout — XKT non prêt");
   return null;
 }
 

@@ -17,13 +17,14 @@ import web
 
 
 def test_exists_xkt_returns_done(tmp_path, monkeypatch):
-    base_dir = tmp_path / "public_xkt"
+    base_dir = tmp_path / "converted"
     base_dir.mkdir()
     file_id = "abc123"
     target = base_dir / f"{file_id}.xkt"
     target.write_bytes(b"dummy")
 
-    monkeypatch.setenv("PUBLIC_XKT", str(base_dir))
+    monkeypatch.setenv("OUTPUT_FOLDER", str(base_dir))
+    monkeypatch.delenv("PUBLIC_XKT", raising=False)
 
     with web.app.test_client() as client:
         resp = client.get(f"/exists/xkt/{file_id}")
@@ -40,3 +41,25 @@ def test_exists_xkt_returns_done(tmp_path, monkeypatch):
     pragma = resp.headers.get("Pragma", "")
     combined_headers = f"{cache_control} {pragma}".lower()
     assert "no-cache" in combined_headers
+    assert resp.headers.get("Access-Control-Allow-Origin") == "*"
+
+
+def test_exists_xkt_returns_pending_when_missing(tmp_path, monkeypatch):
+    base_dir = tmp_path / "converted"
+    base_dir.mkdir()
+    file_id = "missing"
+
+    monkeypatch.setenv("OUTPUT_FOLDER", str(base_dir))
+    monkeypatch.delenv("PUBLIC_XKT", raising=False)
+
+    with web.app.test_client() as client:
+        resp = client.get(f"/exists/xkt/{file_id}")
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload == {
+        "file_id": file_id,
+        "exists": False,
+        "size": 0,
+        "status": "pending",
+    }

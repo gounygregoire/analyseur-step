@@ -753,33 +753,59 @@ def glb_to_xkt(glb_path: str, xkt_path: str) -> None:
     import os, shlex, subprocess, logging, time
 
     env = os.environ.copy()
+    out_dir = os.path.dirname(xkt_path) or "."
+    os.makedirs(out_dir, exist_ok=True)
+    tmp_path = f"{xkt_path}.tmp"
 
     # IMPORTANT : v1.3.1 nécessite -s/--source, et mieux vaut préciser -f gltf.
-    variants = [
-        ["npx", "--yes", "@xeokit/xeokit-convert", "-s", glb_path, "-f", "gltf", "-o", xkt_path],
-        ["npx", "--yes", "@xeokit/xeokit-convert", "--source", glb_path, "--format", "gltf", "--output", xkt_path],
-        ["npx", "--yes", "@xeokit/xeokit-convert", "-s", glb_path, "-o", xkt_path],
-        ["npx", "--yes", "@xeokit/xeokit-convert", "--source", glb_path, "--output", xkt_path],
+    cmd_templates = [
+        ["npx", "--yes", "@xeokit/xeokit-convert", "-s", "{src}", "-f", "gltf", "-o", "{out}"],
+        ["npx", "--yes", "@xeokit/xeokit-convert", "--source", "{src}", "--format", "gltf", "--output", "{out}"],
+        ["npx", "--yes", "@xeokit/xeokit-convert", "-s", "{src}", "-o", "{out}"],
+        ["npx", "--yes", "@xeokit/xeokit-convert", "--source", "{src}", "--output", "{out}"],
         # Fallbacks verbeux si jamais leur wrapper interne est requis :
-        ["npx", "--yes", "@xeokit/xeokit-convert", "convert", "-s", glb_path, "-f", "gltf", "-o", xkt_path],
-        ["npx", "--yes", "@xeokit/xeokit-convert", "convert2xkt", "-s", glb_path, "-f", "gltf", "-o", xkt_path],
+        ["npx", "--yes", "@xeokit/xeokit-convert", "convert", "-s", "{src}", "-f", "gltf", "-o", "{out}"],
+        ["npx", "--yes", "@xeokit/xeokit-convert", "convert2xkt", "-s", "{src}", "-f", "gltf", "-o", "{out}"],
     ]
 
     t0 = time.time()
     last = None
-    for i, cmd in enumerate(variants, 1):
+    for i, template in enumerate(cmd_templates, 1):
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        cmd = [part.format(src=glb_path, out=tmp_path) for part in template]
         logging.info("[convert][xkt] try #%d: %s", i, " ".join(shlex.quote(c) for c in cmd))
         proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
-        if proc.stdout: logging.warning("[convert][xkt][stdout]\n%s", proc.stdout.strip())
-        if proc.stderr: logging.warning("[convert][xkt][stderr]\n%s", proc.stderr.strip())
+        if proc.stdout:
+            logging.warning("[convert][xkt][stdout]\n%s", proc.stdout.strip())
+        if proc.stderr:
+            logging.warning("[convert][xkt][stderr]\n%s", proc.stderr.strip())
 
-        size = os.path.getsize(xkt_path) if os.path.exists(xkt_path) else 0
+        size = os.path.getsize(tmp_path) if os.path.exists(tmp_path) else 0
         logging.info("[convert][xkt] rc=%s size=%s", proc.returncode, size)
         if proc.returncode == 0 and size > 0:
-            logging.info("[convert][xkt] OK variant #%d size=%dB duration=%.2fs",
-                         i, size, time.time() - t0)
+            try:
+                os.replace(tmp_path, xkt_path)
+            except OSError as swap_err:
+                logging.error("[convert][xkt] atomic swap failed tmp=%s dst=%s err=%s", tmp_path, xkt_path, swap_err)
+                raise
+            logging.info(
+                "[convert][xkt] OK variant #%d size=%dB duration=%.2fs",
+                i,
+                size,
+                time.time() - t0,
+            )
             return
         last = f"rc={proc.returncode} | stderr={(proc.stderr or '').strip()!r}"
+
+    if os.path.exists(tmp_path):
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
 
     raise RuntimeError("xeokit convert failed: all variants tried | last=" + (last or "n/a"))
     
