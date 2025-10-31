@@ -20,6 +20,7 @@
     "jspdf": "^3.0.1",
     "@loaders.gl/core": "^4.2.0",
     "@loaders.gl/gltf": "^4.2.0",
-    "@loaders.gl/draco": "^4.2.0"
+    "@loaders.gl/draco": "^4.2.0",
+    "xeokit-convert": "npm:@xeokit/xeokit-convert@^1.3.1"
   }
 }

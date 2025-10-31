@@ -38,7 +38,7 @@ def test_reconvert_rejects_invalid_payload(monkeypatch):
     with web.app.test_client() as client:
         resp = client.post("/api/reconvert", json={})
     assert resp.status_code == 400
-    assert resp.get_json() == {"accepted": False, "error": "missing file_id"}
+    assert resp.get_json() == {"accepted": False, "error": "missing_file_id"}
 
 
 def test_reconvert_status_finished(monkeypatch):
@@ -78,8 +78,8 @@ def test_reconvert_status_not_found(monkeypatch):
     with web.app.test_client() as client:
         resp = client.get("/api/reconvert/status/job-missing")
 
-    assert resp.status_code == 404
-    assert resp.get_json() == {"status": "not_found"}
+    assert resp.status_code == 200
+    assert resp.get_json() == {"status": "failed", "result": {}}
 
 
 def _setup_sync_dirs(tmp_path, monkeypatch):
@@ -89,7 +89,11 @@ def _setup_sync_dirs(tmp_path, monkeypatch):
     outputs.mkdir()
     monkeypatch.setattr(web, "UPLOAD_FOLDER", str(uploads))
     monkeypatch.setattr(web, "OUTPUT_FOLDER", str(outputs))
-    return uploads, outputs
+    monkeypatch.setenv("UPLOAD_FOLDER", str(uploads))
+    sync_dir = outputs / "xkt"
+    sync_dir.mkdir()
+    web.app.config["SYNC_XKT_DIR"] = str(sync_dir)
+    return uploads, sync_dir
 
 
 def test_reconvert_sync_missing_file_id(tmp_path, monkeypatch):
@@ -103,7 +107,7 @@ def test_reconvert_sync_missing_file_id(tmp_path, monkeypatch):
 
 
 def test_reconvert_sync_source_not_found(tmp_path, monkeypatch):
-    uploads, outputs = _setup_sync_dirs(tmp_path, monkeypatch)
+    uploads, sync_dir = _setup_sync_dirs(tmp_path, monkeypatch)
 
     with web.app.test_client() as client:
         resp = client.post(
@@ -116,7 +120,7 @@ def test_reconvert_sync_source_not_found(tmp_path, monkeypatch):
 
 
 def test_reconvert_sync_too_large(tmp_path, monkeypatch):
-    uploads, outputs = _setup_sync_dirs(tmp_path, monkeypatch)
+    uploads, _ = _setup_sync_dirs(tmp_path, monkeypatch)
     file_id = "123e4567-e89b-12d3-a456-426614174000"
     src = uploads / f"{file_id}.step"
     src.write_bytes(b"0" * ((8 * 1024 * 1024) + 1))
@@ -132,14 +136,14 @@ def test_reconvert_sync_too_large(tmp_path, monkeypatch):
 
 
 def test_reconvert_sync_success(tmp_path, monkeypatch):
-    uploads, outputs = _setup_sync_dirs(tmp_path, monkeypatch)
+    uploads, sync_dir = _setup_sync_dirs(tmp_path, monkeypatch)
     file_id = "123e4567-e89b-12d3-a456-426614174000"
     src = uploads / f"{file_id}.step"
     src.write_text("step data")
 
     def fake_run(cmd, capture_output=False, text=False, timeout=None):  # noqa: ARG001
-        assert "@xeokit/xeokit-convert" in cmd
-        tmp_out = outputs / f"{file_id}.xkt.tmp"
+        assert "xeokit-convert" in cmd
+        tmp_out = sync_dir / f"{file_id}.xkt.tmp"
         tmp_out.write_bytes(b"1234567890")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
@@ -152,8 +156,8 @@ def test_reconvert_sync_success(tmp_path, monkeypatch):
     data = resp.get_json()
     assert data == {"ok": True, "xkt_size": 10}
 
-    final_path = outputs / f"{file_id}.xkt"
-    manifest_path = outputs / f"{file_id}.manifest.json"
+    final_path = sync_dir / f"{file_id}.xkt"
+    manifest_path = sync_dir / f"{file_id}.manifest.json"
     assert final_path.exists()
     assert manifest_path.exists()
     with manifest_path.open() as fh:
@@ -163,7 +167,7 @@ def test_reconvert_sync_success(tmp_path, monkeypatch):
 
 
 def test_reconvert_sync_convert_failure(tmp_path, monkeypatch):
-    uploads, outputs = _setup_sync_dirs(tmp_path, monkeypatch)
+    uploads, _ = _setup_sync_dirs(tmp_path, monkeypatch)
     file_id = "123e4567-e89b-12d3-a456-426614174000"
     src = uploads / f"{file_id}.step"
     src.write_text("step data")
