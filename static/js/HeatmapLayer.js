@@ -56,12 +56,13 @@ export class HeatmapLayer {
     }
 
     const scn = viewer.scene || scene;
-    const triCount = Number(scn?.stats?.numTriangles ?? scn?.stats?.triangles ?? 0);
+
+    // === readiness guard : triangles + caméra ===
+    const tri = Number(scn?.stats?.numTriangles ?? scn?.stats?.triangles ?? 0);
     const cam = scn?.camera;
     const projOk = !!(cam && cam.projection === "perspective" && cam.perspective &&
       Number.isFinite(cam.perspective.near) && Number.isFinite(cam.perspective.far));
-
-    if (!(Number.isFinite(triCount) && triCount > 0 && projOk)) {
+    if (!(Number.isFinite(tri) && tri > 0 && projOk)) {
       const scheduler = typeof requestAnimationFrame === "function"
         ? requestAnimationFrame
         : (cb) => setTimeout(cb, 16);
