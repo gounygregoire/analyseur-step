@@ -517,22 +517,30 @@ function applyMode({ layer, registry, entries, axisInfo, thresholdDeg, requested
   // Anti-race: attendre que la scène soit prête (meshes + camera proj)
   const scene = layer?.scene || registry?.viewer?.scene || registry?.model?.scene || null;
   if (scene) {
-    const triCount = Number(scene.stats?.numTriangles ?? scene.stats?.triangles ?? 0);
-    const cam = scene.camera;
+    const scn = layer?.viewer?.scene || scene;
+
+    // === readiness guard : triangles + caméra ===
+    const tri = Number(scn?.stats?.numTriangles ?? scn?.stats?.triangles ?? 0);
+    const cam = scn?.camera;
     const projOk = !!(cam && cam.projection === "perspective" && cam.perspective &&
       Number.isFinite(cam.perspective.near) && Number.isFinite(cam.perspective.far));
-
-    if (!(Number.isFinite(triCount) && triCount > 0 && projOk)) {
+    if (!(Number.isFinite(tri) && tri > 0 && projOk)) {
       const scheduler = typeof requestAnimationFrame === "function"
         ? requestAnimationFrame
         : (cb) => setTimeout(cb, 16);
       scheduler(() => {
+        if (layer?._disposed) {
+          return;
+        }
         try {
           applyMode({ layer, registry, entries, axisInfo, thresholdDeg, requestedMode });
         } catch (err) {
           console.warn("[heatmap] deferred render skipped", err);
         }
       });
+      return registry?.heatmap?.mode || MODE_OK;
+    }
+    if (layer?._disposed) {
       return registry?.heatmap?.mode || MODE_OK;
     }
   }

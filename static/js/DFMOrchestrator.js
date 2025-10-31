@@ -11,7 +11,6 @@ import {
   ensureModelGeometryReady
 } from "./modules/DraftHeatmap.js";
 import { meshHasGeometry, currentViewer } from "./modules/ModelRegistry.js";
-import { getTriangleCount } from "./utils/geomStats.js";
 
 const __geometryPromises = new WeakMap();
 
@@ -28,6 +27,21 @@ function resolveViewerFromRegistry(registry, fallbackModel = null) {
     return window.viewerAdapter?.viewer || window.viewer || null;
   }
   return null;
+}
+
+function _getTriangleCount(scene){
+  const t = scene?.stats?.numTriangles ?? scene?.stats?.triangles;
+  if (Number.isFinite(t)) return t|0;
+  let sum = 0;
+  const arr = scene?.meshes || scene?.objects || [];
+  if (Array.isArray(arr)) {
+    for (const m of arr) {
+      const g = m?.geometry || m?._geometry;
+      const n = (g?.numTriangles != null) ? g.numTriangles : ((g?.indices?.length || 0) / 3);
+      sum += (n|0);
+    }
+  }
+  return sum|0;
 }
 
 function ensureHeatmapHandleArray(registry) {
@@ -1515,11 +1529,11 @@ clearDraftHeatmap(registry = window.CAD, opts = {}) {
       const v = resolveViewerFromRegistry(registry);
       const scene = v?.scene;
       if (!scene) return [];
-      const faces = [];
+      const faceRecords = [];
 
-      const faceCount = getTriangleCount(scene);
-      if (Number.isFinite(faceCount)) {
-        console.log("[probe safe] faces =", faceCount);
+      const faces = _getTriangleCount(scene);
+      if (Number.isFinite(faces)) {
+        console.log("[probe safe] faces =", faces);
       }
 
       const meshes = [];
@@ -1556,11 +1570,11 @@ clearDraftHeatmap(registry = window.CAD, opts = {}) {
           const p2 = mul4x4(wm, [pos[i2], pos[i2+1], pos[i2+2]]);
           const n  = norm(cross(sub(p1,p0), sub(p2,p0)));
           const area = 0.5 * len(cross(sub(p1,p0), sub(p2,p0)));
-          faces.push({ id: `${m.id||m._id||'m'}:${i}`, normal:n, area });
+          faceRecords.push({ id: `${m.id||m._id||'m'}:${i}`, normal:n, area });
           budget--;
         }
       }
-      return faces;
+      return faceRecords;
     } catch (e) {
       console.warn("[DFM] _computeFacesFromViewer fallback failed", e);
       return [];

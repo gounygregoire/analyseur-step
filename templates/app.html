@@ -195,8 +195,6 @@
 
   <!-- === Probe SAFE : expose __getFaces() pour la Phase A locale === -->
   <script type="module">
-    import { getTriangleCount } from "/static/js/utils/geomStats.js";
-
     (function(){
       function arr(x){ return x?.data || x?.array || x || null; }
       function norm(v){ const L=Math.hypot(v[0],v[1],v[2])||1; return [v[0]/L,v[1]/L,v[2]/L]; }
@@ -204,6 +202,21 @@
       const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
       const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
       const vlen=v=>Math.hypot(v[0],v[1],v[2])||1;
+
+      function _getTriangleCount(scene){
+        const t = scene?.stats?.numTriangles ?? scene?.stats?.triangles;
+        if (Number.isFinite(t)) return t|0;
+        let sum = 0;
+        const arr = scene?.meshes || scene?.objects || [];
+        if (Array.isArray(arr)) {
+          for (const m of arr) {
+            const g = m?.geometry || m?._geometry;
+            const n = (g?.numTriangles != null) ? g.numTriangles : ((g?.indices?.length || 0) / 3);
+            sum += (n|0);
+          }
+        }
+        return sum|0;
+      }
 
       function collectMeshes(scene){
         const ms=[];
@@ -256,7 +269,7 @@
             }
             if (tri>=MAX) break;
           }
-          const faces = getTriangleCount(viewer.scene);
+          const faces = _getTriangleCount(viewer.scene);
           console.log('[probe safe] faces =', faces);
           return faceRecords;
         };

@@ -3529,6 +3529,29 @@ async function loadXKTIntoViewer(xktUrl, { fileId: explicitFileId } = {}) {
 
     await loadXKT(finalUrl, nameHint, { fileId });
 
+    // === readiness guard : triangles + caméra ===
+    const scn = viewer.scene;
+    // attendre des triangles réels
+    const _t0 = performance.now();
+    while (performance.now() - _t0 < 12000) {
+      const tri = (scn.stats?.numTriangles ?? scn.stats?.triangles ?? 0);
+      if (Number.isFinite(tri) && tri > 0) break;
+      await new Promise(r => setTimeout(r, 50));
+    }
+    // stabiliser la caméra (évite projMatrix undefined)
+    const cam = scn.camera;
+    if (cam?.projection === "perspective" && cam.perspective) {
+      const p = cam.perspective;
+      if (!Number.isFinite(p.near) || !Number.isFinite(p.far)) {
+        const aabb = scn.aabb || {min:[-1,-1,-1], max:[1,1,1]};
+        const dx=aabb.max[0]-aabb.min[0], dy=aabb.max[1]-aabb.min[1], dz=aabb.max[2]-aabb.min[2];
+        const diag = Math.max(1e-3, Math.hypot(dx,dy,dz));
+        p.near = diag/50; p.far = diag*12;
+      }
+    }
+    // laisser un frame pour matrices
+    await new Promise(r => requestAnimationFrame(() => r()));
+
     console.log('[viewer] XKT loaded', { xktUrl: finalUrl });
   } catch (e) {
     console.error('[viewer] load failed', e);
@@ -4180,14 +4203,39 @@ export {};
       log(`[GET] /exists/xkt/${idv} -> ${res.status} ${await res.text()}`);
     };
 
-    document.getElementById('btn-force').onclick = () => {
-      const idv = window.CADLYTICS.xkt.lastFileId || resolveCurrentFileId();
-      if (!idv) {
-        log('[LOAD] Aucun file_id actif pour forceLoadXKT');
-        return;
+    document.getElementById('btn-force').onclick = async () => {
+      if (window.__forceLock) return;
+      window.__forceLock = true;
+      try {
+        const fileId = typeof currentFileId === "function" ? currentFileId() : (window.__currentFileId || "");
+        const baseUrl = location.origin;
+        // 1) POST reconvert
+        const r = await fetch(`${baseUrl}/api/reconvert`, {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ file_id: fileId })
+        });
+        if (!r.ok) throw new Error("reconvert request failed");
+        const { job_id } = await r.json();
+        // 2) poll jusqu'à finished
+        const t0 = Date.now();
+        let wait = 1500;
+        for (;;) {
+          await new Promise(rs => setTimeout(rs, wait));
+          const s = await fetch(`${baseUrl}/api/reconvert/status/${job_id}`, { cache: "no-store" });
+          if (s.ok) {
+            const j = await s.json();
+            if (j.status === "finished") break;
+            if (j.status === "failed") throw new Error("reconvert failed");
+          }
+          wait = Math.min(wait * 1.5, 5000);
+          if (Date.now() - t0 > 10*60*1000) throw new Error("reconvert timeout");
+        }
+        // 3) recharge avec cache-buster
+        const url = `${baseUrl}/xkt/${fileId}.xkt?v=${Date.now()}`;
+        await loadXKT(url, null, { fileId });
+      } finally {
+        window.__forceLock = false;
       }
-      forceLoadXKT(idv);
-      log(`[LOAD] forceLoadXKT(${idv})`);
     };
   }
 
