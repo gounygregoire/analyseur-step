@@ -517,13 +517,12 @@ function applyMode({ layer, registry, entries, axisInfo, thresholdDeg, requested
   // Anti-race: attendre que la scène soit prête (meshes + camera proj)
   const scene = layer?.scene || registry?.viewer?.scene || registry?.model?.scene || null;
   if (scene) {
-    const meshCount = Number(scene.stats?.numMeshes ?? scene.numMeshes ?? 0);
-    const hasMeshes = Number.isFinite(meshCount) && meshCount > 0;
+    const triCount = Number(scene.stats?.numTriangles ?? scene.stats?.triangles ?? 0);
     const cam = scene.camera;
     const projOk = !!(cam && cam.projection === "perspective" && cam.perspective &&
       Number.isFinite(cam.perspective.near) && Number.isFinite(cam.perspective.far));
 
-    if (!hasMeshes || !projOk) {
+    if (!(Number.isFinite(triCount) && triCount > 0 && projOk)) {
       const scheduler = typeof requestAnimationFrame === "function"
         ? requestAnimationFrame
         : (cb) => setTimeout(cb, 16);
