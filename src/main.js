@@ -18,6 +18,7 @@ const MIN_HEALTHY_XKT = 200000; // 200 KB
 
 let viewer, cameraControl, xktLoader, gltfLoader, dist, sections, canvas;
 let activeConversionTask = null;
+let syncFallbackLogDone = false; // CODENAME: HEAD-FIRST-XKT
 
 function getBaseUrl() {
   if (typeof location !== "undefined" && location.origin) {
@@ -26,54 +27,58 @@ function getBaseUrl() {
   return "";
 }
 
-async function headExists(url) {
-  try {
-    const res = await fetch(url, { method: "HEAD", cache: "no-store" });
-    const len = parseInt(res.headers.get("Content-Length") || res.headers.get("content-length") || "0", 10);
-    return { ok: res.status === 200 && len > 0, size: len, status: res.status };
-  } catch (e) {
-    return { ok: false, size: 0, status: 0, err: String(e) };
+async function waitForXKTReady({ fileId, xktUrl, maxTries = 60, onReady }) {
+  if (!syncFallbackLogDone) {
+    console.log("[wait] sync fallback disabled on frontend"); // CODENAME: HEAD-FIRST-XKT
+    syncFallbackLogDone = true;
   }
-}
 
-async function waitForXKTReady({ fileId, xktUrl, maxTries = 60 }) {
-  const origin = typeof location !== "undefined" && location.origin ? location.origin : "";
-  const baseUrl = origin || "";
-  let lastStatus = null;
+  const baseUrl = getBaseUrl();
 
   for (let attempt = 1; attempt <= maxTries; attempt++) {
+    const headUrl = `${baseUrl}/xkt/${fileId}.xkt?nocache=${Date.now()}`;
+    let headOk = false;
+    let contentLength = 0;
+
     try {
-      const res = await fetch(`${baseUrl}/exists/xkt/${fileId}`, { cache: "no-store" });
-      if (res.ok) {
-        const payload = await res.json();
-        const status = payload?.status;
-        if (payload?.exists || status === "done") {
-          return true;
-        }
-        if (status === "error") {
-          const message = await fetchConversionError({ baseUrl, jobId: payload?.job_id, payload });
-          const err = new Error(message || "Conversion XKT échouée.");
-          err.status = "error";
-          throw err;
-        }
-        if (status && status !== lastStatus) {
-          lastStatus = status;
-          console.log("[wait][xkt][status]", { attempt, fileId, status });
-        }
-      }
+      const res = await fetch(headUrl, { method: "HEAD", cache: "no-store" });
+      const header = res.headers.get("content-length") || res.headers.get("Content-Length") || "0";
+      contentLength = Number(header) || 0;
+      headOk = res.ok && contentLength > 0;
     } catch (err) {
-      console.warn("[wait][xkt] status probe failed", err);
+      console.warn("[wait][xkt][head-check-failed]", { attempt, err });
     }
 
-    const head = await headExists(xktUrl);
-    const len = Number.isFinite(head.size) ? head.size : 0;
-    if (head.ok && len > 0) {
+    const attemptLabel = attempt;
+    const existsUrl = `${baseUrl}/exists/xkt/${fileId}`;
+    void (async () => {
+      try {
+        const res = await fetch(existsUrl, { cache: "no-store" });
+        if (!res.ok) {
+          console.log("[wait][xkt][exists]", { attempt: attemptLabel, status: res.status });
+          return;
+        }
+        const payload = await res.json();
+        console.log("[wait][xkt][exists]", { attempt: attemptLabel, ...payload });
+      } catch (e) {
+        console.warn("[wait][xkt][exists-check-failed]", e);
+      }
+    })();
+
+    if (headOk) {
+      console.log("[wait][xkt][head-ok] load now", { attempt });
+      if (typeof onReady === "function") {
+        const result = await onReady({ attempt, headUrl, xktUrl, contentLength });
+        return typeof result === "undefined" ? true : result;
+      }
       return true;
     }
 
-    await new Promise((resolve) => setTimeout(resolve, Math.min(1000 + attempt * 40, 3000)));
+    const delay = Math.min(1000 + attempt * 200, 3000);
+    await new Promise((resolve) => setTimeout(resolve, delay));
   }
-  return false;
+
+  return null;
 }
 
 function startConversionMonitor(fileId) {
@@ -324,8 +329,52 @@ export async function initViewer(modelUrl) {
       }
       setHeatmapEnabled(false);
       let xktUrl = `/xkt/${fileId}.xkt?t=${Date.now()}`;
-      const waitResult = await waitForXKTReady({ fileId, xktUrl });
-      if (!waitResult) {
+      const attemptLoad = async () => {
+        console.log('[viewer] XKT ready, loading…', { fileId, xktUrl });
+        if (typeof lastXktUrl !== 'undefined') lastXktUrl = xktUrl;
+        const urls = [
+          xktUrl,
+          `/api/simple/models/${fileId}.xkt`,
+          `/static/converted/${fileId}.xkt`,
+          `/models/${fileId}.xkt`
+        ];
+        let lastErr;
+        for (const url of urls) {
+          try {
+            console.log("[viewer] try xkt", url);
+            window.setUiProgress?.("Chargement du modèle…");
+            const { model, type, src } = await tryLoadXKTThenGLB(fileId, url);
+            viewer.model = model;
+            const aabb = viewer.scene.getAABB();
+            try {
+              cameraControl.fit?.({ aabb });
+            } catch {
+              try { viewer.cameraFlight.fit?.({ aabb }); } catch {}
+            }
+            window.setUiProgress?.("");
+            await handleHeatmapAvailability(viewer);
+            console.info(`[viewer] modèle ${type} chargé`, src);
+            return true;
+          } catch (e) {
+            lastErr = e;
+            window.setUiProgress?.("");
+          }
+        }
+        console.error("[viewer] all xkt URLs failed", urls, lastErr);
+        if (typeof window !== "undefined" && typeof window.showError === "function") {
+          window.showError("Impossible de charger le modèle 3D");
+        }
+        setHeatmapEnabled(false);
+        return false;
+      };
+
+      const loaded = await waitForXKTReady({
+        fileId,
+        xktUrl,
+        onReady: attemptLoad
+      });
+
+      if (loaded === null) {
         const waitErr = new Error("XKT_NOT_READY_TIMEOUT");
         console.error('[viewer] waitForXKTReady timeout', { fileId, xktUrl });
         if (typeof window !== "undefined" && typeof window.showError === "function") {
@@ -333,43 +382,8 @@ export async function initViewer(modelUrl) {
         }
         throw waitErr;
       }
-      if (typeof waitResult === "string") {
-        xktUrl = waitResult;
-      }
-      let urls = [
-        xktUrl,
-        `/api/simple/models/${fileId}.xkt`,
-        `/static/converted/${fileId}.xkt`,
-        `/models/${fileId}.xkt`
-      ];
-      let lastErr;
-      for (const url of urls) {
-        try {
-          console.log("[viewer] try xkt", url);
-          window.setUiProgress?.("Chargement du modèle…");
-          const { model, type, src } = await tryLoadXKTThenGLB(fileId, url);
-          viewer.model = model;
-          const aabb = viewer.scene.getAABB();
-          try {
-            cameraControl.fit?.({ aabb });
-          } catch {
-            try { viewer.cameraFlight.fit?.({ aabb }); } catch {}
-          }
-          window.setUiProgress?.("");
-          await handleHeatmapAvailability(viewer);
-          console.info(`[viewer] modèle ${type} chargé`, src);
-          return true;
-        } catch (e) {
-          lastErr = e;
-          window.setUiProgress?.("");
-        }
-      }
-      console.error("[viewer] all xkt URLs failed", urls, lastErr);
-      if (typeof window !== "undefined" && typeof window.showError === "function") {
-        window.showError("Impossible de charger le modèle 3D");
-      }
-      setHeatmapEnabled(false);
-      return false;
+
+      return loaded;
     };
 
     try {
@@ -874,72 +888,78 @@ async function loadXKTFromConvertResponse(response) {
       throw healthErr;
     }
 
-    const waitResult = await waitForXKTReady({ fileId, xktUrl });
-    if (!waitResult) {
+    const performLoad = async () => {
+      console.log('[viewer] XKT ready, loading…', { fileId, xktUrl });
+      if (typeof lastXktUrl !== 'undefined') lastXktUrl = xktUrl;
+
+      const { model, type, src } = await tryLoadXKTThenGLB(fileId, xktUrl);
+      viewer.model = model;
+      try {
+        const aabb = viewer.scene.getAABB();
+        if (cameraControl?.fit) {
+          cameraControl.fit({ aabb });
+        } else if (viewer.cameraFlight?.fit) {
+          viewer.cameraFlight.fit({ aabb });
+        }
+      } catch (fitErr) {
+        console.warn('[VIEW] camera fit failed', fitErr);
+      }
+      // --- readiness guard: meshes + camera ---
+      const scene = viewer.scene;
+
+      // 1) Attendre la présence de meshes réels
+      await waitFor(() => {
+        const n = (scene.stats?.numMeshes ?? scene.numMeshes ?? 0);
+        return Number.isFinite(n) && n > 0;
+      }, 10000, 50);
+
+      // 2) Fixer near/far si indéfinis (évite projMatrix undefined)
+      const cam = scene.camera;
+      if (cam && cam.projection === "perspective" && cam.perspective) {
+        const p = cam.perspective;
+        const hasNear = Number.isFinite(p.near);
+        const hasFar  = Number.isFinite(p.far);
+        if (!hasNear || !hasFar) {
+          const aabb = scene.aabb || {min:[-1,-1,-1], max:[1,1,1]};
+          const dx = aabb.max[0] - aabb.min[0];
+          const dy = aabb.max[1] - aabb.min[1];
+          const dz = aabb.max[2] - aabb.min[2];
+          const diag = Math.max(1e-3, Math.hypot(dx, dy, dz));
+          p.near = diag / 50;
+          p.far  = diag * 12;
+        }
+      }
+
+      // 3) Laisser un frame de stabilisation (construction matrices/projection)
+      await new Promise(r => requestAnimationFrame(() => r()));
+
+      if (typeof runVolumeSurfacePass === "function") {
+        try { await runVolumeSurfacePass(scene); } catch (e) { console.warn("[metrics] skipped:", e); }
+      }
+      console.info('[VIEW] modèle chargé', { type, src });
+      await handleHeatmapAvailability(viewer);
+      state.fileLoaded = true;
+      window.dispatchEvent(
+        new CustomEvent('viewer:modelLoaded', {
+          detail: { fileId, src, type }
+        })
+      );
+      return true;
+    };
+
+    const waitReady = await waitForXKTReady({
+      fileId,
+      xktUrl,
+      onReady: performLoad
+    });
+
+    if (waitReady === null) {
       console.error('[viewer] XKT not ready after timeout', { fileId, xktUrl });
       const msg = "Modèle en cours de génération. Réessaie dans quelques instants.";
       window.showToast ? showToast(msg, { type: 'error' }) : alert(msg);
       hideReconvertBanner();
       return;
     }
-    if (typeof waitResult === 'string') {
-      xktUrl = waitResult;
-    }
-    console.log('[viewer] XKT ready, loading…', { fileId, xktUrl });
-    if (typeof lastXktUrl !== 'undefined') lastXktUrl = xktUrl;
-
-    const { model, type, src } = await tryLoadXKTThenGLB(fileId, xktUrl);
-    viewer.model = model;
-    try {
-      const aabb = viewer.scene.getAABB();
-      if (cameraControl?.fit) {
-        cameraControl.fit({ aabb });
-      } else if (viewer.cameraFlight?.fit) {
-        viewer.cameraFlight.fit({ aabb });
-      }
-    } catch (fitErr) {
-      console.warn('[VIEW] camera fit failed', fitErr);
-    }
-    // --- readiness guard: meshes + camera ---
-    const scene = viewer.scene;
-
-    // 1) Attendre la présence de meshes réels
-    await waitFor(() => {
-      const n = (scene.stats?.numMeshes ?? scene.numMeshes ?? 0);
-      return Number.isFinite(n) && n > 0;
-    }, 10000, 50);
-
-    // 2) Fixer near/far si indéfinis (évite projMatrix undefined)
-    const cam = scene.camera;
-    if (cam && cam.projection === "perspective" && cam.perspective) {
-      const p = cam.perspective;
-      const hasNear = Number.isFinite(p.near);
-      const hasFar  = Number.isFinite(p.far);
-      if (!hasNear || !hasFar) {
-        const aabb = scene.aabb || {min:[-1,-1,-1], max:[1,1,1]};
-        const dx = aabb.max[0] - aabb.min[0];
-        const dy = aabb.max[1] - aabb.min[1];
-        const dz = aabb.max[2] - aabb.min[2];
-        const diag = Math.max(1e-3, Math.hypot(dx, dy, dz));
-        p.near = diag / 50;
-        p.far  = diag * 12;
-      }
-    }
-
-    // 3) Laisser un frame de stabilisation (construction matrices/projection)
-    await new Promise(r => requestAnimationFrame(() => r()));
-
-    if (typeof runVolumeSurfacePass === "function") {
-      try { await runVolumeSurfacePass(scene); } catch (e) { console.warn("[metrics] skipped:", e); }
-    }
-    console.info('[VIEW] modèle chargé', { type, src });
-    await handleHeatmapAvailability(viewer);
-    state.fileLoaded = true;
-    window.dispatchEvent(
-      new CustomEvent('viewer:modelLoaded', {
-        detail: { fileId, src, type }
-      })
-    );
   } catch (e) {
     console.error('[VIEW] Visualization error', e);
     (window.UI?.error ? UI.error : alert)('Échec de la visualisation. Merci de réessayer.\n' + (e.message || String(e)));

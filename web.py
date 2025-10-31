@@ -1000,68 +1000,69 @@ def debug_xkt(file_id: str):
 
 @app.get("/exists/xkt/<file_id>")
 def exists_xkt(file_id: str):
-    xkt_dir = _sync_xkt_dir()
-    path_local = os.path.join(xkt_dir, f"{file_id}.xkt")
-    exists = os.path.isfile(path_local)
-    size = os.path.getsize(path_local) if exists else 0
-    job_id = None
-    status = "done" if exists else "pending"
-    error_message: str | None = None
+    """Expose la disponibilité disque de l'XKT sans dépendre du cache."""
 
-    if not exists:
-        job_id = _lookup_job_id(file_id)
-        if job_id:
-            status = _status_from_job(job_id)
-            if status == "error":
-                result = get_job_result(job_id)
-                if isinstance(result, dict):
-                    error_message = str(result.get("error") or "") or None
-            if status == "done" and not exists:
-                status = "error"
-                if not error_message:
-                    error_message = "xkt_missing"
+    # CODENAME: EXISTS-DISK-FIRST
+    base_dir = os.environ.get("PUBLIC_XKT")
+    if not base_dir:
+        root_path = current_app.root_path if has_app_context() else app.root_path
+        base_dir = os.path.join(root_path, "public", "xkt")
+
+    xkt_path = os.path.join(base_dir, f"{file_id}.xkt")
+    payload: dict[str, object] = {
+        "file_id": file_id,
+        "exists": False,
+        "size": 0,
+        "status": "pending",
+    }
+    log_data: dict[str, object] = {
+        "file_id": file_id,
+        "path": xkt_path,
+        "source": "disk",
+    }
+
+    try:
+        if os.path.exists(xkt_path):
+            size = os.path.getsize(xkt_path)
+            payload.update({"exists": True, "size": size, "status": "done"})
+            log_data.update({"exists": True, "size": size})
         else:
-            source_present = any(
-                os.path.isfile(os.path.join(UPLOAD_FOLDER, f"{file_id}{ext}"))
-                for ext in (".step", ".stp", ".stl")
-            )
-            if not source_present:
-                payload_404 = {
-                    "file_id": file_id,
-                    "exists": False,
-                    "status": "error",
-                    "error": "file_not_found",
-                }
-                resp_404 = make_response(jsonify(payload_404), 404)
-                resp_404.headers["Cache-Control"] = "no-cache, max-age=0"
-                resp_404.headers["Access-Control-Allow-Origin"] = "*"
-                logger.info(
-                    "[exists] http=%s file_id=%s status=%s exists=%s size=%s",
-                    404,
-                    file_id,
-                    payload_404["status"],
-                    False,
-                    0,
-                )
-                return resp_404
+            job_id = _lookup_job_id(file_id)
+            log_data.update({"source": "job", "job_id": job_id})
+            if job_id:
+                status = _status_from_job(job_id)
+                if status == "done":
+                    status = "error"
+                    log_data["job_status_mismatch"] = True
+                payload.update({"status": status, "job_id": job_id})
+                log_data.update({"job_status": status})
+                if status == "error":
+                    result = get_job_result(job_id)
+                    if isinstance(result, dict):
+                        error_msg = str(result.get("error") or "").strip()
+                        if error_msg:
+                            payload["error"] = error_msg
+                            log_data["error"] = error_msg
+            else:
+                log_data.update({"job_status": None})
+    except Exception as exc:
+        error_message = str(exc)
+        payload = {
+            "file_id": file_id,
+            "exists": False,
+            "size": 0,
+            "status": "error",
+            "error": error_message,
+        }
+        log_data.update({"source": "exception", "error": error_message})
+        logger.exception("[exists][xkt] %s", json.dumps(log_data, ensure_ascii=False))
+    else:
+        logger.info("[exists][xkt] %s", json.dumps({**log_data, **payload}, ensure_ascii=False))
 
-    payload = {"file_id": file_id, "exists": exists, "size": size, "status": status}
-    if job_id:
-        payload["job_id"] = job_id
-    if error_message:
-        payload["error"] = error_message
     resp = make_response(jsonify(payload), 200)
-    resp.headers["Cache-Control"] = "no-cache, max-age=0"
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
     resp.headers["Access-Control-Allow-Origin"] = "*"
-    logger.info(
-        "[exists] http=%s file_id=%s status=%s exists=%s size=%s job_id=%s",
-        resp.status_code,
-        file_id,
-        payload["status"],
-        exists,
-        size,
-        job_id or "-",
-    )
     return resp
 
 
