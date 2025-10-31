@@ -4210,26 +4210,13 @@ export {};
         const fileId = typeof currentFileId === "function" ? currentFileId() : (window.__currentFileId || "");
         const baseUrl = location.origin;
         let job_id;
-        try {
-          const r = await fetch(`${baseUrl}/api/reconvert`, {
-            method:"POST",
-            headers:{"Content-Type":"application/json"},
-            body: JSON.stringify({ file_id: fileId })
-          });
-          if (!r.ok) throw new Error(`reconvert ${r.status}`);
-          ({ job_id } = await r.json());
-        } catch (e) {
-          console.warn("[force] reconvert failed, use sync fallback:", e.message);
-          const s = await fetch(`${baseUrl}/api/reconvert/sync`, {
-            method:"POST",
-            headers:{"Content-Type":"application/json"},
-            body: JSON.stringify({ file_id: fileId })
-          });
-          if (!s.ok) throw new Error("sync fallback failed");
-          const fallbackUrl = `${baseUrl}/xkt/${fileId}.xkt?v=${Date.now()}`;
-          await loadXKT(fallbackUrl, null, { fileId });
-          return;
-        }
+        const r = await fetch(`${baseUrl}/api/reconvert`, {
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ file_id: fileId })
+        });
+        if (!r.ok) throw new Error(`reconvert ${r.status}`);
+        ({ job_id } = await r.json());
         // 2) poll jusqu'à finished
         const t0 = Date.now();
         let wait = 1500;
@@ -4247,6 +4234,8 @@ export {};
         // 3) recharge avec cache-buster
         const url = `${baseUrl}/xkt/${fileId}.xkt?v=${Date.now()}`;
         await loadXKT(url, null, { fileId });
+      } catch (err) {
+        console.error('[force] reconvert failed', err);
       } finally {
         window.__forceLock = false;
       }
@@ -4296,36 +4285,18 @@ export {};
 
 const MIN_HEALTHY_XKT = 200000; // 200 KB
 
+// IMPORTANT: front loads XKT on HEAD=200 + content-length>0.
+// /exists is UX-only and must not block rendering.
+// Do NOT reintroduce /api/reconvert/sync calls here.
 async function waitForXKT(fileId, { maxMs = 90000, stepMs = 900 } = {}) {
   const t0 = performance.now();
   let attempt = 0;
-  let fallbackTriggered = false;
 
-  const triggerSyncFallback = async () => {
-    if (fallbackTriggered) {
-      return null;
-    }
+  const freshUrl = () => {
     if (typeof location === 'undefined') {
-      return null;
+      return `/xkt/${fileId}.xkt?nocache=${Date.now()}`;
     }
-    fallbackTriggered = true;
-    console.warn('[wait] fallback sync convert');
-    try {
-      const res = await fetch(`/api/reconvert/sync`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file_id: fileId })
-      });
-      if (res.ok) {
-        return `${location.origin}/xkt/${fileId}.xkt?v=${Date.now()}`;
-      }
-      console.error('[wait] sync convert failed', await res.text());
-      fallbackTriggered = false;
-    } catch (err) {
-      console.error('[wait] sync convert failed', err);
-      fallbackTriggered = false;
-    }
-    return null;
+    return `${location.origin}/xkt/${fileId}.xkt?v=${Date.now()}`;
   };
 
   while (performance.now() - t0 < maxMs) {
@@ -4338,15 +4309,16 @@ async function waitForXKT(fileId, { maxMs = 90000, stepMs = 900 } = {}) {
       const head = await fetch(`/xkt/${fileId}.xkt${qs}`, { method: 'HEAD', cache: 'no-store' });
       headLen = Number(head.headers.get('content-length') || '0');
       console.log('[wait][xkt][head]', { attempt, status: head.status, len: headLen });
-      if (head.ok && headLen > 0) {
-        if (headLen < MIN_HEALTHY_XKT) {
-          const freshUrl = await triggerSyncFallback();
-          if (freshUrl) return freshUrl;
-        } else {
-          return true;
-        }
+      if (head.ok && headLen >= MIN_HEALTHY_XKT) {
+        console.log('[wait][xkt][head-ok] load now', { attempt });
+        return freshUrl();
       }
-    } catch {}
+      if (head.ok && headLen > 0) {
+        console.log('[wait][xkt][head-small]', { attempt, len: headLen });
+      }
+    } catch (err) {
+      console.warn('[wait][xkt][head-error]', { attempt, message: err?.message });
+    }
 
     try {
       const ex = await fetch(`/exists/xkt/${fileId}${qs}`, { cache: 'no-store' });
@@ -4354,26 +4326,22 @@ async function waitForXKT(fileId, { maxMs = 90000, stepMs = 900 } = {}) {
         const j = await ex.json();
         console.log('[wait][xkt][exists]', { attempt, ...j });
         existsFlag = j.exists;
-        if (j.exists && j.size > 0) {
-          if (j.size < MIN_HEALTHY_XKT) {
-            const freshUrl = await triggerSyncFallback();
-            if (freshUrl) return freshUrl;
-          } else {
-            return true;
-          }
+        if (j.exists && j.size >= MIN_HEALTHY_XKT) {
+          console.log('[wait][xkt][exists-ok] load now', { attempt });
+          return freshUrl();
         }
       }
-    } catch {}
-
-    if (attempt >= 5 || existsFlag === false) {
-      console.warn('[wait] early sync fallback');
-      const freshUrl = await triggerSyncFallback();
-      if (freshUrl) return freshUrl;
+    } catch (err) {
+      console.warn('[wait][xkt][exists-error]', { attempt, message: err?.message });
     }
 
-    if ((headLen > 0 && headLen < MIN_HEALTHY_XKT) || attempt >= 10) {
-      const freshUrl = await triggerSyncFallback();
-      if (freshUrl) return freshUrl;
+    if (existsFlag === false) {
+      console.warn('[wait][xkt] exists=false stop', { attempt });
+      break;
+    }
+
+    if (attempt >= 10) {
+      break;
     }
 
     await new Promise(r => setTimeout(r, stepMs));
