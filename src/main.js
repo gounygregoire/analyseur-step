@@ -11,12 +11,20 @@ import {
 } from "@xeokit/xeokit-sdk";
 import DFMViewerAdapter from "../static/js/modules/DFMViewerAdapter.js";
 import { waitFor } from "./js/utils/waits.js";
-import { ensureHealthyXKT } from "./js/xkt/healthCheck.js";
+import { ensureHealthyXKT, postReconvert, pollConversionStatus, fetchConversionError } from "./js/xkt/healthCheck.js";
 import { showReconvertBanner, updateReconvertBanner, hideReconvertBanner } from "./js/ui/reconvertBanner.js";
 
 const MIN_HEALTHY_XKT = 200000; // 200 KB
 
 let viewer, cameraControl, xktLoader, gltfLoader, dist, sections, canvas;
+let activeConversionTask = null;
+
+function getBaseUrl() {
+  if (typeof location !== "undefined" && location.origin) {
+    return location.origin;
+  }
+  return "";
+}
 
 async function headExists(url) {
   try {
@@ -28,96 +36,125 @@ async function headExists(url) {
   }
 }
 
-if (typeof window !== "undefined" && typeof window.__SYNC_CONVERT_DISABLED !== "boolean") {
-  window.__SYNC_CONVERT_DISABLED = false;
-}
+async function waitForXKTReady({ fileId, xktUrl, maxTries = 60 }) {
+  const origin = typeof location !== "undefined" && location.origin ? location.origin : "";
+  const baseUrl = origin || "";
+  let lastStatus = null;
 
-function isSyncConvertDisabled() {
-  return typeof window !== "undefined" && window.__SYNC_CONVERT_DISABLED === true;
-}
-
-function disableSyncConvert() {
-  if (typeof window === "undefined" || window.__SYNC_CONVERT_DISABLED === true) {
-    return;
-  }
-  window.__SYNC_CONVERT_DISABLED = true;
-  const msg = "Conversion locale indisponible (converter non installé)";
-  if (window.showToast) {
-    showToast(msg, { type: "error" });
-  } else {
-    alert(msg);
-  }
-}
-
-async function waitForXKTReady({ fileId, xktUrl, maxTries = 60, delayMs = 800 }) {
-  let attempts = 0;
-
-  let fallbackTriggered = false;
-
-  const triggerSyncFallback = async () => {
-    if (fallbackTriggered || typeof location === "undefined" || isSyncConvertDisabled()) return null;
-    fallbackTriggered = true;
-    console.warn("[wait] fallback sync convert");
+  for (let attempt = 1; attempt <= maxTries; attempt++) {
     try {
-      const res = await fetch(`/api/reconvert/sync`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ file_id: fileId })
-      });
+      const res = await fetch(`${baseUrl}/exists/xkt/${fileId}`, { cache: "no-store" });
       if (res.ok) {
-        return `${location.origin}/xkt/${fileId}.xkt?v=${Date.now()}`;
-      }
-      if (res.status >= 400) {
-        disableSyncConvert();
-        return null;
-      }
-      console.error("[wait] sync convert failed", await res.text());
-      fallbackTriggered = false;
-    } catch (err) {
-      console.error("[wait] sync convert failed", err);
-      fallbackTriggered = false;
-    }
-    return null;
-  };
-
-  // 1) on tente d’abord l’API exists (si elle marche, c’est immédiat)
-  for (let i = 1; i <= maxTries; i++) {
-    attempts++;
-    try {
-      const r = await fetch(`/exists/xkt/${fileId}`, { cache: "no-store" });
-      if (r.ok) {
-        const j = await r.json();
-        console.log("[wait][xkt][exists]", { attempt: i, fileId, j });
-        if (j.exists && j.size > 0) {
-          if (j.size < MIN_HEALTHY_XKT) {
-            const freshUrl = await triggerSyncFallback();
-            if (freshUrl) return freshUrl;
-          } else {
-            return true;
-          }
+        const payload = await res.json();
+        const status = payload?.status;
+        if (payload?.exists || status === "done") {
+          return true;
+        }
+        if (status === "error") {
+          const message = await fetchConversionError({ baseUrl, jobId: payload?.job_id, payload });
+          const err = new Error(message || "Conversion XKT échouée.");
+          err.status = "error";
+          throw err;
+        }
+        if (status && status !== lastStatus) {
+          lastStatus = status;
+          console.log("[wait][xkt][status]", { attempt, fileId, status });
         }
       }
-    } catch {}
-    await new Promise(r => setTimeout(r, 250)); // petite pause avant fallback HEAD
-    // 2) fallback HEAD direct sur /xkt
+    } catch (err) {
+      console.warn("[wait][xkt] status probe failed", err);
+    }
+
     const head = await headExists(xktUrl);
-    console.log("[wait][xkt][head]", { attempt: i, fileId, head });
     const len = Number.isFinite(head.size) ? head.size : 0;
     if (head.ok && len > 0) {
-      if (len < MIN_HEALTHY_XKT) {
-        const freshUrl = await triggerSyncFallback();
-        if (freshUrl) return freshUrl;
-      } else {
-        return true;
-      }
+      return true;
     }
-    if ((len > 0 && len < MIN_HEALTHY_XKT) || attempts >= 10) {
-      const freshUrl = await triggerSyncFallback();
-      if (freshUrl) return freshUrl;
-    }
-    await new Promise(r => setTimeout(r, delayMs));
+
+    await new Promise((resolve) => setTimeout(resolve, Math.min(1000 + attempt * 40, 3000)));
   }
   return false;
+}
+
+function startConversionMonitor(fileId) {
+  if (!fileId) return;
+
+  if (activeConversionTask && typeof activeConversionTask.cancel === "function") {
+    activeConversionTask.cancel();
+  }
+
+  const token = { cancelled: false, cancel() { this.cancelled = true; } };
+  activeConversionTask = token;
+
+  const baseUrl = getBaseUrl();
+
+  showReconvertBanner("Conversion en cours…");
+  window.setUiProgress?.("Conversion en cours…");
+
+  (async () => {
+    let jobId = null;
+    const handleStatus = (signal) => {
+      if (token.cancelled) return;
+      if (signal === "reconvert:queued") {
+        updateReconvertBanner("File d'attente…");
+        window.setUiProgress?.("Conversion en cours…");
+      } else if (signal === "reconvert:started") {
+        updateReconvertBanner("Conversion en cours…");
+        window.setUiProgress?.("Conversion en cours…");
+      } else if (signal === "reconvert:finished") {
+        updateReconvertBanner("Conversion terminée.");
+        window.setUiProgress?.("");
+      } else if (signal === "reconvert:failed") {
+        updateReconvertBanner("Conversion échouée.");
+        window.setUiProgress?.("");
+      }
+    };
+
+    try {
+      const queued = await postReconvert({ baseUrl, fileId });
+      jobId = queued?.job_id || null;
+      handleStatus("reconvert:queued");
+
+      const result = await pollConversionStatus({ baseUrl, fileId, onStatus: handleStatus });
+      jobId = result.jobId || jobId;
+
+      if (token.cancelled) return;
+
+      if (result.status === "done") {
+        hideReconvertBanner();
+        window.setUiProgress?.("");
+        return;
+      }
+
+      const message = await fetchConversionError({ baseUrl, jobId, payload: result.payload });
+      const fallback = result.status === "timeout"
+        ? "Conversion trop longue. Merci de réessayer."
+        : "Conversion échouée.";
+      const finalMessage = message || fallback;
+      updateReconvertBanner(finalMessage);
+      window.setUiProgress?.("");
+      if (window.showToast) {
+        window.showToast(finalMessage, { type: "error" });
+      } else {
+        alert(finalMessage);
+      }
+    } catch (err) {
+      if (token.cancelled) return;
+      console.error("[conversion] monitor failed", err);
+      const msg = err?.message || "Impossible de lancer la conversion.";
+      updateReconvertBanner(msg);
+      window.setUiProgress?.("");
+      if (window.showToast) {
+        window.showToast(msg, { type: "error" });
+      } else {
+        alert(msg);
+      }
+    } finally {
+      if (activeConversionTask === token && !token.cancelled) {
+        activeConversionTask = null;
+      }
+    }
+  })();
 }
 
 function setHeatmapEnabled(enabled) {
@@ -741,6 +778,7 @@ async function uploadStepFile(file){
       throw new Error('file_id manquant');
     }
     exposeFileId.call(state, data.file_id);
+    startConversionMonitor(data.file_id);
     lastXktUrl = null;
     window.refreshHistory?.();
   }catch(e){
@@ -805,14 +843,19 @@ async function loadXKTFromConvertResponse(response) {
       console.log("[xkt][health]", status);
       if (status === "reconvert:start") {
         showReconvertBanner("Reconversion du modèle…");
+        window.setUiProgress?.("Conversion en cours…");
       } else if (status.startsWith("reconvert:queued")) {
         updateReconvertBanner("File d'attente…");
+        window.setUiProgress?.("Conversion en cours…");
       } else if (status.startsWith("reconvert:started")) {
         updateReconvertBanner("Conversion en cours…");
+        window.setUiProgress?.("Conversion en cours…");
       } else if (status.startsWith("reconvert:finished")) {
         updateReconvertBanner("Terminé, rechargement…");
+        window.setUiProgress?.("");
       } else if (status.startsWith("reconvert:failed")) {
         updateReconvertBanner("Reconversion échouée.");
+        window.setUiProgress?.("");
       }
     };
 

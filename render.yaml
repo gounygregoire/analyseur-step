@@ -25,10 +25,10 @@ services:
     name: cadlytics-worker
     env: python
     buildCommand: |
-      pip install -r requirements.txt
-      curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+      curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
       apt-get update && apt-get install -y nodejs
       npm ci
+      pip install -r requirements.txt
     startCommand: rq worker -u $REDIS_URL cadlytics
     envVars:
       - key: REDIS_URL

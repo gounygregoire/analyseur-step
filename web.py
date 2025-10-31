@@ -141,13 +141,13 @@ REDIS_URL = _normalize_redis_url(
     or os.environ.get("REDIS_TLS_URL")
     or "redis://localhost:6379/0"
 )
-RQ_QUEUE_NAME = os.environ.get("RQ_QUEUE_NAME", "cadlytics")
+RQ_QUEUE_NAME = os.environ.get("RQ_QUEUE_NAME", "convert")
 
 # RQ Queue globale (utilisée par les endpoints /api/reconvert)
 _queue_redis_url = REDIS_URL or "redis://localhost:6379/0"
 try:
     redis_conn = Redis.from_url(_queue_redis_url, ssl_cert_reqs=None, socket_timeout=5)
-    queue: Queue | None = Queue("cadlytics", connection=redis_conn)
+    queue: Queue | None = Queue(RQ_QUEUE_NAME, connection=redis_conn)
 except Exception as exc:
     logger.warning("[reconvert] impossible d'initialiser la queue: %s", exc)
     redis_conn = None
@@ -1004,77 +1004,123 @@ def exists_xkt(file_id: str):
     path_local = os.path.join(xkt_dir, f"{file_id}.xkt")
     exists = os.path.isfile(path_local)
     size = os.path.getsize(path_local) if exists else 0
+    job_id = None
+    status = "done" if exists else "pending"
+    error_message: str | None = None
 
-    payload = {"file_id": file_id, "exists": exists, "size": size}
+    if not exists:
+        job_id = _lookup_job_id(file_id)
+        if job_id:
+            status = _status_from_job(job_id)
+            if status == "error":
+                result = get_job_result(job_id)
+                if isinstance(result, dict):
+                    error_message = str(result.get("error") or "") or None
+            if status == "done" and not exists:
+                status = "error"
+                if not error_message:
+                    error_message = "xkt_missing"
+        else:
+            source_present = any(
+                os.path.isfile(os.path.join(UPLOAD_FOLDER, f"{file_id}{ext}"))
+                for ext in (".step", ".stp", ".stl")
+            )
+            if not source_present:
+                payload_404 = {
+                    "file_id": file_id,
+                    "exists": False,
+                    "status": "error",
+                    "error": "file_not_found",
+                }
+                resp_404 = make_response(jsonify(payload_404), 404)
+                resp_404.headers["Cache-Control"] = "no-cache, max-age=0"
+                resp_404.headers["Access-Control-Allow-Origin"] = "*"
+                logger.info(
+                    "[exists] http=%s file_id=%s status=%s exists=%s size=%s",
+                    404,
+                    file_id,
+                    payload_404["status"],
+                    False,
+                    0,
+                )
+                return resp_404
+
+    payload = {"file_id": file_id, "exists": exists, "size": size, "status": status}
+    if job_id:
+        payload["job_id"] = job_id
+    if error_message:
+        payload["error"] = error_message
     resp = make_response(jsonify(payload), 200)
     resp.headers["Cache-Control"] = "no-cache, max-age=0"
     resp.headers["Access-Control-Allow-Origin"] = "*"
     logger.info(
-        "[exists][local] file_id=%s path=%s exists=%s size=%s", file_id, path_local, exists, size
+        "[exists] http=%s file_id=%s status=%s exists=%s size=%s job_id=%s",
+        resp.status_code,
+        file_id,
+        payload["status"],
+        exists,
+        size,
+        job_id or "-",
     )
     return resp
 
 
-@app.get("/api/converter/health")
-def api_converter_health():
-    npm_ok = False
-    docker_status: bool | None = None
+@app.get("/api/health/worker")
+def api_health_worker():
+    redis_ok = False
+    queue_ok = False
 
-    npm_cmd = ["npx", "--yes", "@xeokit/xeokit-convert", "--version"]
     try:
-        npm_proc = subprocess.run(
-            npm_cmd,
+        redis_conn_local = get_redis()
+        redis_conn_local.ping()
+        redis_ok = True
+    except Exception as exc:
+        logger.warning("[health][worker] redis down: %s", exc)
+
+    if redis_ok:
+        try:
+            q = get_queue()
+            q.connection.ping()
+            _ = q.count
+            queue_ok = True
+        except Exception as exc:
+            logger.warning("[health][worker] queue down: %s", exc)
+
+    if redis_ok and queue_ok:
+        return jsonify({"worker": "up"}), 200
+    return jsonify({"worker": "down"}), 503
+
+
+@app.get("/api/health/converter")
+def api_health_converter():
+    cmd = ["npx", "--yes", "@xeokit/xeokit-convert", "--version"]
+    try:
+        proc = subprocess.run(
+            cmd,
             capture_output=True,
             text=True,
             timeout=10,
         )
-        if npm_proc.returncode == 0:
-            npm_ok = True
-            logger.info("[converter][health] npm ok stdout=%s", (npm_proc.stdout or "").strip())
-        else:
-            logger.warning(
-                "[converter][health] npm failed rc=%s stderr=%s",
-                npm_proc.returncode,
-                (npm_proc.stderr or "").strip(),
-            )
-    except subprocess.TimeoutExpired:
-        logger.warning("[converter][health] npm timeout")
     except FileNotFoundError:
-        logger.warning("[converter][health] npx not found")
+        logger.warning("[health][converter] npx introuvable")
+        return jsonify({"npm": False}), 503
+    except subprocess.TimeoutExpired:
+        logger.warning("[health][converter] timeout npx --version")
+        return jsonify({"npm": False}), 503
     except Exception as exc:
-        logger.exception("[converter][health] npm check error: %s", exc)
+        logger.exception("[health][converter] erreur: %s", exc)
+        return jsonify({"npm": False}), 503
 
-    if not npm_ok:
-        docker_cmd = ["docker", "--version"]
-        try:
-            docker_proc = subprocess.run(
-                docker_cmd,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            docker_status = docker_proc.returncode == 0
-            if docker_status:
-                logger.info(
-                    "[converter][health] docker ok stdout=%s", (docker_proc.stdout or "").strip()
-                )
-            else:
-                logger.warning(
-                    "[converter][health] docker failed rc=%s stderr=%s",
-                    docker_proc.returncode,
-                    (docker_proc.stderr or "").strip(),
-                )
-        except subprocess.TimeoutExpired:
-            docker_status = False
-            logger.warning("[converter][health] docker timeout")
-        except FileNotFoundError:
-            docker_status = False
-            logger.warning("[converter][health] docker not found")
-        except Exception as exc:
-            docker_status = False
-            logger.exception("[converter][health] docker check error: %s", exc)
+    if proc.returncode != 0:
+        stderr = (proc.stderr or "").strip()
+        logger.warning("[health][converter] rc=%s stderr=%s", proc.returncode, stderr)
+        return jsonify({"npm": False}), 503
 
-    payload = {"npm": npm_ok, "docker": docker_status}
+    stdout = (proc.stdout or "").strip()
+    version = stdout.split()[-1] if stdout else ""
+    payload = {"npm": True}
+    if version:
+        payload["version"] = version
     return jsonify(payload), 200
 
 
@@ -1121,233 +1167,8 @@ def reconvert(file_id: str):
 
 @app.post("/api/reconvert/sync")
 def api_reconvert_sync():
-    data = request.get_json(silent=True) or {}
-    file_id = None
-    if isinstance(data, dict):
-        file_id = data.get("file_id") or data.get("fileId")
-    if not file_id:
-        return jsonify({"ok": False, "error": "missing_file_id"}), 400
+    return jsonify({"ok": False, "error": "converter_not_available_on_web"}), 503
 
-    if not isinstance(file_id, str) or not re.fullmatch(r"[0-9a-fA-F-]{6,}", file_id):
-        return jsonify({"ok": False, "error": "invalid_file_id"}), 400
-
-    upload_dir = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
-    candidates = [
-        f"{file_id}.step",
-        f"{file_id}.stp",
-        f"{file_id}.stl",
-    ]
-    src = next(
-        (
-            os.path.join(upload_dir, candidate)
-            for candidate in candidates
-            if os.path.isfile(os.path.join(upload_dir, candidate))
-        ),
-        None,
-    )
-    if not src:
-        return jsonify({"ok": False, "error": "source_not_found"}), 404
-
-    try:
-        size_bytes = os.path.getsize(src)
-    except OSError:
-        size_bytes = 0
-
-    if size_bytes > 8 * 1024 * 1024:
-        return (
-            jsonify({
-                "ok": False,
-                "error": "too_large_for_sync",
-                "size_mb": round(size_bytes / (1024 * 1024), 2) if size_bytes else 0,
-            }),
-            413,
-        )
-
-    out_dir = _sync_xkt_dir()
-    out_final = os.path.join(out_dir, f"{file_id}.xkt")
-    out_tmp = f"{out_final}.tmp"
-
-    try:
-        if os.path.exists(out_tmp):
-            os.remove(out_tmp)
-    except OSError:
-        pass
-
-    cmd = [
-        "npx",
-        "--yes",
-        "@xeokit/xeokit-convert",
-        "--input",
-        src,
-        "--output",
-        out_tmp,
-        "--format",
-        "xkt",
-        "--withGeometry",
-        "true",
-        "--withMetaModel",
-        "true",
-        "--triangulate",
-        "true",
-        "--stats",
-        "true",
-        "--logLevel",
-        "error",
-    ]
-
-    npm_proc = None
-    npm_error: Exception | None = None
-    try:
-        npm_proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-    except subprocess.TimeoutExpired:
-        app.logger.warning("[reconvert][sync] npx timeout file_id=%s", file_id)
-        return jsonify({"ok": False, "error": "convert_timeout"}), 504
-    except FileNotFoundError as exc:
-        npm_error = exc
-        app.logger.warning(
-            "[reconvert][sync] npx unavailable, fallback to docker file_id=%s err=%s",
-            file_id,
-            exc,
-        )
-    except Exception as exc:
-        app.logger.exception("[reconvert][sync] npx execution failed file_id=%s", file_id)
-        return jsonify({"ok": False, "error": "convert_failed", "detail": str(exc)}), 500
-
-    conversion_ok = bool(npm_proc and npm_proc.returncode == 0)
-    docker_stderr = ""
-
-    if not conversion_ok:
-        if npm_proc and npm_proc.returncode != 0:
-            app.logger.warning(
-                "[reconvert][sync] npx failed rc=%s stderr=%s file_id=%s",
-                npm_proc.returncode,
-                (npm_proc.stderr or "").strip(),
-                file_id,
-            )
-
-        upload_mount = os.path.abspath(upload_dir)
-        out_mount = os.path.abspath(out_dir)
-        docker_cmd = [
-            "docker",
-            "run",
-            "--rm",
-            "-v",
-            f"{upload_mount}:/in",
-            "-v",
-            f"{out_mount}:/out",
-            "ghcr.io/xeokit/xeokit-convert:1.3.1",
-            "--input",
-            f"/in/{os.path.basename(src)}",
-            "--output",
-            f"/out/{os.path.basename(out_tmp)}",
-            "--format",
-            "xkt",
-            "--withGeometry",
-            "true",
-            "--withMetaModel",
-            "true",
-            "--triangulate",
-            "true",
-            "--stats",
-            "true",
-            "--logLevel",
-            "error",
-        ]
-
-        try:
-            docker_proc = subprocess.run(
-                docker_cmd,
-                capture_output=True,
-                text=True,
-                timeout=180,
-            )
-        except subprocess.TimeoutExpired:
-            app.logger.warning("[reconvert][sync] docker timeout file_id=%s", file_id)
-            return jsonify({"ok": False, "error": "convert_timeout"}), 504
-        except FileNotFoundError as exc:
-            app.logger.warning(
-                "[reconvert][sync] docker unavailable file_id=%s err=%s",
-                file_id,
-                exc,
-            )
-            return (
-                jsonify(
-                    {
-                        "ok": False,
-                        "error": "converter_not_available",
-                        "stderr": str(exc),
-                    }
-                ),
-                503,
-            )
-        except Exception as exc:
-            app.logger.exception(
-                "[reconvert][sync] docker execution failed file_id=%s", file_id
-            )
-            return (
-                jsonify(
-                    {
-                        "ok": False,
-                        "error": "converter_not_available",
-                        "stderr": str(exc),
-                    }
-                ),
-                503,
-            )
-
-        docker_stderr = (docker_proc.stderr or "").strip()
-        if docker_proc.returncode != 0:
-            app.logger.warning(
-                "[reconvert][sync] docker failed rc=%s stderr=%s file_id=%s",
-                docker_proc.returncode,
-                docker_stderr,
-                file_id,
-            )
-            stderr_payload = docker_stderr or ((npm_proc.stderr or "").strip() if npm_proc else str(npm_error or ""))
-            return (
-                jsonify(
-                    {
-                        "ok": False,
-                        "error": "converter_not_available",
-                        "stderr": stderr_payload,
-                    }
-                ),
-                503,
-            )
-
-        conversion_ok = True
-
-    if not conversion_ok or not os.path.isfile(out_tmp):
-        app.logger.error("[reconvert][sync] missing tmp output file_id=%s", file_id)
-        return jsonify({"ok": False, "error": "xkt_missing"}), 500
-
-    try:
-        os.replace(out_tmp, out_final)
-    except Exception as exc:
-        app.logger.exception("[reconvert][sync] finalize failed file_id=%s", file_id)
-        return jsonify({"ok": False, "error": "finalize_failed", "detail": str(exc)}), 500
-
-    try:
-        xkt_size = os.path.getsize(out_final)
-    except OSError:
-        xkt_size = 0
-
-    if xkt_size <= 0:
-        app.logger.error("[reconvert][sync] empty XKT file_id=%s", file_id)
-        return jsonify({"ok": False, "error": "xkt_empty"}), 500
-
-    manifest_path = out_final.replace(".xkt", ".manifest.json")
-    try:
-        with open(manifest_path, "w", encoding="utf-8") as fh:
-            json.dump({"ok": True, "file_id": file_id, "xkt_size": xkt_size}, fh)
-    except Exception as exc:
-        app.logger.warning(
-            "[reconvert][sync] manifest write failed file_id=%s err=%s",
-            file_id,
-            exc,
-        )
-
-    return jsonify({"ok": True, "xkt_size": xkt_size})
 
 
 @app.get("/__s3_env")
@@ -1395,14 +1216,48 @@ def __clear_caches():
 
 
 # --- À insérer en fin de fichier : endpoints reconvert ---
+_JOB_MAPPING_TTL_SEC = 24 * 3600
+
+
+def _conversion_job_key(file_id: str) -> str:
+    return f"reconvert:file:{file_id}"
+
+
+def _store_job_mapping(file_id: str, job_id: str) -> None:
+    redis_instance = redis_conn
+    if redis_instance is None:
+        try:
+            redis_instance = (queue.connection if queue is not None else get_queue().connection)
+        except Exception as exc:  # pragma: no cover - best effort only
+            logger.warning("[reconvert] impossible de stocker le mapping job file_id=%s err=%s", file_id, exc)
+            return
+    try:
+        redis_instance.setex(_conversion_job_key(file_id), _JOB_MAPPING_TTL_SEC, job_id)
+    except Exception as exc:  # pragma: no cover - best effort only
+        logger.warning("[reconvert] setex mapping échoue file_id=%s err=%s", file_id, exc)
+
+
 def enqueue_reconvert_job(file_id: str) -> str:
     current_queue = queue or get_queue()
     job = current_queue.enqueue(
-        "cadlytics.jobs.reconvert.reconvert",
+        "cadlytics.jobs.reconvert.convert_to_xkt",
         file_id,
-        job_timeout=1800,
+        job_timeout=RQ_JOB_TIMEOUT_SEC,
     )
-    return job.id
+    job_id = job.id
+    _store_job_mapping(file_id, job_id)
+    queue_size = None
+    try:
+        queue_size = current_queue.count
+    except Exception:
+        queue_size = None
+    logger.info(
+        "[reconvert][enqueue] file_id=%s job_id=%s queue=%s",
+        file_id,
+        job_id,
+        queue_size if queue_size is not None else "?",
+    )
+    return job_id
 
 
 @app.post("/api/reconvert")
@@ -1410,10 +1265,56 @@ def api_reconvert():
     data = request.get_json(silent=True) or request.form or {}
     file_id = data.get("file_id") or data.get("fileId")
     if not file_id:
-        return jsonify({"accepted": False, "error": "missing_file_id"}), 400
+        logger.warning("[reconvert][request] missing file_id payload=%s", data)
+        return jsonify({"ok": False, "error": "missing_file_id"}), 400
 
-    job_id = enqueue_reconvert_job(file_id)
-    return jsonify({"accepted": True, "file_id": file_id, "job_id": job_id}), 202
+    if not isinstance(file_id, str) or not re.fullmatch(r"[0-9a-fA-F-]{6,}", file_id):
+        logger.warning("[reconvert][request] invalid file_id=%s", file_id)
+        return jsonify({"ok": False, "error": "invalid_file_id"}), 400
+
+    logger.info("[reconvert][request] file_id=%s", file_id)
+    try:
+        job_id = enqueue_reconvert_job(file_id)
+    except Exception as exc:
+        logger.error("[reconvert][enqueue] failed file_id=%s err=%s", file_id, exc)
+        return (
+            jsonify({"ok": False, "error": "converter_unavailable"}),
+            503,
+        )
+
+    payload = {"ok": True, "status": "pending", "file_id": file_id, "job_id": job_id}
+    logger.info(
+        "[reconvert][response] file_id=%s job_id=%s status=%s",
+        file_id,
+        job_id,
+        payload["status"],
+    )
+    return jsonify(payload), 200
+
+
+def _lookup_job_id(file_id: str) -> str | None:
+    redis_instance = redis_conn
+    if redis_instance is None:
+        try:
+            redis_instance = (queue.connection if queue is not None else get_queue().connection)
+        except Exception:
+            return None
+    try:
+        raw = redis_instance.get(_conversion_job_key(file_id))
+    except Exception:
+        return None
+    if isinstance(raw, bytes):
+        try:
+            return raw.decode("utf-8")
+        except Exception:
+            return None
+    if isinstance(raw, str):
+        return raw
+    return None
+
+
+def _status_from_job(job_id: str) -> str:
+    return get_job_status(job_id)
 
 
 def _get_reconvert_job_cache() -> dict[str, Job | None]:
@@ -1471,7 +1372,14 @@ def get_job_status(job_id: str) -> str:
         logger.warning("[reconvert] impossible de récupérer le job %s: %s", job_id, exc)
         return "failed"
     status = job.get_status() or "failed"
-    return _normalize_job_status(status)
+    normalized = _normalize_job_status(status)
+    mapping = {
+        "queued": "pending",
+        "started": "running",
+        "finished": "done",
+        "failed": "error",
+    }
+    return mapping.get(normalized, "error")
 
 
 def get_job_result(job_id: str) -> dict:
@@ -1487,6 +1395,11 @@ def get_job_result(job_id: str) -> dict:
     result = job.result
     if isinstance(result, dict):
         return result
+    meta_result = getattr(job, "meta", None)
+    if isinstance(meta_result, dict):
+        stored = meta_result.get("result")
+        if isinstance(stored, dict):
+            return stored
     if result is None:
         return {}
     logger.warning(
@@ -1498,7 +1411,7 @@ def get_job_result(job_id: str) -> dict:
 @app.get("/api/reconvert/status/<job_id>")
 def api_reconvert_status(job_id):
     st = get_job_status(job_id)
-    res = get_job_result(job_id) if st in ("finished", "failed") else None
+    res = get_job_result(job_id) if st in ("done", "error") else None
     return jsonify({"status": st, "result": res or {}}), 200
 
 if __name__ == "__main__":
