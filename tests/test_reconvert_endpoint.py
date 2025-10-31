@@ -1,6 +1,7 @@
-"""Tests pour l'endpoint /api/reconvert."""
+"""Tests pour les endpoints /api/reconvert."""
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import rq.job
@@ -79,3 +80,103 @@ def test_reconvert_status_not_found(monkeypatch):
 
     assert resp.status_code == 404
     assert resp.get_json() == {"status": "not_found"}
+
+
+def _setup_sync_dirs(tmp_path, monkeypatch):
+    uploads = tmp_path / "uploads"
+    outputs = tmp_path / "converted"
+    uploads.mkdir()
+    outputs.mkdir()
+    monkeypatch.setattr(web, "UPLOAD_FOLDER", str(uploads))
+    monkeypatch.setattr(web, "OUTPUT_FOLDER", str(outputs))
+    return uploads, outputs
+
+
+def test_reconvert_sync_missing_file_id(tmp_path, monkeypatch):
+    _setup_sync_dirs(tmp_path, monkeypatch)
+
+    with web.app.test_client() as client:
+        resp = client.post("/api/reconvert/sync", json={})
+
+    assert resp.status_code == 400
+    assert resp.get_json() == {"ok": False, "error": "missing_file_id"}
+
+
+def test_reconvert_sync_source_not_found(tmp_path, monkeypatch):
+    uploads, outputs = _setup_sync_dirs(tmp_path, monkeypatch)
+
+    with web.app.test_client() as client:
+        resp = client.post(
+            "/api/reconvert/sync",
+            json={"file_id": "123e4567-e89b-12d3-a456-426614174000"},
+        )
+
+    assert resp.status_code == 404
+    assert resp.get_json() == {"ok": False, "error": "source_not_found"}
+
+
+def test_reconvert_sync_too_large(tmp_path, monkeypatch):
+    uploads, outputs = _setup_sync_dirs(tmp_path, monkeypatch)
+    file_id = "123e4567-e89b-12d3-a456-426614174000"
+    src = uploads / f"{file_id}.step"
+    src.write_bytes(b"0" * ((8 * 1024 * 1024) + 1))
+
+    with web.app.test_client() as client:
+        resp = client.post("/api/reconvert/sync", json={"file_id": file_id})
+
+    assert resp.status_code == 413
+    body = resp.get_json()
+    assert body["ok"] is False
+    assert body["error"] == "too_large_for_sync"
+    assert body["size_mb"] >= 8
+
+
+def test_reconvert_sync_success(tmp_path, monkeypatch):
+    uploads, outputs = _setup_sync_dirs(tmp_path, monkeypatch)
+    file_id = "123e4567-e89b-12d3-a456-426614174000"
+    src = uploads / f"{file_id}.step"
+    src.write_text("step data")
+
+    def fake_run(cmd, capture_output=False, text=False, timeout=None):  # noqa: ARG001
+        assert "@xeokit/xeokit-convert" in cmd
+        tmp_out = outputs / f"{file_id}.xkt.tmp"
+        tmp_out.write_bytes(b"1234567890")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(web.subprocess, "run", fake_run)
+
+    with web.app.test_client() as client:
+        resp = client.post("/api/reconvert/sync", json={"file_id": file_id})
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data == {"ok": True, "xkt_size": 10}
+
+    final_path = outputs / f"{file_id}.xkt"
+    manifest_path = outputs / f"{file_id}.manifest.json"
+    assert final_path.exists()
+    assert manifest_path.exists()
+    with manifest_path.open() as fh:
+        manifest = json.load(fh)
+    assert manifest["ok"] is True
+    assert manifest["xkt_size"] == 10
+
+
+def test_reconvert_sync_convert_failure(tmp_path, monkeypatch):
+    uploads, outputs = _setup_sync_dirs(tmp_path, monkeypatch)
+    file_id = "123e4567-e89b-12d3-a456-426614174000"
+    src = uploads / f"{file_id}.step"
+    src.write_text("step data")
+
+    def fake_run(cmd, capture_output=False, text=False, timeout=None):  # noqa: ARG001
+        return SimpleNamespace(returncode=1, stdout="", stderr="boom")
+
+    monkeypatch.setattr(web.subprocess, "run", fake_run)
+
+    with web.app.test_client() as client:
+        resp = client.post("/api/reconvert/sync", json={"file_id": file_id})
+
+    assert resp.status_code == 500
+    data = resp.get_json()
+    assert data["ok"] is False
+    assert data["error"] == "convert_failed"
