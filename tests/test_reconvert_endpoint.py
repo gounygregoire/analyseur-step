@@ -82,6 +82,64 @@ def test_reconvert_status_not_found(monkeypatch):
     assert resp.get_json() == {"status": "failed", "result": {}}
 
 
+def test_converter_health_npm_ok(monkeypatch):
+    calls = []
+
+    def fake_run(cmd, capture_output=False, text=False, timeout=None):  # noqa: ARG001
+        calls.append(cmd[0])
+        assert cmd[0] == "npx"
+        return SimpleNamespace(returncode=0, stdout="1.3.1", stderr="")
+
+    monkeypatch.setattr(web.subprocess, "run", fake_run)
+
+    with web.app.test_client() as client:
+        resp = client.get("/api/converter/health")
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"npm": True, "docker": None}
+    assert calls == ["npx"]
+
+
+def test_converter_health_fallback_docker(monkeypatch):
+    calls = []
+
+    def fake_run(cmd, capture_output=False, text=False, timeout=None):  # noqa: ARG001
+        calls.append(cmd[0])
+        if cmd[0] == "npx":
+            return SimpleNamespace(returncode=1, stdout="", stderr="boom")
+        assert cmd[0] == "docker"
+        return SimpleNamespace(returncode=0, stdout="Docker version", stderr="")
+
+    monkeypatch.setattr(web.subprocess, "run", fake_run)
+
+    with web.app.test_client() as client:
+        resp = client.get("/api/converter/health")
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"npm": False, "docker": True}
+    assert calls == ["npx", "docker"]
+
+
+def test_converter_health_missing_binaries(monkeypatch):
+    calls = []
+
+    def fake_run(cmd, capture_output=False, text=False, timeout=None):  # noqa: ARG001
+        calls.append(cmd[0])
+        if cmd[0] == "npx":
+            raise FileNotFoundError("npx")
+        assert cmd[0] == "docker"
+        raise FileNotFoundError("docker")
+
+    monkeypatch.setattr(web.subprocess, "run", fake_run)
+
+    with web.app.test_client() as client:
+        resp = client.get("/api/converter/health")
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"npm": False, "docker": False}
+    assert calls == ["npx", "docker"]
+
+
 def _setup_sync_dirs(tmp_path, monkeypatch):
     uploads = tmp_path / "uploads"
     outputs = tmp_path / "converted"
@@ -142,7 +200,7 @@ def test_reconvert_sync_success(tmp_path, monkeypatch):
     src.write_text("step data")
 
     def fake_run(cmd, capture_output=False, text=False, timeout=None):  # noqa: ARG001
-        assert "xeokit-convert" in cmd
+        assert "@xeokit/xeokit-convert" in cmd
         tmp_out = sync_dir / f"{file_id}.xkt.tmp"
         tmp_out.write_bytes(b"1234567890")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -166,21 +224,77 @@ def test_reconvert_sync_success(tmp_path, monkeypatch):
     assert manifest["xkt_size"] == 10
 
 
-def test_reconvert_sync_convert_failure(tmp_path, monkeypatch):
+def test_reconvert_sync_converter_not_available(tmp_path, monkeypatch):
     uploads, _ = _setup_sync_dirs(tmp_path, monkeypatch)
     file_id = "123e4567-e89b-12d3-a456-426614174000"
     src = uploads / f"{file_id}.step"
     src.write_text("step data")
 
     def fake_run(cmd, capture_output=False, text=False, timeout=None):  # noqa: ARG001
-        return SimpleNamespace(returncode=1, stdout="", stderr="boom")
+        if cmd[0] == "npx":
+            return SimpleNamespace(returncode=1, stdout="", stderr="boom")
+        assert cmd[0] == "docker"
+        return SimpleNamespace(returncode=1, stdout="", stderr="docker oops")
 
     monkeypatch.setattr(web.subprocess, "run", fake_run)
 
     with web.app.test_client() as client:
         resp = client.post("/api/reconvert/sync", json={"file_id": file_id})
 
-    assert resp.status_code == 500
+    assert resp.status_code == 503
     data = resp.get_json()
-    assert data["ok"] is False
-    assert data["error"] == "convert_failed"
+    assert data == {
+        "ok": False,
+        "error": "converter_not_available",
+        "stderr": "docker oops",
+    }
+
+
+def test_reconvert_sync_fallback_docker_success(tmp_path, monkeypatch):
+    uploads, sync_dir = _setup_sync_dirs(tmp_path, monkeypatch)
+    file_id = "123e4567-e89b-12d3-a456-426614174000"
+    src = uploads / f"{file_id}.step"
+    src.write_text("step data")
+
+    def fake_run(cmd, capture_output=False, text=False, timeout=None):  # noqa: ARG001
+        if cmd[0] == "npx":
+            return SimpleNamespace(returncode=1, stdout="", stderr="boom")
+        assert cmd[0] == "docker"
+        tmp_out = sync_dir / f"{file_id}.xkt.tmp"
+        tmp_out.write_bytes(b"abc")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(web.subprocess, "run", fake_run)
+
+    with web.app.test_client() as client:
+        resp = client.post("/api/reconvert/sync", json={"file_id": file_id})
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data == {"ok": True, "xkt_size": 3}
+
+
+def test_reconvert_sync_docker_missing(tmp_path, monkeypatch):
+    uploads, _ = _setup_sync_dirs(tmp_path, monkeypatch)
+    file_id = "123e4567-e89b-12d3-a456-426614174000"
+    src = uploads / f"{file_id}.step"
+    src.write_text("step data")
+
+    def fake_run(cmd, capture_output=False, text=False, timeout=None):  # noqa: ARG001
+        if cmd[0] == "npx":
+            raise FileNotFoundError("npx")
+        assert cmd[0] == "docker"
+        raise FileNotFoundError("docker")
+
+    monkeypatch.setattr(web.subprocess, "run", fake_run)
+
+    with web.app.test_client() as client:
+        resp = client.post("/api/reconvert/sync", json={"file_id": file_id})
+
+    assert resp.status_code == 503
+    data = resp.get_json()
+    assert data == {
+        "ok": False,
+        "error": "converter_not_available",
+        "stderr": "docker",
+    }

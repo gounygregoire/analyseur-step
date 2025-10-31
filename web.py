@@ -1000,39 +1000,82 @@ def debug_xkt(file_id: str):
 
 @app.get("/exists/xkt/<file_id>")
 def exists_xkt(file_id: str):
-    path_local = os.path.join(current_app.root_path, "public", "xkt", f"{file_id}.xkt")
-    if os.path.isfile(path_local):
-        size = os.path.getsize(path_local)
-        payload = {"exists": True, "file_id": file_id, "size": size}
-        resp = make_response(jsonify(payload), 200)
-        resp.headers["Cache-Control"] = "no-cache, max-age=0"
-        resp.headers["Access-Control-Allow-Origin"] = "*"
-        logger.info("[exists][local] file_id=%s path=%s size=%s", file_id, path_local, size)
-        return resp
-
-    key = _s3_key_for_xkt(file_id)
-    exists = False
-    size = 0
-
-    if _s3_enabled():
-        try:
-            resp = s3_client.head_object(Bucket=S3_BUCKET, Key=key)
-            size = int(resp.get("ContentLength", 0) or 0)
-            exists = size > 0
-            app.logger.info(f"[exists][s3] key={key} size={size} exists={exists}")
-        except botocore.exceptions.ClientError as e:
-            app.logger.warning(f"[exists][s3] head failed key={key} err={e}")
-        except Exception as e:
-            app.logger.error(f"[exists][s3] unexpected err key={key} err={e}")
+    xkt_dir = _sync_xkt_dir()
+    path_local = os.path.join(xkt_dir, f"{file_id}.xkt")
+    exists = os.path.isfile(path_local)
+    size = os.path.getsize(path_local) if exists else 0
 
     payload = {"file_id": file_id, "exists": exists, "size": size}
     resp = make_response(jsonify(payload), 200)
     resp.headers["Cache-Control"] = "no-cache, max-age=0"
     resp.headers["Access-Control-Allow-Origin"] = "*"
     logger.info(
-        "[exists][result] file_id=%s key=%s exists=%s size=%s", file_id, key, exists, size
+        "[exists][local] file_id=%s path=%s exists=%s size=%s", file_id, path_local, exists, size
     )
     return resp
+
+
+@app.get("/api/converter/health")
+def api_converter_health():
+    npm_ok = False
+    docker_status: bool | None = None
+
+    npm_cmd = ["npx", "--yes", "@xeokit/xeokit-convert", "--version"]
+    try:
+        npm_proc = subprocess.run(
+            npm_cmd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if npm_proc.returncode == 0:
+            npm_ok = True
+            logger.info("[converter][health] npm ok stdout=%s", (npm_proc.stdout or "").strip())
+        else:
+            logger.warning(
+                "[converter][health] npm failed rc=%s stderr=%s",
+                npm_proc.returncode,
+                (npm_proc.stderr or "").strip(),
+            )
+    except subprocess.TimeoutExpired:
+        logger.warning("[converter][health] npm timeout")
+    except FileNotFoundError:
+        logger.warning("[converter][health] npx not found")
+    except Exception as exc:
+        logger.exception("[converter][health] npm check error: %s", exc)
+
+    if not npm_ok:
+        docker_cmd = ["docker", "--version"]
+        try:
+            docker_proc = subprocess.run(
+                docker_cmd,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            docker_status = docker_proc.returncode == 0
+            if docker_status:
+                logger.info(
+                    "[converter][health] docker ok stdout=%s", (docker_proc.stdout or "").strip()
+                )
+            else:
+                logger.warning(
+                    "[converter][health] docker failed rc=%s stderr=%s",
+                    docker_proc.returncode,
+                    (docker_proc.stderr or "").strip(),
+                )
+        except subprocess.TimeoutExpired:
+            docker_status = False
+            logger.warning("[converter][health] docker timeout")
+        except FileNotFoundError:
+            docker_status = False
+            logger.warning("[converter][health] docker not found")
+        except Exception as exc:
+            docker_status = False
+            logger.exception("[converter][health] docker check error: %s", exc)
+
+    payload = {"npm": npm_ok, "docker": docker_status}
+    return jsonify(payload), 200
 
 
 @app.get("/xkt/<file_id>.xkt")
@@ -1133,7 +1176,7 @@ def api_reconvert_sync():
     cmd = [
         "npx",
         "--yes",
-        "xeokit-convert",
+        "@xeokit/xeokit-convert",
         "--input",
         src,
         "--output",
@@ -1152,36 +1195,129 @@ def api_reconvert_sync():
         "error",
     ]
 
+    npm_proc = None
+    npm_error: Exception | None = None
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+        npm_proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     except subprocess.TimeoutExpired:
-        app.logger.warning("[reconvert][sync] conversion timeout file_id=%s", file_id)
+        app.logger.warning("[reconvert][sync] npx timeout file_id=%s", file_id)
         return jsonify({"ok": False, "error": "convert_timeout"}), 504
     except FileNotFoundError as exc:
-        app.logger.error("[reconvert][sync] converter unavailable: %s", exc)
-        return jsonify({"ok": False, "error": "converter_unavailable"}), 500
+        npm_error = exc
+        app.logger.warning(
+            "[reconvert][sync] npx unavailable, fallback to docker file_id=%s err=%s",
+            file_id,
+            exc,
+        )
     except Exception as exc:
-        app.logger.exception("[reconvert][sync] unexpected failure file_id=%s", file_id)
+        app.logger.exception("[reconvert][sync] npx execution failed file_id=%s", file_id)
         return jsonify({"ok": False, "error": "convert_failed", "detail": str(exc)}), 500
 
-    if proc.returncode != 0:
-        app.logger.error(
-            "[reconvert][sync] converter failed file_id=%s rc=%s stderr=%s",
-            file_id,
-            proc.returncode,
-            (proc.stderr or "").strip(),
-        )
-        return (
-            jsonify({
-                "ok": False,
-                "error": "convert_failed",
-                "stderr": proc.stderr,
-                "stdout": proc.stdout,
-            }),
-            500,
-        )
+    conversion_ok = bool(npm_proc and npm_proc.returncode == 0)
+    docker_stderr = ""
 
-    if not os.path.isfile(out_tmp):
+    if not conversion_ok:
+        if npm_proc and npm_proc.returncode != 0:
+            app.logger.warning(
+                "[reconvert][sync] npx failed rc=%s stderr=%s file_id=%s",
+                npm_proc.returncode,
+                (npm_proc.stderr or "").strip(),
+                file_id,
+            )
+
+        upload_mount = os.path.abspath(upload_dir)
+        out_mount = os.path.abspath(out_dir)
+        docker_cmd = [
+            "docker",
+            "run",
+            "--rm",
+            "-v",
+            f"{upload_mount}:/in",
+            "-v",
+            f"{out_mount}:/out",
+            "ghcr.io/xeokit/xeokit-convert:1.3.1",
+            "--input",
+            f"/in/{os.path.basename(src)}",
+            "--output",
+            f"/out/{os.path.basename(out_tmp)}",
+            "--format",
+            "xkt",
+            "--withGeometry",
+            "true",
+            "--withMetaModel",
+            "true",
+            "--triangulate",
+            "true",
+            "--stats",
+            "true",
+            "--logLevel",
+            "error",
+        ]
+
+        try:
+            docker_proc = subprocess.run(
+                docker_cmd,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+        except subprocess.TimeoutExpired:
+            app.logger.warning("[reconvert][sync] docker timeout file_id=%s", file_id)
+            return jsonify({"ok": False, "error": "convert_timeout"}), 504
+        except FileNotFoundError as exc:
+            app.logger.warning(
+                "[reconvert][sync] docker unavailable file_id=%s err=%s",
+                file_id,
+                exc,
+            )
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": "converter_not_available",
+                        "stderr": str(exc),
+                    }
+                ),
+                503,
+            )
+        except Exception as exc:
+            app.logger.exception(
+                "[reconvert][sync] docker execution failed file_id=%s", file_id
+            )
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": "converter_not_available",
+                        "stderr": str(exc),
+                    }
+                ),
+                503,
+            )
+
+        docker_stderr = (docker_proc.stderr or "").strip()
+        if docker_proc.returncode != 0:
+            app.logger.warning(
+                "[reconvert][sync] docker failed rc=%s stderr=%s file_id=%s",
+                docker_proc.returncode,
+                docker_stderr,
+                file_id,
+            )
+            stderr_payload = docker_stderr or ((npm_proc.stderr or "").strip() if npm_proc else str(npm_error or ""))
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": "converter_not_available",
+                        "stderr": stderr_payload,
+                    }
+                ),
+                503,
+            )
+
+        conversion_ok = True
+
+    if not conversion_ok or not os.path.isfile(out_tmp):
         app.logger.error("[reconvert][sync] missing tmp output file_id=%s", file_id)
         return jsonify({"ok": False, "error": "xkt_missing"}), 500
 

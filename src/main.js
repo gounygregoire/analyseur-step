@@ -28,13 +28,34 @@ async function headExists(url) {
   }
 }
 
+if (typeof window !== "undefined" && typeof window.__SYNC_CONVERT_DISABLED !== "boolean") {
+  window.__SYNC_CONVERT_DISABLED = false;
+}
+
+function isSyncConvertDisabled() {
+  return typeof window !== "undefined" && window.__SYNC_CONVERT_DISABLED === true;
+}
+
+function disableSyncConvert() {
+  if (typeof window === "undefined" || window.__SYNC_CONVERT_DISABLED === true) {
+    return;
+  }
+  window.__SYNC_CONVERT_DISABLED = true;
+  const msg = "Conversion locale indisponible (converter non installé)";
+  if (window.showToast) {
+    showToast(msg, { type: "error" });
+  } else {
+    alert(msg);
+  }
+}
+
 async function waitForXKTReady({ fileId, xktUrl, maxTries = 60, delayMs = 800 }) {
   let attempts = 0;
 
   let fallbackTriggered = false;
 
   const triggerSyncFallback = async () => {
-    if (fallbackTriggered || typeof location === "undefined") return null;
+    if (fallbackTriggered || typeof location === "undefined" || isSyncConvertDisabled()) return null;
     fallbackTriggered = true;
     console.warn("[wait] fallback sync convert");
     try {
@@ -45,6 +66,10 @@ async function waitForXKTReady({ fileId, xktUrl, maxTries = 60, delayMs = 800 })
       });
       if (res.ok) {
         return `${location.origin}/xkt/${fileId}.xkt?v=${Date.now()}`;
+      }
+      if (res.status >= 400) {
+        disableSyncConvert();
+        return null;
       }
       console.error("[wait] sync convert failed", await res.text());
       fallbackTriggered = false;
