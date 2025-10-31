@@ -14,6 +14,8 @@ import { waitFor } from "./js/utils/waits.js";
 import { ensureHealthyXKT } from "./js/xkt/healthCheck.js";
 import { showReconvertBanner, updateReconvertBanner, hideReconvertBanner } from "./js/ui/reconvertBanner.js";
 
+const MIN_HEALTHY_XKT = 200000; // 200 KB
+
 let viewer, cameraControl, xktLoader, gltfLoader, dist, sections, canvas;
 
 async function headExists(url) {
@@ -27,21 +29,67 @@ async function headExists(url) {
 }
 
 async function waitForXKTReady({ fileId, xktUrl, maxTries = 60, delayMs = 800 }) {
+  let attempts = 0;
+
+  let fallbackTriggered = false;
+
+  const triggerSyncFallback = async () => {
+    if (fallbackTriggered || typeof location === "undefined") return null;
+    fallbackTriggered = true;
+    console.warn("[wait] fallback sync convert");
+    try {
+      const res = await fetch(`/api/reconvert/sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ file_id: fileId })
+      });
+      if (res.ok) {
+        return `${location.origin}/xkt/${fileId}.xkt?v=${Date.now()}`;
+      }
+      console.error("[wait] sync convert failed", await res.text());
+      fallbackTriggered = false;
+    } catch (err) {
+      console.error("[wait] sync convert failed", err);
+      fallbackTriggered = false;
+    }
+    return null;
+  };
+
   // 1) on tente d’abord l’API exists (si elle marche, c’est immédiat)
   for (let i = 1; i <= maxTries; i++) {
+    attempts++;
     try {
       const r = await fetch(`/exists/xkt/${fileId}`, { cache: "no-store" });
       if (r.ok) {
         const j = await r.json();
         console.log("[wait][xkt][exists]", { attempt: i, fileId, j });
-        if (j.exists && j.size > 0) return true;
+        if (j.exists && j.size > 0) {
+          if (j.size < MIN_HEALTHY_XKT) {
+            const freshUrl = await triggerSyncFallback();
+            if (freshUrl) return freshUrl;
+          } else {
+            return true;
+          }
+        }
       }
     } catch {}
     await new Promise(r => setTimeout(r, 250)); // petite pause avant fallback HEAD
     // 2) fallback HEAD direct sur /xkt
     const head = await headExists(xktUrl);
     console.log("[wait][xkt][head]", { attempt: i, fileId, head });
-    if (head.ok && head.size > 0) return true;
+    const len = Number.isFinite(head.size) ? head.size : 0;
+    if (head.ok && len > 0) {
+      if (len < MIN_HEALTHY_XKT) {
+        const freshUrl = await triggerSyncFallback();
+        if (freshUrl) return freshUrl;
+      } else {
+        return true;
+      }
+    }
+    if ((len > 0 && len < MIN_HEALTHY_XKT) || attempts >= 10) {
+      const freshUrl = await triggerSyncFallback();
+      if (freshUrl) return freshUrl;
+    }
     await new Promise(r => setTimeout(r, delayMs));
   }
   return false;
@@ -213,15 +261,18 @@ export async function initViewer(modelUrl) {
         viewer.model = null;
       }
       setHeatmapEnabled(false);
-      const xktUrl = `/xkt/${fileId}.xkt?t=${Date.now()}`;
-      const ok = await waitForXKTReady({ fileId, xktUrl });
-      if (!ok) {
+      let xktUrl = `/xkt/${fileId}.xkt?t=${Date.now()}`;
+      const waitResult = await waitForXKTReady({ fileId, xktUrl });
+      if (!waitResult) {
         const waitErr = new Error("XKT_NOT_READY_TIMEOUT");
         console.error('[viewer] waitForXKTReady timeout', { fileId, xktUrl });
         if (typeof window !== "undefined" && typeof window.showError === "function") {
           window.showError("Conversion en cours. Merci de patienter quelques instants et réessayer.");
         }
         throw waitErr;
+      }
+      if (typeof waitResult === "string") {
+        xktUrl = waitResult;
       }
       let urls = [
         xktUrl,
@@ -755,13 +806,16 @@ async function loadXKTFromConvertResponse(response) {
       throw healthErr;
     }
 
-    const ok = await waitForXKTReady({ fileId, xktUrl });
-    if (!ok) {
+    const waitResult = await waitForXKTReady({ fileId, xktUrl });
+    if (!waitResult) {
       console.error('[viewer] XKT not ready after timeout', { fileId, xktUrl });
       const msg = "Modèle en cours de génération. Réessaie dans quelques instants.";
       window.showToast ? showToast(msg, { type: 'error' }) : alert(msg);
       hideReconvertBanner();
       return;
+    }
+    if (typeof waitResult === 'string') {
+      xktUrl = waitResult;
     }
     console.log('[viewer] XKT ready, loading…', { fileId, xktUrl });
     if (typeof lastXktUrl !== 'undefined') lastXktUrl = xktUrl;

@@ -4240,7 +4240,7 @@ export {};
   }
 
   // loader neutre : adapte à ton viewer/Plugin réel
-  window.forceLoadXKT = function forceLoadXKT(fileId) {
+  window.forceLoadXKT = function forceLoadXKT(fileId, options = {}) {
     const effectiveId = fileId
       || window.CADLYTICS?.xkt?.lastFileId
       || resolveCurrentFileId();
@@ -4256,7 +4256,8 @@ export {};
 
     window.currentFileId = effectiveId;
 
-    const url = `/xkt/${effectiveId}.xkt?nocache=${Date.now()}`;
+    const overrideUrl = options && typeof options === 'object' ? options.url : undefined;
+    const url = overrideUrl || `/xkt/${effectiveId}.xkt?nocache=${Date.now()}`;
     // 1) Si tu as déjà un wrapper
     if (typeof window.loadXKTFromUrl === 'function') {
       return window.loadXKTFromUrl(url, { fileId: effectiveId });
@@ -4279,30 +4280,79 @@ export {};
   });
 })();
 
+const MIN_HEALTHY_XKT = 200000; // 200 KB
+
 async function waitForXKT(fileId, { maxMs = 90000, stepMs = 900 } = {}) {
   const t0 = performance.now();
   let attempt = 0;
+  let fallbackTriggered = false;
+
+  const triggerSyncFallback = async () => {
+    if (fallbackTriggered) {
+      return null;
+    }
+    if (typeof location === 'undefined') {
+      return null;
+    }
+    fallbackTriggered = true;
+    console.warn('[wait] fallback sync convert');
+    try {
+      const res = await fetch(`/api/reconvert/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file_id: fileId })
+      });
+      if (res.ok) {
+        return `${location.origin}/xkt/${fileId}.xkt?v=${Date.now()}`;
+      }
+      console.error('[wait] sync convert failed', await res.text());
+      fallbackTriggered = false;
+    } catch (err) {
+      console.error('[wait] sync convert failed', err);
+      fallbackTriggered = false;
+    }
+    return null;
+  };
+
   while (performance.now() - t0 < maxMs) {
     attempt++;
     const qs = `?nocache=${Date.now()}`;
+    let headLen = 0;
 
-    // HEAD direct
     try {
       const head = await fetch(`/xkt/${fileId}.xkt${qs}`, { method: 'HEAD', cache: 'no-store' });
-      const len = Number(head.headers.get('content-length') || '0');
-      console.log('[wait][xkt][head]', { attempt, status: head.status, len });
-      if (head.ok && len > 0) return true;
+      headLen = Number(head.headers.get('content-length') || '0');
+      console.log('[wait][xkt][head]', { attempt, status: head.status, len: headLen });
+      if (head.ok && headLen > 0) {
+        if (headLen < MIN_HEALTHY_XKT) {
+          const freshUrl = await triggerSyncFallback();
+          if (freshUrl) return freshUrl;
+        } else {
+          return true;
+        }
+      }
     } catch {}
 
-    // /exists
     try {
       const ex = await fetch(`/exists/xkt/${fileId}${qs}`, { cache: 'no-store' });
       if (ex.ok) {
         const j = await ex.json();
         console.log('[wait][xkt][exists]', { attempt, ...j });
-        if (j.exists && j.size > 0) return true;
+        if (j.exists && j.size > 0) {
+          if (j.size < MIN_HEALTHY_XKT) {
+            const freshUrl = await triggerSyncFallback();
+            if (freshUrl) return freshUrl;
+          } else {
+            return true;
+          }
+        }
       }
     } catch {}
+
+    if ((headLen > 0 && headLen < MIN_HEALTHY_XKT) || attempt >= 10) {
+      const freshUrl = await triggerSyncFallback();
+      if (freshUrl) return freshUrl;
+    }
 
     await new Promise(r => setTimeout(r, stepMs));
   }
@@ -4316,12 +4366,26 @@ async function onUploadResponse(resp) {
 
   CADLYTICS.xkt.setFileId(file_id);       // maj panneau debug
 
-  const ready = await waitForXKT(file_id);
-  if (!ready) {
+  const waitResult = await waitForXKT(file_id);
+  if (!waitResult) {
     console.warn('[wait] timeout — XKT non prêt, utilisez le bouton "Force Load" dans le panneau debug');
     return;
   }
 
   // charge automatiquement si prêt
+  if (typeof waitResult === 'string') {
+    const url = waitResult || `${location.origin}/xkt/${file_id}.xkt?v=${Date.now()}`;
+    const result = forceLoadXKT(file_id, { url });
+    if (result && typeof result.then === 'function') {
+      result.catch?.((err) => console.warn('[wait] fallback load promise rejected', err));
+      try {
+        await result;
+      } catch (err) {
+        console.warn('[wait] fallback load await failed', err);
+      }
+    }
+    return;
+  }
+
   forceLoadXKT(file_id);
 }

@@ -97,6 +97,19 @@ OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
+
+def _sync_xkt_path(file_id: str) -> str:
+    os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+    return os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+
+
+def _sync_source_candidates(file_id: str) -> list[str]:
+    return [
+        os.path.join(UPLOAD_FOLDER, f"{file_id}.step"),
+        os.path.join(UPLOAD_FOLDER, f"{file_id}.stp"),
+        os.path.join(UPLOAD_FOLDER, f"{file_id}.stl"),
+    ]
+
 def _first_existing(paths):
     for p in paths:
         if os.path.exists(p):
@@ -1063,6 +1076,130 @@ def reconvert(file_id: str):
         "xkt": result.get("xkt"),
     }
     return jsonify(payload)
+
+
+@app.post("/api/reconvert/sync")
+def api_reconvert_sync():
+    data = request.get_json(silent=True) or {}
+    file_id = data.get("file_id") if isinstance(data, dict) else None
+    if not file_id:
+        return jsonify({"ok": False, "error": "missing_file_id"}), 400
+
+    if not isinstance(file_id, str) or not re.fullmatch(r"[0-9a-fA-F-]{6,}", file_id):
+        return jsonify({"ok": False, "error": "invalid_file_id"}), 400
+
+    src = next((p for p in _sync_source_candidates(file_id) if os.path.isfile(p)), None)
+    if not src:
+        return jsonify({"ok": False, "error": "source_not_found"}), 404
+
+    try:
+        size_bytes = os.path.getsize(src)
+    except OSError:
+        size_bytes = 0
+
+    size_mb = size_bytes / (1024 * 1024) if size_bytes else 0
+    if size_mb > 8:
+        return (
+            jsonify({
+                "ok": False,
+                "error": "too_large_for_sync",
+                "size_mb": round(size_mb, 2),
+            }),
+            413,
+        )
+
+    out_final = _sync_xkt_path(file_id)
+    out_tmp = f"{out_final}.tmp"
+
+    try:
+        if os.path.exists(out_tmp):
+            os.remove(out_tmp)
+    except OSError:
+        pass
+
+    cmd = [
+        "npx",
+        "--yes",
+        "@xeokit/xeokit-convert",
+        "--input",
+        src,
+        "--output",
+        out_tmp,
+        "--format",
+        "xkt",
+        "--withGeometry",
+        "true",
+        "--withMetaModel",
+        "true",
+        "--triangulate",
+        "true",
+        "--stats",
+        "true",
+        "--logLevel",
+        "error",
+    ]
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+    except subprocess.TimeoutExpired:
+        app.logger.warning("[reconvert][sync] conversion timeout file_id=%s", file_id)
+        return jsonify({"ok": False, "error": "convert_timeout"}), 504
+    except FileNotFoundError as exc:
+        app.logger.error("[reconvert][sync] converter unavailable: %s", exc)
+        return jsonify({"ok": False, "error": "converter_unavailable"}), 500
+    except Exception as exc:
+        app.logger.exception("[reconvert][sync] unexpected failure file_id=%s", file_id)
+        return jsonify({"ok": False, "error": "convert_failed", "detail": str(exc)}), 500
+
+    if proc.returncode != 0:
+        app.logger.error(
+            "[reconvert][sync] converter failed file_id=%s rc=%s stderr=%s",
+            file_id,
+            proc.returncode,
+            (proc.stderr or "").strip(),
+        )
+        return (
+            jsonify({
+                "ok": False,
+                "error": "convert_failed",
+                "stderr": proc.stderr,
+                "stdout": proc.stdout,
+            }),
+            500,
+        )
+
+    if not os.path.isfile(out_tmp):
+        app.logger.error("[reconvert][sync] missing tmp output file_id=%s", file_id)
+        return jsonify({"ok": False, "error": "xkt_missing"}), 500
+
+    try:
+        os.replace(out_tmp, out_final)
+    except Exception as exc:
+        app.logger.exception("[reconvert][sync] finalize failed file_id=%s", file_id)
+        return jsonify({"ok": False, "error": "finalize_failed", "detail": str(exc)}), 500
+
+    try:
+        xkt_size = os.path.getsize(out_final)
+    except OSError:
+        xkt_size = 0
+
+    if xkt_size <= 0:
+        app.logger.error("[reconvert][sync] empty XKT file_id=%s", file_id)
+        return jsonify({"ok": False, "error": "xkt_empty"}), 500
+
+    manifest_path = out_final.replace(".xkt", ".manifest.json")
+    try:
+        with open(manifest_path, "w", encoding="utf-8") as fh:
+            json.dump({"ok": True, "file_id": file_id, "xkt_size": xkt_size}, fh)
+    except Exception as exc:
+        app.logger.warning(
+            "[reconvert][sync] manifest write failed file_id=%s err=%s",
+            file_id,
+            exc,
+        )
+
+    return jsonify({"ok": True, "xkt_size": xkt_size})
+
 
 @app.get("/__s3_env")
 def __s3_env():
