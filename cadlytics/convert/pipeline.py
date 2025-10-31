@@ -11,7 +11,6 @@ import json
 import math
 import os
 import re
-import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,6 +38,17 @@ class ConvertStats:
     meshes: Optional[int]
     triangles: Optional[int]
     xkt_size: int
+    stdout: str = ""
+    stderr: str = ""
+
+
+class ConversionCommandError(RuntimeError):
+    """Erreur lors de l'exécution de ``@xeokit/xeokit-convert``."""
+
+    def __init__(self, message: str, *, stdout: str = "", stderr: str = "") -> None:
+        super().__init__(message)
+        self.stdout = stdout
+        self.stderr = stderr
 
 
 def _s3_client() -> BaseClient:
@@ -158,50 +168,68 @@ def validate_stl_triangles(stl_path: Path) -> int:
 
 
 def stl_to_xkt(src_stl: Path, dst_xkt: Path) -> ConvertStats:
-    """Convertit un STL en XKT via le script xeokit-convert."""
+    """Convertit un STL en XKT via le binaire ``@xeokit/xeokit-convert``."""
 
     project_root = Path(__file__).resolve().parents[2]
-    converter_script = project_root / "node_modules" / "@xeokit" / "xeokit-convert" / "convert2xkt.js"
-    if not converter_script.exists():
-        raise FileNotFoundError(f"convert2xkt.js introuvable: {converter_script}")
-
     dst_xkt.parent.mkdir(parents=True, exist_ok=True)
+    if dst_xkt.exists():
+        dst_xkt.unlink()
 
     cmd = [
-        "node",
-        str(converter_script),
-        "-s",
+        "npx",
+        "--yes",
+        "@xeokit/xeokit-convert",
+        "--input",
         str(src_stl),
-        "-o",
+        "--output",
         str(dst_xkt),
-        "-f",
-        "stl",
-        "-b",
+        "--format",
+        "xkt",
+        "--withGeometry",
+        "true",
+        "--withMetaModel",
+        "true",
+        "--triangulate",
+        "true",
+        "--stats",
+        "true",
+        "--logLevel",
+        "error",
     ]
 
     print("[convert] stl_to_xkt cmd=", " ".join(cmd))
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=project_root,
+        )
     except FileNotFoundError as exc:
-        raise FileNotFoundError("Node.js introuvable pour la conversion XKT") from exc
+        raise FileNotFoundError("npx introuvable pour la conversion XKT") from exc
 
     stdout = result.stdout or ""
     stderr = result.stderr or ""
     if result.returncode != 0:
         message = stderr.strip() or stdout.strip() or "conversion inconnue"
-        raise RuntimeError(f"Conversion XKT échouée (code={result.returncode}): {message}")
+        raise ConversionCommandError(
+            f"Conversion XKT échouée (code={result.returncode}): {message}",
+            stdout=stdout,
+            stderr=stderr,
+        )
 
     combined = f"{stdout}\n{stderr}"
     meshes = _parse_stat(combined, ("meshes", "numMeshes"))
     triangles = _parse_stat(combined, ("triangles", "numTriangles"))
 
     if not dst_xkt.exists():
-        raise RuntimeError("Fichier XKT non généré")
+        raise ConversionCommandError("Fichier XKT non généré", stdout=stdout, stderr=stderr)
 
     size = dst_xkt.stat().st_size
     print("[convert] stl_to_xkt done size=", size, "meshes=", meshes, "triangles=", triangles)
 
-    return ConvertStats(meshes=meshes, triangles=triangles, xkt_size=size)
+    return ConvertStats(meshes=meshes, triangles=triangles, xkt_size=size, stdout=stdout, stderr=stderr)
 
 
 def _parse_stat(text: str, labels: tuple[str, ...]) -> Optional[int]:
@@ -245,7 +273,7 @@ def publish_xkt(file_id: str, xkt_path: Path) -> Path:
 
     XKT_PUBLISH_DIR.mkdir(parents=True, exist_ok=True)
     dst = XKT_PUBLISH_DIR / f"{file_id}.xkt"
-    shutil.copy2(xkt_path, dst)
+    os.replace(xkt_path, dst)
     print("[convert] publish_xkt", dst)
     return dst
 
@@ -264,9 +292,7 @@ def run_conversion(file_id: str) -> dict[str, object]:
 
     triangle_count = validate_stl_triangles(stl_path)
 
-    xkt_tmp_dir = Path("/tmp/xkt")
-    xkt_tmp_dir.mkdir(parents=True, exist_ok=True)
-    xkt_tmp = xkt_tmp_dir / f"{file_id}.xkt"
+    xkt_tmp = XKT_PUBLISH_DIR / f"{file_id}.xkt.tmp"
 
     stats = stl_to_xkt(stl_path, xkt_tmp)
     if stats.triangles is None:
@@ -291,11 +317,14 @@ def run_conversion(file_id: str) -> dict[str, object]:
     write_manifest(file_id, stats, ok=True)
 
     result = {
+        "status": "done",
         "ok": True,
         "file_id": file_id,
         "meshes": stats.meshes,
         "triangles": stats.triangles,
         "xkt_size": stats.xkt_size,
+        "stdout": stats.stdout,
+        "stderr": stats.stderr,
     }
 
     print("[convert] run_conversion ok", result)
