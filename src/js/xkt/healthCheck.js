@@ -36,19 +36,22 @@ async function fetchExists(baseUrl, fileId) {
 }
 
 export async function postReconvert({ baseUrl, fileId }) {
-  const res = await fetch(`${baseUrl}/api/reconvert`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ file_id: fileId })
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const msg = body?.error || body?.detail || `reconvert: request failed (${res.status})`;
-    const err = new Error(msg);
-    err.status = res.status;
-    throw err;
-  }
-  return body || {};
+  console.log("[wait] sync fallback disabled on frontend");
+  // Legacy fallback: delegated to backend worker, do not trigger here.
+  // const res = await fetch(`${baseUrl}/api/reconvert`, {
+  //   method: "POST",
+  //   headers: { "Content-Type": "application/json" },
+  //   body: JSON.stringify({ file_id: fileId })
+  // });
+  // const body = await res.json().catch(() => ({}));
+  // if (!res.ok) {
+  //   const msg = body?.error || body?.detail || `reconvert: request failed (${res.status})`;
+  //   const err = new Error(msg);
+  //   err.status = res.status;
+  //   throw err;
+  // }
+  // return body || {};
+  return {};
 }
 
 export async function pollConversionStatus({ baseUrl, fileId, maxAttempts = MAX_ATTEMPTS, onStatus }) {
