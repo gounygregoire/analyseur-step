@@ -27,6 +27,9 @@ function getBaseUrl() {
   return "";
 }
 
+// IMPORTANT: front loads XKT on HEAD=200 + content-length>0.
+// /exists est purement UX et ne doit jamais bloquer le rendu.
+// Ne réintroduis pas d'appel /api/reconvert/sync ici.
 async function waitForXKTReady({ fileId, xktUrl, maxTries = 60, onReady }) {
   if (!syncFallbackLogDone) {
     console.log("[wait] sync fallback disabled on frontend"); // CODENAME: HEAD-FIRST-XKT
