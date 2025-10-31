@@ -19,6 +19,9 @@ from flask import (
     redirect,
     url_for,
     Response,
+    g,
+    current_app,
+    has_app_context,
 )
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -98,23 +101,23 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 
-def _sync_xkt_path(file_id: str) -> str:
-    os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-    return os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+def _sync_xkt_dir() -> str:
+    """Retourne le dossier de sortie XKT pour la conversion synchrone."""
 
+    config_dir = app.config.get("SYNC_XKT_DIR")
+    if has_app_context():
+        config_dir = current_app.config.get("SYNC_XKT_DIR", config_dir)
+        root_path = current_app.root_path
+    else:
+        root_path = app.root_path
 
-def _sync_source_candidates(file_id: str) -> list[str]:
-    return [
-        os.path.join(UPLOAD_FOLDER, f"{file_id}.step"),
-        os.path.join(UPLOAD_FOLDER, f"{file_id}.stp"),
-        os.path.join(UPLOAD_FOLDER, f"{file_id}.stl"),
-    ]
+    if config_dir:
+        target_dir = config_dir
+    else:
+        target_dir = os.path.join(root_path, "public", "xkt")
 
-def _first_existing(paths):
-    for p in paths:
-        if os.path.exists(p):
-            return p
-    return None
+    os.makedirs(target_dir, exist_ok=True)
+    return target_dir
 
 # ---------- Redis / RQ ----------
 def _normalize_redis_url(url: str) -> str:
@@ -997,35 +1000,30 @@ def debug_xkt(file_id: str):
 
 @app.get("/exists/xkt/<file_id>")
 def exists_xkt(file_id: str):
+    path_local = os.path.join(current_app.root_path, "public", "xkt", f"{file_id}.xkt")
+    if os.path.isfile(path_local):
+        size = os.path.getsize(path_local)
+        payload = {"exists": True, "file_id": file_id, "size": size}
+        resp = make_response(jsonify(payload), 200)
+        resp.headers["Cache-Control"] = "no-cache, max-age=0"
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        logger.info("[exists][local] file_id=%s path=%s size=%s", file_id, path_local, size)
+        return resp
+
     key = _s3_key_for_xkt(file_id)
     exists = False
     size = 0
 
-    try:
-        resp = s3_client.head_object(Bucket=S3_BUCKET, Key=key)
-        size = int(resp.get("ContentLength", 0) or 0)
-        exists = size > 0
-        app.logger.info(f"[exists][s3] key={key} size={size} exists={exists}")
-    except botocore.exceptions.ClientError as e:
-        app.logger.warning(f"[exists][s3] head failed key={key} err={e}")
-    except Exception as e:
-        app.logger.error(f"[exists][s3] unexpected err key={key} err={e}")
-
-    if not exists:
+    if _s3_enabled():
         try:
-            xkt_url = url_for("serve_xkt", file_id=file_id, _external=True)
-            r = requests.head(xkt_url, timeout=5, allow_redirects=True)
-            clen = r.headers.get("Content-Length") or r.headers.get("content-length") or "0"
-            try:
-                size = int(str(clen))
-            except (TypeError, ValueError):
-                size = 0
-            exists = (r.status_code == 200 and size > 0)
-            app.logger.info(
-                f"[exists][http] url={xkt_url} status={r.status_code} size={size} exists={exists}"
-            )
+            resp = s3_client.head_object(Bucket=S3_BUCKET, Key=key)
+            size = int(resp.get("ContentLength", 0) or 0)
+            exists = size > 0
+            app.logger.info(f"[exists][s3] key={key} size={size} exists={exists}")
+        except botocore.exceptions.ClientError as e:
+            app.logger.warning(f"[exists][s3] head failed key={key} err={e}")
         except Exception as e:
-            app.logger.warning(f"[exists][http] head failed key={key} err={e}")
+            app.logger.error(f"[exists][s3] unexpected err key={key} err={e}")
 
     payload = {"file_id": file_id, "exists": exists, "size": size}
     resp = make_response(jsonify(payload), 200)
@@ -1081,14 +1079,29 @@ def reconvert(file_id: str):
 @app.post("/api/reconvert/sync")
 def api_reconvert_sync():
     data = request.get_json(silent=True) or {}
-    file_id = data.get("file_id") if isinstance(data, dict) else None
+    file_id = None
+    if isinstance(data, dict):
+        file_id = data.get("file_id") or data.get("fileId")
     if not file_id:
         return jsonify({"ok": False, "error": "missing_file_id"}), 400
 
     if not isinstance(file_id, str) or not re.fullmatch(r"[0-9a-fA-F-]{6,}", file_id):
         return jsonify({"ok": False, "error": "invalid_file_id"}), 400
 
-    src = next((p for p in _sync_source_candidates(file_id) if os.path.isfile(p)), None)
+    upload_dir = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
+    candidates = [
+        f"{file_id}.step",
+        f"{file_id}.stp",
+        f"{file_id}.stl",
+    ]
+    src = next(
+        (
+            os.path.join(upload_dir, candidate)
+            for candidate in candidates
+            if os.path.isfile(os.path.join(upload_dir, candidate))
+        ),
+        None,
+    )
     if not src:
         return jsonify({"ok": False, "error": "source_not_found"}), 404
 
@@ -1097,18 +1110,18 @@ def api_reconvert_sync():
     except OSError:
         size_bytes = 0
 
-    size_mb = size_bytes / (1024 * 1024) if size_bytes else 0
-    if size_mb > 8:
+    if size_bytes > 8 * 1024 * 1024:
         return (
             jsonify({
                 "ok": False,
                 "error": "too_large_for_sync",
-                "size_mb": round(size_mb, 2),
+                "size_mb": round(size_bytes / (1024 * 1024), 2) if size_bytes else 0,
             }),
             413,
         )
 
-    out_final = _sync_xkt_path(file_id)
+    out_dir = _sync_xkt_dir()
+    out_final = os.path.join(out_dir, f"{file_id}.xkt")
     out_tmp = f"{out_final}.tmp"
 
     try:
@@ -1120,7 +1133,7 @@ def api_reconvert_sync():
     cmd = [
         "npx",
         "--yes",
-        "@xeokit/xeokit-convert",
+        "xeokit-convert",
         "--input",
         src,
         "--output",
@@ -1246,37 +1259,111 @@ def __clear_caches():
 
 
 # --- À insérer en fin de fichier : endpoints reconvert ---
-@app.post("/api/reconvert")
-def api_reconvert():
-    data = request.get_json(silent=True) or {}
-    file_id = data.get("file_id")
-    if not file_id:
-        return jsonify({"accepted": False, "error": "missing file_id"}), 400
-
+def enqueue_reconvert_job(file_id: str) -> str:
     current_queue = queue or get_queue()
     job = current_queue.enqueue(
         "cadlytics.jobs.reconvert.reconvert",
         file_id,
         job_timeout=1800,
     )
-    return jsonify({"accepted": True, "file_id": file_id, "job_id": job.id}), 202
+    return job.id
+
+
+@app.post("/api/reconvert")
+def api_reconvert():
+    data = request.get_json(silent=True) or request.form or {}
+    file_id = data.get("file_id") or data.get("fileId")
+    if not file_id:
+        return jsonify({"accepted": False, "error": "missing_file_id"}), 400
+
+    job_id = enqueue_reconvert_job(file_id)
+    return jsonify({"accepted": True, "file_id": file_id, "job_id": job_id}), 202
+
+
+def _get_reconvert_job_cache() -> dict[str, Job | None]:
+    try:
+        cache = getattr(g, "_reconvert_job_cache", None)
+    except RuntimeError:
+        return {}
+    if cache is None:
+        cache = {}
+        try:
+            g._reconvert_job_cache = cache
+        except RuntimeError:
+            pass
+    return cache
+
+
+def _mark_missing_job(job_id: str) -> None:
+    cache = _get_reconvert_job_cache()
+    cache[job_id] = None
+
+
+def _fetch_reconvert_job(job_id: str) -> Job:
+    cache = _get_reconvert_job_cache()
+    if job_id in cache:
+        job = cache[job_id]
+        if job is None:
+            raise NoSuchJobError
+        return job
+
+    connection = redis_conn or get_queue().connection
+    job = Job.fetch(job_id, connection=connection)
+    cache[job_id] = job
+    return job
+
+
+def _normalize_job_status(status: str) -> str:
+    allowed = {"queued", "started", "finished", "failed"}
+    if status in allowed:
+        return status
+    if status in {"deferred", "scheduled"}:
+        return "queued"
+    if status in {"canceled", "cancelled", "stopped"}:
+        return "failed"
+    return "failed"
+
+
+def get_job_status(job_id: str) -> str:
+    try:
+        job = _fetch_reconvert_job(job_id)
+    except NoSuchJobError:
+        _mark_missing_job(job_id)
+        logger.warning("[reconvert] job %s introuvable", job_id)
+        return "failed"
+    except Exception as exc:
+        logger.warning("[reconvert] impossible de récupérer le job %s: %s", job_id, exc)
+        return "failed"
+    status = job.get_status() or "failed"
+    return _normalize_job_status(status)
+
+
+def get_job_result(job_id: str) -> dict:
+    try:
+        job = _fetch_reconvert_job(job_id)
+    except NoSuchJobError:
+        logger.debug("[reconvert] job %s introuvable lors de la récupération du résultat", job_id)
+        return {}
+    except Exception as exc:
+        logger.warning("[reconvert] erreur lors de la récupération du résultat du job %s: %s", job_id, exc)
+        return {}
+
+    result = job.result
+    if isinstance(result, dict):
+        return result
+    if result is None:
+        return {}
+    logger.warning(
+        "[reconvert] résultat inattendu pour le job %s: type=%s", job_id, type(result).__name__
+    )
+    return {}
 
 
 @app.get("/api/reconvert/status/<job_id>")
 def api_reconvert_status(job_id):
-    from rq.job import Job
-
-    connection = redis_conn or get_queue().connection
-    try:
-        job = Job.fetch(job_id, connection=connection)
-    except Exception:
-        return jsonify({"status": "not_found"}), 404
-
-    status = job.get_status()
-    result = job.result if status == "finished" else None
-    if isinstance(result, dict):
-        return jsonify({"status": status, "result": result})
-    return jsonify({"status": status})
+    st = get_job_status(job_id)
+    res = get_job_result(job_id) if st in ("finished", "failed") else None
+    return jsonify({"status": st, "result": res or {}}), 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
