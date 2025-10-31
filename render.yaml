@@ -6,6 +6,7 @@ services:
       npm ci
       npm run build
       pip install -r requirements.txt
+      npm ci --omit=dev
     startCommand: gunicorn web:app --bind 0.0.0.0:$PORT --workers=1 --threads=2 --timeout=600
     envVars:
       - key: REDIS_URL
