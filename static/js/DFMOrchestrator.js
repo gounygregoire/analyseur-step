@@ -11,6 +11,7 @@ import {
   ensureModelGeometryReady
 } from "./modules/DraftHeatmap.js";
 import { meshHasGeometry, currentViewer } from "./modules/ModelRegistry.js";
+import { getTriangleCount } from "./utils/geomStats.js";
 
 const __geometryPromises = new WeakMap();
 
@@ -1515,6 +1516,11 @@ clearDraftHeatmap(registry = window.CAD, opts = {}) {
       const scene = v?.scene;
       if (!scene) return [];
       const faces = [];
+
+      const faceCount = getTriangleCount(scene);
+      if (Number.isFinite(faceCount)) {
+        console.log("[probe safe] faces =", faceCount);
+      }
 
       const meshes = [];
       if (scene.meshes) { for (const k in scene.meshes) { if (scene.meshes[k]) meshes.push(scene.meshes[k]); } }

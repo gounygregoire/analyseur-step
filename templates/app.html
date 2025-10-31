@@ -194,7 +194,9 @@
   </div> <!-- /wrap -->
 
   <!-- === Probe SAFE : expose __getFaces() pour la Phase A locale === -->
-  <script>
+  <script type="module">
+    import { getTriangleCount } from "/static/js/utils/geomStats.js";
+
     (function(){
       function arr(x){ return x?.data || x?.array || x || null; }
       function norm(v){ const L=Math.hypot(v[0],v[1],v[2])||1; return [v[0]/L,v[1]/L,v[2]/L]; }
@@ -211,19 +213,6 @@
         if (scene._objects)ms.push(...Object.values(scene._objects));
         if (typeof scene.iterate==='function') scene.iterate(o=>ms.push(o));
         return ms.filter(Boolean);
-      }
-
-      function getFaceCount(scene){
-        if (scene?.stats?.numTriangles != null) return scene.stats.numTriangles|0;
-        if (scene?.stats?.triangles    != null) return scene.stats.triangles|0;
-        let sum = 0;
-        const meshes = scene?.meshes || scene?.objects || [];
-        for (const m of meshes) {
-          const g = m?.geometry || m?._geometry;
-          const triCount = (g?.numTriangles != null) ? g.numTriangles : ((g?.indices?.length || 0) / 3);
-          sum += (triCount|0);
-        }
-        return sum|0;
       }
 
       function getGeomArrays(m){
@@ -267,7 +256,7 @@
             }
             if (tri>=MAX) break;
           }
-          const faces = getFaceCount(viewer.scene);
+          const faces = getTriangleCount(viewer.scene);
           console.log('[probe safe] faces =', faces);
           return faceRecords;
         };

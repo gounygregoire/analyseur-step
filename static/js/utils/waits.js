@@ -1,4 +1,4 @@
-// src/js/utils/waits.js
+// static/js/utils/waits.js
 // Polling utilitaire simple pour attendre une condition front-end.
 export function waitFor(pred, timeoutMs = 10000, intervalMs = 50) {
   return new Promise((resolve, reject) => {

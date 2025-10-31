@@ -43,6 +43,9 @@ import {
   sceneThemeState,
   sceneOpacitySample
 } from "./modules/sceneAudit.js";
+import { ensureHealthyXKT } from "./xkt/healthCheck.js";
+import { showReconvertBanner, updateReconvertBanner, hideReconvertBanner } from "./ui/reconvertBanner.js";
+import { waitFor } from "./utils/waits.js";
 
 /* ---------- utils DOM ---------- */
 const $  = (s) => document.querySelector(s);
@@ -3065,14 +3068,8 @@ async function finalizeModelLoad({ model, stableId, src, nameHint, loaderType })
   window.CAD.modelId = stableId;
   window.CAD.lastLoadedFormat = loaderType;
 
-  try {
-    const meshCount = await waitForMeshes(viewer);
-    console.log(`[viewer] meshes ready: ${meshCount}`);
-    setHeatmapEnabled(true, "mesh");
-  } catch (err) {
-    console.warn("[viewer] meshes not ready in time", err);
-    setHeatmapEnabled(false, "mesh");
-  }
+  const scn = viewer.scene;
+  await prepareSceneAfterLoad(scn, { heatmapKey: "mesh", context: "[viewer]" });
 
   handleSceneAuditAfterLoad(viewer);
 
@@ -3189,19 +3186,60 @@ async function loadXKT(url, nameHint, options = {}) {
   }
 }
 
-async function waitForMeshes(viewerInstance, maxWaitMs = 30000) {
-  const startedAt = performance.now();
-  while (true) {
-    const meshes = viewerInstance?.scene?.meshes || {};
-    const count = Object.keys(meshes).length;
-    if (count > 0) {
-      return count;
-    }
-    if (performance.now() - startedAt > maxWaitMs) {
-      throw new Error("MESH_WAIT_TIMEOUT");
-    }
-    await new Promise((resolve) => setTimeout(resolve, 300));
+async function waitForTrianglesReady(scene, timeoutMs = 12000, intervalMs = 50) {
+  if (!scene) throw new Error("SCENE_MISSING");
+  await waitFor(() => {
+    const triangles = scene.stats?.numTriangles ?? scene.stats?.triangles ?? 0;
+    return Number.isFinite(triangles) && triangles > 0;
+  }, timeoutMs, intervalMs);
+  const finalValue = scene.stats?.numTriangles ?? scene.stats?.triangles ?? 0;
+  return Number.isFinite(finalValue) ? finalValue : 0;
+}
+
+async function prepareSceneAfterLoad(scene, { heatmapKey = "mesh", context = "[viewer]" } = {}) {
+  if (!scene) return null;
+  let triangleCount = null;
+  try {
+    triangleCount = await waitForTrianglesReady(scene);
+    console.log(`${context} triangles ready: ${triangleCount}`);
+    if (heatmapKey) setHeatmapEnabled(true, heatmapKey);
+  } catch (err) {
+    console.warn(`${context} triangles not ready in time`, err);
+    if (heatmapKey) setHeatmapEnabled(false, heatmapKey);
   }
+
+  const cam = scene?.camera;
+  if (cam?.projection === "perspective" && cam.perspective) {
+    const p = cam.perspective;
+    const okNear = Number.isFinite(p.near);
+    const okFar = Number.isFinite(p.far);
+    if (!okNear || !okFar) {
+      const raw = scene?.aabb;
+      let min = [-1, -1, -1];
+      let max = [1, 1, 1];
+      if (raw) {
+        if (Array.isArray(raw) && raw.length >= 6) {
+          min = [raw[0], raw[1], raw[2]];
+          max = [raw[3], raw[4], raw[5]];
+        } else if (Array.isArray(raw.min) && Array.isArray(raw.max)) {
+          min = raw.min.slice(0, 3);
+          max = raw.max.slice(0, 3);
+        }
+      }
+      const dx = max[0] - min[0];
+      const dy = max[1] - min[1];
+      const dz = max[2] - min[2];
+      const diag = Math.max(1e-3, Math.hypot(dx, dy, dz));
+      p.near = diag / 50;
+      p.far = diag * 12;
+    }
+  }
+
+  await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+  if (typeof runVolumeSurfacePass === "function") {
+    try { await runVolumeSurfacePass(scene); } catch (err) {}
+  }
+  return triangleCount;
 }
 
 // --- FIX XKT local via blob: garder l'URL jusqu'à la fin, éviter double-load ---
@@ -3268,14 +3306,7 @@ async function loadLocalXKT(file) {
     window.CAD.model = readinessModel;
     window.CAD.modelId = stableIdLocal;
 
-    try {
-      const meshCount = await waitForMeshes(viewer);
-      console.log(`[viewer] meshes ready: ${meshCount}`);
-      setHeatmapEnabled(true, "mesh");
-    } catch (err) {
-      console.warn("[viewer] meshes not ready in time", err);
-      setHeatmapEnabled(false, "mesh");
-    }
+    await prepareSceneAfterLoad(viewer.scene, { heatmapKey: "mesh", context: "[viewer][local]" });
 
     handleSceneAuditAfterLoad(viewer);
     logCameraAndClippingDiagnostics(viewer, model);
@@ -3415,6 +3446,61 @@ async function loadXKTIntoViewer(xktUrl, { fileId: explicitFileId } = {}) {
 
   const fileId = explicitFileId || window.currentFileId || resolveCurrentFileId();
   const nameHint = window.__lastUploadNameHint || fileId || undefined;
+  const handleHealthStatus = (status) => {
+    if (!status) return;
+    console.log("[xkt][health]", status);
+    if (status === "reconvert:start") {
+      showReconvertBanner("Reconversion du modèle…");
+    } else if (status.startsWith("reconvert:queued")) {
+      updateReconvertBanner("File d'attente…");
+    } else if (status.startsWith("reconvert:started")) {
+      updateReconvertBanner("Conversion en cours…");
+    } else if (status.startsWith("reconvert:finished")) {
+      updateReconvertBanner("Terminé, rechargement…");
+    } else if (status.startsWith("reconvert:failed")) {
+      updateReconvertBanner("Reconversion échouée.");
+    }
+  };
+
+  const shouldHealthCheck = (() => {
+    if (!fileId) return false;
+    if (!absoluteUrl) return false;
+    const lower = String(absoluteUrl).toLowerCase();
+    if (lower.startsWith("blob:")) return false;
+    if (lower.startsWith("data:")) return false;
+    if (lower.startsWith("file:")) return false;
+    return lower.startsWith("http://") || lower.startsWith("https://") || lower.startsWith("/");
+  })();
+
+  let finalUrl = absoluteUrl;
+  hideReconvertBanner();
+  if (shouldHealthCheck) {
+    let baseUrl = "";
+    if (typeof location !== "undefined" && location.origin) {
+      baseUrl = location.origin;
+    }
+    if (!baseUrl) {
+      try {
+        baseUrl = new URL(absoluteUrl, location?.href || undefined).origin;
+      } catch {
+        baseUrl = "";
+      }
+    }
+    if (baseUrl) {
+      try {
+        finalUrl = await ensureHealthyXKT({
+          baseUrl,
+          fileId,
+          minBytes: 200000,
+          onStatus: handleHealthStatus
+        });
+      } catch (healthErr) {
+        hideReconvertBanner();
+        console.error("[xkt][health] contrôle impossible", healthErr);
+        throw healthErr;
+      }
+    }
+  }
 
   try {
     if (typeof setUiProgress === 'function') {
@@ -3441,13 +3527,14 @@ async function loadXKTIntoViewer(xktUrl, { fileId: explicitFileId } = {}) {
     const prev = window.viewer.scene.models?.uploadedModel;
     if (prev && typeof prev.destroy === 'function') prev.destroy();
 
-    await loadXKT(absoluteUrl, nameHint, { fileId });
+    await loadXKT(finalUrl, nameHint, { fileId });
 
-    console.log('[viewer] XKT loaded', { xktUrl: absoluteUrl });
+    console.log('[viewer] XKT loaded', { xktUrl: finalUrl });
   } catch (e) {
     console.error('[viewer] load failed', e);
     throw e;
   } finally {
+    hideReconvertBanner();
     window.__lastUploadNameHint = null;
   }
 }

@@ -11,6 +11,8 @@ import {
 } from "@xeokit/xeokit-sdk";
 import DFMViewerAdapter from "../static/js/modules/DFMViewerAdapter.js";
 import { waitFor } from "./js/utils/waits.js";
+import { ensureHealthyXKT } from "./js/xkt/healthCheck.js";
+import { showReconvertBanner, updateReconvertBanner, hideReconvertBanner } from "./js/ui/reconvertBanner.js";
 
 let viewer, cameraControl, xktLoader, gltfLoader, dist, sections, canvas;
 
@@ -52,18 +54,14 @@ function setHeatmapEnabled(enabled) {
     .forEach((el) => el.toggleAttribute("disabled", !enabled));
 }
 
-async function waitForMeshes(viewerInstance, maxWaitMs = 30000) {
-  if (!viewerInstance?.scene) throw new Error("VIEWER_SCENE_MISSING");
-  const pollMs = 300;
-  const t0 = performance.now();
-  while (true) {
-    const meshCount = Object.keys(viewerInstance.scene?.meshes || {}).length;
-    if (meshCount > 0) return meshCount;
-    if (performance.now() - t0 > maxWaitMs) {
-      throw new Error("MESH_WAIT_TIMEOUT");
-    }
-    await new Promise((res) => setTimeout(res, pollMs));
-  }
+async function waitForTrianglesReady(scene, timeoutMs = 12000, intervalMs = 50) {
+  if (!scene) throw new Error("SCENE_MISSING");
+  await waitFor(() => {
+    const count = scene.stats?.numTriangles ?? scene.stats?.triangles ?? 0;
+    return Number.isFinite(count) && count > 0;
+  }, timeoutMs, intervalMs);
+  const value = scene.stats?.numTriangles ?? scene.stats?.triangles ?? 0;
+  return Number.isFinite(value) ? value : 0;
 }
 
 async function handleHeatmapAvailability(viewerInstance) {
@@ -72,8 +70,8 @@ async function handleHeatmapAvailability(viewerInstance) {
     return false;
   }
   try {
-    const meshCount = await waitForMeshes(viewerInstance);
-    console.log("[viewer] meshes ready:", meshCount);
+    const meshCount = await waitForTrianglesReady(viewerInstance.scene);
+    console.log("[viewer] triangles ready:", meshCount);
     setHeatmapEnabled(true);
     return true;
   } catch (err) {
@@ -725,12 +723,44 @@ async function loadXKTFromConvertResponse(response) {
 
     window.setUiProgress?.('Chargement du modèle…');
     setHeatmapEnabled(false);
-    const xktUrl = `/xkt/${fileId}.xkt?t=${Date.now()}`;
+    const baseUrl = typeof location !== "undefined" && location.origin ? location.origin : "";
+    const handleHealthStatus = (status) => {
+      if (!status) return;
+      console.log("[xkt][health]", status);
+      if (status === "reconvert:start") {
+        showReconvertBanner("Reconversion du modèle…");
+      } else if (status.startsWith("reconvert:queued")) {
+        updateReconvertBanner("File d'attente…");
+      } else if (status.startsWith("reconvert:started")) {
+        updateReconvertBanner("Conversion en cours…");
+      } else if (status.startsWith("reconvert:finished")) {
+        updateReconvertBanner("Terminé, rechargement…");
+      } else if (status.startsWith("reconvert:failed")) {
+        updateReconvertBanner("Reconversion échouée.");
+      }
+    };
+
+    hideReconvertBanner();
+    let xktUrl = baseUrl ? `${baseUrl}/xkt/${fileId}.xkt` : `/xkt/${fileId}.xkt`;
+    try {
+      xktUrl = await ensureHealthyXKT({
+        baseUrl,
+        fileId,
+        minBytes: 200000,
+        onStatus: handleHealthStatus
+      });
+    } catch (healthErr) {
+      hideReconvertBanner();
+      console.error("[xkt][health] contrôle impossible", healthErr);
+      throw healthErr;
+    }
+
     const ok = await waitForXKTReady({ fileId, xktUrl });
     if (!ok) {
       console.error('[viewer] XKT not ready after timeout', { fileId, xktUrl });
       const msg = "Modèle en cours de génération. Réessaie dans quelques instants.";
       window.showToast ? showToast(msg, { type: 'error' }) : alert(msg);
+      hideReconvertBanner();
       return;
     }
     console.log('[viewer] XKT ready, loading…', { fileId, xktUrl });
@@ -793,6 +823,7 @@ async function loadXKTFromConvertResponse(response) {
     (window.UI?.error ? UI.error : alert)('Échec de la visualisation. Merci de réessayer.\n' + (e.message || String(e)));
     setHeatmapEnabled(false);
   } finally {
+    hideReconvertBanner();
     window.setUiProgress?.('');
   }
 }

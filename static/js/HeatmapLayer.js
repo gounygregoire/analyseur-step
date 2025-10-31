@@ -55,13 +55,13 @@ export class HeatmapLayer {
       throw new Error("MODEL_NOT_READY");
     }
 
-    const meshCount = Number(scene.stats?.numMeshes ?? scene.numMeshes ?? 0);
-    const hasMeshes = Number.isFinite(meshCount) && meshCount > 0;
-    const cam = scene.camera;
+    const scn = viewer.scene || scene;
+    const triCount = Number(scn?.stats?.numTriangles ?? scn?.stats?.triangles ?? 0);
+    const cam = scn?.camera;
     const projOk = !!(cam && cam.projection === "perspective" && cam.perspective &&
       Number.isFinite(cam.perspective.near) && Number.isFinite(cam.perspective.far));
 
-    if (!hasMeshes || !projOk) {
+    if (!(Number.isFinite(triCount) && triCount > 0 && projOk)) {
       const scheduler = typeof requestAnimationFrame === "function"
         ? requestAnimationFrame
         : (cb) => setTimeout(cb, 16);
@@ -72,6 +72,10 @@ export class HeatmapLayer {
         }
         this.renderDraft(params);
       });
+      return false;
+    }
+
+    if (this._disposed) {
       return false;
     }
 
@@ -99,7 +103,7 @@ export class HeatmapLayer {
     let created = 0;
     for (const entry of sourceEntries) {
       if (this._disposed) {
-        break;
+        return false;
       }
       const mesh = entry?.mesh;
       if (!mesh || mesh.destroyed) continue;
