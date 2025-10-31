@@ -12,6 +12,7 @@ import math
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -268,13 +269,26 @@ def write_manifest(file_id: str, stats: ConvertStats, ok: bool) -> Path:
 def publish_xkt(file_id: str, xkt_path: Path) -> Path:
     """Publie le XKT généré dans le dossier public attendu."""
 
+    # CODENAME: ATOMIC-XKT
+    start_ts = time.perf_counter()
+
     if not xkt_path.exists():
         raise FileNotFoundError(f"XKT introuvable: {xkt_path}")
 
     XKT_PUBLISH_DIR.mkdir(parents=True, exist_ok=True)
     dst = XKT_PUBLISH_DIR / f"{file_id}.xkt"
     os.replace(xkt_path, dst)
-    print("[convert] publish_xkt", dst)
+
+    size = dst.stat().st_size
+    elapsed_ms = int((time.perf_counter() - start_ts) * 1000)
+    log_payload = {
+        "event": "publish_xkt",
+        "file_id": file_id,
+        "ok": True,
+        "size": size,
+        "ms": elapsed_ms,
+    }
+    print(json.dumps(log_payload, ensure_ascii=False))
     return dst
 
 
@@ -313,7 +327,11 @@ def run_conversion(file_id: str) -> dict[str, object]:
         write_manifest(file_id, stats, ok=False)
         raise RuntimeError(f"Garde-fous échoués: {', '.join(guard_errors)}")
 
-    publish_xkt(file_id, xkt_tmp)
+    published_path = publish_xkt(file_id, xkt_tmp)
+    try:
+        stats.xkt_size = published_path.stat().st_size
+    except OSError:
+        pass
     write_manifest(file_id, stats, ok=True)
 
     result = {
