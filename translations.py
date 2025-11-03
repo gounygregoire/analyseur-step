@@ -15,7 +15,7 @@ translations = {
         'nav_register': 'Inscription',
         
         # Landing page
-        'hero_title': 'CADlytitcs',
+        'hero_title': 'Cadlytics',
         'hero_subtitle': 'Analyse DFM avancée pour l\'injection plastique',
         'hero_description': 'Optimisez vos pièces plastiques avec notre analyse DFM intelligente. Détectez les problèmes de moulabilité, recevez des recommandations de matériaux et améliorez votre conception.',
         'hero_cta': 'Essayer maintenant',
@@ -34,7 +34,7 @@ translations = {
         'section_how_step3_title': 'Rapport détaillé',
         'section_how_step3_desc': 'Recevez un rapport PDF complet avec recommandations',
         
-        'section_why_title': 'Pourquoi CADlytitcs ?',
+        'section_why_title': 'Pourquoi Cadlytics ?',
         'section_why_reliable_title': 'Analyse fiable',
         'section_why_reliable_desc': 'Algorithmes basés sur les meilleures pratiques de l\'industrie',
         'section_why_fast_title': 'Résultats rapides',
@@ -42,7 +42,7 @@ translations = {
         'section_why_expert_title': 'Recommandations expertes',
         'section_why_expert_desc': 'Conseils personnalisés pour optimiser vos pièces',
         
-        'section_demo_title': 'Découvrez CADlytitcs en action',
+        'section_demo_title': 'Découvrez Cadlytics en action',
         'section_demo_viewer_title': 'Visualisateur 3D interactif',
         'section_demo_report_title': 'Rapport d\'analyse DFM',
         'section_demo_report_score': 'Score de moulabilité',
@@ -183,7 +183,7 @@ translations = {
         'nav_register': 'Sign up',
         
         # Landing page
-        'hero_title': 'CADlytitcs',
+        'hero_title': 'Cadlytics',
         'hero_subtitle': 'Advanced DFM Analysis for Plastic Injection',
         'hero_description': 'Optimize your plastic parts with our intelligent DFM analysis. Detect moldability issues, get material recommendations and improve your design.',
         'hero_cta': 'Try now',
@@ -202,7 +202,7 @@ translations = {
         'section_how_step3_title': 'Detailed report',
         'section_how_step3_desc': 'Get a complete PDF report with recommendations',
         
-        'section_why_title': 'Why CADlytitcs?',
+        'section_why_title': 'Why Cadlytics?',
         'section_why_reliable_title': 'Reliable analysis',
         'section_why_reliable_desc': 'Algorithms based on industry best practices',
         'section_why_fast_title': 'Fast results',
@@ -210,7 +210,7 @@ translations = {
         'section_why_expert_title': 'Expert recommendations',
         'section_why_expert_desc': 'Personalized advice to optimize your parts',
         
-        'section_demo_title': 'Discover CADlytitcs in action',
+        'section_demo_title': 'Discover Cadlytics in action',
         'section_demo_viewer_title': 'Interactive 3D viewer',
         'section_demo_report_title': 'DFM Analysis Report',
         'section_demo_report_score': 'Moldability score',
