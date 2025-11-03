@@ -4166,6 +4166,7 @@ export {};
       this.lastFileId = id;
       const el = document.getElementById('xkt-debug-id');
       if (el) el.textContent = id || '(none)';
+      window.__currentFileId = id; // pour le bouton "Force Load"
     }
   };
 
@@ -4207,7 +4208,11 @@ export {};
       if (window.__forceLock) return;
       window.__forceLock = true;
       try {
-        const fileId = typeof currentFileId === "function" ? currentFileId() : (window.__currentFileId || "");
+const fileId =
+  (typeof currentFileId === "function" && currentFileId()) ||
+  window.currentFileId ||
+  window.CADLYTICS?.xkt?.lastFileId ||
+  window.__currentFileId || "";
         const baseUrl = location.origin;
         let job_id;
         const r = await fetch(`${baseUrl}/api/reconvert`, {
@@ -4310,14 +4315,14 @@ async function waitForXKT(fileId, { maxMs = 90000, stepMs = 900 } = {}) {
       headLen = Number(head.headers.get('content-length') || '0');
       console.log('[wait][xkt][head]', { attempt, status: head.status, len: headLen });
       if (head.ok && headLen >= MIN_HEALTHY_XKT) {
-        console.log('[wait][xkt][head-ok] load now', { attempt });
-        return freshUrl();
-      }
+      return freshUrl();}
       if (head.ok && headLen > 0) {
-        console.log('[wait][xkt][head-small]', { attempt, len: headLen });
-      }
-    } catch (err) {
-      console.warn('[wait][xkt][head-error]', { attempt, message: err?.message });
+      console.log('[wait][xkt][head-small]', { attempt, len: headLen });}
+      if (head.ok && headLen > 0) {
+      console.log('[wait][xkt][head-ok-any]', { attempt, len: headLen });
+      return freshUrl();}
+        } catch (err) {
+          console.warn('[wait][xkt][head-error]', { attempt, message: err?.message });
     }
 
     try {
@@ -4335,14 +4340,10 @@ async function waitForXKT(fileId, { maxMs = 90000, stepMs = 900 } = {}) {
       console.warn('[wait][xkt][exists-error]', { attempt, message: err?.message });
     }
 
-    if (existsFlag === false) {
-      console.warn('[wait][xkt] exists=false stop', { attempt });
-      break;
-    }
-
-    if (attempt >= 10) {
-      break;
-    }
+ if (existsFlag === false) {
+   console.warn('[wait][xkt] exists=false stop', { attempt });
+   break;
+ }
 
     await new Promise(r => setTimeout(r, stepMs));
   }
