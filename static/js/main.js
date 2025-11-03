@@ -4293,46 +4293,48 @@ const MIN_HEALTHY_XKT = 200000; // 200 KB
 // IMPORTANT: front loads XKT on HEAD=200 + content-length>0.
 // /exists is UX-only and must not block rendering.
 // Do NOT reintroduce /api/reconvert/sync calls here.
+// Remplace entièrement ta fonction par celle-ci
 async function waitForXKT(fileId, { maxMs = 90000, stepMs = 900 } = {}) {
   const t0 = performance.now();
   let attempt = 0;
 
   const freshUrl = () => {
+    const bust = `nocache=${Date.now()}`;
     if (typeof location === 'undefined') {
-      return `/xkt/${fileId}.xkt?nocache=${Date.now()}`;
+      return `/xkt/${fileId}.xkt?${bust}`;
     }
-    return `${location.origin}/xkt/${fileId}.xkt?v=${Date.now()}`;
+    return `${location.origin}/xkt/${fileId}.xkt?${bust}`;
   };
 
   while (performance.now() - t0 < maxMs) {
     attempt++;
-    const qs = `?nocache=${Date.now()}`;
-    let headLen = 0;
-    let existsFlag;
 
+    // 1) HEAD: on considère "prêt" dès que len > 0
     try {
-      const head = await fetch(`/xkt/${fileId}.xkt${qs}`, { method: 'HEAD', cache: 'no-store' });
-      headLen = Number(head.headers.get('content-length') || '0');
-      console.log('[wait][xkt][head]', { attempt, status: head.status, len: headLen });
-      if (head.ok && headLen >= MIN_HEALTHY_XKT) {
-      return freshUrl();}
-      if (head.ok && headLen > 0) {
-      console.log('[wait][xkt][head-small]', { attempt, len: headLen });}
-      if (head.ok && headLen > 0) {
-      console.log('[wait][xkt][head-ok-any]', { attempt, len: headLen });
-      return freshUrl();}
-        } catch (err) {
-          console.warn('[wait][xkt][head-error]', { attempt, message: err?.message });
+      const head = await fetch(`/xkt/${fileId}.xkt?nocache=${Date.now()}`, {
+        method: 'HEAD',
+        cache: 'no-store'
+      });
+      const rawLen = head.headers.get('content-length') || head.headers.get('Content-Length') || '0';
+      const len = Number(rawLen);
+      console.log('[wait][xkt][head]', { attempt, status: head.status, len });
+
+      if (head.ok && len > 0) {
+        console.log('[wait][xkt][head-ok-any]', { attempt, len });
+        return freshUrl();
+      }
+    } catch (err) {
+      console.warn('[wait][xkt][head-error]', { attempt, message: err?.message });
     }
 
+    // 2) EXISTS: télémétrie uniquement (ne JAMAIS stopper sur exists:false)
     try {
-      const ex = await fetch(`/exists/xkt/${fileId}${qs}`, { cache: 'no-store' });
+      const ex = await fetch(`/exists/xkt/${fileId}?nocache=${Date.now()}`, { cache: 'no-store' });
       if (ex.ok) {
         const j = await ex.json();
         console.log('[wait][xkt][exists]', { attempt, ...j });
-        existsFlag = j.exists;
-        if (j.exists && j.size >= MIN_HEALTHY_XKT) {
-          console.log('[wait][xkt][exists-ok] load now', { attempt });
+        if (j.exists && Number(j.size || 0) > 0) {
+          console.log('[wait][xkt][exists-ok] load now', { attempt, size: j.size });
           return freshUrl();
         }
       }
@@ -4340,13 +4342,11 @@ async function waitForXKT(fileId, { maxMs = 90000, stepMs = 900 } = {}) {
       console.warn('[wait][xkt][exists-error]', { attempt, message: err?.message });
     }
 
- if (existsFlag === false) {
-   console.warn('[wait][xkt] exists=false stop', { attempt });
-   break;
- }
-
+    // 3) Attendre avant la prochaine sonde
     await new Promise(r => setTimeout(r, stepMs));
   }
+
+  console.warn('[wait] timeout — XKT non prêt');
   return false;
 }
 
