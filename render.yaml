@@ -7,13 +7,15 @@ services:
       npm run build
       pip install -r requirements.txt
       npm ci --omit=dev
-    startCommand: gunicorn web:app --bind 0.0.0.0:$PORT --workers=1 --threads=2 --timeout=600
+    startCommand: gunicorn "app:create_app()" -w 2 -k gthread -b 0.0.0.0:$PORT
     envVars:
       - key: REDIS_URL
         fromService:
           name: cadlytics-redis
           type: redis
           property: connectionString
+      - key: PORT
+        value: "10000"
       - key: UPLOAD_FOLDER
         value: /tmp/uploads
       - key: OUTPUT_FOLDER
