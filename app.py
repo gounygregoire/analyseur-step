@@ -1,3 +1,5 @@
+"""Routes principales Cadlytics (web + conversion)."""
+
 # app.py
 import logging
 import os
@@ -7,9 +9,26 @@ import subprocess
 import sys
 import traceback
 import uuid
-
-from flask import Blueprint, Flask, current_app, jsonify, request, send_from_directory
 from pathlib import Path
+
+from flask import (
+    Blueprint,
+    Flask,
+    Response,
+    abort,
+    jsonify,
+    request,
+    send_from_directory,
+)
+from werkzeug.exceptions import HTTPException
+
+BASE_DIR = Path(__file__).resolve().parent
+_DEFAULT_LANDING_DIR = BASE_DIR / "landing"
+LANDING_DIR = (
+    _DEFAULT_LANDING_DIR
+    if _DEFAULT_LANDING_DIR.is_dir()
+    else BASE_DIR / "static" / "landing"
+)
 
 print("[env] XEOKIT_ARGS =", os.getenv("XEOKIT_ARGS"))
 
@@ -62,22 +81,43 @@ def run_xkt_convert(step_path: str, xkt_path: str):
 # --- Root landing ---
 @root_bp.route("/", methods=["GET", "HEAD"])
 def landing_index():
-    landing_dir = os.path.join(current_app.root_path, "static", "landing")
-    index_path = os.path.join(landing_dir, "index.html")
+    landing_dir = LANDING_DIR
+    index_path = landing_dir / "index.html"
     cache_headers = {
         "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
         "Pragma": "no-cache",
         "Expires": "0",
     }
-    if not os.path.exists(index_path):
+    if not index_path.exists():
         return (
             "<h1>Cadlytics</h1><p>Landing en cours.</p>",
             200,
             cache_headers,
         )
-    response = send_from_directory(landing_dir, "index.html", conditional=True)
+    response = send_from_directory(str(landing_dir), "index.html", mimetype="text/html")
     response.headers.update(cache_headers)
+    if request.method == "HEAD":
+        response.set_data(b"")
     return response
+
+
+@root_bp.get("/assets/<path:filename>")
+def landing_assets(filename: str):
+    assets_dir = LANDING_DIR / "assets"
+    if not assets_dir.is_dir():
+        abort(404)
+    response = send_from_directory(str(assets_dir), filename)
+    if request.method == "HEAD":
+        response.set_data(b"")
+    return response
+
+
+@root_bp.get("/favicon.ico")
+def favicon():
+    favicon_path = LANDING_DIR / "favicon.ico"
+    if not favicon_path.is_file():
+        abort(404)
+    return send_from_directory(str(LANDING_DIR), "favicon.ico")
 
 
 app.register_blueprint(root_bp)
@@ -86,26 +126,21 @@ app.register_blueprint(root_bp)
 # --- Healthcheck ---
 @app.get("/healthz")
 def healthz():
-    return {"ok": True}, 200, {"Cache-Control": "no-store"}
+    return Response("ok", 200, content_type="text/plain")
 
 
 # --- Error handler ---
 logger = logging.getLogger("cadlytics")
 
 
-@app.errorhandler(500)
-def handle_500(e):
-    logger.error(
-        "HTTP 500 on %s — %s\n%s",
-        request.path,
-        repr(e),
-        traceback.format_exc(),
-    )
-    return (
-        "Internal Server Error",
-        500,
-        {"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
-    )
+@app.errorhandler(Exception)
+def handle_exception(exc):
+    if isinstance(exc, HTTPException):
+        if exc.code >= 500:
+            logger.exception("HTTP %s on %s", exc.code, request.path)
+        return exc
+    logger.exception("Unhandled exception on %s", request.path)
+    return jsonify(error="internal_error"), 500
 
 
 # ===== API conversion (upload -> XKT) =====
@@ -152,3 +187,13 @@ def __diag():
 
     }
     return jsonify(info)
+
+
+def create_app() -> Flask:
+    """Factory Flask utilisée par Gunicorn."""
+
+    return app
+
+
+if __name__ == "__main__":
+    create_app().run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)

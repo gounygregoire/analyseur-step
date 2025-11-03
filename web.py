@@ -26,6 +26,7 @@ from flask import (
 from flask_cors import CORS
 from dotenv import load_dotenv
 import requests
+from werkzeug.exceptions import HTTPException
 
 # RQ / Redis (imports sans collision de noms)
 import redis as redislib
@@ -58,6 +59,18 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
+
+_LANDING_DIR_CANDIDATES = [
+    Path(app.root_path) / "landing",
+    Path(app.root_path) / "static" / "landing",
+]
+
+
+def _landing_directory() -> Path | None:
+    for candidate in _LANDING_DIR_CANDIDATES:
+        if candidate.is_dir():
+            return candidate
+    return None
 
 # ---------- Config ----------
 def env_int(name: str, default: int) -> int:
@@ -344,24 +357,42 @@ def _pull_converted_from_s3_if_missing(file_id: str, axis: str) -> dict:
     return res
 
 # ---------- Pages ----------
-@app.get("/")
+@app.route("/", methods=["GET", "HEAD"])
 def landing():
-    candidates = [
-        os.path.join(app.root_path, "templates", "index.html"),
-        os.path.join(app.root_path, "templates", "home.html"),
-        os.path.join(app.root_path, "templates", "landing.html"),
-        os.path.join(app.root_path, "static", "index.html"),
-        os.path.join(app.root_path, "static", "dist", "index.html"),
-        os.path.join(app.root_path, "static", "app", "index.html"),
-    ]
-    found = _first_existing(candidates)
-    if not found:
-        return "Landing non trouvée (ajoute templates/index.html ou static/index.html)", 200
-    rel = os.path.relpath(found, app.root_path)
-    parts = rel.split(os.sep)
-    if parts[0] == "templates":
-        return render_template(parts[-1])
-    return send_from_directory(os.path.dirname(rel), os.path.basename(rel))
+    landing_dir = _landing_directory()
+    if not landing_dir:
+        return (
+            "Landing non trouvée (ajoute landing/index.html)",
+            200,
+        )
+    index_path = landing_dir / "index.html"
+    if not index_path.is_file():
+        return (
+            "Landing non trouvée (ajoute landing/index.html)",
+            200,
+        )
+    response = send_from_directory(str(landing_dir), "index.html")
+    if request.method == "HEAD":
+        response.set_data(b"")
+    return response
+
+
+@app.route("/assets/<path:asset>", methods=["GET", "HEAD"])
+def landing_assets(asset: str):
+    landing_dir = _landing_directory()
+    if not landing_dir:
+        abort(404)
+    asset_path = (landing_dir / asset).resolve()
+    try:
+        asset_path.relative_to(landing_dir)
+    except ValueError:
+        abort(404)
+    if not asset_path.is_file():
+        abort(404)
+    response = send_from_directory(str(landing_dir), asset)
+    if request.method == "HEAD":
+        response.set_data(b"")
+    return response
 
 @app.get("/app")
 def app_view():
@@ -374,6 +405,25 @@ def favicon():
 @app.get("/healthz")
 def healthz():
     return "ok"
+
+
+@app.errorhandler(Exception)
+def log_unhandled_exception(exc: Exception):
+    if isinstance(exc, HTTPException):
+        if exc.code >= 500:
+            app.logger.exception(
+                "[http_error] %s %s -> %s",
+                request.method,
+                request.path,
+                exc.code,
+            )
+        return exc
+    app.logger.exception(
+        "[unhandled] %s %s",
+        request.method,
+        request.path,
+    )
+    return Response("Internal Server Error", 500)
 
 # ---------- Upload -> XKT ----------
 @app.post("/upload")
