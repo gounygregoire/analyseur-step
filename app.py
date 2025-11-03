@@ -1,13 +1,20 @@
 # app.py
-print("[env] XEOKIT_ARGS =", os.getenv("XEOKIT_ARGS"))
-import os, uuid, shlex, subprocess, pathlib
-import sys
+import logging
+import os
+import shlex
 import shutil
+import subprocess
+import sys
+import traceback
+import uuid
 
-from flask import Flask, request, jsonify, send_from_directory, abort, render_template
+from flask import Blueprint, Flask, current_app, jsonify, request, send_from_directory
 from pathlib import Path
 
+print("[env] XEOKIT_ARGS =", os.getenv("XEOKIT_ARGS"))
+
 app = Flask(__name__, static_folder="static", template_folder="templates")
+root_bp = Blueprint("root", __name__)
 
 # ===== Config minimale =====
 MAX_UPLOAD_MB = int(float(os.environ.get("MAX_UPLOAD_MB", "50")))
@@ -51,6 +58,55 @@ def run_xkt_convert(step_path: str, xkt_path: str):
     print(f"[xeokit] RC={proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}", file=sys.stderr, flush=True)
     if proc.returncode != 0:
         raise RuntimeError(f"xeokit-convert failed ({proc.returncode})")
+
+# --- Root landing ---
+@root_bp.route("/", methods=["GET", "HEAD"])
+def landing_index():
+    landing_dir = os.path.join(current_app.root_path, "static", "landing")
+    index_path = os.path.join(landing_dir, "index.html")
+    cache_headers = {
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
+    if not os.path.exists(index_path):
+        return (
+            "<h1>Cadlytics</h1><p>Landing en cours.</p>",
+            200,
+            cache_headers,
+        )
+    response = send_from_directory(landing_dir, "index.html", conditional=True)
+    response.headers.update(cache_headers)
+    return response
+
+
+app.register_blueprint(root_bp)
+
+
+# --- Healthcheck ---
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}, 200, {"Cache-Control": "no-store"}
+
+
+# --- Error handler ---
+logger = logging.getLogger("cadlytics")
+
+
+@app.errorhandler(500)
+def handle_500(e):
+    logger.error(
+        "HTTP 500 on %s — %s\n%s",
+        request.path,
+        repr(e),
+        traceback.format_exc(),
+    )
+    return (
+        "Internal Server Error",
+        500,
+        {"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    )
+
 
 # ===== API conversion (upload -> XKT) =====
 @app.post("/upload")
