@@ -10,6 +10,7 @@ import sys
 import traceback
 import uuid
 from pathlib import Path
+from urllib.parse import urlparse
 
 from flask import (
     Blueprint,
@@ -17,18 +18,40 @@ from flask import (
     Response,
     abort,
     jsonify,
+    redirect,
+    render_template,
     request,
     send_from_directory,
+    url_for,
 )
 from werkzeug.exceptions import HTTPException
+from translations import get_all_translations
+from auth import auth_bp
 
 BASE_DIR = Path(__file__).resolve().parent
-_DEFAULT_LANDING_DIR = BASE_DIR / "landing"
-LANDING_DIR = (
-    _DEFAULT_LANDING_DIR
-    if _DEFAULT_LANDING_DIR.is_dir()
-    else BASE_DIR / "static" / "landing"
-)
+LANDING_FILE = BASE_DIR / "templates" / "landing.html"
+LANDING_DIR = LANDING_FILE.parent
+SUPPORTED_LANGUAGES = {"fr", "en"}
+LANG_COOKIE_NAME = "cadlytics_lang"
+
+
+class _TranslationsProxy(dict):
+    """Expose un dict de traductions avec accès par attribut."""
+
+    def __getattr__(self, key: str) -> str:
+        return self.get(key, key)
+
+
+def _resolve_language() -> str:
+    """Détermine la langue courante à partir du cookie ou des préférences."""
+
+    lang = (request.cookies.get(LANG_COOKIE_NAME) or "").lower()
+    if lang in SUPPORTED_LANGUAGES:
+        return lang
+    match = request.accept_languages.best_match(sorted(SUPPORTED_LANGUAGES))
+    if match:
+        return match
+    return "fr"
 
 print("[env] XEOKIT_ARGS =", os.getenv("XEOKIT_ARGS"))
 
@@ -81,34 +104,59 @@ def run_xkt_convert(step_path: str, xkt_path: str):
 # --- Root landing ---
 @root_bp.route("/", methods=["GET", "HEAD"])
 def landing_index():
-    landing_dir = LANDING_DIR
-    index_path = landing_dir / "index.html"
-    cache_headers = {
-        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-        "Pragma": "no-cache",
-        "Expires": "0",
-    }
-    if not index_path.exists():
-        return (
-            "<h1>Cadlytics</h1><p>Landing en cours.</p>",
-            200,
-            cache_headers,
-        )
-    response = send_from_directory(str(landing_dir), "index.html", mimetype="text/html")
-    response.headers.update(cache_headers)
+    if not LANDING_FILE.is_file():
+        abort(404)
+
+    current_language = _resolve_language()
+    translations = _TranslationsProxy(get_all_translations(current_language))
+    html = render_template(
+        LANDING_FILE.name,
+        t=translations,
+        current_language=current_language,
+    )
+    response = Response(html, mimetype="text/html")
     if request.method == "HEAD":
         response.set_data(b"")
     return response
 
 
-@root_bp.get("/assets/<path:filename>")
-def landing_assets(filename: str):
-    assets_dir = LANDING_DIR / "assets"
-    if not assets_dir.is_dir():
+def _landing_asset(prefix: str, asset_path: str):
+    full_path = LANDING_DIR / prefix / asset_path
+    if not full_path.is_file():
         abort(404)
-    response = send_from_directory(str(assets_dir), filename)
+    response = send_from_directory(str(LANDING_DIR), f"{prefix}/{asset_path}")
     if request.method == "HEAD":
         response.set_data(b"")
+    return response
+
+
+for _prefix in ("assets", "css", "js", "img", "images", "fonts", "media"):
+    root_bp.add_url_rule(
+        f"/{_prefix}/<path:asset_path>",
+        endpoint=f"landing_asset_{_prefix}",
+        view_func=lambda asset_path, _p=_prefix: _landing_asset(_p, asset_path),
+        methods=["GET", "HEAD"],
+    )
+
+
+@root_bp.get("/change-language/<lang>")
+def change_language(lang: str):
+    lang = (lang or "").lower()
+    if lang not in SUPPORTED_LANGUAGES:
+        abort(404)
+    fallback = url_for("root.landing_index")
+    target = request.referrer or fallback
+    parsed = urlparse(target)
+    if parsed.scheme and parsed.netloc and parsed.netloc != request.host:
+        target = fallback
+    response = redirect(target)
+    response.set_cookie(
+        LANG_COOKIE_NAME,
+        lang,
+        max_age=60 * 60 * 24 * 365,
+        secure=request.is_secure,
+        samesite="Lax",
+    )
     return response
 
 
@@ -121,6 +169,22 @@ def favicon():
 
 
 app.register_blueprint(root_bp)
+app.register_blueprint(auth_bp)
+app.add_url_rule("/", endpoint="site.index", view_func=landing_index, methods=["GET", "HEAD"])
+
+
+@app.route("/app", methods=["GET"], endpoint="site.app_page")
+def site_app_page():
+    return render_template("app.html", max_upload_mb=MAX_UPLOAD_MB)
+
+
+@app.route("/outputs/<path:fname>", methods=["GET"], endpoint="site.public_outputs")
+def site_public_outputs(fname: str):
+    base_dir = OUTPUT_FOLDER
+    path = os.path.join(base_dir, fname)
+    if not os.path.isfile(path):
+        abort(404)
+    return send_from_directory(base_dir, fname)
 
 
 # --- Healthcheck ---
