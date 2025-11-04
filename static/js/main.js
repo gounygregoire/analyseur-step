@@ -4351,18 +4351,28 @@ async function waitForXKT(fileId, { maxMs = 90000, stepMs = 900 } = {}) {
   return false;
 }
 
+// Après upload : reconvert → attendre (status finished OU HEAD 200) → charger XKT
 async function onUploadResponse(resp) {
   const { file_id } = resp;
   console.log('[upload] ok', { file_id });
 
-  // MAJ états globaux / debug
-  CADLYTICS?.xkt?.setFileId?.(file_id);
+  // met à jour le debug + les globals
+  try { window.CADLYTICS?.xkt?.setFileId?.(file_id); } catch {}
   window.currentFileId = file_id;
 
-  // 1) Reconversion explicite (garantit "attempt 1")
-  await reconvertAndWait(file_id);
+  // 1) Reconversion robuste
+  try {
+    await reconvertAndWait(file_id); // sort dès que status finished OU HEAD 200
+  } catch (e) {
+    console.warn('[reconvert] soft error/timeout', e?.message);
+    // Fallback : si le HEAD est déjà bon, on continue quand même
+    const head = await fetch(`/xkt/${file_id}.xkt?nocache=${Date.now()}`, { method: 'HEAD', cache: 'no-store' });
+    const len  = Number(head.headers.get('content-length') || head.headers.get('Content-Length') || '0');
+    if (!(head.ok && len > 0)) throw e; // pas dispo → on propage l’erreur initiale
+    console.log('[reconvert] fallback head-ready', { len });
+  }
 
-  // 2) Charge immédiatement l’XKT
+  // 2) Charge immédiatement l’XKT (cache-buster)
   const url = `${location.origin}/xkt/${file_id}.xkt?nocache=${Date.now()}`;
   try {
     const result = forceLoadXKT(file_id, { url });
@@ -4374,7 +4384,9 @@ async function onUploadResponse(resp) {
   }
 }
 
-async function reconvertAndWait(fileId) {
+// Hybride : considère terminé dès que status === "finished" OU HEAD 200 (len > 0)
+// maxMs plus large pour absorber files/queues lentes
+async function reconvertAndWait(fileId, { maxMs = 8 * 60 * 1000, pollMs = 800 } = {}) {
   const post = await fetch('/api/reconvert', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -4382,19 +4394,45 @@ async function reconvertAndWait(fileId) {
   });
   if (!post.ok) throw new Error(`reconvert ${post.status}`);
   const { job_id } = await post.json();
+  console.log('[reconvert] started', { job_id, fileId });
 
-  let wait = 700;
   const t0 = Date.now();
-  for (;;) {
-    const r = await fetch(`/api/reconvert/status/${job_id}`, { cache: 'no-store' });
-    if (r.ok) {
-      const j = await r.json().catch(() => null);
-      if (j?.status === 'finished') break;
-      if (j?.status === 'failed') throw new Error('reconvert failed');
+  let wait = pollMs;
+
+  while (Date.now() - t0 < maxMs) {
+    // 1) HEAD : si le XKT existe déjà, on sort tout de suite
+    try {
+      const head = await fetch(`/xkt/${fileId}.xkt?nocache=${Date.now()}`, { method: 'HEAD', cache: 'no-store' });
+      const len  = Number(head.headers.get('content-length') || head.headers.get('Content-Length') || '0');
+      if (head.ok && len > 0) {
+        console.log('[reconvert] head-ready', { len });
+        return;
+      }
+    } catch (e) {
+      console.warn('[reconvert] head-check error', e?.message);
     }
+
+    // 2) Status : finished / failed
+    try {
+      const r = await fetch(`/api/reconvert/status/${job_id}`, { cache: 'no-store' });
+      if (r.ok) {
+        const j = await r.json().catch(() => null);
+        if (j?.status === 'finished') {
+          console.log('[reconvert] status finished');
+          return;
+        }
+        if (j?.status === 'failed') {
+          throw new Error('reconvert failed');
+        }
+      }
+    } catch (e) {
+      console.warn('[reconvert] status-check error', e?.message);
+    }
+
     await new Promise(rs => setTimeout(rs, wait));
     wait = Math.min(wait * 1.4, 3000);
-    if (Date.now() - t0 > 3 * 60 * 1000) throw new Error('reconvert timeout');
   }
+
+  throw new Error('reconvert timeout');
 }
 
