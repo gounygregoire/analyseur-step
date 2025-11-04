@@ -2157,83 +2157,39 @@ async function urlExists(url) {
   return res.ok;
 }
 
-async function tryLoadXKTThenGLB({
-  viewerInstance,
-  stableId,
-  xktUrl,
-  glbUrl,
-  onBeforeLoad
-}) {
-  const attempt = async ({ type, loader, src }) => {
-    let model;
-    try {
-      model = loader();
-    } catch (error) {
-      throw { error, type, model: null, src };
-    }
+// Essaie d'abord le XKT, puis bascule GLB en cas d'échec.
+async function tryLoadXKTThenGLB({ fileId, url, glbFallback }) {
+  // url DOIT être une string (jamais un booléen/objet)
+  const xktUrl = (typeof url === "string" && url) ||
+                 `${location.origin}/xkt/${fileId}.xkt?nocache=${Date.now()}`;
 
-    let cleanupHook = null;
-    if (typeof onBeforeLoad === "function") {
-      try {
-        cleanupHook = onBeforeLoad({ model, type, src });
-      } catch (err) {
-        console.warn("[viewer] onBeforeLoad a échoué", err);
-      }
-    }
-
-    try {
-      await waitForModelLoad(model);
-      if (cleanupHook) {
-        try { cleanupHook(); } catch {}
-      }
-      return { model, type, src };
-    } catch (info) {
-      if (cleanupHook) {
-        try { cleanupHook(); } catch {}
-      }
-      info = info || {};
-      info.type = type;
-      info.model = info.model || model;
-      info.src = src;
-      throw info;
-    }
-  };
+  console.log('[viewer]', new Date().toISOString(), 'start load', {
+    stableId: fileId,
+    url: xktUrl,
+    glbFallback
+  });
 
   try {
-    return await attempt({
-      type: "xkt",
-      src: xktUrl,
-      loader: () => xktLoader.load(buildXKTLoadConfig({ id: stableId, src: xktUrl }))
-    });
-  } catch (firstErr) {
-    const cause = firstErr?.error || firstErr;
-    console.warn("[viewer] XKT load failed, tentative GLB", cause);
-    if (!glbUrl) {
-      throw firstErr;
+    // Health check = prédicat (on ignore sa valeur de retour)
+    await ensureHealthyXKT(xktUrl, { fileId });
+
+    // Charge le XKT avec l'URL STRING (pas le booléen)
+    return await loadXKT(xktUrl, null, { fileId });
+  } catch (err) {
+    console.log('[viewer] XKT load failed, tentative GLB', err);
+
+    if (glbFallback) {
+      // Charge le GLB en secours
+      if (window.viewer?.scene?.loadGLTF) {
+        return window.viewer.scene.loadGLTF({ src: glbFallback, modelId: fileId });
+      }
+      // ou ton wrapper si tu en as un:
+      if (typeof window.loadGLBFromUrl === "function") {
+        return window.loadGLBFromUrl(glbFallback, { fileId });
+      }
     }
-    let glbExists = false;
-    try {
-      glbExists = await urlExists(glbUrl);
-    } catch (probeErr) {
-      console.warn("[viewer] GLB HEAD check failed", probeErr);
-    }
-    if (!glbExists) {
-      console.warn("[viewer] GLB fallback skipped (404).", { glbUrl });
-      throw firstErr;
-    }
-    try {
-      firstErr?.model?.destroy?.();
-    } catch (destroyErr) {
-      console.warn("[viewer] destruction modèle XKT échouée", destroyErr);
-    }
-    const gltfLoader = getGLTFLoader(viewerInstance);
-    const result = await attempt({
-      type: "glb",
-      src: glbUrl,
-      loader: () => gltfLoader.load({ id: stableId, src: glbUrl })
-    });
-    console.log("[viewer] GLB loaded fallback");
-    return result;
+
+    throw err;
   }
 }
 

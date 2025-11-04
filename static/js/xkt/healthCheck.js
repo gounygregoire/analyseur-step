@@ -33,11 +33,7 @@ export async function ensureHealthyXKT(xktUrl, { fileId } = {}) {
     const manifestUrl = url.replace(/\.xkt(\?.*)?$/i, ".manifest.json");
     const sep = manifestUrl.includes("?") ? "&" : "?";
     const res = await fetch(`${manifestUrl}${sep}nocache=${Date.now()}`, { cache: "no-store" });
-
-    // OK si le manifest existe
     if (res.ok) return true;
-
-    // OK aussi si le manifest n'existe pas (on ne bloque pas le chargement)
     if (res.status === 404) {
       console.warn("[xkt][health] manifest missing → skipping health check");
       return true;
@@ -45,8 +41,6 @@ export async function ensureHealthyXKT(xktUrl, { fileId } = {}) {
   } catch (e) {
     console.warn("[xkt][health] check error (ignored)", e?.message);
   }
-
-  // Dans tous les autres cas, on ne bloque pas non plus.
   return true;
 }
 
