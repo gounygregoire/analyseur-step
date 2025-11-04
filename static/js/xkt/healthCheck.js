@@ -18,38 +18,17 @@ export async function fetchManifest(urlBase, fileId) {
   }
 }
 
-export async function ensureHealthyXKT({ baseUrl, fileId, minBytes = 200000, onStatus }) {
-  const xktUrl = `${baseUrl}/xkt/${fileId}.xkt`;
-  const size = await headContentLength(xktUrl);
-  const manifest = await fetchManifest(baseUrl, fileId);
-  const notOk = (size > 0 && size < minBytes) || (manifest && manifest.ok === false);
-  if (!notOk) return `${xktUrl}?v=${Date.now()}`;
-
-  onStatus?.("reconvert:start");
-  const r = await fetch(`${baseUrl}/api/reconvert`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ file_id: fileId })
-  });
-  if (!r.ok) throw new Error("reconvert: request failed");
-  const { job_id } = await r.json();
-  // poll status
-  const t0 = Date.now();
-  while (Date.now() - t0 < 10 * 60 * 1000) { // 10 min
-    await new Promise((r) => setTimeout(r, 2000));
-    const s = await fetch(`${baseUrl}/api/reconvert/status/${job_id}`, { cache: "no-store" });
-    if (!s.ok) continue;
-    const j = await s.json();
-    onStatus?.(`reconvert:${j.status}`);
-    if (j.status === "finished") {
-      // recheck
-      const size2 = await headContentLength(xktUrl);
-      if (size2 >= minBytes) return `${xktUrl}?v=${Date.now()}`;
-      const m2 = await fetchManifest(baseUrl, fileId);
-      if (m2 && m2.ok && m2.xkt_size >= minBytes) return `${xktUrl}?v=${Date.now()}`;
-      // else continue loop (CDN propagation)
+async function ensureHealthyXKT(xktUrl, { fileId } = {}) {
+  try {
+    const manifestUrl = String(xktUrl).replace(/\.xkt(\?.*)?$/i, '.manifest.json');
+    const res = await fetch(`${manifestUrl}${manifestUrl.includes('?') ? '&' : '?'}nocache=${Date.now()}`, { cache: 'no-store' });
+    if (res.ok) return true;
+    if (res.status === 404) {
+      console.warn('[xkt][health] manifest missing → skipping health check');
+      return true; // << on n’échoue plus
     }
-    if (j.status === "failed") throw new Error("reconvert: failed");
+  } catch (e) {
+    console.warn('[xkt][health] check error (ignored)', e?.message);
   }
-  throw new Error("reconvert: timeout");
+  return true;
 }

@@ -4163,11 +4163,13 @@ export {};
   window.CADLYTICS.xkt = {
     lastFileId: null,
     setFileId(id) {
-      this.lastFileId = id;
-      const el = document.getElementById('xkt-debug-id');
-      if (el) el.textContent = id || '(none)';
-      window.__currentFileId = id; // pour le bouton "Force Load"
-    }
+  this.lastFileId = id;
+  const el = document.getElementById('xkt-debug-id');
+  if (el) el.textContent = id || '(none)';
+  // >>> AJOUT pour forcer l’ID partout
+  window.__currentFileId = id;
+  window.currentFileId   = id;
+}
   };
 
   function ensurePanel() {
@@ -4309,7 +4311,7 @@ async function waitForXKT(fileId, { maxMs = 90000, stepMs = 900 } = {}) {
   while (performance.now() - t0 < maxMs) {
     attempt++;
 
-    // 1) HEAD: on considère "prêt" dès que len > 0
+    // 1) HEAD: prêt dès que len > 0
     try {
       const head = await fetch(`/xkt/${fileId}.xkt?nocache=${Date.now()}`, {
         method: 'HEAD',
@@ -4327,7 +4329,7 @@ async function waitForXKT(fileId, { maxMs = 90000, stepMs = 900 } = {}) {
       console.warn('[wait][xkt][head-error]', { attempt, message: err?.message });
     }
 
-    // 2) EXISTS: télémétrie uniquement (ne JAMAIS stopper sur exists:false)
+    // 2) EXISTS: télémétrie (ne jamais stopper sur exists:false)
     try {
       const ex = await fetch(`/exists/xkt/${fileId}?nocache=${Date.now()}`, { cache: 'no-store' });
       if (ex.ok) {
@@ -4342,7 +4344,6 @@ async function waitForXKT(fileId, { maxMs = 90000, stepMs = 900 } = {}) {
       console.warn('[wait][xkt][exists-error]', { attempt, message: err?.message });
     }
 
-    // 3) Attendre avant la prochaine sonde
     await new Promise(r => setTimeout(r, stepMs));
   }
 
@@ -4351,32 +4352,49 @@ async function waitForXKT(fileId, { maxMs = 90000, stepMs = 900 } = {}) {
 }
 
 async function onUploadResponse(resp) {
-  // resp doit contenir file_id (et éventuellement xktUrl côté serveur, mais on ne s’y fie pas)
   const { file_id } = resp;
-  console.log('[upload] ok', { file_id }); // log minimal et fiable
+  console.log('[upload] ok', { file_id });
 
-  CADLYTICS.xkt.setFileId(file_id);       // maj panneau debug
+  // MAJ états globaux / debug
+  CADLYTICS?.xkt?.setFileId?.(file_id);
+  window.currentFileId = file_id;
 
-  const waitResult = await waitForXKT(file_id);
-  if (!waitResult) {
-    console.warn('[wait] timeout — XKT non prêt, utilisez le bouton "Force Load" dans le panneau debug');
-    return;
-  }
+  // 1) Reconversion explicite (garantit "attempt 1")
+  await reconvertAndWait(file_id);
 
-  // charge automatiquement si prêt
-  if (typeof waitResult === 'string') {
-    const url = waitResult || `${location.origin}/xkt/${file_id}.xkt?v=${Date.now()}`;
+  // 2) Charge immédiatement l’XKT
+  const url = `${location.origin}/xkt/${file_id}.xkt?nocache=${Date.now()}`;
+  try {
     const result = forceLoadXKT(file_id, { url });
     if (result && typeof result.then === 'function') {
-      result.catch?.((err) => console.warn('[wait] fallback load promise rejected', err));
-      try {
-        await result;
-      } catch (err) {
-        console.warn('[wait] fallback load await failed', err);
-      }
+      await result;
     }
-    return;
+  } catch (err) {
+    console.warn('[load] XKT load failed', err);
   }
-
-  forceLoadXKT(file_id);
 }
+
+async function reconvertAndWait(fileId) {
+  const post = await fetch('/api/reconvert', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ file_id: fileId })
+  });
+  if (!post.ok) throw new Error(`reconvert ${post.status}`);
+  const { job_id } = await post.json();
+
+  let wait = 700;
+  const t0 = Date.now();
+  for (;;) {
+    const r = await fetch(`/api/reconvert/status/${job_id}`, { cache: 'no-store' });
+    if (r.ok) {
+      const j = await r.json().catch(() => null);
+      if (j?.status === 'finished') break;
+      if (j?.status === 'failed') throw new Error('reconvert failed');
+    }
+    await new Promise(rs => setTimeout(rs, wait));
+    wait = Math.min(wait * 1.4, 3000);
+    if (Date.now() - t0 > 3 * 60 * 1000) throw new Error('reconvert timeout');
+  }
+}
+
