@@ -9,6 +9,9 @@ import subprocess
 import sys
 import traceback
 import uuid
+import threading
+import time
+from xkt_converter import convert_step_to_xkt  # conversion robuste (GLB guard)
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -65,6 +68,24 @@ UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
 OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
+JOBS = {}  # job_id -> {"status": "pending|running|finished|error", ...}
+
+def _step_path(file_id: str) -> str:
+    return os.path.join(UPLOAD_FOLDER, f"{file_id}.step")
+
+def _xkt_path(file_id: str) -> str:
+    return os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+
+def _glb_path(file_id: str) -> str:
+    return os.path.join(OUTPUT_FOLDER, f"{file_id}.glb")
+
+def _size_or_0(path: str) -> int:
+    try:
+        return os.path.getsize(path) if os.path.isfile(path) else 0
+    except Exception:
+        return 0
+
 
 # ===== Helpers =====
 ALLOWED = {".stp", ".step"}
@@ -186,6 +207,78 @@ def site_public_outputs(fname: str):
         abort(404)
     return send_from_directory(base_dir, fname)
 
+@app.route("/xkt/<file_id>.xkt", methods=["GET", "HEAD"])
+def serve_xkt(file_id: str):
+    fname = f"{file_id}.xkt"
+    path = _xkt_path(file_id)
+    if not os.path.isfile(path):
+        abort(404)
+    resp = send_from_directory(OUTPUT_FOLDER, fname, mimetype="application/octet-stream")
+    resp.headers["Cache-Control"] = "no-cache, max-age=0"
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    if request.method == "HEAD":
+        resp.set_data(b"")
+    return resp
+
+@app.route("/glb/<file_id>.glb", methods=["GET", "HEAD"])
+def serve_glb(file_id: str):
+    fname = f"{file_id}.glb"
+    path = _glb_path(file_id)
+    if not os.path.isfile(path):
+        abort(404)
+    resp = send_from_directory(OUTPUT_FOLDER, fname, mimetype="model/gltf-binary")
+    resp.headers["Cache-Control"] = "no-cache, max-age=0"
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    if request.method == "HEAD":
+        resp.set_data(b"")
+    return resp
+
+@app.get("/exists/xkt/<file_id>")
+def exists_xkt(file_id: str):
+    p = _xkt_path(file_id)
+    exists = os.path.isfile(p)
+    size = _size_or_0(p)
+    # si un job tourne encore pour ce file_id
+    status = "ready" if (exists and size > 0) else "pending"
+    return jsonify({"exists": bool(exists), "file_id": file_id, "size": int(size), "status": status})
+
+def _reconvert_job(file_id: str, job_id: str):
+    JOBS[job_id] = {"status": "running", "file_id": file_id, "started_at": time.time()}
+    try:
+        step = _step_path(file_id)
+        xkt  = _xkt_path(file_id)
+        # Conversion robuste (génère un GLB intermédiaire et refuse les XKT trop petits)
+        convert_step_to_xkt(step, xkt)
+        size = _size_or_0(xkt)
+        JOBS[job_id] = {"status": "finished", "file_id": file_id, "xkt_size": size}
+    except Exception as e:
+        JOBS[job_id] = {"status": "error", "file_id": file_id, "error": str(e)}
+
+@app.post("/api/reconvert")
+def api_reconvert():
+    data = request.get_json(silent=True) or {}
+    file_id = (data.get("file_id") or data.get("id") or "").strip()
+    if not file_id:
+        return jsonify(error="missing_file_id"), 400
+
+    # si déjà prêt, on court-circuite
+    if _size_or_0(_xkt_path(file_id)) > 0:
+        return jsonify(job_id="noop", status="finished")
+
+    job_id = str(uuid.uuid4())
+    th = threading.Thread(target=_reconvert_job, args=(file_id, job_id), daemon=True)
+    th.start()
+    JOBS[job_id] = {"status": "pending", "file_id": file_id}
+    return jsonify(job_id=job_id, status="pending")
+
+@app.get("/api/reconvert/status/<job_id>")
+def api_reconvert_status(job_id: str):
+    info = JOBS.get(job_id)
+    if not info:
+        return jsonify(status="unknown", job_id=job_id), 404
+    return jsonify(info | {"job_id": job_id})
+
+
 
 # --- Healthcheck ---
 @app.get("/healthz")
@@ -225,7 +318,7 @@ def upload():
         f.save(step_path)  # peut lever si répertoire manquant, droits, etc.
 
         try:
-            run_xkt_convert(step_path, xkt_path)
+            convert_step_to_xkt(step_path, xkt_path)
         except Exception as e:
             # On renvoie stdout/stderr côté client pour debug rapide
             return jsonify(error="convert_fail", detail=str(e)), 500
