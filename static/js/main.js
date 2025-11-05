@@ -2158,6 +2158,7 @@ async function urlExists(url) {
 }
 
 // Essaie d'abord le XKT, puis bascule GLB en cas d'échec.
+// Essaie d'abord le XKT, puis bascule GLB en cas d'échec.
 async function tryLoadXKTThenGLB({ fileId, url, glbFallback }) {
   // url DOIT être une string (jamais un booléen/objet)
   const xktUrl = (typeof url === "string" && url) ||
@@ -2171,7 +2172,8 @@ async function tryLoadXKTThenGLB({ fileId, url, glbFallback }) {
 
   try {
     // Health check = prédicat (on ignore sa valeur de retour)
-    await ensureHealthyXKT(xktUrl, { fileId });
+const ok  = await ensureHealthyXKT(xktUrl, { fileId }); // booléen
+const url = xktUrl; // on conserve l'URL STRING
 
     // Charge le XKT avec l'URL STRING (pas le booléen)
     return await loadXKT(xktUrl, null, { fileId });

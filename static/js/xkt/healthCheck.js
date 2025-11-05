@@ -44,5 +44,6 @@ export async function ensureHealthyXKT(xktUrl, { fileId } = {}) {
   return true;
 }
 
+
 // Optionnel : export par défaut pour compat legacy
 export default { headContentLength, fetchManifest, ensureHealthyXKT };
