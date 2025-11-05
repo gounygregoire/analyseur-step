@@ -11,7 +11,6 @@ import traceback
 import uuid
 import threading
 import time
-from xkt_converter import convert_step_to_xkt  # conversion robuste (GLB guard)
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -28,26 +27,25 @@ from flask import (
     url_for,
 )
 from werkzeug.exceptions import HTTPException
+
 from translations import get_all_translations
 from auth import auth_bp
+from xkt_converter import convert_step_to_xkt  # conversion robuste (GLB guard)
 
+# ====== Base paths / i18n ======
 BASE_DIR = Path(__file__).resolve().parent
 LANDING_FILE = BASE_DIR / "templates" / "landing.html"
 LANDING_DIR = LANDING_FILE.parent
 SUPPORTED_LANGUAGES = {"fr", "en"}
 LANG_COOKIE_NAME = "cadlytics_lang"
 
-
 class _TranslationsProxy(dict):
     """Expose un dict de traductions avec accès par attribut."""
-
     def __getattr__(self, key: str) -> str:
         return self.get(key, key)
 
-
 def _resolve_language() -> str:
     """Détermine la langue courante à partir du cookie ou des préférences."""
-
     lang = (request.cookies.get(LANG_COOKIE_NAME) or "").lower()
     if lang in SUPPORTED_LANGUAGES:
         return lang
@@ -58,10 +56,11 @@ def _resolve_language() -> str:
 
 print("[env] XEOKIT_ARGS =", os.getenv("XEOKIT_ARGS"))
 
+# ====== Flask app / blueprints ======
 app = Flask(__name__, static_folder="static", template_folder="templates")
 root_bp = Blueprint("root", __name__)
 
-# ===== Config minimale =====
+# ====== Config minimale ======
 MAX_UPLOAD_MB = int(float(os.environ.get("MAX_UPLOAD_MB", "50")))
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
 UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
@@ -69,6 +68,7 @@ OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
+# ====== Jobs en mémoire (reconvert) ======
 JOBS = {}  # job_id -> {"status": "pending|running|finished|error", ...}
 
 def _step_path(file_id: str) -> str:
@@ -86,8 +86,7 @@ def _size_or_0(path: str) -> int:
     except Exception:
         return 0
 
-
-# ===== Helpers =====
+# ===== Helpers upload/convert =====
 ALLOWED = {".stp", ".step"}
 def _allowed(name: str) -> bool:
     return Path(name.lower()).suffix in ALLOWED
@@ -111,6 +110,7 @@ def _resolve_converter_cmd(step_path: str, xkt_path: str) -> str:
     return f"npx -y @xeokit/xeokit-convert@latest {extra} {shlex.quote(step_path)} --output {shlex.quote(xkt_path)}"
 
 def run_xkt_convert(step_path: str, xkt_path: str):
+    """(Non utilisé par défaut) Conversion brute via xeokit-convert."""
     cmd = _resolve_converter_cmd(step_path, xkt_path)
     proc = subprocess.run(
         cmd, shell=True, env=_with_node_path(os.environ),
@@ -122,12 +122,11 @@ def run_xkt_convert(step_path: str, xkt_path: str):
     if proc.returncode != 0:
         raise RuntimeError(f"xeokit-convert failed ({proc.returncode})")
 
-# --- Root landing ---
+# ====== Landing (marketing) ======
 @root_bp.route("/", methods=["GET", "HEAD"])
 def landing_index():
     if not LANDING_FILE.is_file():
         abort(404)
-
     current_language = _resolve_language()
     translations = _TranslationsProxy(get_all_translations(current_language))
     html = render_template(
@@ -140,7 +139,6 @@ def landing_index():
         response.set_data(b"")
     return response
 
-
 def _landing_asset(prefix: str, asset_path: str):
     full_path = LANDING_DIR / prefix / asset_path
     if not full_path.is_file():
@@ -150,7 +148,6 @@ def _landing_asset(prefix: str, asset_path: str):
         response.set_data(b"")
     return response
 
-
 for _prefix in ("assets", "css", "js", "img", "images", "fonts", "media"):
     root_bp.add_url_rule(
         f"/{_prefix}/<path:asset_path>",
@@ -158,7 +155,6 @@ for _prefix in ("assets", "css", "js", "img", "images", "fonts", "media"):
         view_func=lambda asset_path, _p=_prefix: _landing_asset(_p, asset_path),
         methods=["GET", "HEAD"],
     )
-
 
 @root_bp.get("/change-language/<lang>")
 def change_language(lang: str):
@@ -180,7 +176,6 @@ def change_language(lang: str):
     )
     return response
 
-
 @root_bp.get("/favicon.ico")
 def favicon():
     favicon_path = LANDING_DIR / "favicon.ico"
@@ -188,17 +183,16 @@ def favicon():
         abort(404)
     return send_from_directory(str(LANDING_DIR), "favicon.ico")
 
-
 app.register_blueprint(root_bp)
 app.register_blueprint(auth_bp)
 app.add_url_rule("/", endpoint="site.index", view_func=landing_index, methods=["GET", "HEAD"])
 
-
+# ====== App (viewer) ======
 @app.route("/app", methods=["GET"], endpoint="site.app_page")
 def site_app_page():
     return render_template("app.html", max_upload_mb=MAX_UPLOAD_MB)
 
-
+# ====== Public outputs (héritage) ======
 @app.route("/outputs/<path:fname>", methods=["GET"], endpoint="site.public_outputs")
 def site_public_outputs(fname: str):
     base_dir = OUTPUT_FOLDER
@@ -207,6 +201,7 @@ def site_public_outputs(fname: str):
         abort(404)
     return send_from_directory(base_dir, fname)
 
+# ====== Serve XKT / GLB comme attendus par le front ======
 @app.route("/xkt/<file_id>.xkt", methods=["GET", "HEAD"])
 def serve_xkt(file_id: str):
     fname = f"{file_id}.xkt"
@@ -233,15 +228,16 @@ def serve_glb(file_id: str):
         resp.set_data(b"")
     return resp
 
+# ====== Télémétrie existence pour waitForXKT ======
 @app.get("/exists/xkt/<file_id>")
 def exists_xkt(file_id: str):
     p = _xkt_path(file_id)
     exists = os.path.isfile(p)
     size = _size_or_0(p)
-    # si un job tourne encore pour ce file_id
     status = "ready" if (exists and size > 0) else "pending"
     return jsonify({"exists": bool(exists), "file_id": file_id, "size": int(size), "status": status})
 
+# ====== Reconvert async léger (thread) ======
 def _reconvert_job(file_id: str, job_id: str):
     JOBS[job_id] = {"status": "running", "file_id": file_id, "started_at": time.time()}
     try:
@@ -261,7 +257,7 @@ def api_reconvert():
     if not file_id:
         return jsonify(error="missing_file_id"), 400
 
-    # si déjà prêt, on court-circuite
+    # court-circuit si déjà prêt
     if _size_or_0(_xkt_path(file_id)) > 0:
         return jsonify(job_id="noop", status="finished")
 
@@ -278,17 +274,13 @@ def api_reconvert_status(job_id: str):
         return jsonify(status="unknown", job_id=job_id), 404
     return jsonify(info | {"job_id": job_id})
 
-
-
-# --- Healthcheck ---
+# ====== Healthcheck basique ======
 @app.get("/healthz")
 def healthz():
     return Response("ok", 200, content_type="text/plain")
 
-
-# --- Error handler ---
+# ====== Error handler ======
 logger = logging.getLogger("cadlytics")
-
 
 @app.errorhandler(Exception)
 def handle_exception(exc):
@@ -299,8 +291,7 @@ def handle_exception(exc):
     logger.exception("Unhandled exception on %s", request.path)
     return jsonify(error="internal_error"), 500
 
-
-# ===== API conversion (upload -> XKT) =====
+# ====== Upload (STEP -> XKT direct via convertisseur robuste) ======
 @app.post("/upload")
 def upload():
     try:
@@ -308,19 +299,18 @@ def upload():
         if not f or not f.filename:
             return jsonify(error="no_file"), 400
         if not _allowed(f.filename):
-            return jsonify(error="bad_ext",
-                           detail="Seuls .stp / .step sont acceptés."), 400
+            return jsonify(error="bad_ext", detail="Seuls .stp / .step sont acceptés."), 400
 
         file_id = str(uuid.uuid4())
-        step_path = os.path.join(UPLOAD_FOLDER, f"{file_id}.step")
-        xkt_path  = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+        step_path = _step_path(file_id)
+        xkt_path  = _xkt_path(file_id)
 
-        f.save(step_path)  # peut lever si répertoire manquant, droits, etc.
+        f.save(step_path)
 
+        # Conversion robuste immédiate (peut être déportée vers /api/reconvert si tu préfères)
         try:
             convert_step_to_xkt(step_path, xkt_path)
         except Exception as e:
-            # On renvoie stdout/stderr côté client pour debug rapide
             return jsonify(error="convert_fail", detail=str(e)), 500
 
         if not os.path.exists(xkt_path):
@@ -330,7 +320,7 @@ def upload():
     except Exception as e:
         return jsonify(error="server_exception", detail=str(e)), 500
 
-# --- routes diag (utiles 2 minutes) ---
+# ====== Diag rapide ======
 @app.get("/__diag")
 def __diag():
     info = {
@@ -341,16 +331,12 @@ def __diag():
         "UPLOAD_FOLDER": UPLOAD_FOLDER,
         "OUTPUT_FOLDER": OUTPUT_FOLDER,
         "XEOKIT_ARGS": os.getenv("XEOKIT_ARGS"),
-
     }
     return jsonify(info)
 
-
 def create_app() -> Flask:
     """Factory Flask utilisée par Gunicorn."""
-
     return app
-
 
 if __name__ == "__main__":
     create_app().run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
