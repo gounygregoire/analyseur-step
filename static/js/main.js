@@ -2172,8 +2172,9 @@ async function tryLoadXKTThenGLB({ fileId, url, glbFallback }) {
 
   try {
     // Health check = prédicat (on ignore sa valeur de retour)
-const ok  = await ensureHealthyXKT(xktUrl, { fileId }); // booléen
-const url = xktUrl; // on conserve l'URL STRING
+const xktUrl = `${location.origin}/xkt/${fileId}.xkt?nocache=${Date.now()}`;
+await ensureHealthyXKT(xktUrl, { fileId }); // booléen ignoré
+return await loadXKT(xktUrl, null, { fileId });
 
     // Charge le XKT avec l'URL STRING (pas le booléen)
     return await loadXKT(xktUrl, null, { fileId });
@@ -4249,6 +4250,9 @@ const fileId =
 })();
 
 const MIN_HEALTHY_XKT = 200000; // 200 KB
+// Un XKT réel dépasse largement 45 kB ; ajuste si besoin pour tes cas.
+const MIN_HEALTHY_XKT_LEN = 100 * 1024; // 100 kB
+
 
 // IMPORTANT: front loads XKT on HEAD=200 + content-length>0.
 // /exists is UX-only and must not block rendering.
@@ -4321,14 +4325,16 @@ async function onUploadResponse(resp) {
   // 1) Reconversion robuste
   try {
     await reconvertAndWait(file_id); // sort dès que status finished OU HEAD 200
-  } catch (e) {
-    console.warn('[reconvert] soft error/timeout', e?.message);
-    // Fallback : si le HEAD est déjà bon, on continue quand même
-    const head = await fetch(`/xkt/${file_id}.xkt?nocache=${Date.now()}`, { method: 'HEAD', cache: 'no-store' });
-    const len  = Number(head.headers.get('content-length') || head.headers.get('Content-Length') || '0');
-    if (!(head.ok && len > 0)) throw e; // pas dispo → on propage l’erreur initiale
-    console.log('[reconvert] fallback head-ready', { len });
+} catch (e) {
+  console.warn('[reconvert] soft error/timeout', e?.message);
+  // Fallback : uniquement si HEAD indique une taille "saine"
+  const head = await fetch(`/xkt/${file_id}.xkt?nocache=${Date.now()}`, { method: 'HEAD', cache: 'no-store' });
+  const len  = Number(head.headers.get('content-length') || head.headers.get('Content-Length') || '0');
+  if (!(head.ok && len >= MIN_HEALTHY_XKT_LEN)) {
+    throw e; // pas prêt → on propage l’erreur
   }
+  console.log('[reconvert] fallback head-ready (healthy)', { len });
+}
 
   // 2) Charge immédiatement l’XKT (cache-buster)
   const url = `${location.origin}/xkt/${file_id}.xkt?nocache=${Date.now()}`;
@@ -4344,6 +4350,7 @@ async function onUploadResponse(resp) {
 
 // Hybride : considère terminé dès que status === "finished" OU HEAD 200 (len > 0)
 // maxMs plus large pour absorber files/queues lentes
+// Hybride: terminé quand (status === "finished") OU (HEAD 200 && len >= MIN_HEALTHY_XKT_LEN)
 async function reconvertAndWait(fileId, { maxMs = 8 * 60 * 1000, pollMs = 800 } = {}) {
   const post = await fetch('/api/reconvert', {
     method: 'POST',
@@ -4358,30 +4365,34 @@ async function reconvertAndWait(fileId, { maxMs = 8 * 60 * 1000, pollMs = 800 } 
   let wait = pollMs;
 
   while (Date.now() - t0 < maxMs) {
-    // 1) HEAD : si le XKT existe déjà, on sort tout de suite
+    // 1) HEAD → prêt uniquement si taille "saine"
     try {
       const head = await fetch(`/xkt/${fileId}.xkt?nocache=${Date.now()}`, { method: 'HEAD', cache: 'no-store' });
-      const len  = Number(head.headers.get('content-length') || head.headers.get('Content-Length') || '0');
-      if (head.ok && len > 0) {
-        console.log('[reconvert] head-ready', { len });
+      const len = Number(head.headers.get('content-length') || head.headers.get('Content-Length') || '0');
+      if (head.ok && len >= MIN_HEALTHY_XKT_LEN) {
+        console.log('[reconvert] head-ready (healthy)', { len });
         return;
       }
     } catch (e) {
       console.warn('[reconvert] head-check error', e?.message);
     }
 
-    // 2) Status : finished / failed
+    // 2) Status → finished
     try {
       const r = await fetch(`/api/reconvert/status/${job_id}`, { cache: 'no-store' });
       if (r.ok) {
         const j = await r.json().catch(() => null);
         if (j?.status === 'finished') {
           console.log('[reconvert] status finished');
-          return;
+          // (Optionnel) double check HEAD pour éviter les races ultra-courtes
+          try {
+            const head = await fetch(`/xkt/${fileId}.xkt?nocache=${Date.now()}`, { method: 'HEAD', cache: 'no-store' });
+            const len = Number(head.headers.get('content-length') || head.headers.get('Content-Length') || '0');
+            if (head.ok && len >= MIN_HEALTHY_XKT_LEN) return;
+          } catch {}
+          // Si la taille n'est pas encore saine, on boucle
         }
-        if (j?.status === 'failed') {
-          throw new Error('reconvert failed');
-        }
+        if (j?.status === 'failed') throw new Error('reconvert failed');
       }
     } catch (e) {
       console.warn('[reconvert] status-check error', e?.message);
