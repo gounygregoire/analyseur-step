@@ -9,6 +9,7 @@ logger = logging.getLogger("app.storage.storage")
 DB_PATH = os.environ.get("FILES_DB_PATH") or os.path.join(os.path.dirname(__file__), "files.sqlite")
 UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
 OUTPUT_FOLDER = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
+XKT_LOCAL_DIR = os.path.abspath(os.environ.get("XKT_LOCAL_DIR", "./public/xkt"))
 
 
 class Storage:
@@ -64,8 +65,21 @@ class Storage:
 
     @staticmethod
     def get_xkt_path(file_id: str) -> str | None:
-        p = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
-        return p if os.path.isfile(p) else None
+        try:
+            from app.file_records import get as get_file_record
+
+            record = get_file_record(file_id)
+            if record and record.xkt_path:
+                return record.xkt_path
+        except Exception:
+            pass
+
+        candidate = os.path.join(XKT_LOCAL_DIR, f"{file_id}.xkt")
+        if os.path.isfile(candidate):
+            return candidate
+
+        fallback = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+        return fallback if os.path.isfile(fallback) else None
 
     @staticmethod
     def ensure_step_persisted(file_id: str, tmp_step_path: str, original_filename: str) -> str:

@@ -1,9 +1,30 @@
-# --- APP WEB: upload & conversion XKT via npx, DFM enqueue RQ ---
-import os, uuid, shlex, subprocess
+# --- APP WEB: upload & conversion XKT ---
+import os
+import threading
+import uuid
+from pathlib import Path
+
 from flask import Flask, request, jsonify, send_from_directory, abort
 from flask_cors import CORS
 from redis import Redis
 from rq import Queue
+
+from app.file_records import (
+    FileRecord,
+    create_or_update as create_file_record,
+    get as get_file_record,
+    mark_failed as mark_file_failed,
+    mark_processing as mark_file_processing,
+    mark_ready as mark_file_ready,
+)
+from app.storage.storage import Storage
+from app.xkt_pipeline import (
+    build_xkt_url,
+    convert_and_publish_xkt,
+    is_local_storage,
+    local_xkt_path,
+    should_serve_xkt_via_flask,
+)
 
 app = Flask(__name__)
 CORS(app)
@@ -17,57 +38,154 @@ REDIS_URL = os.environ.get("REDIS_URL")
 redis_conn = Redis.from_url(REDIS_URL) if REDIS_URL else None
 q = Queue(connection=redis_conn) if redis_conn else None
 
-ALLOWED = {".stp", ".step"}
-def allowed(name): return os.path.splitext(name.lower())[1] in ALLOWED
+ALLOWED = {".stp", ".step", ".stl"}
 
-def _npx_cmd():
-    return "npx"  # Render fournit Node 20, PATH ajouté en dessous
+_conversion_threads: dict[str, threading.Thread] = {}
+_conversion_lock = threading.Lock()
 
-def run_xkt_convert(step_path: str, xkt_path: str):
-    npx = _npx_cmd()
-    cmd = f"""{shlex.quote(npx)} -y @xeokit/xeokit-convert@latest \
-      --input {shlex.quote(step_path)} \
-      --output {shlex.quote(xkt_path)}"""
-    env = os.environ.copy()
-    env["PATH"] = env.get("PATH","") + ":/opt/render/project/nodes/node-20.19.5/bin"
-    proc = subprocess.run(cmd, shell=True, env=env,
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError(f"xeokit-convert failed ({proc.returncode})\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
+
+def allowed(name: str) -> bool:
+    return os.path.splitext(name.lower())[1] in ALLOWED
+
+
+def _conversion_worker(file_id: str, step_path: str) -> None:
+    try:
+        Path(step_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(OUTPUT_FOLDER).mkdir(parents=True, exist_ok=True)
+        result = convert_and_publish_xkt(file_id, step_path)
+        mark_file_ready(file_id, xkt_path=result.local_path, xkt_url=result.xkt_url)
+    except Exception as exc:  # pragma: no cover - log + statut
+        mark_file_failed(file_id, str(exc))
+    finally:
+        with _conversion_lock:
+            _conversion_threads.pop(file_id, None)
+
+
+def _start_conversion(file_id: str, step_path: str) -> None:
+    with _conversion_lock:
+        if file_id in _conversion_threads:
+            return
+        thread = threading.Thread(
+            target=_conversion_worker,
+            args=(file_id, step_path),
+            daemon=True,
+            name=f"xkt-convert-{file_id}",
+        )
+        _conversion_threads[file_id] = thread
+        thread.start()
+
+
+def _create_record(file_id: str, filename: str, step_path: str) -> FileRecord:
+    record = create_file_record(
+        file_id=file_id,
+        original_name=filename,
+        step_path=step_path,
+        status="processing",
+    )
+    Storage.save_step_record(file_id, filename, step_path, os.path.getsize(step_path))
+    return record
+
+
+def _process_upload_request() -> tuple[dict, int]:
+    incoming = request.files.get("file")
+    if not incoming or not incoming.filename:
+        return {"error": "no_file"}, 400
+
+    if not allowed(incoming.filename):
+        return {"error": "bad_ext", "detail": "Extensions supportées: .step, .stp, .stl"}, 400
+
+    file_id = uuid.uuid4().hex
+    ext = os.path.splitext(incoming.filename)[1].lower() or ".step"
+    step_path = os.path.join(UPLOAD_FOLDER, f"{file_id}{ext}")
+
+    try:
+        incoming.save(step_path)
+    except Exception as exc:
+        if os.path.exists(step_path):
+            os.remove(step_path)
+        return {"error": "save_failed", "detail": str(exc)}, 500
+
+    record = _create_record(file_id, incoming.filename, step_path)
+    _start_conversion(file_id, step_path)
+
+    payload = record.to_payload()
+    payload["file_id"] = file_id
+    return payload, 202
+
+
+@app.post("/api/upload")
+def api_upload():
+    payload, status = _process_upload_request()
+    return jsonify(payload), status
+
 
 @app.post("/upload")
-def upload():
-    f = request.files.get("file")
-    if not f or not f.filename:
-        return jsonify(error="no_file"), 400
-    if not allowed(f.filename):
-        return jsonify(error="bad_ext"), 400
-    file_id = str(uuid.uuid4())
-    step_path = os.path.join(UPLOAD_FOLDER, f"{file_id}.step")
-    xkt_path  = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
-    f.save(step_path)
-    try:
-        run_xkt_convert(step_path, xkt_path)
-    except Exception as e:
-        return jsonify(error="convert_fail", detail=str(e)), 500
-    xkt_url = f"/xkt/{file_id}.xkt" if os.path.exists(xkt_path) else None
-    return jsonify(file_id=file_id, status=("ready" if xkt_url else "processing"), xkt_url=xkt_url)
+def legacy_upload():
+    payload, status = _process_upload_request()
+    return jsonify(payload), status
 
-@app.get("/convert/status")
-def convert_status():
-    file_id = request.args.get("file_id")
-    if not file_id:
-        return jsonify(error="no_file_id"), 400
-    xkt_path = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
-    if os.path.exists(xkt_path):
-        return jsonify(status="ready", xkt_url=f"/xkt/{file_id}.xkt")
-    return jsonify(status="processing")
 
-@app.get("/xkt/<path:fname>")
-def serve_xkt(fname):
-    if not fname.endswith(".xkt"):
-        abort(404)
-    return send_from_directory(OUTPUT_FOLDER, fname, as_attachment=False)
+@app.get("/api/files/<file_id>/status")
+def file_status(file_id: str):
+    record = get_file_record(file_id)
+    if not record:
+        return jsonify({"error": "file_not_found"}), 404
+
+    payload = record.to_payload()
+    if record.status == "ready" and not payload.get("xkt_url"):
+        payload["xkt_url"] = build_xkt_url(file_id)
+    payload["file_id"] = file_id
+    return jsonify(payload), 200
+
+
+@app.post("/api/files/<file_id>/reconvert")
+def file_reconvert(file_id: str):
+    record = get_file_record(file_id)
+    if not record:
+        return jsonify({"error": "file_not_found"}), 404
+
+    step_path = record.step_path or Storage.get_step_path(file_id)
+    if not step_path or not os.path.isfile(step_path):
+        return jsonify({"error": "step_missing"}), 404
+
+    updated = mark_file_processing(file_id)
+    if updated is None:
+        updated = create_file_record(
+            file_id=file_id,
+            original_name=record.original_name,
+            step_path=step_path,
+            status="processing",
+        )
+
+    if is_local_storage():
+        local_path = local_xkt_path(file_id)
+        if local_path.exists():
+            try:
+                local_path.unlink()
+            except OSError:
+                pass
+
+    _start_conversion(file_id, step_path)
+
+    payload = updated.to_payload()
+    payload["file_id"] = file_id
+    return jsonify(payload), 202
+
+
+if should_serve_xkt_via_flask():
+
+    @app.get("/xkt/<file_id>.xkt")
+    def serve_xkt(file_id: str):
+        path = local_xkt_path(file_id)
+        if not path.exists():
+            abort(404)
+        resp = send_from_directory(
+            str(path.parent),
+            path.name,
+            mimetype="application/octet-stream",
+        )
+        resp.headers["Cache-Control"] = "public, max-age=31536000"
+        return resp
 
 # ---------- DFM (enqueue au worker RQ) ----------
 @app.post("/dfm/start")
@@ -79,7 +197,7 @@ def dfm_start():
     if not file_id:
         return jsonify(error="no_file_id"), 400
     step_path = os.path.join(UPLOAD_FOLDER, f"{file_id}.step")
-    xkt_path  = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+    xkt_path = str(local_xkt_path(file_id))
     job = q.enqueue("tasks.run_dfm", step_path, xkt_path, job_timeout=60*30)
     return jsonify(job_id=job.get_id(), status="queued")
 

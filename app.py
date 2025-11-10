@@ -3,11 +3,7 @@
 # app.py
 import logging
 import os
-import shlex
 import shutil
-import subprocess
-import sys
-import traceback
 import uuid
 import threading
 import time
@@ -30,7 +26,22 @@ from werkzeug.exceptions import HTTPException
 
 from translations import get_all_translations
 from auth import auth_bp
-from xkt_converter import convert_step_to_xkt  # conversion robuste (GLB guard)
+from app.file_records import (
+    FileRecord,
+    create_or_update as create_file_record,
+    get as get_file_record,
+    mark_failed as mark_file_failed,
+    mark_processing as mark_file_processing,
+    mark_ready as mark_file_ready,
+)
+from app.storage.storage import Storage
+from app.xkt_pipeline import (
+    build_xkt_url,
+    convert_and_publish_xkt,
+    is_local_storage,
+    local_xkt_path,
+    should_serve_xkt_via_flask,
+)
 
 # ====== Base paths / i18n ======
 BASE_DIR = Path(__file__).resolve().parent
@@ -74,53 +85,57 @@ JOBS = {}  # job_id -> {"status": "pending|running|finished|error", ...}
 def _step_path(file_id: str) -> str:
     return os.path.join(UPLOAD_FOLDER, f"{file_id}.step")
 
-def _xkt_path(file_id: str) -> str:
-    return os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
-
 def _glb_path(file_id: str) -> str:
     return os.path.join(OUTPUT_FOLDER, f"{file_id}.glb")
 
-def _size_or_0(path: str) -> int:
-    try:
-        return os.path.getsize(path) if os.path.isfile(path) else 0
-    except Exception:
-        return 0
-
 # ===== Helpers upload/convert =====
-ALLOWED = {".stp", ".step"}
+ALLOWED = {".stp", ".step", ".stl"}
 def _allowed(name: str) -> bool:
     return Path(name.lower()).suffix in ALLOWED
 
-def _with_node_path(env: dict) -> dict:
-    env = env.copy()
-    root = app.root_path
-    # ajoute node + les bins locaux de node_modules
-    extra = [
-        str(Path(root) / "node_modules" / ".bin"),
-        "/opt/render/project/nodes/node-20.19.5/bin",  # Render (si présent)
-    ]
-    env["PATH"] = os.pathsep.join([env.get("PATH", "")] + extra)
-    return env
 
-def _resolve_converter_cmd(step_path: str, xkt_path: str) -> str:
-    extra = os.getenv("XEOKIT_ARGS", "").strip()  # ex: "--no-merge --keep-hierarchy"
-    local_bin = Path(app.root_path) / "node_modules" / ".bin" / "xeokit-convert"
-    if local_bin.exists():
-        return f"{shlex.quote(str(local_bin))} {extra} {shlex.quote(step_path)} --output {shlex.quote(xkt_path)}"
-    return f"npx -y @xeokit/xeokit-convert@latest {extra} {shlex.quote(step_path)} --output {shlex.quote(xkt_path)}"
+_conversion_threads: dict[str, threading.Thread] = {}
+_conversion_lock = threading.Lock()
 
-def run_xkt_convert(step_path: str, xkt_path: str):
-    """(Non utilisé par défaut) Conversion brute via xeokit-convert."""
-    cmd = _resolve_converter_cmd(step_path, xkt_path)
-    proc = subprocess.run(
-        cmd, shell=True, env=_with_node_path(os.environ),
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+
+def _create_record(file_id: str, filename: str, step_path: str) -> FileRecord:
+    record = create_file_record(
+        file_id=file_id,
+        original_name=filename,
+        step_path=step_path,
+        status="processing",
     )
-    # log côté serveur pour debug Render
-    print(f"[xeokit] CMD: {cmd}", file=sys.stderr, flush=True)
-    print(f"[xeokit] RC={proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}", file=sys.stderr, flush=True)
-    if proc.returncode != 0:
-        raise RuntimeError(f"xeokit-convert failed ({proc.returncode})")
+    try:
+        Storage.save_step_record(file_id, filename, step_path, os.path.getsize(step_path))
+    except Exception:
+        logger = logging.getLogger("cadlytics.files")
+        logger.warning("[files] unable to persist STEP metadata", exc_info=True)
+    return record
+
+
+def _conversion_worker(file_id: str, step_path: str) -> None:
+    try:
+        result = convert_and_publish_xkt(file_id, step_path)
+        mark_file_ready(file_id, xkt_path=result.local_path, xkt_url=result.xkt_url)
+    except Exception as exc:
+        mark_file_failed(file_id, str(exc))
+    finally:
+        with _conversion_lock:
+            _conversion_threads.pop(file_id, None)
+
+
+def _schedule_conversion(file_id: str, step_path: str) -> None:
+    with _conversion_lock:
+        if file_id in _conversion_threads:
+            return
+        thread = threading.Thread(
+            target=_conversion_worker,
+            args=(file_id, step_path),
+            daemon=True,
+            name=f"convert-{file_id}",
+        )
+        _conversion_threads[file_id] = thread
+        thread.start()
 
 # ====== Landing (marketing) ======
 @root_bp.route("/", methods=["GET", "HEAD"])
@@ -202,18 +217,21 @@ def site_public_outputs(fname: str):
     return send_from_directory(base_dir, fname)
 
 # ====== Serve XKT / GLB comme attendus par le front ======
-@app.route("/xkt/<file_id>.xkt", methods=["GET", "HEAD"])
-def serve_xkt(file_id: str):
-    fname = f"{file_id}.xkt"
-    path = _xkt_path(file_id)
-    if not os.path.isfile(path):
-        abort(404)
-    resp = send_from_directory(OUTPUT_FOLDER, fname, mimetype="application/octet-stream")
-    resp.headers["Cache-Control"] = "no-cache, max-age=0"
-    resp.headers["Access-Control-Allow-Origin"] = "*"
-    if request.method == "HEAD":
-        resp.set_data(b"")
-    return resp
+if should_serve_xkt_via_flask():
+
+    @app.route("/xkt/<file_id>.xkt", methods=["GET"])
+    def serve_xkt(file_id: str):
+        path = local_xkt_path(file_id)
+        if not path.exists():
+            abort(404)
+        resp = send_from_directory(
+            str(path.parent),
+            path.name,
+            mimetype="application/octet-stream",
+        )
+        resp.headers["Cache-Control"] = "public, max-age=31536000"
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
 
 @app.route("/glb/<file_id>.glb", methods=["GET", "HEAD"])
 def serve_glb(file_id: str):
@@ -231,23 +249,38 @@ def serve_glb(file_id: str):
 # ====== Télémétrie existence pour waitForXKT ======
 @app.get("/exists/xkt/<file_id>")
 def exists_xkt(file_id: str):
-    p = _xkt_path(file_id)
-    exists = os.path.isfile(p)
-    size = _size_or_0(p)
-    status = "ready" if (exists and size > 0) else "pending"
+    if is_local_storage():
+        path = local_xkt_path(file_id)
+        exists = path.exists()
+        size = path.stat().st_size if exists else 0
+    else:
+        record = get_file_record(file_id)
+        exists = bool(record and record.status == "ready")
+        size = 0
+    status = "ready" if exists else "pending"
     return jsonify({"exists": bool(exists), "file_id": file_id, "size": int(size), "status": status})
 
 # ====== Reconvert async léger (thread) ======
 def _reconvert_job(file_id: str, job_id: str):
     JOBS[job_id] = {"status": "running", "file_id": file_id, "started_at": time.time()}
+    mark_file_processing(file_id)
     try:
-        step = _step_path(file_id)
-        xkt  = _xkt_path(file_id)
-        # Conversion robuste (génère un GLB intermédiaire et refuse les XKT trop petits)
-        convert_step_to_xkt(step, xkt)
-        size = _size_or_0(xkt)
-        JOBS[job_id] = {"status": "finished", "file_id": file_id, "xkt_size": size}
+        step = Storage.get_step_path(file_id) or _step_path(file_id)
+        if not step or not os.path.isfile(step):
+            raise FileNotFoundError(f"STEP introuvable pour {file_id}")
+        _conversion_worker(file_id, step)
+        size = 0
+        if is_local_storage():
+            local_path = local_xkt_path(file_id)
+            if local_path.exists():
+                size = local_path.stat().st_size
+        JOBS[job_id] = {
+            "status": "finished",
+            "file_id": file_id,
+            "xkt_size": size,
+        }
     except Exception as e:
+        mark_file_failed(file_id, str(e))
         JOBS[job_id] = {"status": "error", "file_id": file_id, "error": str(e)}
 
 @app.post("/api/reconvert")
@@ -258,11 +291,16 @@ def api_reconvert():
         return jsonify(error="missing_file_id"), 400
 
     # court-circuit si déjà prêt
-    if _size_or_0(_xkt_path(file_id)) > 0:
+    record = get_file_record(file_id)
+    if record and record.status == "ready":
         return jsonify(job_id="noop", status="finished")
 
     job_id = str(uuid.uuid4())
-    th = threading.Thread(target=_reconvert_job, args=(file_id, job_id), daemon=True)
+    th = threading.Thread(
+        target=_reconvert_job,
+        args=(file_id, job_id),
+        daemon=True,
+    )
     th.start()
     JOBS[job_id] = {"status": "pending", "file_id": file_id}
     return jsonify(job_id=job_id, status="pending")
@@ -291,34 +329,97 @@ def handle_exception(exc):
     logger.exception("Unhandled exception on %s", request.path)
     return jsonify(error="internal_error"), 500
 
-# ====== Upload (STEP -> XKT direct via convertisseur robuste) ======
+# ====== Upload / statut fichiers (STEP -> XKT async) ======
+def _handle_upload_request() -> tuple[dict, int]:
+    try:
+        incoming = request.files.get("file")
+        if not incoming or not incoming.filename:
+            return {"error": "no_file"}, 400
+        if not _allowed(incoming.filename):
+            return {
+                "error": "bad_ext",
+                "detail": "Extensions supportées: .step, .stp, .stl",
+            }, 400
+
+        file_id = uuid.uuid4().hex
+        ext = Path(incoming.filename).suffix.lower() or ".step"
+        step_path = os.path.join(UPLOAD_FOLDER, f"{file_id}{ext}")
+
+        try:
+            incoming.save(step_path)
+        except Exception as exc:
+            if os.path.exists(step_path):
+                os.remove(step_path)
+            return {"error": "save_failed", "detail": str(exc)}, 500
+
+        record = _create_record(file_id, incoming.filename, step_path)
+        mark_file_processing(file_id)
+        _schedule_conversion(file_id, step_path)
+
+        payload = record.to_payload()
+        payload["file_id"] = file_id
+        return payload, 202
+    except Exception as exc:  # pragma: no cover - garde-fou
+        return {"error": "server_exception", "detail": str(exc)}, 500
+
+
+@app.post("/api/upload")
+def api_upload():
+    payload, status = _handle_upload_request()
+    return jsonify(payload), status
+
+
 @app.post("/upload")
 def upload():
-    try:
-        f = request.files.get("file")
-        if not f or not f.filename:
-            return jsonify(error="no_file"), 400
-        if not _allowed(f.filename):
-            return jsonify(error="bad_ext", detail="Seuls .stp / .step sont acceptés."), 400
+    payload, status = _handle_upload_request()
+    return jsonify(payload), status
 
-        file_id = str(uuid.uuid4())
-        step_path = _step_path(file_id)
-        xkt_path  = _xkt_path(file_id)
 
-        f.save(step_path)
+@app.get("/api/files/<file_id>/status")
+def file_status(file_id: str):
+    record = get_file_record(file_id)
+    if not record:
+        return jsonify({"error": "file_not_found"}), 404
 
-        # Conversion robuste immédiate (peut être déportée vers /api/reconvert si tu préfères)
-        try:
-            convert_step_to_xkt(step_path, xkt_path)
-        except Exception as e:
-            return jsonify(error="convert_fail", detail=str(e)), 500
+    payload = record.to_payload()
+    if record.status == "ready" and not payload.get("xkt_url"):
+        payload["xkt_url"] = build_xkt_url(file_id)
+    payload["file_id"] = file_id
+    return jsonify(payload), 200
 
-        if not os.path.exists(xkt_path):
-            return jsonify(error="no_xkt", detail="Conversion terminée mais fichier .xkt introuvable."), 500
 
-        return jsonify(file_id=file_id, status="ready", xkt_url=f"/xkt/{file_id}.xkt")
-    except Exception as e:
-        return jsonify(error="server_exception", detail=str(e)), 500
+@app.post("/api/files/<file_id>/reconvert")
+def file_reconvert(file_id: str):
+    record = get_file_record(file_id)
+    if not record:
+        return jsonify({"error": "file_not_found"}), 404
+
+    step_path = record.step_path or Storage.get_step_path(file_id) or _step_path(file_id)
+    if not step_path or not os.path.isfile(step_path):
+        return jsonify({"error": "step_missing"}), 404
+
+    updated = mark_file_processing(file_id)
+    if updated is None:
+        updated = create_file_record(
+            file_id=file_id,
+            original_name=record.original_name,
+            step_path=step_path,
+            status="processing",
+        )
+
+    if is_local_storage():
+        local_path = local_xkt_path(file_id)
+        if local_path.exists():
+            try:
+                local_path.unlink()
+            except OSError:
+                pass
+
+    _schedule_conversion(file_id, step_path)
+
+    payload = updated.to_payload()
+    payload["file_id"] = file_id
+    return jsonify(payload), 202
 
 # ====== Diag rapide ======
 @app.get("/__diag")

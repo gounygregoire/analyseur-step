@@ -1,123 +1,116 @@
 #!/usr/bin/env bash
-# CODENAME: SMOKE-XKT
-# Petit smoke test pour vérifier la disponibilité d'un XKT côté frontend/backend.
+# Smoke test du pipeline XKT : upload -> statut -> téléchargement du XKT.
 
 set -euo pipefail
 
-BASE_URL=${BASE_URL:-http://localhost:5000}
-STEP_PATH=${STEP_PATH:-tests/sample.step}
-MAX_ATTEMPTS=${MAX_ATTEMPTS:-60}
+BASE_URL=${1:-"http://localhost:5000"}
+STEP_FILE=${STEP_FILE:-"tests/sample.step"}
+TIMEOUT=${TIMEOUT:-120}
+MAX_DELAY=${MAX_DELAY:-5}
+INITIAL_DELAY=${INITIAL_DELAY:-1}
 
-if [[ ! -f "${STEP_PATH}" ]]; then
-  echo "FAIL: STEP introuvable à ${STEP_PATH}" >&2
+if [[ ! -f "$STEP_FILE" ]]; then
+  echo "[smoke] Fichier STEP introuvable: $STEP_FILE" >&2
   exit 1
 fi
 
-upload_payload=$(mktemp)
-trap 'rm -f "${upload_payload}"' EXIT
+TMP_DIR=$(mktemp -d)
+trap 'rm -rf "$TMP_DIR"' EXIT
 
-upload_code=$(curl -sS -w "%{http_code}" -o "${upload_payload}" \
-  -F "file=@${STEP_PATH}" \
-  "${BASE_URL}/upload")
+UPLOAD_RESPONSE="$TMP_DIR/upload.json"
+STATUS_RESPONSE="$TMP_DIR/status.json"
+XKT_FILE="$TMP_DIR/model.xkt"
 
-if [[ "${upload_code}" != "200" && "${upload_code}" != "202" ]]; then
-  echo "FAIL: upload HTTP ${upload_code}" >&2
-  cat "${upload_payload}" >&2
+start_ts=$(date +%s)
+
+echo "[smoke] Upload $STEP_FILE vers $BASE_URL/api/upload"
+
+upload_code=$(curl -sS -o "$UPLOAD_RESPONSE" -w '%{http_code}' \
+  -F "file=@${STEP_FILE}" \
+  "$BASE_URL/api/upload")
+
+if [[ "$upload_code" -ge 400 ]]; then
+  echo "[smoke] Upload HTTP $upload_code" >&2
+  cat "$UPLOAD_RESPONSE" >&2
   exit 1
 fi
 
 file_id=$(python - <<'PY'
-import json, sys
-from pathlib import Path
-payload = Path(sys.argv[1]).read_text()
-try:
-    data = json.loads(payload)
-except json.JSONDecodeError:
-    print("")
-    sys.exit(0)
-print(data.get("file_id", ""))
+import json,sys
+with open(sys.argv[1], 'r', encoding='utf-8') as fh:
+    data=json.load(fh)
+print(data.get('file_id',''))
 PY
-"${upload_payload}")
+"$UPLOAD_RESPONSE")
 
-if [[ -z "${file_id}" ]]; then
-  echo "FAIL: file_id manquant dans la réponse d'upload" >&2
-  cat "${upload_payload}" >&2
+if [[ -z "$file_id" ]]; then
+  echo "[smoke] Impossible de récupérer file_id dans la réponse:" >&2
+  cat "$UPLOAD_RESPONSE" >&2
   exit 1
 fi
 
-echo "[smoke][upload] file_id=${file_id} code=${upload_code}"
+echo "[smoke] file_id=$file_id"
 
-attempt=1
-head_ok=0
-head_size=0
-while [[ ${attempt} -le ${MAX_ATTEMPTS} ]]; do
-  now=$(date +%s%3N)
-  headers=$(curl -sS -D - -o /dev/null -X HEAD \
-    -H "Cache-Control: no-store" \
-    "${BASE_URL}/xkt/${file_id}.xkt?nocache=${now}")
+delay=$INITIAL_DELAY
+elapsed=0
 
-  status=$(printf '%s\n' "${headers}" | head -n 1 | awk '{print $2}')
-  length=$(printf '%s\n' "${headers}" | awk 'tolower($1)=="content-length:" {print $2}' | tail -n 1 | tr -d '\r')
-  length=${length:-0}
+while (( elapsed < TIMEOUT )); do
+  echo "[smoke] Poll statut (wait ${delay}s)"
+  sleep "$delay"
+  status_code=$(curl -sS -o "$STATUS_RESPONSE" -w '%{http_code}' \
+    "$BASE_URL/api/files/${file_id}/status")
+  if [[ "$status_code" -ge 400 ]]; then
+    echo "[smoke] Statut HTTP $status_code" >&2
+    cat "$STATUS_RESPONSE" >&2
+    exit 1
+  fi
+  status=$(python - <<'PY'
+import json,sys
+with open(sys.argv[1], 'r', encoding='utf-8') as fh:
+    data=json.load(fh)
+print(data.get('status',''))
+print(data.get('xkt_url') or '')
+print(data.get('message') or '')
+PY
+"$STATUS_RESPONSE")
+  IFS=$'\n' read -r current_status xkt_url message <<<"$status"
+  echo "[smoke] statut=$current_status"
 
-  if [[ "${status}" == "200" && "${length}" =~ ^[0-9]+$ && ${length} -gt 0 ]]; then
-    head_ok=1
-    head_size=${length}
-    echo "[smoke][head] attempt=${attempt} status=${status} size=${length}"
-    break
+  if [[ "$current_status" == "ready" ]]; then
+    if [[ -z "$xkt_url" ]]; then
+      echo "[smoke] URL XKT absente malgré status=ready" >&2
+      exit 1
+    fi
+    if [[ "$xkt_url" == /* ]]; then
+      xkt_url="${BASE_URL%/}$xkt_url"
+    fi
+    echo "[smoke] Téléchargement XKT $xkt_url"
+    xkt_code=$(curl -sS -o "$XKT_FILE" -w '%{http_code}' "$xkt_url")
+    if [[ "$xkt_code" -ge 400 ]]; then
+      echo "[smoke] Téléchargement XKT HTTP $xkt_code" >&2
+      exit 1
+    fi
+    if [[ ! -s "$XKT_FILE" ]]; then
+      echo "[smoke] Fichier XKT vide ou absent" >&2
+      exit 1
+    fi
+    total=$(( $(date +%s) - start_ts ))
+    size=$(wc -c < "$XKT_FILE")
+    echo "[smoke] Succès en ${total}s (size=${size}B)"
+    exit 0
   fi
 
-  delay=$(python - <<'PY'
-import sys
-attempt = int(sys.argv[1])
-delay = 1.0 + attempt * 0.2
-if delay > 3.0:
-    delay = 3.0
-print(f"{delay:.3f}")
-PY
-"${attempt}")
-  echo "[smoke][head] attempt=${attempt} status=${status:-none} size=${length} retry_in=${delay}s"
-  sleep "${delay}"
-  attempt=$((attempt + 1))
+  if [[ "$current_status" == "failed" ]]; then
+    echo "[smoke] Conversion échouée: $message" >&2
+    exit 2
+  fi
+
+  elapsed=$(( $(date +%s) - start_ts ))
+  delay=$(( delay * 2 ))
+  if (( delay > MAX_DELAY )); then
+    delay=$MAX_DELAY
+  fi
 done
 
-if [[ ${head_ok} -ne 1 ]]; then
-  echo "FAIL: HEAD /xkt/${file_id}.xkt non disponible après ${MAX_ATTEMPTS} tentatives" >&2
-  exit 1
-fi
-
-exists_payload=$(mktemp)
-trap 'rm -f "${upload_payload}" "${exists_payload}"' EXIT
-curl -sS -H "Cache-Control: no-store" \
-  "${BASE_URL}/exists/xkt/${file_id}" \
-  -o "${exists_payload}"
-
-exists_case=$(python - <<'PY'
-import json, sys
-from pathlib import Path
-payload = Path(sys.argv[1]).read_text()
-try:
-    data = json.loads(payload)
-except json.JSONDecodeError:
-    print("invalid")
-    sys.exit(0)
-exists = bool(data.get("exists"))
-status = str(data.get("status", "")).lower() or "pending"
-if exists and status == "done":
-    print("done")
-elif (not exists) and status == "pending":
-    print("pending")
-else:
-    print(f"other:{status}")
-PY
-"${exists_payload}")
-
-echo "[smoke][exists] response=$(cat "${exists_payload}")"
-
-if [[ "${exists_case}" != "done" && "${exists_case}" != "pending" ]]; then
-  echo "FAIL: statut /exists inattendu (${exists_case})" >&2
-  exit 1
-fi
-
-echo "PASS: file_id=${file_id} size=${head_size} status=${exists_case}"
-exit 0
+echo "[smoke] Timeout ${TIMEOUT}s atteint sans statut ready" >&2
+exit 3
