@@ -26,21 +26,20 @@ def _reload_pipeline(monkeypatch, **env) -> ModuleType:
     return importlib.reload(module)
 
 
-def test_build_xkt_url_appends_segment(monkeypatch):
-    mod = _reload_pipeline(monkeypatch, XKT_BASE_URL="https://cadlytics.app")
-    assert (
-        mod.build_xkt_url("abc123")
-        == "https://cadlytics.app/xkt/abc123.xkt"
-    )
+def test_build_xkt_url_with_abs_base(monkeypatch):
+    mod = _reload_pipeline(monkeypatch, XKT_BASE_URL="https://cadlytics.app/xkt")
+    assert mod.build_xkt_url("abc123") == "https://cadlytics.app/xkt/abc123.xkt"
 
 
 @pytest.mark.parametrize(
     "base_url,expected",
     [
         ("", "/xkt/abc123.xkt"),
+        ("/xkt", "/xkt/abc123.xkt"),
         ("/xkt/", "/xkt/abc123.xkt"),
         ("https://cdn.example.com/xkt", "https://cdn.example.com/xkt/abc123.xkt"),
-        ("https://cdn.example.com", "https://cdn.example.com/xkt/abc123.xkt"),
+        ("https://cdn.example.com/xkt/", "https://cdn.example.com/xkt/abc123.xkt"),
+        ("https://cdn.example.com/models", "https://cdn.example.com/models/abc123.xkt"),
     ],
 )
 def test_build_xkt_url_variants(monkeypatch, base_url, expected):

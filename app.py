@@ -382,9 +382,6 @@ def file_status(file_id: str):
         return jsonify({"error": "file_not_found"}), 404
 
     payload = record.to_payload()
-    if record.status == "ready" and not payload.get("xkt_url"):
-        payload["xkt_url"] = build_xkt_url(file_id)
-    payload["file_id"] = file_id
     return jsonify(payload), 200
 
 

@@ -44,7 +44,7 @@ S3_REGION = os.getenv("S3_REGION") or os.getenv("AWS_REGION") or "us-east-1"
 S3_ENDPOINT = os.getenv("S3_ENDPOINT")
 S3_FORCE_PATH_STYLE = os.getenv("S3_FORCE_PATH_STYLE", "0") in {"1", "true", "True"}
 S3_XKT_ACL = os.getenv("S3_XKT_ACL")
-XKT_BASE_URL = os.getenv("XKT_BASE_URL", "/xkt/")
+XKT_BASE_URL = os.getenv("XKT_BASE_URL", "/xkt")
 SERVE_XKT_FROM_FLASK = os.getenv("SERVE_XKT_FROM_FLASK")
 XKT_FAKE_CONVERTER = _coerce_bool(os.getenv("XKT_FAKE_CONVERTER"))
 
@@ -66,17 +66,21 @@ class ConversionResult:
     duration_sec: float
 
 
+def _normalize_base_url(base: Optional[str]) -> str:
+    candidate = (base if base is not None else XKT_BASE_URL) or ""
+    candidate = candidate.strip()
+    if not candidate:
+        return "/xkt"
+    candidate = candidate.rstrip("/")
+    if not candidate:
+        return "/xkt"
+    return candidate
+
+
 def build_xkt_url(file_id: str, base: Optional[str] = None) -> str:
     """Construit l'URL publique finale du XKT."""
 
-    base_url = (base or XKT_BASE_URL or "").strip()
-    if not base_url:
-        base_url = "/"
-    base_url = base_url.rstrip("/")
-    if not base_url:
-        base_url = "/xkt"
-    elif not base_url.endswith("/xkt"):
-        base_url = f"{base_url}/xkt"
+    base_url = _normalize_base_url(base)
     return f"{base_url}/{file_id}.xkt"
 
 
@@ -217,6 +221,10 @@ def should_serve_xkt_via_flask() -> bool:
     if not is_local_storage():
         return False
 
-    # En local/developpement on garde la route si l'URL est relative.
-    return XKT_BASE_URL.startswith("/") or not XKT_BASE_URL
+    base = (XKT_BASE_URL or "").strip()
+    if not base:
+        return True
+
+    normalized = _normalize_base_url(base)
+    return normalized.startswith("/")
 

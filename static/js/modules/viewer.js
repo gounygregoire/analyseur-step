@@ -80,12 +80,24 @@ if (!window.__XE_VIEWER_BOOT__) {
     const xktLoader = new XEXKTLoaderPlugin(viewer, DEFAULT_XKT_LOADER_OPTIONS);
 
     async function pickUrl(id) {
-      const urls = [
-        `/xkt/${id}.xkt`,
+      if (window.waitXKTReady) {
+        try {
+          const readyUrl = await window.waitXKTReady(id);
+          if (readyUrl) {
+            console.log('[viewer] waitXKTReady ok', readyUrl);
+            return readyUrl;
+          }
+        } catch (err) {
+          console.warn('[viewer] waitXKTReady error', err?.message || err);
+        }
+      }
+
+      const fallbackUrls = [
         `/models/${id}.xkt`,
         `/static/converted/${id}.xkt`
       ];
-      for (const u of urls) {
+
+      for (const u of fallbackUrls) {
         try {
           const h = await fetch(u, { method: 'HEAD', cache: 'no-store' });
           console.log('[viewer] HEAD', u, h.status);
