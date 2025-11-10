@@ -85,8 +85,10 @@ def test_status_ready_returns_absolute_url(client_factory, monkeypatch):
     assert status_resp.status_code == 200
     payload = status_resp.get_json()
     assert payload["status"] == "ready"
+    assert payload["xkt_url"] == f"https://cdn.example/xkt/{file_id}.xkt"
     assert payload["xkt_url"].endswith(f"/{file_id}.xkt")
     assert payload["message"] is None
+    assert "file_id" not in payload
 
 
 def test_status_failed_returns_message(client_factory, monkeypatch):

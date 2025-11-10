@@ -2152,11 +2152,6 @@ function waitForModelLoad(model) {
   });
 }
 
-async function urlExists(url) {
-  const res = await fetch(url, { method: "HEAD", cache: "no-store" });
-  return res.ok;
-}
-
 // Essaie d'abord le XKT, puis bascule GLB en cas d'échec.
 // Essaie d'abord le XKT, puis bascule GLB en cas d'échec.
 async function tryLoadXKTThenGLB({ fileId, url, glbFallback }) {
@@ -2174,10 +2169,10 @@ async function tryLoadXKTThenGLB({ fileId, url, glbFallback }) {
     // Health check = prédicat (on ignore sa valeur de retour)
 const xktUrl = `${location.origin}/xkt/${fileId}.xkt?nocache=${Date.now()}`;
 await ensureHealthyXKT(xktUrl, { fileId }); // booléen ignoré
-return await loadXKT(xktUrl, null, { fileId });
+return await loadXKTAdvanced(xktUrl, null, { fileId });
 
     // Charge le XKT avec l'URL STRING (pas le booléen)
-    return await loadXKT(xktUrl, null, { fileId });
+    return await loadXKTAdvanced(xktUrl, null, { fileId });
   } catch (err) {
     console.log('[viewer] XKT load failed, tentative GLB', err);
 
@@ -2226,17 +2221,23 @@ function normalizeContentType(contentType) {
   return contentType.split(";")[0].trim().toLowerCase();
 }
 
-async function fetchXKTHead(url, { signal } = {}) {
-  return fetch(url, { method: "HEAD", cache: "no-store", signal });
-}
-
 async function fetchXKTProbeChunk(url, { signal } = {}) {
   const headers = { Range: "bytes=0-255" };
   try {
     const res = await fetch(url, { method: "GET", headers, cache: "no-store", signal });
+    const meta = {
+      status: res?.status ?? null,
+      headers: {
+        contentType: res?.headers?.get?.("content-type") || null,
+        contentLength: res?.headers?.get?.("content-length") || null,
+        contentRange: res?.headers?.get?.("content-range") || null
+      }
+    };
+
     if (!res || !res.ok) {
-      return { snippet: null, status: res?.status ?? null };
+      return { snippet: null, ...meta };
     }
+
     let buffer = null;
     if (res.body && typeof res.body.getReader === "function") {
       const reader = res.body.getReader();
@@ -2246,7 +2247,11 @@ async function fetchXKTProbeChunk(url, { signal } = {}) {
     } else {
       buffer = new Uint8Array(await res.arrayBuffer());
     }
-    if (!buffer) return { snippet: null, status: res.status };
+
+    if (!buffer) {
+      return { snippet: null, ...meta };
+    }
+
     const limited = buffer.slice(0, 128);
     let snippet = null;
     try {
@@ -2255,7 +2260,8 @@ async function fetchXKTProbeChunk(url, { signal } = {}) {
         snippet = decoder.decode(limited);
       }
     } catch {}
-    return { snippet, status: res.status };
+
+    return { snippet, ...meta };
   } catch (err) {
     throw err;
   }
@@ -2280,49 +2286,56 @@ async function logXKTContentDiagnostics({ src, file, label }) {
     const timeout = controller ? setTimeout(() => {
       try { controller.abort(); } catch {}
     }, 7000) : null;
-    let res;
-    let contentType = null;
-    let len = null;
+
+    let probe = null;
     try {
-      res = await fetchXKTHead(normalized, { signal: controller?.signal });
+      probe = await fetchXKTProbeChunk(normalized, { signal: controller?.signal });
+    } catch (probeErr) {
+      console.warn("[viewer][xkt] probe fetch failed", { src: normalized, error: probeErr });
     } finally {
       if (timeout) clearTimeout(timeout);
     }
-    if (!res || !res.ok) {
-      console.warn("[viewer][xkt] HEAD failed", { src: normalized, status: res?.status });
+
+    if (!probe || !probe.status || probe.status >= 400) {
+      console.warn("[viewer][xkt] probe unavailable", { src: normalized, status: probe?.status ?? null });
       return;
     }
-    contentType = res.headers.get("content-type");
-    len = res.headers.get("content-length");
-    const size = len ? Number(len) : null;
+
+    const contentType = probe.headers?.contentType || null;
+    const rawLength = probe.headers?.contentLength || null;
+    const rawRange = probe.headers?.contentRange || null;
+
+    let size = null;
+    if (rawRange) {
+      const match = /\/([0-9]+)$/i.exec(rawRange);
+      if (match) {
+        size = Number(match[1]);
+      }
+    }
+    if (!Number.isFinite(size) && rawLength) {
+      const parsed = Number(rawLength);
+      if (Number.isFinite(parsed)) {
+        size = parsed;
+      }
+    }
+
     const normalizedType = normalizeContentType(contentType);
     const typeAllowed = normalizedType ? ALLOWED_XKT_CONTENT_TYPES.includes(normalizedType) : false;
     console.log("[viewer][xkt] content =", {
       src: normalized,
       sizeBytes: Number.isFinite(size) ? size : null,
-      rawContentLength: len || null,
+      rawContentLength: rawLength || null,
+      rawContentRange: rawRange || null,
       contentType: contentType || null
     });
-    let suspiciousReasons = [];
+
+    const suspiciousReasons = [];
     if (normalizedType && !typeAllowed) {
       suspiciousReasons.push(`content-type:${normalizedType}`);
     }
 
-    let snippetInfo = null;
-    const probeController = typeof AbortController !== "undefined" ? new AbortController() : null;
-    const probeTimeout = probeController ? setTimeout(() => {
-      try { probeController.abort(); } catch {}
-    }, 5000) : null;
-    try {
-      snippetInfo = await fetchXKTProbeChunk(normalized, { signal: probeController?.signal });
-    } catch (probeErr) {
-      console.warn("[viewer][xkt] probe fetch failed", { src: normalized, error: probeErr });
-    } finally {
-      if (probeTimeout) clearTimeout(probeTimeout);
-    }
-
-    if (snippetInfo?.snippet) {
-      const snippetLower = snippetInfo.snippet.toLowerCase();
+    if (probe?.snippet) {
+      const snippetLower = probe.snippet.toLowerCase();
       if (snippetLower.includes("<!doctype")) {
         suspiciousReasons.push("doctype-payload");
       }
@@ -2333,8 +2346,8 @@ async function logXKTContentDiagnostics({ src, file, label }) {
         src: normalized,
         reasons: suspiciousReasons,
         contentType: contentType || null,
-        contentLength: len || null,
-        snippet: snippetInfo?.snippet ? snippetInfo.snippet.slice(0, 128) : null
+        contentLength: rawLength || null,
+        snippet: probe?.snippet ? probe.snippet.slice(0, 128) : null
       });
     }
   } catch (err) {
@@ -3050,7 +3063,7 @@ async function finalizeModelLoad({ model, stableId, src, nameHint, loaderType })
   initCadlyticsTools(model, { fileId: currentFileId || stableId });
 }
 
-async function loadXKT(url, nameHint, options = {}) {
+async function loadXKTAdvanced(url, nameHint, options = {}) {
   const uploadMetaId = (typeof fileMeta !== "undefined" && fileMeta && fileMeta.file_id) ? fileMeta.file_id : null;
   const stableId = uploadMetaId
     || currentFileId
@@ -3323,7 +3336,7 @@ async function uploadAndShow(file) {
       console.log("[viewer] loading XKT (local):", fileURL);
       logXKTContentDiagnostics({ src: fileURL, file: f, label: f.name }).catch(() => {});
       StatsPoller.cancel();
-      await loadXKT(fileURL, f.name);
+      await loadXKTAdvanced(fileURL, f.name);
       return;
     }
 
@@ -3486,7 +3499,7 @@ async function loadXKTIntoViewer(xktUrl, { fileId: explicitFileId } = {}) {
     const prev = window.viewer.scene.models?.uploadedModel;
     if (prev && typeof prev.destroy === 'function') prev.destroy();
 
-    await loadXKT(finalUrl, nameHint, { fileId });
+    await loadXKTAdvanced(finalUrl, nameHint, { fileId });
 
     // === readiness guard : triangles + caméra ===
     const scn = viewer.scene;
@@ -4140,7 +4153,7 @@ export {};
       <div style="margin-bottom:6px">XKT Debug</div>
       <div>file_id: <code id="xkt-debug-id">(none)</code></div>
       <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
-        <button id="btn-head"  style="padding:4px 8px">HEAD /xkt</button>
+        <button id="btn-status"  style="padding:4px 8px">Poll status</button>
         <button id="btn-exists" style="padding:4px 8px">GET /exists</button>
         <button id="btn-force"  style="padding:4px 8px">Force Load</button>
       </div>
@@ -4153,10 +4166,14 @@ export {};
       pre.textContent = (pre.textContent + '\n' + m).trim();
     };
 
-    document.getElementById('btn-head').onclick = async () => {
+    document.getElementById('btn-status').onclick = async () => {
       const idv = window.CADLYTICS.xkt.lastFileId;
-      const res = await fetch(`/xkt/${idv}.xkt?nocache=${Date.now()}`, { method: 'HEAD', cache: 'no-store' });
-      log(`[HEAD] /xkt/${idv}.xkt -> ${res.status} length=${res.headers.get('content-length')}`);
+      try {
+        const url = await waitXKTReady(idv);
+        log(`[waitXKTReady] /xkt/${idv}.xkt -> ready (${url})`);
+      } catch (err) {
+        log(`[waitXKTReady] /xkt/${idv}.xkt -> error ${(err && err.message) || err}`);
+      }
     };
 
     document.getElementById('btn-exists').onclick = async () => {
@@ -4199,7 +4216,7 @@ const fileId =
         }
         // 3) recharge avec cache-buster
         const url = `${baseUrl}/xkt/${fileId}.xkt?v=${Date.now()}`;
-        await loadXKT(url, null, { fileId });
+        await loadXKTAdvanced(url, null, { fileId });
       } catch (err) {
         console.error('[force] reconvert failed', err);
       } finally {
@@ -4249,159 +4266,156 @@ const fileId =
   });
 })();
 
-const MIN_HEALTHY_XKT = 200000; // 200 KB
-// Un XKT réel dépasse largement 45 kB ; ajuste si besoin pour tes cas.
-const MIN_HEALTHY_XKT_LEN = 100 * 1024; // 100 kB
+const STATUS_POLL_MIN_MS = 1000;
+const STATUS_POLL_MAX_MS = 5000;
+const STATUS_TIMEOUT_MS = 120000;
 
+function ensureStatusEl() {
+  let el = document.getElementById('uploadStatus');
+  if (el) return el;
 
-// IMPORTANT: front loads XKT on HEAD=200 + content-length>0.
-// /exists is UX-only and must not block rendering.
-// Do NOT reintroduce /api/reconvert/sync calls here.
-// Remplace entièrement ta fonction par celle-ci
-async function waitForXKT(fileId, { maxMs = 90000, stepMs = 900 } = {}) {
-  const t0 = performance.now();
-  let attempt = 0;
+  el = document.createElement('div');
+  el.id = 'uploadStatus';
+  el.className = 'alert alert-info mt-3';
+  el.style.display = 'none';
+  el.setAttribute('role', 'status');
 
-  const freshUrl = () => {
-    const bust = `nocache=${Date.now()}`;
-    if (typeof location === 'undefined') {
-      return `/xkt/${fileId}.xkt?${bust}`;
-    }
-    return `${location.origin}/xkt/${fileId}.xkt?${bust}`;
-  };
+  const anchor =
+    document.querySelector('[data-upload-status-anchor]') ||
+    document.getElementById('uploadPanel') ||
+    document.getElementById('analysisPanel') ||
+    document.body;
 
-  while (performance.now() - t0 < maxMs) {
-    attempt++;
+  anchor.appendChild(el);
+  return el;
+}
 
-    // 1) HEAD: prêt dès que len > 0
+function setStatus(message) {
+  const el = ensureStatusEl();
+  if (!message) {
+    el.textContent = '';
+    el.style.display = 'none';
+    return;
+  }
+
+  el.textContent = message;
+  el.style.display = '';
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms || 0)));
+}
+
+async function waitXKTReady(fileId) {
+  if (!fileId) {
+    throw new Error('waitXKTReady: fileId requis');
+  }
+
+  const startedAt = Date.now();
+  let delay = STATUS_POLL_MIN_MS;
+  let lastError = null;
+
+  while (Date.now() - startedAt < STATUS_TIMEOUT_MS) {
     try {
-      const head = await fetch(`/xkt/${fileId}.xkt?nocache=${Date.now()}`, {
-        method: 'HEAD',
+      const response = await fetch(`/api/files/${encodeURIComponent(fileId)}/status`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
         cache: 'no-store'
       });
-      const rawLen = head.headers.get('content-length') || head.headers.get('Content-Length') || '0';
-      const len = Number(rawLen);
-      console.log('[wait][xkt][head]', { attempt, status: head.status, len });
 
-      if (head.ok && len > 0) {
-        console.log('[wait][xkt][head-ok-any]', { attempt, len });
-        return freshUrl();
-      }
-    } catch (err) {
-      console.warn('[wait][xkt][head-error]', { attempt, message: err?.message });
-    }
+      if (response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        const status = payload?.status;
+        const xktUrl = payload?.xkt_url || payload?.xktUrl || null;
+        console.log('[status]', status, xktUrl || null);
 
-    // 2) EXISTS: télémétrie (ne jamais stopper sur exists:false)
-    try {
-      const ex = await fetch(`/exists/xkt/${fileId}?nocache=${Date.now()}`, { cache: 'no-store' });
-      if (ex.ok) {
-        const j = await ex.json();
-        console.log('[wait][xkt][exists]', { attempt, ...j });
-        if (j.exists && Number(j.size || 0) > 0) {
-          console.log('[wait][xkt][exists-ok] load now', { attempt, size: j.size });
-          return freshUrl();
+        if (status === 'ready' && xktUrl) {
+          return xktUrl;
         }
+
+        if (status === 'failed') {
+          const message = payload?.message || 'Conversion échouée';
+          const error = new Error(message);
+          error.details = payload;
+          throw error;
+        }
+      } else {
+        console.warn('[status] polling error', { status: response.status });
       }
     } catch (err) {
-      console.warn('[wait][xkt][exists-error]', { attempt, message: err?.message });
+      lastError = err;
+      console.warn('[status] polling exception', err);
     }
 
-    await new Promise(r => setTimeout(r, stepMs));
+    await sleep(delay);
+    delay = Math.min(Math.round(delay * 1.5), STATUS_POLL_MAX_MS);
   }
 
-  console.warn('[wait] timeout — XKT non prêt');
-  return false;
+  const timeoutError = new Error('Conversion trop longue (timeout)');
+  if (lastError) timeoutError.cause = lastError;
+  throw timeoutError;
 }
 
-// Après upload : reconvert → attendre (status finished OU HEAD 200) → charger XKT
-async function onUploadResponse(resp) {
-  const { file_id } = resp;
-  console.log('[upload] ok', { file_id });
-
-  // met à jour le debug + les globals
-  try { window.CADLYTICS?.xkt?.setFileId?.(file_id); } catch {}
-  window.currentFileId = file_id;
-
-  // 1) Reconversion robuste
-  try {
-    await reconvertAndWait(file_id); // sort dès que status finished OU HEAD 200
-} catch (e) {
-  console.warn('[reconvert] soft error/timeout', e?.message);
-  // Fallback : uniquement si HEAD indique une taille "saine"
-  const head = await fetch(`/xkt/${file_id}.xkt?nocache=${Date.now()}`, { method: 'HEAD', cache: 'no-store' });
-  const len  = Number(head.headers.get('content-length') || head.headers.get('Content-Length') || '0');
-  if (!(head.ok && len >= MIN_HEALTHY_XKT_LEN)) {
-    throw e; // pas prêt → on propage l’erreur
+async function loadXKT(xktUrl) {
+  if (!xktUrl) {
+    throw new Error('loadXKT: URL XKT manquante');
   }
-  console.log('[reconvert] fallback head-ready (healthy)', { len });
-}
 
-  // 2) Charge immédiatement l’XKT (cache-buster)
-  const url = `${location.origin}/xkt/${file_id}.xkt?nocache=${Date.now()}`;
+  const viewerInstance = viewerSingleton;
+  if (!viewerInstance) {
+    throw new Error('Viewer indisponible');
+  }
+
+  console.log('[viewer] clear + load', { xktUrl });
+
   try {
-    const result = forceLoadXKT(file_id, { url });
-    if (result && typeof result.then === 'function') {
-      await result;
+    viewerInstance.scene?.clear?.();
+    viewerInstance.scene?.destroyAll?.();
+  } catch (err) {
+    console.warn('[viewer] clear failed', err);
+  }
+
+  await loadXKTIntoViewer(xktUrl, { fileId: resolveCurrentFileId() });
+
+  try {
+    if (viewerInstance.cameraFlight?.flyTo) {
+      viewerInstance.cameraFlight.flyTo(viewerInstance.scene);
     }
   } catch (err) {
-    console.warn('[load] XKT load failed', err);
+    console.warn('[viewer] camera fit failed', err);
   }
+
+  console.log('[viewer] XKT chargé', { xktUrl });
+  return viewerInstance.scene;
 }
 
-// Hybride : considère terminé dès que status === "finished" OU HEAD 200 (len > 0)
-// maxMs plus large pour absorber files/queues lentes
-// Hybride: terminé quand (status === "finished") OU (HEAD 200 && len >= MIN_HEALTHY_XKT_LEN)
-async function reconvertAndWait(fileId, { maxMs = 8 * 60 * 1000, pollMs = 800 } = {}) {
-  const post = await fetch('/api/reconvert', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ file_id: fileId })
-  });
-  if (!post.ok) throw new Error(`reconvert ${post.status}`);
-  const { job_id } = await post.json();
-  console.log('[reconvert] started', { job_id, fileId });
+if (typeof window !== 'undefined') {
+  window.waitXKTReady = waitXKTReady;
+  window.loadXKT = loadXKT;
+}
 
-  const t0 = Date.now();
-  let wait = pollMs;
+async function onUploadResponse(resp) {
+  const fileId = resp?.file_id || resp?.fileId;
+  const jobId = resp?.job_id || resp?.jobId || null;
+  console.log('[upload] ok', { fileId, jobId });
 
-  while (Date.now() - t0 < maxMs) {
-    // 1) HEAD → prêt uniquement si taille "saine"
-    try {
-      const head = await fetch(`/xkt/${fileId}.xkt?nocache=${Date.now()}`, { method: 'HEAD', cache: 'no-store' });
-      const len = Number(head.headers.get('content-length') || head.headers.get('Content-Length') || '0');
-      if (head.ok && len >= MIN_HEALTHY_XKT_LEN) {
-        console.log('[reconvert] head-ready (healthy)', { len });
-        return;
-      }
-    } catch (e) {
-      console.warn('[reconvert] head-check error', e?.message);
-    }
-
-    // 2) Status → finished
-    try {
-      const r = await fetch(`/api/reconvert/status/${job_id}`, { cache: 'no-store' });
-      if (r.ok) {
-        const j = await r.json().catch(() => null);
-        if (j?.status === 'finished') {
-          console.log('[reconvert] status finished');
-          // (Optionnel) double check HEAD pour éviter les races ultra-courtes
-          try {
-            const head = await fetch(`/xkt/${fileId}.xkt?nocache=${Date.now()}`, { method: 'HEAD', cache: 'no-store' });
-            const len = Number(head.headers.get('content-length') || head.headers.get('Content-Length') || '0');
-            if (head.ok && len >= MIN_HEALTHY_XKT_LEN) return;
-          } catch {}
-          // Si la taille n'est pas encore saine, on boucle
-        }
-        if (j?.status === 'failed') throw new Error('reconvert failed');
-      }
-    } catch (e) {
-      console.warn('[reconvert] status-check error', e?.message);
-    }
-
-    await new Promise(rs => setTimeout(rs, wait));
-    wait = Math.min(wait * 1.4, 3000);
+  if (!fileId) {
+    throw new Error('Réponse upload invalide (file_id manquant)');
   }
 
-  throw new Error('reconvert timeout');
+  try { window.CADLYTICS?.xkt?.setFileId?.(fileId); } catch {}
+  window.currentFileId = fileId;
+
+  try {
+    setStatus('Conversion en cours…');
+    const xktUrl = await waitXKTReady(fileId);
+    setStatus('Modèle prêt, chargement…');
+    await loadXKT(xktUrl);
+    setStatus('');
+  } catch (err) {
+    console.error('[upload] conversion/load failed', err);
+    setStatus(err?.message || 'Erreur lors de la conversion');
+    throw err;
+  }
 }
 

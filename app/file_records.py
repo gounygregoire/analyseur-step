@@ -145,9 +145,9 @@ def mark_ready(file_id: str, *, xkt_path: str, xkt_url: str) -> Optional[FileRec
 
 def mark_failed(file_id: str, message: str) -> Optional[FileRecord]:
     updated_at = _utc_now()
-    short = message.strip()
-    if len(short) > 300:
-        short = short[:300] + "…"
+    short = (message or "").strip()
+    if len(short) > 500:
+        short = short[:500]
     with closing(_connect()) as conn:
         res = conn.execute(
             """
