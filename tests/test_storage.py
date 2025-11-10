@@ -18,6 +18,7 @@ def test_paths(tmp_path, monkeypatch):
     monkeypatch.setenv("FILES_DB_PATH", str(db_path))
     monkeypatch.setenv("UPLOAD_FOLDER", str(uploads))
     monkeypatch.setenv("OUTPUT_FOLDER", str(converted))
+    monkeypatch.setenv("XKT_LOCAL_DIR", str(converted))
     importlib.reload(storage)
     Storage = storage.Storage
 

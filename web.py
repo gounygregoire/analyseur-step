@@ -28,6 +28,8 @@ from dotenv import load_dotenv
 import requests
 from werkzeug.exceptions import HTTPException
 
+from app.xkt_pipeline import should_serve_xkt_via_flask
+
 # RQ / Redis (imports sans collision de noms)
 import redis as redislib
 from redis import Redis, from_url as redis_from_url
@@ -636,57 +638,67 @@ def upload():
     )
 
 # ---------- Fichiers servis ----------
-@app.get("/xkt/<file_id>.xkt")
-def serve_xkt(file_id: str):
-    if not re.fullmatch(r"[0-9a-fA-F-]{36}", file_id):
-        return abort(400)
-    path = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
+if should_serve_xkt_via_flask():
 
-    def _abort_known_bad(local_path: str):
-        try:
-            size = os.path.getsize(local_path)
-        except OSError:
-            size = 0
-        if size == KNOWN_BAD_XKT_BYTES and size > 0:
-            app.logger.warning("[xkt] known bad artifact blocked", {
-                "file_id": file_id,
-                "size": size,
-            })
-            return jsonify({
-                "error": "known_bad_xkt",
-                "file_id": file_id,
-                "size": size,
-            }), 409
-        return None
+    @app.get("/xkt/<file_id>.xkt")
+    def serve_xkt(file_id: str):
+        if not re.fullmatch(r"[0-9a-fA-F-]{36}", file_id):
+            return abort(400)
+        path = os.path.join(OUTPUT_FOLDER, f"{file_id}.xkt")
 
-    if os.path.isfile(path):
-        blocked = _abort_known_bad(path)
-        if blocked:
-            return blocked
-        return send_from_directory(
-            OUTPUT_FOLDER, f"{file_id}.xkt",
-            mimetype="application/octet-stream",
-            as_attachment=False, max_age=0, etag=False, conditional=False
-        )
-    if _s3_enabled():
-        try:
-            from s3io import get_file
-            os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-            key = f"xkt/{file_id}.xkt"
-            ok = get_file(key, path)
-            if ok and os.path.isfile(path):
-                blocked = _abort_known_bad(path)
-                if blocked:
-                    return blocked
-                return send_from_directory(
-                    OUTPUT_FOLDER, f"{file_id}.xkt",
-                    mimetype="application/octet-stream",
-                    as_attachment=False, max_age=0, etag=False, conditional=False
-                )
-            app.logger.warning("S3 fallback miss for XKT key=%s", key)
-        except Exception as e:
-            app.logger.warning("S3 fallback error for XKT %s: %s", file_id, e)
-    return abort(404)
+        def _abort_known_bad(local_path: str):
+            try:
+                size = os.path.getsize(local_path)
+            except OSError:
+                size = 0
+            if size == KNOWN_BAD_XKT_BYTES and size > 0:
+                app.logger.warning("[xkt] known bad artifact blocked", {
+                    "file_id": file_id,
+                    "size": size,
+                })
+                return jsonify({
+                    "error": "known_bad_xkt",
+                    "file_id": file_id,
+                    "size": size,
+                }), 409
+            return None
+
+        if os.path.isfile(path):
+            blocked = _abort_known_bad(path)
+            if blocked:
+                return blocked
+            return send_from_directory(
+                OUTPUT_FOLDER,
+                f"{file_id}.xkt",
+                mimetype="application/octet-stream",
+                as_attachment=False,
+                max_age=0,
+                etag=False,
+                conditional=False,
+            )
+        if _s3_enabled():
+            try:
+                from s3io import get_file
+                os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+                key = f"xkt/{file_id}.xkt"
+                ok = get_file(key, path)
+                if ok and os.path.isfile(path):
+                    blocked = _abort_known_bad(path)
+                    if blocked:
+                        return blocked
+                    return send_from_directory(
+                        OUTPUT_FOLDER,
+                        f"{file_id}.xkt",
+                        mimetype="application/octet-stream",
+                        as_attachment=False,
+                        max_age=0,
+                        etag=False,
+                        conditional=False,
+                    )
+                app.logger.warning("S3 fallback miss for XKT key=%s", key)
+            except Exception as e:
+                app.logger.warning("S3 fallback error for XKT %s: %s", file_id, e)
+        return abort(404)
 
 @app.get("/glb/<file_id>.glb")
 def serve_glb(file_id: str):
