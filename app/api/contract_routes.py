@@ -233,6 +233,10 @@ def get_report(file_id: str) -> tuple[Any, int]:
 def _add_models_route(setup_state):
     app = setup_state.app
 
+    # L'application principale expose déjà /models ; ne duplique pas la règle.
+    if any(rule.rule == "/models/<path:filename>" for rule in app.url_map.iter_rules()):
+        return
+
     @app.route("/models/<path:filename>", methods=["GET", "HEAD"])
     def serve_model(filename):
         mimetype = None
