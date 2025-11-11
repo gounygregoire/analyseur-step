@@ -106,7 +106,30 @@ def create_or_update(
         )
         conn.commit()
 
+    _sync_file_row(file_id, status=status, xkt_url=None, error_message=None)
     return get(file_id)
+
+
+def _sync_file_row(file_id: str, *, status: str, xkt_url: Optional[str], error_message: Optional[str]) -> None:
+    try:
+        from models import File, db  # pylint: disable=import-outside-toplevel
+        from flask import has_app_context  # pylint: disable=import-outside-toplevel
+    except Exception:  # pragma: no cover - SQLAlchemy optionnel en local
+        return
+
+    if not has_app_context():  # pragma: no cover - utilisé dans les tests sans app context
+        return
+
+    try:
+        file_row = db.session.get(File, file_id)
+        if not file_row:
+            return
+        file_row.status = status
+        file_row.xkt_url = xkt_url
+        file_row.error_message = error_message
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
 
 
 def mark_processing(file_id: str) -> Optional[FileRecord]:
@@ -123,6 +146,7 @@ def mark_processing(file_id: str) -> Optional[FileRecord]:
         conn.commit()
         if res.rowcount == 0:
             return None
+    _sync_file_row(file_id, status="processing", xkt_url=None, error_message=None)
     return get(file_id)
 
 
@@ -140,6 +164,7 @@ def mark_ready(file_id: str, *, xkt_path: str, xkt_url: str) -> Optional[FileRec
         conn.commit()
         if res.rowcount == 0:
             return None
+    _sync_file_row(file_id, status="ready", xkt_url=xkt_url, error_message=None)
     return get(file_id)
 
 
@@ -160,6 +185,7 @@ def mark_failed(file_id: str, message: str) -> Optional[FileRecord]:
         conn.commit()
         if res.rowcount == 0:
             return None
+    _sync_file_row(file_id, status="failed", xkt_url=None, error_message=short or "Conversion échouée")
     return get(file_id)
 
 

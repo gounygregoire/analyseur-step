@@ -1,178 +1,46 @@
-#!/usr/bin/env python3
-"""Smoke test du pipeline XKT : upload STEP -> statut -> téléchargement XKT."""
-from __future__ import annotations
+"""Smoke test pour la conversion XKT via l'API publique de CADlytics.
 
-import argparse
-import json
+Ce script envoie un STEP factice, poll l'état jusqu'à obtention du fichier
+XKT puis vérifie que le contenu est non vide. Usage:
+    python scripts/smoke_xkt.py
+"""
+
 import os
 import sys
 import time
-from typing import Tuple
-from urllib.parse import urljoin
+import requests
 
-try:
-    import requests
-except ImportError as exc:  # pragma: no cover - dépendance manquante
-    raise SystemExit(
-        "Le module 'requests' est requis pour scripts/smoke_xkt.py (pip install requests)."
-    ) from exc
-
-DEFAULT_BASE_URL = "http://localhost:5000/"
-DEFAULT_STEP_PATH = "tests/sample.step"
-DEFAULT_TIMEOUT = 120
-DEFAULT_INITIAL_DELAY = 1.0
-DEFAULT_MAX_DELAY = 5.0
+BASE = os.getenv("CADLYTICS_BASE", "https://cadlytics.app")
 
 
-class SmokeError(RuntimeError):
-    """Exception fonctionnelle pour signaler un échec du smoke test."""
+def main() -> None:
+    files = {"file": ("cube.step", b"dummy", "application/octet-stream")}
+    r = requests.post(f"{BASE}/api/upload", files=files, timeout=30)
+    print("upload:", r.status_code, r.text)
+    r.raise_for_status()
+    file_id = r.json()["fileId"]
 
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Vérifie la publication XKT complète.")
-    parser.add_argument(
-        "--base-url",
-        default=DEFAULT_BASE_URL,
-        help=f"URL de base de l'API (défaut: {DEFAULT_BASE_URL}).",
-    )
-    parser.add_argument(
-        "--step-file",
-        default=DEFAULT_STEP_PATH,
-        help=f"Chemin du fichier STEP à téléverser (défaut: {DEFAULT_STEP_PATH}).",
-    )
-    parser.add_argument(
-        "--timeout",
-        type=float,
-        default=DEFAULT_TIMEOUT,
-        help=f"Timeout global en secondes (défaut: {DEFAULT_TIMEOUT}).",
-    )
-    parser.add_argument(
-        "--initial-delay",
-        type=float,
-        default=DEFAULT_INITIAL_DELAY,
-        help=f"Délai initial entre deux polls (défaut: {DEFAULT_INITIAL_DELAY}).",
-    )
-    parser.add_argument(
-        "--max-delay",
-        type=float,
-        default=DEFAULT_MAX_DELAY,
-        help=f"Délai maximum entre deux polls (défaut: {DEFAULT_MAX_DELAY}).",
-    )
-    return parser.parse_args()
-
-
-def upload_step(base_url: str, step_path: str) -> str:
-    if not os.path.isfile(step_path):
-        raise SmokeError(f"Fichier STEP introuvable: {step_path}")
-
-    endpoint = urljoin(base_url, "api/upload")
-    with open(step_path, "rb") as handle:
-        files = {"file": (os.path.basename(step_path), handle, "application/step")}
-        response = requests.post(endpoint, files=files, timeout=60)
-
-    if response.status_code >= 400:
-        raise SmokeError(f"Upload HTTP {response.status_code}: {response.text}")
-
-    try:
-        payload = response.json()
-    except json.JSONDecodeError as exc:
-        raise SmokeError(f"Réponse upload invalide: {response.text}") from exc
-
-    file_id = payload.get("file_id") or payload.get("fileId")
-    if not file_id:
-        raise SmokeError(f"file_id absent dans la réponse upload: {payload}")
-
-    return str(file_id)
-
-
-def poll_status(
-    base_url: str,
-    file_id: str,
-    timeout_s: float,
-    initial_delay: float,
-    max_delay: float,
-) -> Tuple[str, str]:
-    status_endpoint = urljoin(base_url, f"api/files/{file_id}/status")
-    deadline = time.monotonic() + timeout_s
-    delay = max(initial_delay, 0.5)
-
+    t0 = time.time()
     while True:
-        if time.monotonic() > deadline:
-            raise SmokeError(f"Timeout {timeout_s}s atteint sans statut ready.")
+        s = requests.get(f"{BASE}/api/files/{file_id}/status", timeout=10)
+        print("status:", s.status_code, s.text)
+        if s.status_code == 404:
+            sys.exit("ERROR: fileId not found in DB")
+        s.raise_for_status()
+        data = s.json()
+        if data["status"] == "ready" and data.get("xkt_url"):
+            break
+        if time.time() - t0 > 120:
+            sys.exit("ERROR: timeout")
+        time.sleep(2)
 
-        response = requests.get(status_endpoint, timeout=30)
-        if response.status_code >= 400:
-            raise SmokeError(
-                f"Statut HTTP {response.status_code}: {response.text}"
-            )
-
-        try:
-            payload = response.json()
-        except json.JSONDecodeError as exc:
-            raise SmokeError(f"Réponse statut invalide: {response.text}") from exc
-
-        status = (payload.get("status") or "").lower()
-        xkt_url = payload.get("xkt_url")
-        message = payload.get("message") or payload.get("error") or ""
-
-        print(f"[status] {status} {xkt_url or ''}")
-
-        if status == "ready":
-            if not xkt_url:
-                raise SmokeError("Status ready mais xkt_url manquant.")
-            return status, str(xkt_url)
-        if status == "failed":
-            raise SmokeError(f"Conversion échouée: {message}")
-
-        time.sleep(delay)
-        delay = min(delay * 2, max_delay)
-
-
-def fetch_xkt(xkt_url: str, base_url: str) -> int:
-    if xkt_url.startswith("/"):
-        xkt_url = urljoin(base_url, xkt_url.lstrip("/"))
-    response = requests.get(xkt_url, stream=True, timeout=60)
-    if response.status_code >= 400:
-        raise SmokeError(
-            f"Téléchargement XKT HTTP {response.status_code}: {response.text}"
-        )
-
-    total = 0
-    for chunk in response.iter_content(chunk_size=65536):
-        if chunk:
-            total += len(chunk)
-    if total <= 0:
-        raise SmokeError("Fichier XKT vide ou non téléchargé.")
-    return total
-
-
-def main() -> int:
-    args = parse_args()
-    base_url = args.base_url if args.base_url.endswith("/") else f"{args.base_url}/"
-
-    start = time.monotonic()
-    print(f"[smoke] Upload depuis {args.step_file} vers {base_url}api/upload")
-
-    try:
-        file_id = upload_step(base_url, args.step_file)
-        print(f"[smoke] file_id={file_id}")
-        status, xkt_url = poll_status(
-            base_url, file_id, args.timeout, args.initial_delay, args.max_delay
-        )
-        size = fetch_xkt(xkt_url, base_url)
-    except SmokeError as err:
-        print(f"[smoke] Échec: {err}", file=sys.stderr)
-        return 1
-    except requests.RequestException as err:
-        print(f"[smoke] Erreur réseau: {err}", file=sys.stderr)
-        return 1
-
-    duration = time.monotonic() - start
-    print(
-        f"[smoke] Succès statut={status} en {duration:.1f}s (taille XKT={size} octets)"
-    )
-    return 0
+    x = requests.get(data["xkt_url"], timeout=30)
+    print("xkt:", x.status_code, len(x.content))
+    x.raise_for_status()
+    if not x.content:
+        sys.exit("ERROR: empty xkt")
+    print("OK")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
