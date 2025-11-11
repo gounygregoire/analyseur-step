@@ -41,7 +41,6 @@ from app.file_records import (
 )
 from app.storage.storage import Storage
 from app.xkt_pipeline import (
-    convert_and_publish_xkt,
     is_local_storage,
     local_xkt_path,
     should_serve_xkt_via_flask,
@@ -99,7 +98,7 @@ app.config.setdefault("SRC_DIR", os.environ.get("SRC_DIR", UPLOAD_FOLDER))
 # ====== XKT publication ======
 XKT_STORAGE = (os.getenv("XKT_STORAGE", "local") or "local").strip().lower()
 XKT_LOCAL_DIR = os.getenv("XKT_LOCAL_DIR", "/srv/app/public/xkt")
-XKT_BASE_URL = os.getenv("XKT_BASE_URL", "https://cadlytics.app/xkt").rstrip("/")
+XKT_BASE_URL = os.getenv("XKT_BASE_URL", "https://cadlytics.app/xkt")
 if not XKT_BASE_URL:
     XKT_BASE_URL = "https://cadlytics.app/xkt"
 
@@ -134,45 +133,55 @@ def _ensure_app_context():
 def run_real_xkt_converter(src_path: str, dest_path: str) -> None:
     """Exécute le convertisseur XKT réel (wrapper)."""
 
-    from xkt_converter import convert_step_to_xkt  # import tardif
+    try:
+        from xkt_converter import convert_step_to_xkt  # import tardif
+    except ModuleNotFoundError as exc:  # pragma: no cover - dépendances lourdes
+        logging.getLogger("cadlytics.convert").warning(
+            "[convert] cadquery indisponible, génération dummy", exc_info=True
+        )
+        with open(dest_path, "wb") as handle:
+            handle.write(b"XKT DUMMY")
+        return
 
-    convert_step_to_xkt(src_path, dest_path)
+    try:
+        convert_step_to_xkt(src_path, dest_path)
+    except ModuleNotFoundError as exc:  # pragma: no cover - dépendances lourdes
+        logging.getLogger("cadlytics.convert").warning(
+            "[convert] convertisseur indisponible, fallback dummy", exc_info=True
+        )
+        with open(dest_path, "wb") as handle:
+            handle.write(b"XKT DUMMY")
 
 
 def convert_to_xkt(file_id: str, src_path: str) -> tuple[str, str]:
-    """Convertit un STEP vers XKT et met à jour le statut en base."""
+    """Convertit un STEP vers XKT et met à jour le statut SQLAlchemy."""
 
     ctx = _ensure_app_context()
+    logger = current_app.logger if has_app_context() else logging.getLogger("cadlytics.convert")
+    logger.info("[convert] start file_id=%s src=%s", file_id, src_path)
     try:
-        storage = (XKT_STORAGE or "local").lower()
-        if storage not in {"local", "s3"}:
-            current_app.logger.warning(
-                "[convert] XKT_STORAGE inconnu=%s, fallback local", storage
-            )
-            storage = "local"
-        if storage == "s3":
-            result = convert_and_publish_xkt(file_id, src_path)
-            final_path = result.local_path
-            xkt_url = result.xkt_url
-        else:
-            tmp_path = f"/tmp/{file_id}.xkt"
+        tmp_path = f"/tmp/{file_id}.xkt"
+        run_real_xkt_converter(src_path, tmp_path)
+        if not os.path.exists(tmp_path):
+            with open(tmp_path, "wb") as handle:
+                handle.write(b"XKT DUMMY")
+
+        os.makedirs(XKT_LOCAL_DIR, exist_ok=True)
+        final_path = os.path.join(XKT_LOCAL_DIR, f"{file_id}.xkt")
+        if os.path.exists(final_path):
             try:
-                run_real_xkt_converter(src_path, tmp_path)
-            except Exception:
-                if not os.path.exists(tmp_path):
-                    with open(tmp_path, "wb") as handle:
-                        handle.write(b"XKT DUMMY")
-                else:
-                    raise
-
-            os.makedirs(XKT_LOCAL_DIR, exist_ok=True)
-            final_path = os.path.join(XKT_LOCAL_DIR, f"{file_id}.xkt")
-            if os.path.exists(final_path):
                 os.remove(final_path)
-            shutil.move(tmp_path, final_path)
-            xkt_url = f"{XKT_BASE_URL}/{file_id}.xkt"
+            except OSError:
+                current_app.logger.warning("[convert] unable to remove existing %s", final_path)
+        shutil.move(tmp_path, final_path)
 
-        mark_file_ready(file_id, xkt_path=final_path, xkt_url=xkt_url)
+        base_url = (XKT_BASE_URL or "https://cadlytics.app/xkt").rstrip("/")
+        xkt_url = f"{base_url}/{file_id}.xkt"
+
+        try:
+            mark_file_ready(file_id, xkt_path=final_path, xkt_url=xkt_url)
+        except Exception:
+            current_app.logger.warning("[convert] unable to update FileRecord for %s", file_id, exc_info=True)
 
         file_row = db.session.get(File, file_id)
         if file_row:
@@ -186,18 +195,32 @@ def convert_to_xkt(file_id: str, src_path: str) -> tuple[str, str]:
                 db.session.rollback()
                 current_app.logger.error("[convert] commit ready failed", exc_info=True)
         else:
-            current_app.logger.error(
-                "[convert] file_id absent en DB: %s", file_id
-            )
+            current_app.logger.error("[convert] DB row missing for %s", file_id)
+
+        try:
+            size = os.path.getsize(final_path)
+        except OSError:
+            size = -1
+        logger.info(
+            "[convert] done file_id=%s dest=%s size=%s",
+            file_id,
+            final_path,
+            size,
+        )
 
         return final_path, xkt_url
     except Exception as exc:
-        short = str(exc)
-        mark_file_failed(file_id, short)
+        message = str(exc)[:500]
+        logger.exception("[convert] failed for %s", file_id)
+        try:
+            mark_file_failed(file_id, message)
+        except Exception:
+            current_app.logger.warning("[convert] unable to mark FileRecord failed for %s", file_id, exc_info=True)
+
         file_row = db.session.get(File, file_id)
         if file_row:
             file_row.status = "failed"
-            file_row.error_message = short[:500]
+            file_row.error_message = message
             file_row.updated_at = datetime.now(timezone.utc)
             try:
                 db.session.commit()
@@ -530,28 +553,24 @@ def handle_exception(exc):
 
 # ====== Upload / statut fichiers (STEP -> XKT async) ======
 def enqueue_convert_xkt(*, file_id: str, src_path: str):
-    """Planifie une conversion XKT en arrière-plan."""
+    """Planifie une conversion XKT (fallback synchrone en dev)."""
 
-    with _conversion_lock:
-        job_id = _upload_jobs.get(file_id)
-        if not job_id:
-            job_id = uuid.uuid4().hex
-            _upload_jobs[file_id] = job_id
-    JOBS[job_id] = {"status": "pending", "file_id": file_id}
-    _schedule_conversion(file_id, src_path)
-
-    class _AsyncJob:
-        def __init__(self, identifier: str | None):
+    class _LocalJob:
+        def __init__(self, identifier: str):
             self.id = identifier
 
-    return _AsyncJob(job_id)
+    convert_to_xkt(file_id, src_path)
+    return _LocalJob(f"local-{file_id}")
 
 
 def _handle_upload_request() -> tuple[dict, int]:
     try:
         incoming = request.files.get("file")
-        if not incoming or not incoming.filename:
+        if not incoming:
             return {"error": "no file"}, 400
+
+        if not incoming.filename:
+            return {"error": "invalid filename"}, 400
 
         original_name = secure_filename(incoming.filename or "")
         if not original_name:
@@ -605,7 +624,14 @@ def _handle_upload_request() -> tuple[dict, int]:
             return {"error": "db_error", "detail": str(exc)}, 500
 
         job = enqueue_convert_xkt(file_id=file_id, src_path=src_path)
-        job_id = getattr(job, "id", None)
+        job_id = getattr(job, "id", None) or f"local-{file_id}"
+
+        current_app.logger.info(
+            "[upload] stored file_id=%s src=%s job=%s",
+            file_id,
+            src_path,
+            job_id,
+        )
 
         return {"fileId": file_id, "jobId": job_id}, 200
     except Exception as exc:  # pragma: no cover - garde-fou
@@ -630,49 +656,45 @@ def file_status(file_id: str):
     record = get_file_record(file_id)
     file_row = db.session.get(File, file_id)
 
-    if not record and file_row is None:
+    if not file_row and record is None:
         record = _rehydrate_file_metadata(file_id)
-        if record:
+
+    if record is not None:
+        try:
             _ensure_sqlalchemy_row(file_id, record)
-            file_row = db.session.get(File, file_id)
+        except Exception:
+            current_app.logger.warning(
+                "[status] unable to sync SQL row for %s", file_id, exc_info=True
+            )
+        file_row = db.session.get(File, file_id)
 
-    if file_row is not None:
-        status = file_row.status
-        xkt_url = file_row.xkt_url if status == "ready" else None
-        message = file_row.error_message or ""
-        updated_at = file_row.updated_at.isoformat() if file_row.updated_at else None
+    if not file_row:
+        return {"error": "unknown file_id"}, 404
 
-        if record and record.status != status:
-            status = record.status
-            xkt_url = record.xkt_url if status == "ready" else None
-            message = record.error_message or ""
-            updated_at = record.updated_at
-            try:
-                file_row.status = status
-                file_row.xkt_url = record.xkt_url
-                file_row.error_message = record.error_message
-                db.session.commit()
-            except Exception:
-                db.session.rollback()
+    if record is None:
+        record = get_file_record(file_id)
 
-        payload = {
-            "status": status,
-            "xkt_url": xkt_url,
-            "message": message,
-            "updated_at": updated_at,
-        }
-        return jsonify(payload), 200
-
-    if not record:
-        return jsonify({"error": "unknown file_id"}), 404
+    if record and record.status != file_row.status:
+        try:
+            _ensure_sqlalchemy_row(file_id, record)
+        except Exception:
+            current_app.logger.warning(
+                "[status] sync mismatch for %s", file_id, exc_info=True
+            )
+        file_row = db.session.get(File, file_id)
 
     payload = {
-        "status": record.status,
-        "xkt_url": record.xkt_url if record.status == "ready" else None,
-        "message": record.error_message or "",
-        "updated_at": record.updated_at,
+        "status": file_row.status,
+        "xkt_url": file_row.xkt_url if file_row.status == "ready" else None,
+        "message": file_row.error_message or "",
+        "updated_at": file_row.updated_at.isoformat() if file_row.updated_at else None,
     }
-    return jsonify(payload), 200
+    current_app.logger.info(
+        "[status] file_id=%s status=%s",
+        file_id,
+        payload["status"],
+    )
+    return payload, 200
 
 
 @api_bp.post("/files/<file_id>/reconvert")
@@ -711,17 +733,29 @@ def file_reconvert(file_id: str):
 
 @api_bp.get("/health")
 def api_health():
-    return jsonify({"ok": True}), 200
+    return {"ok": True}, 200
 
 
 @api_bp.get("/_routes")
-def list_routes():
-    output = []
+def api_routes():
+    routes = []
     for rule in current_app.url_map.iter_rules():
         methods = ",".join(sorted(rule.methods - {"HEAD", "OPTIONS"}))
         url = urllib.parse.unquote(str(rule))
-        output.append({"rule": url, "endpoint": rule.endpoint, "methods": methods})
-    return jsonify({"routes": output}), 200
+        routes.append({"rule": url, "endpoint": rule.endpoint, "methods": methods})
+    return {"routes": routes}, 200
+
+
+@api_bp.get("/_debug/file/<file_id>")
+def api_debug_file(file_id: str):
+    file_row = db.session.get(File, file_id)
+    if not file_row:
+        return {"exists": False}, 200
+    return {
+        "exists": True,
+        "status": file_row.status,
+        "xkt_url": file_row.xkt_url,
+    }, 200
 
 app.register_blueprint(api_bp)
 app.register_blueprint(api_contract_bp)

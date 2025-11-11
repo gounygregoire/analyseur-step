@@ -91,6 +91,45 @@ def test_api_upload_starts_processing(client_factory, monkeypatch):
         assert file_row.original_name == "piece.step"
 
 
+def test_debug_file_endpoint_reflects_processing_state(client_factory, monkeypatch):
+    client, *_rest, module = client_factory()
+
+    class _DummyJob:
+        def __init__(self, identifier: str | None):
+            self.id = identifier
+
+    def _fake_enqueue(*, file_id, src_path):
+        return _DummyJob("job-debug")
+
+    monkeypatch.setattr(module, "enqueue_convert_xkt", _fake_enqueue)
+
+    resp = client.post("/api/upload", data={"file": (io.BytesIO(b"cad"), "piece.step")})
+    assert resp.status_code == 200
+
+    file_id = resp.get_json()["fileId"]
+
+    debug_resp = client.get(f"/api/_debug/file/{file_id}")
+    assert debug_resp.status_code == 200
+    payload = debug_resp.get_json()
+    assert payload == {"exists": True, "status": "processing", "xkt_url": None}
+
+
+def test_api_upload_generates_local_job_id_when_missing(client_factory, monkeypatch):
+    client, _, _, module = client_factory()
+
+    class _DummyJob:
+        id = None
+
+    monkeypatch.setattr(module, "enqueue_convert_xkt", lambda **_: _DummyJob())
+
+    resp = client.post("/api/upload", data={"file": (io.BytesIO(b"cad"), "piece.step")})
+    assert resp.status_code == 200
+
+    payload = resp.get_json()
+    file_id = payload["fileId"]
+    assert payload["jobId"] == f"local-{file_id}"
+
+
 def test_status_ready_returns_absolute_url(client_factory, monkeypatch):
     client, upload_dir, output_dir, module = client_factory()
 
