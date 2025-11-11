@@ -2,7 +2,13 @@
 
 from flask import Blueprint
 
-api = Blueprint("api", __name__)
+from . import files
 
-# Import des routes pour l'enregistrement des endpoints.
-from . import files  # noqa: E402,F401
+
+def create_api_blueprint() -> Blueprint:
+    api = Blueprint("cadlytics_api", __name__)
+    files.register_routes(api)
+    return api
+
+
+__all__ = ["create_api_blueprint"]

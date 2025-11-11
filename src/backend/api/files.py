@@ -1,33 +1,89 @@
-"""Routes API fichier : diagnostic et statut stateless."""
+"""Routes API fichier : diagnostic et statut."""
 
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from typing import Optional
 
 import boto3
 from botocore.exceptions import ClientError
 import requests
-from flask import current_app as app, jsonify
+from flask import Blueprint, current_app as app, jsonify
 
-from . import api
+from ..models import File, db
+from app.log_utils import mask_db_uri
 
 
-@api.get("/_routes")
-def api_routes():
-    import urllib
+def register_routes(bp: Blueprint) -> None:
+    @bp.get("/_routes")
+    def api_routes():
+        import urllib
 
-    out = []
-    for rule in app.url_map.iter_rules():
-        methods = ",".join(sorted(rule.methods - {"HEAD", "OPTIONS"}))
-        out.append(
-            {
-                "rule": urllib.parse.unquote(str(rule)),
-                "endpoint": rule.endpoint,
-                "methods": methods,
-            }
+        out = []
+        for rule in app.url_map.iter_rules():
+            methods = ",".join(sorted(rule.methods - {"HEAD", "OPTIONS"}))
+            out.append(
+                {
+                    "rule": urllib.parse.unquote(str(rule)),
+                    "endpoint": rule.endpoint,
+                    "methods": methods,
+                }
+            )
+        return {"routes": out}, 200
+
+    @bp.get("/files/<file_id>/status")
+    def file_status(file_id: str):
+        """Retourne le statut JSON d'un fichier connu."""
+
+        file_row = db.session.get(File, file_id)
+        if not file_row:
+            db_uri = mask_db_uri(app.config.get("SQLALCHEMY_DATABASE_URI"))
+            app.logger.info(
+                "[status] missing file_id=%s content_type=%s db=%s",
+                file_id,
+                "application/json",
+                db_uri,
+            )
+            response = jsonify({"error": "unknown file_id"})
+            response.status_code = 404
+            return response
+
+        status = (file_row.status or "processing").lower()
+        if status not in _ALLOWED_STATUSES:
+            status = "processing"
+
+        xkt_url = None
+        glb_url = None
+        if status == "ready":
+            xkt_url = file_row.xkt_url or _default_xkt_url(file_id)
+            glb_url = _default_glb_url(file_id)
+
+        message = file_row.error_message or ""
+        updated_at = file_row.updated_at
+        if isinstance(updated_at, datetime):
+            updated_str = updated_at.isoformat()
+        else:
+            updated_str = None
+
+        payload = {
+            "status": status,
+            "xkt_url": xkt_url,
+            "glb_url": glb_url,
+            "message": message,
+            "updated_at": updated_str,
+        }
+
+        response = jsonify(payload)
+        db_uri = mask_db_uri(app.config.get("SQLALCHEMY_DATABASE_URI"))
+        app.logger.info(
+            "[status] file_id=%s status=%s content_type=%s db=%s",
+            file_id,
+            status,
+            response.content_type,
+            db_uri,
         )
-    return {"routes": out}, 200
+        return response, 200
 
 
 def http_exists(url: str) -> bool:
@@ -60,38 +116,17 @@ def local_file_exists(file_id: str, extension: str) -> bool:
     return os.path.exists(candidate)
 
 
-@api.get("/files/<file_id>/status")
-def file_status_stateless(file_id: str):
-    xkt_url = f"{os.getenv('XKT_BASE_URL', 'https://cadlytics.app/xkt')}/{file_id}.xkt"
-    glb_url = f"{os.getenv('GLB_BASE_URL', 'https://cadlytics.app/glb')}/{file_id}.glb"
+_ALLOWED_STATUSES = {"enqueued", "processing", "ready", "failed"}
 
-    storage_backend = os.getenv("STORAGE_BACKEND", "local").lower()
-    status = "processing"
-    xkt_ready = False
 
-    if storage_backend == "s3":
-        bucket = os.getenv("S3_BUCKET")
-        prefix = os.getenv("S3_PREFIX_XKT", "xkt/")
-        if bucket:
-            exists = s3_object_exists(bucket, f"{prefix}{file_id}.xkt")
-            xkt_ready = exists is True
-        if not xkt_ready:
-            xkt_ready = http_exists(xkt_url)
-    else:
-        xkt_ready = local_file_exists(file_id, "xkt") or http_exists(xkt_url)
+def _default_xkt_url(file_id: str) -> str:
+    base = (os.getenv("XKT_BASE_URL") or "https://cadlytics.app/xkt").rstrip("/")
+    return f"{base}/{file_id}.xkt"
 
-    if xkt_ready:
-        status = "ready"
 
-    return (
-        jsonify(
-            {
-                "status": status,
-                "xkt_url": xkt_url if status == "ready" else None,
-                "glb_url": glb_url if status == "ready" else None,
-                "message": "",
-                "updated_at": None,
-            }
-        ),
-        200,
-    )
+def _default_glb_url(file_id: str) -> str:
+    base = (os.getenv("GLB_BASE_URL") or "https://cadlytics.app/glb").rstrip("/")
+    return f"{base}/{file_id}.glb"
+
+
+__all__ = ["register_routes", "http_exists", "s3_object_exists", "local_file_exists"]

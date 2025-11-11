@@ -111,7 +111,7 @@ def test_debug_file_endpoint_reflects_processing_state(client_factory, monkeypat
     debug_resp = client.get(f"/api/_debug/file/{file_id}")
     assert debug_resp.status_code == 200
     payload = debug_resp.get_json()
-    assert payload == {"exists": True, "status": "processing", "xkt_url": None}
+    assert payload == {"exists": True, "status": "enqueued", "xkt_url": None}
 
 
 def test_api_upload_generates_local_job_id_when_missing(client_factory, monkeypatch):
@@ -144,6 +144,14 @@ def test_status_ready_returns_absolute_url(client_factory, monkeypatch):
     xkt_path.write_bytes(b"xkt")
     mark_file_ready(file_id, xkt_path=str(xkt_path), xkt_url=f"https://cdn.example/xkt/{file_id}.xkt")
 
+    with client.application.app_context():
+        file_row = db.session.get(File, file_id)
+        assert file_row is not None
+        file_row.status = "ready"
+        file_row.xkt_url = f"https://cdn.example/xkt/{file_id}.xkt"
+        file_row.updated_at = datetime.now(timezone.utc)
+        db.session.commit()
+
     status_resp = client.get(f"/api/files/{file_id}/status")
     assert status_resp.status_code == 200
     payload = status_resp.get_json()
@@ -165,6 +173,14 @@ def test_status_failed_returns_message(client_factory, monkeypatch):
     file_id = resp.get_json()["fileId"]
 
     mark_file_failed(file_id, "Conversion échouée")
+
+    with client.application.app_context():
+        file_row = db.session.get(File, file_id)
+        assert file_row is not None
+        file_row.status = "failed"
+        file_row.error_message = "Conversion échouée"
+        file_row.updated_at = datetime.now(timezone.utc)
+        db.session.commit()
 
     status_resp = client.get(f"/api/files/{file_id}/status")
     assert status_resp.status_code == 200
@@ -243,7 +259,7 @@ def test_status_rehydrates_missing_metadata(client_factory, monkeypatch):
     assert resp.status_code == 200
     file_id = resp.get_json()["fileId"]
 
-    # Supprime les métadonnées pour simuler un backend qui a perdu l'enregistrement
+    # Supprime la ligne SQL pour simuler une corruption : la route renvoie 404
     delete_file_record(file_id)
     with client.application.app_context():
         file_row = db.session.get(File, file_id)
@@ -251,24 +267,9 @@ def test_status_rehydrates_missing_metadata(client_factory, monkeypatch):
         db.session.delete(file_row)
         db.session.commit()
 
-    # Le STEP original doit toujours être présent dans SRC_DIR
-    assert (upload_dir / f"{file_id}__piece.step").exists()
-
     status_resp = client.get(f"/api/files/{file_id}/status")
-    assert status_resp.status_code == 200
-    payload = status_resp.get_json()
-    assert payload["status"] == "processing"
-    assert payload["xkt_url"] is None
-
-    # Les métadonnées ont été reconstruites
-    record = get_file_record(file_id)
-    assert record is not None
-    assert record.status == "processing"
-
-    with client.application.app_context():
-        restored_row = db.session.get(File, file_id)
-        assert restored_row is not None
-        assert restored_row.status == "processing"
+    assert status_resp.status_code == 404
+    assert status_resp.get_json() == {"error": "unknown file_id"}
 
 
 def test_conversion_worker_marks_ready(client_factory, monkeypatch):

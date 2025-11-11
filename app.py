@@ -46,6 +46,7 @@ from app.xkt_pipeline import (
     should_serve_xkt_via_flask,
 )
 from app.api.contract_routes import api_contract_bp
+from app.log_utils import mask_db_uri
 
 SRC_DIR = Path(__file__).resolve().parent / "src"
 if SRC_DIR.exists():
@@ -54,7 +55,7 @@ if SRC_DIR.exists():
         sys.path.insert(0, src_path)
 
 from backend.models import db, File
-from backend.api import api as api_bp
+from backend.api import create_api_blueprint
 
 # ====== Base paths / i18n ======
 BASE_DIR = Path(__file__).resolve().parent
@@ -83,6 +84,7 @@ print("[env] XEOKIT_ARGS =", os.getenv("XEOKIT_ARGS"))
 # ====== Flask app / blueprints ======
 app = Flask(__name__, static_folder="static", template_folder="templates")
 root_bp = Blueprint("root", __name__)
+api_bp = create_api_blueprint()
 
 _default_db_uri = (
     os.environ.get("SQLALCHEMY_DATABASE_URI")
@@ -137,6 +139,17 @@ def _ensure_app_context():
     return ctx
 
 
+def _blueprint_endpoint_name(func) -> str | None:
+    closure = getattr(func, "__closure__", None)
+    if not closure:
+        return None
+    for cell in closure:
+        value = cell.cell_contents
+        if isinstance(value, str) and value and "/" not in value:
+            return value
+    return None
+
+
 def run_real_xkt_converter(src_path: str, dest_path: str) -> None:
     """Exécute le convertisseur XKT réel (wrapper)."""
 
@@ -165,8 +178,20 @@ def convert_to_xkt(file_id: str, src_path: str) -> tuple[str, str]:
 
     ctx = _ensure_app_context()
     logger = current_app.logger if has_app_context() else logging.getLogger("cadlytics.convert")
-    logger.info("[convert] start file_id=%s src=%s", file_id, src_path)
+    job_id = _upload_jobs.get(file_id)
+    logger.info("[convert] start file_id=%s job_id=%s src=%s", file_id, job_id or "-", src_path)
     try:
+        file_row = db.session.get(File, file_id)
+        if file_row:
+            file_row.status = "processing"
+            file_row.error_message = None
+            file_row.updated_at = datetime.now(timezone.utc)
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+                current_app.logger.warning("[convert] unable to persist processing status for %s", file_id, exc_info=True)
+
         tmp_path = f"/tmp/{file_id}.xkt"
         run_real_xkt_converter(src_path, tmp_path)
         if not os.path.exists(tmp_path):
@@ -195,7 +220,7 @@ def convert_to_xkt(file_id: str, src_path: str) -> tuple[str, str]:
             file_row.status = "ready"
             file_row.xkt_url = final_xkt_url
             file_row.error_message = None
-            file_row.updated_at = datetime.utcnow()
+            file_row.updated_at = datetime.now(timezone.utc)
             try:
                 db.session.commit()
             except Exception:
@@ -209,10 +234,12 @@ def convert_to_xkt(file_id: str, src_path: str) -> tuple[str, str]:
         except OSError:
             size = -1
         logger.info(
-            "[convert] done file_id=%s dest=%s size=%s",
+            "[convert] done file_id=%s job_id=%s dest=%s size=%s xkt_url=%s",
             file_id,
+            job_id or "-",
             final_path,
             size,
+            final_xkt_url,
         )
 
         return final_path, final_xkt_url
@@ -228,7 +255,7 @@ def convert_to_xkt(file_id: str, src_path: str) -> tuple[str, str]:
         if file_row:
             file_row.status = "failed"
             file_row.error_message = message
-            file_row.updated_at = datetime.utcnow()
+            file_row.updated_at = datetime.now(timezone.utc)
             try:
                 db.session.commit()
             except Exception:
@@ -512,7 +539,7 @@ def _reconvert_job(file_id: str, job_id: str):
         mark_file_failed(file_id, str(e))
         JOBS[job_id] = {"status": "error", "file_id": file_id, "error": str(e)}
 
-@api_bp.post("/reconvert")
+@api_bp.post("/reconvert", endpoint="api_reconvert_enqueue")
 def api_reconvert():
     data = request.get_json(silent=True) or {}
     file_id = (data.get("file_id") or data.get("id") or "").strip()
@@ -534,7 +561,7 @@ def api_reconvert():
     JOBS[job_id] = {"status": "pending", "file_id": file_id}
     return jsonify(job_id=job_id, status="pending")
 
-@api_bp.get("/reconvert/status/<job_id>")
+@api_bp.get("/reconvert/status/<job_id>", endpoint="api_reconvert_status_job")
 def api_reconvert_status(job_id: str):
     info = JOBS.get(job_id)
     if not info:
@@ -560,14 +587,17 @@ def handle_exception(exc):
 
 # ====== Upload / statut fichiers (STEP -> XKT async) ======
 def enqueue_convert_xkt(*, file_id: str, src_path: str):
-    """Planifie une conversion XKT (fallback synchrone en dev)."""
+    """Planifie une conversion XKT via le worker local (thread)."""
 
     class _LocalJob:
         def __init__(self, identifier: str):
             self.id = identifier
 
-    convert_to_xkt(file_id, src_path)
-    return _LocalJob(f"local-{file_id}")
+    job_id = str(uuid.uuid4())
+    _upload_jobs[file_id] = job_id
+    JOBS[job_id] = {"status": "pending", "file_id": file_id, "enqueued_at": time.time()}
+    _schedule_conversion(file_id, src_path)
+    return _LocalJob(job_id)
 
 
 def _handle_upload_request() -> tuple[dict, int]:
@@ -620,13 +650,15 @@ def _handle_upload_request() -> tuple[dict, int]:
             )
 
         try:
-            frow = File.query.get(file_id)
+            now = datetime.now(timezone.utc)
+            frow = db.session.get(File, file_id)
             if not frow:
                 frow = File(
                     id=file_id,
                     original_name=original_name,
                     status="enqueued",
                     xkt_url=None,
+                    updated_at=now,
                 )
                 db.session.add(frow)
             else:
@@ -634,6 +666,7 @@ def _handle_upload_request() -> tuple[dict, int]:
                 frow.status = "enqueued"
                 frow.xkt_url = None
                 frow.error_message = None
+                frow.updated_at = now
             db.session.commit()
         except Exception as exc:
             db.session.rollback()
@@ -644,16 +677,20 @@ def _handle_upload_request() -> tuple[dict, int]:
 
         job = enqueue_convert_xkt(file_id=file_id, src_path=src_path)
         job_id = getattr(job, "id", None) or f"local-{file_id}"
+        _upload_jobs[file_id] = job_id
 
         base_xkt_url = (XKT_BASE_URL or "https://cadlytics.app/xkt").rstrip("/")
         xkt_url = f"{base_xkt_url}/{file_id}.xkt"
 
+        db_uri = mask_db_uri(current_app.config.get("SQLALCHEMY_DATABASE_URI"))
+
         current_app.logger.info(
-            "[upload] enqueued file_id=%s job_id=%s xkt_url=%s src=%s",
+            "[upload] enqueued file_id=%s job_id=%s xkt_url=%s src=%s db=%s",
             file_id,
             job_id,
             xkt_url,
             src_path,
+            db_uri,
         )
 
         payload = {
@@ -753,12 +790,32 @@ def __diag():
 
 def create_app() -> Flask:
     """Factory Flask utilisée par Gunicorn."""
-    if "api" not in app.blueprints:
+    if "cadlytics_api" not in app.blueprints:
+        if hasattr(api_bp, "deferred_functions"):
+            dedup: list = []
+            seen = set()
+            for func in getattr(api_bp, "deferred_functions", []):
+                endpoint_name = _blueprint_endpoint_name(func)
+                if endpoint_name in {"api_reconvert_enqueue", "api_reconvert_status_job"}:
+                    if endpoint_name in seen:
+                        continue
+                    seen.add(endpoint_name)
+                dedup.append(func)
+            api_bp.deferred_functions = dedup  # type: ignore[attr-defined]
+        existing_endpoints = [name for name in app.view_functions if name.startswith("cadlytics_api.")]
+        if existing_endpoints:
+            for name in existing_endpoints:
+                app.view_functions.pop(name, None)
+            to_remove = [rule for rule in list(app.url_map.iter_rules()) if rule.endpoint.startswith("cadlytics_api.")]
+            for rule in to_remove:
+                try:
+                    app.url_map._rules.remove(rule)
+                except ValueError:
+                    pass
+                app.url_map._rules_by_endpoint.pop(rule.endpoint, None)
         app.register_blueprint(api_bp, url_prefix="/api")
     return app
 
-
-create_app()
 
 if __name__ == "__main__":
     create_app().run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
