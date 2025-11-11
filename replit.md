@@ -101,7 +101,16 @@ CELERY_BROKER_URL=redis://localhost:6379/0 ./start_worker.sh
 - Lancer Gunicorn en utilisant la même variable :
 
 ```bash
-CELERY_BROKER_URL=redis://localhost:6379/0 gunicorn app:app --timeout 600
+CELERY_BROKER_URL=redis://localhost:6379/0 \
+  gunicorn "app:create_app()" \
+  --bind 0.0.0.0:8000 \
+  --worker-class gthread \
+  --workers=2 \
+  --threads=8 \
+  --timeout=600 \
+  --access-logfile - \
+  --error-logfile - \
+  --log-level info
 ```
 - Pour Nginx, ajouter `client_max_body_size 100M;` et `proxy_read_timeout 600;`
 
