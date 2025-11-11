@@ -26,7 +26,7 @@ export CELERY_RESULT_BACKEND="$REDIS_URL"
 Lancer l'application Flask :
 
 ```
-gunicorn web:app --timeout 600
+gunicorn "app:create_app()" --bind 0.0.0.0:8000 --worker-class gthread --workers=2 --threads=8 --timeout=600 --access-logfile - --error-logfile - --log-level info
 ```
 
 Lancer le worker Celery :

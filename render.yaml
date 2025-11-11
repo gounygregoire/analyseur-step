@@ -7,7 +7,16 @@ services:
       npm run build
       pip install -r requirements.txt
       npm ci --omit=dev
-    startCommand: gunicorn "app:create_app()" -w 2 -k gthread -b 0.0.0.0:$PORT
+    startCommand: >-
+      gunicorn "app:create_app()"
+      --bind 0.0.0.0:$PORT
+      --worker-class gthread
+      --workers=2
+      --threads=8
+      --timeout=600
+      --access-logfile -
+      --error-logfile -
+      --log-level info
     envVars:
       - key: REDIS_URL
         fromService:
