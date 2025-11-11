@@ -2,7 +2,7 @@ from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import DeclarativeBase
 from flask_dance.consumer.storage.sqla import OAuthConsumerMixin
 from flask_login import UserMixin
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import UniqueConstraint, func
 from datetime import datetime
 import uuid
 
@@ -10,6 +10,22 @@ class Base(DeclarativeBase):
     pass
 
 db = SQLAlchemy(model_class=Base)
+
+
+class File(db.Model):
+    """Modèle de suivi d'un fichier STEP en conversion XKT."""
+
+    __tablename__ = "files"
+
+    id = db.Column(db.String(36), primary_key=True)
+    original_name = db.Column(db.String(255))
+    status = db.Column(db.String(20), default="processing")
+    xkt_url = db.Column(db.Text, nullable=True)
+    error_message = db.Column(db.Text, nullable=True)
+    updated_at = db.Column(
+        db.DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
 
 MODEL_JOB_STATE_ORDER = [
     'uploaded',

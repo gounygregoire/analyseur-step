@@ -4311,9 +4311,11 @@ async function waitXKTReady(fileId) {
     throw new Error('waitXKTReady: fileId requis');
   }
 
+  setStatus('Upload enregistré, conversion en cours…');
   const startedAt = Date.now();
   let delay = STATUS_POLL_MIN_MS;
   let lastError = null;
+  let notFoundCount = 0;
 
   while (Date.now() - startedAt < STATUS_TIMEOUT_MS) {
     try {
@@ -4323,7 +4325,16 @@ async function waitXKTReady(fileId) {
         cache: 'no-store'
       });
 
-      if (response.ok) {
+      if (response.status === 404) {
+        notFoundCount++;
+        console.warn('[status] 404 (id inconnu?)', { fileId, notFoundCount });
+        if (notFoundCount >= 3) {
+          const notFoundError = new Error('ID inconnu côté backend (404)');
+          notFoundError.code = 'STATUS_NOT_FOUND';
+          throw notFoundError;
+        }
+      } else if (response.ok) {
+        notFoundCount = 0;
         const payload = await response.json().catch(() => ({}));
         const status = payload?.status;
         const xktUrl = payload?.xkt_url || payload?.xktUrl || null;
@@ -4344,6 +4355,9 @@ async function waitXKTReady(fileId) {
       }
     } catch (err) {
       lastError = err;
+      if (err?.code === 'STATUS_NOT_FOUND') {
+        throw err;
+      }
       console.warn('[status] polling exception', err);
     }
 
