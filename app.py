@@ -225,6 +225,77 @@ def _create_record(file_id: str, filename: str, step_path: str) -> FileRecord:
     return record
 
 
+def _locate_step_source(file_id: str) -> tuple[str | None, str | None]:
+    """Retrouve un STEP uploadé à partir du disque ou de la base Storage."""
+
+    prefix = f"{file_id}__"
+    src_dir = Path(current_app.config.get("SRC_DIR", UPLOAD_FOLDER))
+    if src_dir.is_dir():
+        try:
+            for entry in src_dir.iterdir():
+                if entry.is_file() and entry.name.startswith(prefix):
+                    original = entry.name[len(prefix):] or entry.name
+                    return str(entry), original
+        except Exception:
+            current_app.logger.warning(
+                "[files] unable to scan SRC_DIR for %s", file_id, exc_info=True
+            )
+
+    step_path = Storage.get_step_path(file_id)
+    if step_path and os.path.isfile(step_path):
+        name = os.path.basename(step_path)
+        original = name[len(prefix):] if name.startswith(prefix) else name
+        return step_path, original
+
+    return None, None
+
+
+def _rehydrate_file_metadata(file_id: str) -> FileRecord | None:
+    """Recrée un enregistrement FileRecord à partir des fichiers sur disque."""
+
+    step_path, original_name = _locate_step_source(file_id)
+    if not step_path:
+        return None
+
+    try:
+        record = _create_record(file_id, original_name or os.path.basename(step_path), step_path)
+    except Exception:
+        current_app.logger.warning("[files] rehydrate failed for %s", file_id, exc_info=True)
+        return None
+
+    return record
+
+
+def _ensure_sqlalchemy_row(file_id: str, record: FileRecord) -> None:
+    """Garantit la présence d'une ligne File dans la base SQL."""
+
+    try:
+        file_row = db.session.get(File, file_id)
+        if not file_row:
+            file_row = File(
+                id=file_id,
+                original_name=record.original_name,
+                status=record.status,
+                xkt_url=record.xkt_url,
+                error_message=record.error_message,
+            )
+            db.session.add(file_row)
+        else:
+            if not file_row.original_name:
+                file_row.original_name = record.original_name
+            file_row.status = record.status
+            file_row.xkt_url = record.xkt_url
+            file_row.error_message = record.error_message
+
+        file_row.updated_at = datetime.now(timezone.utc)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.warning(
+            "[files] unable to ensure SQLAlchemy row for %s", file_id, exc_info=True
+        )
+
+
 def _conversion_worker(file_id: str, step_path: str) -> None:
     job_id = _upload_jobs.get(file_id)
     if job_id:
@@ -558,6 +629,13 @@ def upload():
 def file_status(file_id: str):
     record = get_file_record(file_id)
     file_row = db.session.get(File, file_id)
+
+    if not record and file_row is None:
+        record = _rehydrate_file_metadata(file_id)
+        if record:
+            _ensure_sqlalchemy_row(file_id, record)
+            file_row = db.session.get(File, file_id)
+
     if file_row is not None:
         status = file_row.status
         xkt_url = file_row.xkt_url if status == "ready" else None

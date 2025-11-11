@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from app.file_records import get as get_file_record, mark_failed as mark_file_failed, mark_ready as mark_file_ready
+from app.file_records import (
+    delete as delete_file_record,
+    get as get_file_record,
+    mark_failed as mark_file_failed,
+    mark_ready as mark_file_ready,
+)
 from models import File, db
 
 APP_MODULE_PATH = Path(__file__).resolve().parents[1] / "app.py"
@@ -31,6 +36,7 @@ def client_factory(tmp_path, monkeypatch):
         monkeypatch.setenv("OUTPUT_FOLDER", str(output_dir))
         monkeypatch.setenv("XKT_LOCAL_DIR", str(output_dir))
         monkeypatch.setenv("SRC_DIR", str(upload_dir))
+        monkeypatch.setenv("FILES_DB_PATH", str(tmp_path / "files.sqlite"))
         db_path = tmp_path / "cadlytics.sqlite"
         monkeypatch.setenv("SQLALCHEMY_DATABASE_URI", f"sqlite:///{db_path}")
         monkeypatch.setenv("MAX_UPLOAD_MB", str(max_mb))
@@ -184,6 +190,46 @@ def test_status_uses_sqlalchemy_model(client_factory):
     assert payload["xkt_url"] == "https://cdn/sqlalchemy/xkt/file.xkt"
     assert payload["message"] == ""
     assert payload["updated_at"] is not None
+
+
+def test_status_rehydrates_missing_metadata(client_factory, monkeypatch):
+    client, upload_dir, _output_dir, module = client_factory()
+
+    class _DummyJob:
+        id = None
+
+    monkeypatch.setattr(module, "enqueue_convert_xkt", lambda **_: _DummyJob())
+
+    resp = client.post("/api/upload", data={"file": (io.BytesIO(b"cad"), "piece.step")})
+    assert resp.status_code == 200
+    file_id = resp.get_json()["fileId"]
+
+    # Supprime les métadonnées pour simuler un backend qui a perdu l'enregistrement
+    delete_file_record(file_id)
+    with client.application.app_context():
+        file_row = db.session.get(File, file_id)
+        assert file_row is not None
+        db.session.delete(file_row)
+        db.session.commit()
+
+    # Le STEP original doit toujours être présent dans SRC_DIR
+    assert (upload_dir / f"{file_id}__piece.step").exists()
+
+    status_resp = client.get(f"/api/files/{file_id}/status")
+    assert status_resp.status_code == 200
+    payload = status_resp.get_json()
+    assert payload["status"] == "processing"
+    assert payload["xkt_url"] is None
+
+    # Les métadonnées ont été reconstruites
+    record = get_file_record(file_id)
+    assert record is not None
+    assert record.status == "processing"
+
+    with client.application.app_context():
+        restored_row = db.session.get(File, file_id)
+        assert restored_row is not None
+        assert restored_row.status == "processing"
 
 
 def test_conversion_worker_marks_ready(client_factory, monkeypatch):
