@@ -46,6 +46,7 @@ from app.xkt_pipeline import (
     local_xkt_path,
     should_serve_xkt_via_flask,
 )
+from app.api.contract_routes import api_contract_bp
 from models import File, db
 
 # ====== Base paths / i18n ======
@@ -645,6 +646,7 @@ def list_routes():
     return jsonify({"routes": output}), 200
 
 app.register_blueprint(api_bp)
+app.register_blueprint(api_contract_bp)
 
 # ====== Diag rapide ======
 @app.get("/__diag")
