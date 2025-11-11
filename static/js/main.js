@@ -4315,7 +4315,7 @@ async function waitXKTReady(fileId) {
   const startedAt = Date.now();
   let delay = STATUS_POLL_MIN_MS;
   let lastError = null;
-  let notFoundCount = 0;
+  let consecutiveNotFound = 0;
 
   while (Date.now() - startedAt < STATUS_TIMEOUT_MS) {
     try {
@@ -4326,16 +4326,26 @@ async function waitXKTReady(fileId) {
       });
 
       if (response.status === 404) {
-        notFoundCount++;
-        console.warn('[status] 404 (id inconnu?)', { fileId, notFoundCount });
-        if (notFoundCount >= 3) {
+        consecutiveNotFound++;
+        const contentType = response.headers.get('content-type') || '';
+        console.warn('[status] 404', { fileId, consecutiveNotFound, contentType });
+
+        if (!contentType.includes('application/json')) {
+          const routeMissingError = new Error('Route /api/files/:id/status indisponible');
+          routeMissingError.code = 'STATUS_ROUTE_MISSING';
+          throw routeMissingError;
+        }
+
+        if (consecutiveNotFound >= 2) {
           const notFoundError = new Error('ID inconnu côté backend (404)');
-          notFoundError.code = 'STATUS_NOT_FOUND';
+          notFoundError.code = 'STATUS_POLL_NOT_FOUND';
           throw notFoundError;
         }
+        await sleep(delay);
+        delay = Math.min(Math.round(delay * 1.5), STATUS_POLL_MAX_MS);
         continue;
       } else if (response.ok) {
-        notFoundCount = 0;
+        consecutiveNotFound = 0;
         const payload = await response.json().catch(() => ({}));
         const status = payload?.status;
         const xktUrl = payload?.xkt_url || payload?.xktUrl || null;
@@ -4356,7 +4366,7 @@ async function waitXKTReady(fileId) {
       }
     } catch (err) {
       lastError = err;
-      if (err?.code === 'STATUS_NOT_FOUND') {
+      if (err?.code === 'STATUS_ROUTE_MISSING' || err?.code === 'STATUS_POLL_NOT_FOUND') {
         throw err;
       }
       console.warn('[status] polling exception', err);
@@ -4369,6 +4379,27 @@ async function waitXKTReady(fileId) {
   const timeoutError = new Error('Conversion trop longue (timeout)');
   if (lastError) timeoutError.cause = lastError;
   throw timeoutError;
+}
+
+async function waitXKTByURL(url) {
+  if (!url) {
+    throw new Error('waitXKTByURL: URL manquante');
+  }
+
+  const start = Date.now();
+  let delay = 1000;
+
+  while (Date.now() - start < 120000) {
+    const response = await fetch(url, { method: 'HEAD', cache: 'no-store' });
+    if (response.ok) {
+      return url;
+    }
+
+    await sleep(delay);
+    delay = Math.min(delay * 1.5, 5000);
+  }
+
+  throw new Error('Timeout en attendant le fichier XKT');
 }
 
 async function loadXKT(xktUrl) {
@@ -4412,6 +4443,7 @@ if (typeof window !== 'undefined') {
 async function onUploadResponse(resp) {
   const fileId = resp?.file_id || resp?.fileId;
   const jobId = resp?.job_id || resp?.jobId || null;
+  const uploadXktUrl = resp?.xkt_url || resp?.xktUrl || null;
   console.log('[upload] ok', { fileId, jobId });
 
   if (!fileId) {
@@ -4423,7 +4455,18 @@ async function onUploadResponse(resp) {
 
   try {
     setStatus('Conversion en cours…');
-    const xktUrl = await waitXKTReady(fileId);
+    let xktUrl;
+    try {
+      xktUrl = await waitXKTReady(fileId);
+    } catch (statusErr) {
+      if (uploadXktUrl && (statusErr?.code === 'STATUS_ROUTE_MISSING' || statusErr?.code === 'STATUS_POLL_NOT_FOUND')) {
+        console.warn('[fallback-xkt] start', { fileId, reason: statusErr?.code, message: statusErr?.message });
+        xktUrl = await waitXKTByURL(uploadXktUrl);
+        console.log('[fallback-xkt] ok', { fileId, xktUrl });
+      } else {
+        throw statusErr;
+      }
+    }
     setStatus('Modèle prêt, chargement…');
     await loadXKT(xktUrl);
     setStatus('');
