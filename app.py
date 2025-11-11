@@ -4,13 +4,13 @@
 import logging
 import os
 import shutil
+import sys
 import uuid
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
-import urllib.parse
 
 from flask import (
     Blueprint,
@@ -46,7 +46,15 @@ from app.xkt_pipeline import (
     should_serve_xkt_via_flask,
 )
 from app.api.contract_routes import api_contract_bp
-from models import File, db
+
+SRC_DIR = Path(__file__).resolve().parent / "src"
+if SRC_DIR.exists():
+    src_path = str(SRC_DIR)
+    if src_path not in sys.path:
+        sys.path.insert(0, src_path)
+
+from backend.models import db, File
+from backend.api import api as api_bp
 
 # ====== Base paths / i18n ======
 BASE_DIR = Path(__file__).resolve().parent
@@ -75,7 +83,6 @@ print("[env] XEOKIT_ARGS =", os.getenv("XEOKIT_ARGS"))
 # ====== Flask app / blueprints ======
 app = Flask(__name__, static_folder="static", template_folder="templates")
 root_bp = Blueprint("root", __name__)
-api_bp = Blueprint("api", __name__, url_prefix="/api")
 
 _default_db_uri = (
     os.environ.get("SQLALCHEMY_DATABASE_URI")
@@ -98,7 +105,7 @@ app.config.setdefault("SRC_DIR", os.environ.get("SRC_DIR", UPLOAD_FOLDER))
 # ====== XKT publication ======
 XKT_STORAGE = (os.getenv("XKT_STORAGE", "local") or "local").strip().lower()
 XKT_LOCAL_DIR = os.getenv("XKT_LOCAL_DIR", "/srv/app/public/xkt")
-XKT_BASE_URL = os.getenv("XKT_BASE_URL", "https://cadlytics.app/xkt")
+XKT_BASE_URL = (os.getenv("XKT_BASE_URL") or "https://cadlytics.app/xkt").rstrip("/")
 if not XKT_BASE_URL:
     XKT_BASE_URL = "https://cadlytics.app/xkt"
 
@@ -175,27 +182,27 @@ def convert_to_xkt(file_id: str, src_path: str) -> tuple[str, str]:
                 current_app.logger.warning("[convert] unable to remove existing %s", final_path)
         shutil.move(tmp_path, final_path)
 
-        base_url = (XKT_BASE_URL or "https://cadlytics.app/xkt").rstrip("/")
-        xkt_url = f"{base_url}/{file_id}.xkt"
+        base_url = XKT_BASE_URL or "https://cadlytics.app/xkt"
+        final_xkt_url = f"{base_url}/{file_id}.xkt"  # public GET 200
 
         try:
-            mark_file_ready(file_id, xkt_path=final_path, xkt_url=xkt_url)
+            mark_file_ready(file_id, xkt_path=final_path, xkt_url=final_xkt_url)
         except Exception:
             current_app.logger.warning("[convert] unable to update FileRecord for %s", file_id, exc_info=True)
 
-        file_row = db.session.get(File, file_id)
+        file_row = File.query.get(file_id)
         if file_row:
             file_row.status = "ready"
-            file_row.xkt_url = xkt_url
+            file_row.xkt_url = final_xkt_url
             file_row.error_message = None
-            file_row.updated_at = datetime.now(timezone.utc)
+            file_row.updated_at = datetime.utcnow()
             try:
                 db.session.commit()
             except Exception:
                 db.session.rollback()
                 current_app.logger.error("[convert] commit ready failed", exc_info=True)
         else:
-            current_app.logger.error("[convert] DB row missing for %s", file_id)
+            current_app.logger.error("[convert] missing File row for %s", file_id)
 
         try:
             size = os.path.getsize(final_path)
@@ -208,7 +215,7 @@ def convert_to_xkt(file_id: str, src_path: str) -> tuple[str, str]:
             size,
         )
 
-        return final_path, xkt_url
+        return final_path, final_xkt_url
     except Exception as exc:
         message = str(exc)[:500]
         logger.exception("[convert] failed for %s", file_id)
@@ -217,11 +224,11 @@ def convert_to_xkt(file_id: str, src_path: str) -> tuple[str, str]:
         except Exception:
             current_app.logger.warning("[convert] unable to mark FileRecord failed for %s", file_id, exc_info=True)
 
-        file_row = db.session.get(File, file_id)
+        file_row = File.query.get(file_id)
         if file_row:
             file_row.status = "failed"
             file_row.error_message = message
-            file_row.updated_at = datetime.now(timezone.utc)
+            file_row.updated_at = datetime.utcnow()
             try:
                 db.session.commit()
             except Exception:
@@ -612,9 +619,21 @@ def _handle_upload_request() -> tuple[dict, int]:
                 "[files] unable to persist legacy record", exc_info=True
             )
 
-        file_row = File(id=file_id, original_name=original_name, status="processing")
         try:
-            db.session.add(file_row)
+            frow = File.query.get(file_id)
+            if not frow:
+                frow = File(
+                    id=file_id,
+                    original_name=original_name,
+                    status="enqueued",
+                    xkt_url=None,
+                )
+                db.session.add(frow)
+            else:
+                frow.original_name = original_name
+                frow.status = "enqueued"
+                frow.xkt_url = None
+                frow.error_message = None
             db.session.commit()
         except Exception as exc:
             db.session.rollback()
@@ -626,14 +645,29 @@ def _handle_upload_request() -> tuple[dict, int]:
         job = enqueue_convert_xkt(file_id=file_id, src_path=src_path)
         job_id = getattr(job, "id", None) or f"local-{file_id}"
 
+        base_xkt_url = (XKT_BASE_URL or "https://cadlytics.app/xkt").rstrip("/")
+        xkt_url = f"{base_xkt_url}/{file_id}.xkt"
+
         current_app.logger.info(
-            "[upload] stored file_id=%s src=%s job=%s",
+            "[upload] enqueued file_id=%s job_id=%s xkt_url=%s src=%s",
             file_id,
-            src_path,
             job_id,
+            xkt_url,
+            src_path,
         )
 
-        return {"fileId": file_id, "jobId": job_id}, 200
+        payload = {
+            "file_id": file_id,
+            "job_id": job_id,
+            "xkt_url": xkt_url,
+            "status": "enqueued",
+            "message": "",
+            "updated_at": None,
+            "fileId": file_id,
+            "jobId": job_id,
+            "xktUrl": xkt_url,
+        }
+        return payload, 200
     except Exception as exc:  # pragma: no cover - garde-fou
         logging.getLogger("cadlytics").exception("[files] upload failed")
         return {"error": "server_exception", "detail": str(exc)}, 500
@@ -649,52 +683,6 @@ def api_upload():
 def upload():
     payload, status = _handle_upload_request()
     return jsonify(payload), status
-
-
-@api_bp.get("/files/<file_id>/status")
-def file_status(file_id: str):
-    record = get_file_record(file_id)
-    file_row = db.session.get(File, file_id)
-
-    if not file_row and record is None:
-        record = _rehydrate_file_metadata(file_id)
-
-    if record is not None:
-        try:
-            _ensure_sqlalchemy_row(file_id, record)
-        except Exception:
-            current_app.logger.warning(
-                "[status] unable to sync SQL row for %s", file_id, exc_info=True
-            )
-        file_row = db.session.get(File, file_id)
-
-    if not file_row:
-        return {"error": "unknown file_id"}, 404
-
-    if record is None:
-        record = get_file_record(file_id)
-
-    if record and record.status != file_row.status:
-        try:
-            _ensure_sqlalchemy_row(file_id, record)
-        except Exception:
-            current_app.logger.warning(
-                "[status] sync mismatch for %s", file_id, exc_info=True
-            )
-        file_row = db.session.get(File, file_id)
-
-    payload = {
-        "status": file_row.status,
-        "xkt_url": file_row.xkt_url if file_row.status == "ready" else None,
-        "message": file_row.error_message or "",
-        "updated_at": file_row.updated_at.isoformat() if file_row.updated_at else None,
-    }
-    current_app.logger.info(
-        "[status] file_id=%s status=%s",
-        file_id,
-        payload["status"],
-    )
-    return payload, 200
 
 
 @api_bp.post("/files/<file_id>/reconvert")
@@ -736,16 +724,6 @@ def api_health():
     return {"ok": True}, 200
 
 
-@api_bp.get("/_routes")
-def api_routes():
-    routes = []
-    for rule in current_app.url_map.iter_rules():
-        methods = ",".join(sorted(rule.methods - {"HEAD", "OPTIONS"}))
-        url = urllib.parse.unquote(str(rule))
-        routes.append({"rule": url, "endpoint": rule.endpoint, "methods": methods})
-    return {"routes": routes}, 200
-
-
 @api_bp.get("/_debug/file/<file_id>")
 def api_debug_file(file_id: str):
     file_row = db.session.get(File, file_id)
@@ -757,7 +735,6 @@ def api_debug_file(file_id: str):
         "xkt_url": file_row.xkt_url,
     }, 200
 
-app.register_blueprint(api_bp)
 app.register_blueprint(api_contract_bp)
 
 # ====== Diag rapide ======
@@ -776,7 +753,12 @@ def __diag():
 
 def create_app() -> Flask:
     """Factory Flask utilisée par Gunicorn."""
+    if "api" not in app.blueprints:
+        app.register_blueprint(api_bp, url_prefix="/api")
     return app
+
+
+create_app()
 
 if __name__ == "__main__":
     create_app().run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
