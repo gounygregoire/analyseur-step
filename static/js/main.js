@@ -4333,6 +4333,7 @@ async function waitXKTReady(fileId) {
           notFoundError.code = 'STATUS_NOT_FOUND';
           throw notFoundError;
         }
+        continue;
       } else if (response.ok) {
         notFoundCount = 0;
         const payload = await response.json().catch(() => ({}));
