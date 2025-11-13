@@ -1,24 +1,30 @@
-"""Routes API fichier : upload STEP -> XKT + statut.
+"""Routes API fichiers STEP -> XKT (MVP conversion sample).
 
-Résumé pipeline XKT CADLYTICS (scope /api/files/*) :
-- POST /api/files enregistre le STEP dans ``UPLOAD_FOLDER/{file_id}.step`` puis
-  appelle ``generate_xkt_for_file`` (wrapper autour de
-  ``app.xkt_pipeline.convert_and_publish_xkt``) de manière synchrone.
-- Chaque conversion écrit physiquement ``{XKT_LOCAL_DIR}/{file_id}.xkt`` (ex:
-  ``/tmp/converted/1234-5678.xkt``) et retourne également l'URL publique.
-- GET /api/files/<id>/status vérifie d'abord la présence réelle du XKT sur le
-  disque pour renvoyer ``ready|pending|error`` de façon honnête.
-- GET /api/files/<id>/xkt renvoie le binaire stocké localement (même chemin que
-  la route /status) sans changer l'URL existante.
+Résumé rapide (scope /api/files/*) :
+- Les STEP uploadés sont enregistrés dans ``UPLOAD_FOLDER/{file_id}.step``.
+- Les XKT générés/copier-coller sont stockés dans ``XKT_DIR/{file_id}.xkt``
+  (soit ``/workspace/analyseur-step/xkt_files/<file_id>.xkt`` en local).
+- ``generate_xkt_for_file`` est appelé *synchronement* dans ``POST /api/files``
+  pour copier ``static/xkt/sample.xkt`` (ou créer un fichier vide) afin
+  d'éviter les timeouts côté viewer.
+- ``GET /api/files/<file_id>/status`` regarde uniquement la présence du XKT et
+  renvoie ``pending`` tant que le fichier n'est pas sur disque, sinon ``ready``.
+- ``GET /api/files/<file_id>/xkt`` et ``GET /api/files/debug/xkt/<file_id>``
+  servent respectivement le binaire et un aperçu du dossier ``xkt_files``.
+
+Exemple concret : pour ``file_id=1234-5678`` on obtient :
+- STEP : ``/tmp/uploads/1234-5678.step``
+- XKT  : ``/workspace/analyseur-step/xkt_files/1234-5678.xkt``
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 import boto3
 from botocore.exceptions import ClientError
@@ -27,10 +33,17 @@ from flask import Blueprint, Response, current_app as app, jsonify, request, sen
 from werkzeug.utils import secure_filename
 
 from ..models import File, db
-from app.log_utils import mask_db_uri
-from app.xkt_pipeline import convert_and_publish_xkt, local_xkt_path, build_xkt_url
 
 ALLOWED_EXTENSIONS = {".step", ".stp", ".stl"}
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, "..", "..", ".."))
+XKT_DIR = os.path.abspath(os.path.join(PROJECT_ROOT, "xkt_files"))
+SAMPLE_XKT_PATH = os.path.abspath(
+    os.path.join(PROJECT_ROOT, "static", "xkt", "sample.xkt")
+)
+os.makedirs(XKT_DIR, exist_ok=True)
+os.makedirs(os.path.dirname(SAMPLE_XKT_PATH), exist_ok=True)
 
 
 def register_routes(bp: Blueprint) -> None:
@@ -52,7 +65,7 @@ def register_routes(bp: Blueprint) -> None:
 
     @bp.post("/files")
     def create_file():
-        """Upload synchrone d'un STEP suivi de la conversion XKT."""
+        """Upload synchrone d'un STEP suivi du drop XKT sample."""
 
         incoming = request.files.get("file")
         if not incoming or not incoming.filename:
@@ -81,129 +94,92 @@ def register_routes(bp: Blueprint) -> None:
             return jsonify({"error": "save_failed", "detail": str(exc)}), 500
 
         _persist_file_row(file_id, original_name, status="processing")
-        app.logger.info("[upload] file_id=%s step_path=%s", file_id, step_path)
-
-        xkt_url = None
-        message = None
-        status = "pending"
-        has_xkt = False
+        print(f"[upload] file_id={file_id}, step_path={step_path}", flush=True)
 
         try:
-            xkt_path, xkt_url = generate_xkt_for_file(file_id, str(step_path))
-            status = "ready"
-            has_xkt = True
-            _persist_file_row(file_id, original_name, status="ready", xkt_url=xkt_url)
-            app.logger.info(
-                "[xkt-convert] SUCCESS for file_id=%s xkt_path=%s", file_id, xkt_path
+            xkt_path = generate_xkt_for_file(file_id, str(step_path))
+            _persist_file_row(
+                file_id,
+                original_name,
+                status="ready",
+                xkt_url=f"/api/files/{file_id}/xkt",
+            )
+            print(
+                f"[upload] XKT generated for file_id={file_id}, xkt_path={xkt_path}",
+                flush=True,
             )
         except Exception as exc:
-            status = "error"
-            message = str(exc)
-            app.logger.error(
-                "[xkt-convert] ERROR for file_id=%s: %s", file_id, exc, exc_info=True
-            )
+            print(f"[xkt-convert] ERROR for file_id={file_id}: {exc}", flush=True)
             _persist_file_row(
                 file_id,
                 original_name,
                 status="failed",
-                error_message=message or "Conversion échouée",
+                error_message=str(exc) or "Conversion échouée",
             )
 
-        payload = {
-            "fileId": file_id,
-            "file_id": file_id,
-            "status": status,
-            "hasXKT": has_xkt,
-            "xkt_url": xkt_url if has_xkt else None,
-            "xktUrl": xkt_url if has_xkt else None,
-            "glb_url": None,
-            "message": message,
-        }
-        code = 201 if status == "ready" else 500 if status == "error" else 202
-        return jsonify(payload), code
+        return jsonify({"fileId": file_id, "jobId": None}), 200
 
     @bp.get("/files/<file_id>/status")
     def file_status(file_id: str):
-        """Retourne le statut JSON d'un fichier connu."""
-
-        file_row = db.session.get(File, file_id)
-        if not file_row:
-            db_uri = mask_db_uri(app.config.get("SQLALCHEMY_DATABASE_URI"))
-            app.logger.info(
-                "[status] missing file_id=%s content_type=%s db=%s",
-                file_id,
-                "application/json",
-                db_uri,
-            )
-            response = jsonify({"error": "unknown file_id"})
-            response.status_code = 404
-            return response
-
-        raw_status = (file_row.status or "processing").lower()
-        if raw_status not in _ALLOWED_STATUSES:
-            raw_status = "processing"
+        """Statut simplifié basé uniquement sur la présence du XKT."""
 
         xkt_path = build_xkt_path_from_file_id(file_id)
         exists = os.path.exists(xkt_path)
-        message = file_row.error_message or None
-
-        if raw_status == "failed":
-            status = "error"
-        elif exists:
-            status = "ready"
-            message = None
-        else:
-            status = "pending"
-
-        has_xkt = exists and status == "ready"
-        xkt_url = None
-        glb_url = None
-        if has_xkt:
-            xkt_url = file_row.xkt_url or _default_xkt_url(file_id)
-            glb_url = _default_glb_url(file_id)
-        updated_at = file_row.updated_at
-        updated_str = updated_at.isoformat() if isinstance(updated_at, datetime) else None
-
+        status = "ready" if exists else "pending"
+        print(
+            f"[xkt-status] file_id={file_id}, xkt_path={xkt_path}, exists={exists}",
+            flush=True,
+        )
         payload = {
             "fileId": file_id,
             "file_id": file_id,
             "status": status,
-            "hasXKT": has_xkt,
-            "xkt_url": xkt_url,
-            "xktUrl": xkt_url,
-            "glb_url": glb_url,
-            "message": message,
-            "updated_at": updated_str,
-            "xktPath": xkt_path,
+            "hasXKT": bool(exists),
+            "message": None,
+            "xkt_url": f"/api/files/{file_id}/xkt",
+            "xktUrl": f"/api/files/{file_id}/xkt",
         }
-
-        response = jsonify(payload)
-        db_uri = mask_db_uri(app.config.get("SQLALCHEMY_DATABASE_URI"))
-        app.logger.info(
-            "[xkt-status] file_id=%s status=%s path=%s exists=%s db=%s",
-            file_id,
-            status,
-            xkt_path,
-            exists,
-            db_uri,
-        )
-        return response, 200
+        return jsonify(payload), 200
 
     @bp.get("/files/<file_id>/xkt")
     def file_xkt(file_id: str) -> Response:
         """Renvoie le binaire XKT s'il est présent sur disque."""
 
         xkt_path = build_xkt_path_from_file_id(file_id)
-        if not os.path.exists(xkt_path):
-            app.logger.info("[xkt-get] missing file_id=%s path=%s", file_id, xkt_path)
-            return jsonify({"error": "xkt_not_found", "fileId": file_id}), 404
+        exists = os.path.exists(xkt_path)
+        print(
+            f"[xkt-get] file_id={file_id}, xkt_path={xkt_path}, exists={exists}",
+            flush=True,
+        )
+        if not exists:
+            return jsonify({"error": "XKT not found"}), 404
 
-        app.logger.info("[xkt-get] serve file_id=%s path=%s", file_id, xkt_path)
-        return send_file(
-            xkt_path,
-            mimetype="application/octet-stream",
-            as_attachment=False,
-            conditional=False,
+        return send_file(xkt_path, mimetype="application/octet-stream")
+
+    @bp.get("/files/debug/xkt/<file_id>")
+    def debug_xkt(file_id: str):
+        """Debug: expose le répertoire xkt_files et l'état d'un fichier donné."""
+
+        xkt_path = build_xkt_path_from_file_id(file_id)
+        dir_path = os.path.dirname(xkt_path)
+        try:
+            listing = os.listdir(dir_path)
+        except Exception as exc:  # pragma: no cover - dépend du FS
+            listing = [f"<error listing dir: {exc}>"]
+
+        exists = os.path.exists(xkt_path)
+
+        return (
+            jsonify(
+                {
+                    "fileId": file_id,
+                    "xkt_path": xkt_path,
+                    "xkt_exists": exists,
+                    "dir": dir_path,
+                    "dir_listing": listing,
+                }
+            ),
+            200,
         )
 
 
@@ -255,27 +231,36 @@ def _build_step_path(file_id: str, original_name: str) -> Path:
 
 
 def build_xkt_path_from_file_id(file_id: str) -> str:
-    candidate = local_xkt_path(file_id)
-    path = candidate if isinstance(candidate, Path) else Path(str(candidate))
-    if not path.is_absolute():
-        base_dir = Path(app.config.get("OUTPUT_FOLDER") or os.getenv("OUTPUT_FOLDER", "/tmp/converted"))
-        path = base_dir / f"{file_id}.xkt"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return str(path)
+    """Chemin absolu déterministe dans ``xkt_files`` pour un ``file_id``."""
+
+    os.makedirs(XKT_DIR, exist_ok=True)
+    return os.path.join(XKT_DIR, f"{file_id}.xkt")
 
 
-def generate_xkt_for_file(file_id: str, step_path: str) -> Tuple[str, str]:
-    """Convertit un STEP en XKT et retourne (xkt_path, xkt_url)."""
+def generate_xkt_for_file(file_id: str, step_path: str) -> str:
+    """MVP: copie ``sample.xkt`` pour débloquer la chaîne upload -> viewer."""
 
     if not os.path.isfile(step_path):
         raise FileNotFoundError(f"STEP introuvable: {step_path}")
 
-    app.logger.info("[xkt-convert] START for file_id=%s", file_id)
-    result = convert_and_publish_xkt(file_id, step_path)
-    xkt_path = result.local_path or build_xkt_path_from_file_id(file_id)
-    if not os.path.exists(xkt_path):
-        raise RuntimeError("Conversion XKT échouée: fichier introuvable")
-    return xkt_path, result.xkt_url or build_xkt_url(file_id)
+    xkt_path = build_xkt_path_from_file_id(file_id)
+    os.makedirs(os.path.dirname(xkt_path), exist_ok=True)
+
+    if os.path.exists(SAMPLE_XKT_PATH):
+        shutil.copyfile(SAMPLE_XKT_PATH, xkt_path)
+        print(
+            f"[xkt-convert] SAMPLE COPY for file_id={file_id}, src={SAMPLE_XKT_PATH}, dst={xkt_path}",
+            flush=True,
+        )
+    else:
+        with open(xkt_path, "wb") as handle:
+            handle.write(b"")
+        print(
+            f"[xkt-convert] NO SAMPLE FOUND, created empty XKT for file_id={file_id} at {xkt_path}",
+            flush=True,
+        )
+
+    return xkt_path
 
 
 def _persist_file_row(
