@@ -48,7 +48,9 @@ def test_api_file_status_ready(tmp_path, monkeypatch):
     assert payload["fileId"] == file_id
     assert payload["status"] == "ready"
     assert payload["hasXKT"] is True
-    assert payload["xkt_url"].endswith(f"/api/files/{file_id}/xkt")
+    assert payload["xkt_url"].startswith(f"http://localhost/api/files/{file_id}/xkt")
+    assert "?nocache=" in payload["xkt_url"]
+    assert payload["xktUrl"] == payload["xkt_url"]
 
 
 def test_api_file_status_pending_returns_200(tmp_path, monkeypatch):
@@ -60,13 +62,12 @@ def test_api_file_status_pending_returns_200(tmp_path, monkeypatch):
 
     assert resp.status_code == 200
     payload = resp.get_json()
-    assert payload == {
-        "fileId": file_id,
-        "file_id": file_id,
-        "status": "pending",
-        "hasXKT": False,
-        "xkt_url": None,
-    }
+    assert payload["fileId"] == file_id
+    assert payload["file_id"] == file_id
+    assert payload["status"] == "pending"
+    assert payload["hasXKT"] is False
+    assert payload["xkt_url"] is None
+    assert payload["xktUrl"] is None
 
 
 def test_api_file_xkt_serves_binary(tmp_path, monkeypatch):
