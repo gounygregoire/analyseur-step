@@ -1,20 +1,23 @@
-"""Routes API fichiers STEP -> XKT (MVP conversion sample).
+"""Routes API fichiers STEP -> XKT (pipeline RQ + worker).
 
-Résumé rapide (scope /api/files/*) :
-- Les STEP uploadés sont enregistrés dans ``UPLOAD_FOLDER/{file_id}.step``.
-- Les XKT générés/copier-coller sont stockés dans ``XKT_DIR/{file_id}.xkt``
-  (soit ``/workspace/analyseur-step/xkt_files/<file_id>.xkt`` en local).
-- ``generate_xkt_for_file`` est appelé *synchronement* dans ``POST /api/files``
-  pour copier ``static/xkt/sample.xkt`` (ou créer un fichier vide) afin
-  d'éviter les timeouts côté viewer.
-- ``GET /api/files/<file_id>/status`` regarde uniquement la présence du XKT et
-  renvoie ``pending`` tant que le fichier n'est pas sur disque, sinon ``ready``.
-- ``GET /api/files/<file_id>/xkt`` et ``GET /api/files/debug/xkt/<file_id>``
-  servent respectivement le binaire et un aperçu du dossier ``xkt_files``.
+Résumé du pipeline réel (scope ``/api/files/*``) :
 
-Exemple concret : pour ``file_id=1234-5678`` on obtient :
-- STEP : ``/tmp/uploads/1234-5678.step``
-- XKT  : ``/workspace/analyseur-step/xkt_files/1234-5678.xkt``
+- ``POST /api/files`` sauvegarde le STEP dans ``UPLOAD_FOLDER/<file_id>.step``
+  puis enfile un job RQ via ``converter.convert_step_to_xkt`` (module
+  ``converter.py``). Le job vit dans ``RQ_CONVERT_QUEUE`` (ou
+  ``RQ_QUEUE_NAME``) sur Redis.
+- Le worker RQ lance ``converter.convert_step_to_xkt`` qui :
+  * télécharge le STEP depuis S3 si besoin («[convert][src] pulled STEP…»),
+  * convertit en GLB/XKT via ``@xeokit/xeokit-convert``,
+  * uploade ``xkt/<file_id>.xkt`` et ``glb/<file_id>.glb`` dans ``s3://$S3_BUCKET``
+    puis met à jour ``File`` (``status``, ``xkt_url``, ``error_message``).
+- Les URL publiques proviennent de ``XKT_BASE_URL`` / ``GLB_BASE_URL``
+  (défaut ``https://cadlytics.app/xkt`` & ``https://cadlytics.app/glb``).
+- ``GET /api/files/<file_id>/status`` consulte la DB et vérifie l'existence du
+  XKT via HTTP HEAD (``http_exists``) ou ``s3_object_exists``.
+- ``GET /api/files/<file_id>/xkt`` renvoie l'artefact publié par le worker
+  (redirection HTTP ou proxy S3). ``generate_xkt_for_file`` reste un fallback
+  local activable via ``DEV_FORCE_SAMPLE_XKT`` pour le dev/offline uniquement.
 """
 
 from __future__ import annotations
@@ -24,12 +27,24 @@ import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Generator, Optional
 
 import boto3
 from botocore.exceptions import ClientError
 import requests
-from flask import Blueprint, Response, current_app as app, jsonify, request, send_file
+from flask import (
+    Blueprint,
+    Response,
+    current_app as app,
+    jsonify,
+    redirect,
+    request,
+    send_file,
+    stream_with_context,
+)
+from redis import Redis
+from rq import Queue
+from urllib.parse import urlparse, urlunparse
 from werkzeug.utils import secure_filename
 
 from ..models import File, db
@@ -44,6 +59,20 @@ SAMPLE_XKT_PATH = os.path.abspath(
 )
 os.makedirs(XKT_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(SAMPLE_XKT_PATH), exist_ok=True)
+
+_DEV_FORCE_SAMPLE_DEFAULT = (
+    str(os.getenv("DEV_FORCE_SAMPLE_XKT", "")).strip().lower() in {"1", "true", "yes", "on"}
+)
+_REDIS_URL = (
+    os.getenv("REDIS_URL")
+    or os.getenv("REDIS_TLS_URL")
+    or "redis://localhost:6379/0"
+)
+_RQ_QUEUE_NAME = os.getenv("RQ_CONVERT_QUEUE") or os.getenv("RQ_QUEUE_NAME") or "convert"
+_RQ_JOB_TIMEOUT_SEC = int(os.getenv("RQ_JOB_TIMEOUT_SEC", "1200"))
+_S3_BUCKET = os.getenv("S3_BUCKET")
+
+_rq_queue: Queue | None = None
 
 
 def register_routes(bp: Blueprint) -> None:
@@ -65,7 +94,7 @@ def register_routes(bp: Blueprint) -> None:
 
     @bp.post("/files")
     def create_file():
-        """Upload synchrone d'un STEP suivi du drop XKT sample."""
+        """Upload d'un STEP + enqueue du job RQ (fallback local optionnel)."""
 
         incoming = request.files.get("file")
         if not incoming or not incoming.filename:
@@ -93,72 +122,191 @@ def register_routes(bp: Blueprint) -> None:
             app.logger.exception("[upload] save_failed file_id=%s", file_id)
             return jsonify({"error": "save_failed", "detail": str(exc)}), 500
 
-        _persist_file_row(file_id, original_name, status="processing")
-        print(f"[upload] file_id={file_id}, step_path={step_path}", flush=True)
+        _persist_file_row(file_id, original_name, status="enqueued")
+        app.logger.info("[upload] file_id=%s step_path=%s", file_id, step_path)
+
+        job_id: Optional[str] = None
+        enqueue_error: Optional[str] = None
+        force_sample = _should_force_sample_mode()
+
+        if not force_sample:
+            try:
+                job_id = _enqueue_conversion_job(file_id)
+                app.logger.info("[upload] enqueued file_id=%s job_id=%s", file_id, job_id)
+            except Exception as exc:
+                enqueue_error = str(exc)
+                app.logger.exception("[upload] enqueue_failed file_id=%s", file_id)
+
+        if job_id:
+            payload = {
+                "fileId": file_id,
+                "file_id": file_id,
+                "jobId": job_id,
+                "status": "enqueued",
+                "hasXKT": False,
+                "xkt_url": None,
+                "xktUrl": None,
+                "glb_url": None,
+                "message": None,
+            }
+            return jsonify(payload), 202
+
+        if enqueue_error and not force_sample:
+            app.logger.warning(
+                "[upload] fallback_sample file_id=%s reason=%s", file_id, enqueue_error
+            )
 
         try:
             xkt_path = generate_xkt_for_file(file_id, str(step_path))
-            _persist_file_row(
-                file_id,
-                original_name,
-                status="ready",
-                xkt_url=f"/api/files/{file_id}/xkt",
-            )
-            print(
-                f"[upload] XKT generated for file_id={file_id}, xkt_path={xkt_path}",
-                flush=True,
-            )
-        except Exception as exc:
-            print(f"[xkt-convert] ERROR for file_id={file_id}: {exc}", flush=True)
+        except Exception as exc:  # pragma: no cover - unexpected fallback failure
+            app.logger.exception("[upload] sample_generation_failed file_id=%s", file_id)
             _persist_file_row(
                 file_id,
                 original_name,
                 status="failed",
                 error_message=str(exc) or "Conversion échouée",
             )
+            return (
+                jsonify(
+                    {
+                        "error": "conversion_failed",
+                        "detail": str(exc) or "Conversion échouée",
+                        "fileId": file_id,
+                    }
+                ),
+                500,
+            )
 
-        return jsonify({"fileId": file_id, "jobId": None}), 200
-
-    @bp.get("/files/<file_id>/status")
-    def file_status(file_id: str):
-        """Statut simplifié basé uniquement sur la présence du XKT."""
-
-        xkt_path = build_xkt_path_from_file_id(file_id)
-        exists = os.path.exists(xkt_path)
-        status = "ready" if exists else "pending"
-        print(
-            f"[xkt-status] file_id={file_id}, xkt_path={xkt_path}, exists={exists}",
-            flush=True,
+        _persist_file_row(
+            file_id,
+            original_name,
+            status="ready",
+            xkt_url=f"/api/files/{file_id}/xkt",
         )
         payload = {
             "fileId": file_id,
             "file_id": file_id,
-            "status": status,
-            "hasXKT": bool(exists),
-            "message": None,
+            "jobId": None,
+            "status": "ready",
+            "hasXKT": True,
             "xkt_url": f"/api/files/{file_id}/xkt",
             "xktUrl": f"/api/files/{file_id}/xkt",
+            "glb_url": None,
+            "message": None,
+            "xkt_path": xkt_path,
         }
+        return jsonify(payload), 201
+
+    @bp.get("/files/<file_id>/status")
+    def file_status(file_id: str):
+        """Retourne le statut basé sur la DB + existence XKT (HTTP/S3)."""
+
+        file_row = db.session.get(File, file_id)
+        if not file_row:
+            payload = {
+                "fileId": file_id,
+                "file_id": file_id,
+                "status": "error",
+                "hasXKT": False,
+                "message": "Fichier inconnu",
+                "xkt_url": None,
+                "xktUrl": None,
+                "glb_url": None,
+            }
+            return jsonify(payload), 404
+
+        db_status = (file_row.status or "").strip().lower()
+        error_message = file_row.error_message
+        xkt_url = file_row.xkt_url or _default_xkt_url(file_id)
+        glb_url = _default_glb_url(file_id)
+        http_flag: Optional[bool] = None
+        s3_flag: Optional[bool] = None
+        xkt_exists = False
+
+        if xkt_url and xkt_url.lower().startswith(("http://", "https://")):
+            http_flag = http_exists(xkt_url)
+            xkt_exists = bool(http_flag)
+
+        s3_key = f"xkt/{file_id}.xkt"
+        if not xkt_exists and _S3_BUCKET:
+            s3_flag = s3_object_exists(_S3_BUCKET, s3_key)
+            if s3_flag:
+                xkt_exists = True
+
+        if db_status in {"failed", "error"}:
+            status = "error"
+            has_xkt = False
+        elif xkt_exists:
+            status = "ready"
+            has_xkt = True
+        elif db_status == "ready":
+            status = "ready"
+            has_xkt = True
+            app.logger.warning(
+                "[xkt-status] DB ready but artifact missing file_id=%s url=%s", file_id, xkt_url
+            )
+        elif db_status in {"processing", "pending", "enqueued"}:
+            status = "pending"
+            has_xkt = False
+        else:
+            status = "pending"
+            has_xkt = False
+
+        updated_at = file_row.updated_at.isoformat() if file_row.updated_at else None
+        xkt_path = build_xkt_path_from_file_id(file_id)
+        payload = {
+            "fileId": file_id,
+            "file_id": file_id,
+            "status": status,
+            "hasXKT": has_xkt,
+            "message": error_message if status == "error" else None,
+            "xkt_url": xkt_url if has_xkt else None,
+            "xktUrl": xkt_url if has_xkt else None,
+            "glb_url": glb_url if has_xkt else None,
+            "updated_at": updated_at,
+            "xktPath": xkt_path,
+            "http_head_ok": http_flag,
+            "s3_exists": s3_flag,
+        }
+        app.logger.info(
+            "[xkt-status] file_id=%s status=%s db_status=%s has_xkt=%s",  # noqa: G003
+            file_id,
+            status,
+            db_status,
+            has_xkt,
+        )
         return jsonify(payload), 200
 
     @bp.get("/files/<file_id>/xkt")
     def file_xkt(file_id: str) -> Response:
-        """Renvoie le binaire XKT s'il est présent sur disque."""
+        """Renvoie le XKT réel (redirection HTTP, proxy S3 ou fallback local)."""
+
+        file_row = db.session.get(File, file_id)
+        if not file_row:
+            return jsonify({"error": "file_not_found", "fileId": file_id}), 404
+
+        xkt_url = file_row.xkt_url or _default_xkt_url(file_id)
+        if xkt_url and xkt_url.lower().startswith(("http://", "https://")):
+            app.logger.info("[xkt-get] redirect file_id=%s url=%s", file_id, xkt_url)
+            return redirect(xkt_url, code=302)
+
+        s3_key = f"xkt/{file_id}.xkt"
+        if _S3_BUCKET:
+            s3_response = _proxy_s3_xkt(_S3_BUCKET, s3_key)
+            if s3_response is not None:
+                return s3_response
 
         xkt_path = build_xkt_path_from_file_id(file_id)
-        exists = os.path.exists(xkt_path)
-        print(
-            f"[xkt-get] file_id={file_id}, xkt_path={xkt_path}, exists={exists}",
-            flush=True,
-        )
-        if not exists:
-            return jsonify({"error": "XKT not found"}), 404
+        if os.path.exists(xkt_path):
+            app.logger.info("[xkt-get] serve-local file_id=%s path=%s", file_id, xkt_path)
+            return send_file(xkt_path, mimetype="application/octet-stream")
 
-        return send_file(xkt_path, mimetype="application/octet-stream")
+        app.logger.info("[xkt-get] missing file_id=%s", file_id)
+        return jsonify({"error": "xkt_not_found", "fileId": file_id}), 404
 
     @bp.get("/files/debug/xkt/<file_id>")
     def debug_xkt(file_id: str):
-        """Debug: expose le répertoire xkt_files et l'état d'un fichier donné."""
+        """Debug: expose DB + S3/HTTP pour un file_id donné."""
 
         xkt_path = build_xkt_path_from_file_id(file_id)
         dir_path = os.path.dirname(xkt_path)
@@ -168,19 +316,99 @@ def register_routes(bp: Blueprint) -> None:
             listing = [f"<error listing dir: {exc}>"]
 
         exists = os.path.exists(xkt_path)
+        file_row = db.session.get(File, file_id)
+        xkt_url = file_row.xkt_url if file_row else None
+        http_flag = http_exists(xkt_url) if xkt_url and xkt_url.startswith("http") else None
+        s3_key = f"xkt/{file_id}.xkt"
+        s3_flag = s3_object_exists(_S3_BUCKET, s3_key) if _S3_BUCKET else None
 
-        return (
-            jsonify(
-                {
-                    "fileId": file_id,
-                    "xkt_path": xkt_path,
-                    "xkt_exists": exists,
-                    "dir": dir_path,
-                    "dir_listing": listing,
-                }
-            ),
-            200,
-        )
+        payload = {
+            "fileId": file_id,
+            "xkt_path": xkt_path,
+            "xkt_exists": exists,
+            "dir": dir_path,
+            "dir_listing": listing,
+            "db_status": getattr(file_row, "status", None),
+            "db_xkt_url": xkt_url,
+            "db_error_message": getattr(file_row, "error_message", None),
+            "http_head_ok": http_flag,
+            "s3_exists": s3_flag,
+        }
+        return jsonify(payload), 200
+
+
+def _normalize_redis_url(url: str) -> str:
+    if not url:
+        return url
+    parsed = urlparse(str(url).strip().strip('"').strip("'"))
+    host = parsed.hostname or ""
+    needs_tls = host.endswith("redis-cloud.com") or host.endswith("redns.redis-cloud.com") or (parsed.port == 12922)
+    if needs_tls and (parsed.scheme or "").lower() == "redis":
+        parsed = parsed._replace(scheme="rediss")
+    return urlunparse(parsed)
+
+
+def _should_force_sample_mode() -> bool:
+    cfg = app.config.get("DEV_FORCE_SAMPLE_XKT")
+    if cfg is None:
+        app.config["DEV_FORCE_SAMPLE_XKT"] = _DEV_FORCE_SAMPLE_DEFAULT
+        cfg = _DEV_FORCE_SAMPLE_DEFAULT
+    return bool(cfg)
+
+
+def _get_rq_queue() -> Queue:
+    global _rq_queue
+    if _rq_queue is not None:
+        return _rq_queue
+    redis_url = _normalize_redis_url(_REDIS_URL)
+    conn = Redis.from_url(redis_url, ssl_cert_reqs=None, socket_timeout=5)
+    _rq_queue = Queue(_RQ_QUEUE_NAME, connection=conn)
+    return _rq_queue
+
+
+def _enqueue_conversion_job(file_id: str) -> str:
+    queue = _get_rq_queue()
+    job = queue.enqueue(
+        "converter.convert_step_to_xkt",
+        file_id,
+        job_timeout=_RQ_JOB_TIMEOUT_SEC,
+        result_ttl=3600,
+        failure_ttl=3600,
+        ttl=_RQ_JOB_TIMEOUT_SEC,
+    )
+    return job.id
+
+
+def _proxy_s3_xkt(bucket: str, key: str) -> Optional[Response]:
+    client = boto3.client("s3")
+    try:
+        obj = client.get_object(Bucket=bucket, Key=key)
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code") if hasattr(exc, "response") else None
+        if code in {"404", "NoSuchKey", "NotFound"}:
+            return None
+        app.logger.warning("[xkt-get] s3_get_failed key=%s err=%s", key, exc)
+        return None
+
+    body = obj.get("Body")
+    if body is None:
+        return None
+
+    content_length = obj.get("ContentLength")
+
+    def _generate() -> Generator[bytes, None, None]:
+        try:
+            for chunk in body.iter_chunks(64 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            body.close()
+
+    response = Response(stream_with_context(_generate()), mimetype="application/octet-stream")
+    if content_length is not None:
+        response.content_length = int(content_length)
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    return response
 
 
 def http_exists(url: str) -> bool:

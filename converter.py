@@ -7,7 +7,8 @@ import time
 import os
 import shlex
 import subprocess
-from typing import Iterable, Tuple
+from datetime import datetime, timezone
+from typing import Iterable, Optional, Tuple
 
 try:
     from observability.logging import get_logger  # peut dépendre de Flask côté web
@@ -24,6 +25,10 @@ except Exception:
         return logger
 
 
+from flask import Flask
+
+from models import File, db
+
 logger = get_logger("convert")
 log = logger
 
@@ -39,6 +44,59 @@ CONVERT_DIR = os.environ.get("OUTPUT_FOLDER", "/tmp/converted")
 UPLOAD_DIR = os.environ.get("UPLOAD_FOLDER", "/tmp/uploads")
 MIN_XKT_BYTES = int(os.environ.get("MIN_XKT_BYTES", 100 * 1024))
 KNOWN_BAD_XKT_BYTES = int(os.environ.get("KNOWN_BAD_XKT_BYTES", 46204))
+
+_worker_app: Optional[Flask] = None
+
+
+def _worker_flask_app() -> Flask:
+    global _worker_app
+    if _worker_app is not None:
+        return _worker_app
+    flask_app = Flask("converter-worker")
+    uri = os.getenv("SQLALCHEMY_DATABASE_URI") or os.getenv("DATABASE_URL") or "sqlite:///cadlytics.sqlite"
+    flask_app.config["SQLALCHEMY_DATABASE_URI"] = uri
+    flask_app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+    db.init_app(flask_app)
+    _worker_app = flask_app
+    return flask_app
+
+
+def _update_file_status(
+    file_id: str,
+    *,
+    status: str,
+    xkt_url: Optional[str],
+    error_message: Optional[str],
+) -> None:
+    try:
+        flask_app = _worker_flask_app()
+    except Exception as exc:  # pragma: no cover - init failures should not break conversion
+        logger.warning("[convert][db] init_app_failed file_id=%s err=%s", file_id, exc)
+        return
+
+    try:
+        with flask_app.app_context():
+            file_row = db.session.get(File, file_id)
+            if not file_row:
+                return
+            file_row.status = status
+            file_row.xkt_url = xkt_url
+            file_row.error_message = error_message
+            file_row.updated_at = datetime.now(timezone.utc)
+            db.session.commit()
+    except Exception as exc:  # pragma: no cover - DB best effort
+        db.session.rollback()
+        logger.warning("[convert][db] update_failed file_id=%s err=%s", file_id, exc)
+
+
+def _public_xkt_url(file_id: str) -> str:
+    base = (os.getenv("XKT_BASE_URL") or "https://cadlytics.app/xkt").rstrip("/")
+    return f"{base}/{file_id}.xkt"
+
+
+def _public_glb_url(file_id: str) -> str:
+    base = (os.getenv("GLB_BASE_URL") or "https://cadlytics.app/glb").rstrip("/")
+    return f"{base}/{file_id}.glb"
 
 
 def file_size(path: str) -> int:
@@ -854,6 +912,7 @@ def convert_step_to_xkt(file_id: str) -> dict[str, int | str]:
         raise RuntimeError("OCP symbols not found: check imports")
 
     step_path = os.path.join(UPLOAD_DIR, f"{file_id}.step")
+    _update_file_status(file_id, status="processing", xkt_url=None, error_message=None)
 
     try:
         if not os.path.exists(step_path):
@@ -907,11 +966,9 @@ def convert_step_to_xkt(file_id: str) -> dict[str, int | str]:
             raise ConversionError("no_faces_after_meshing")
         faces = glb_faces_total
 
-        # 3) Convert GLB -> XKT (robuste)
         log.info("[convert][xkt] using cli=@xeokit/xeokit-convert")
         glb_to_xkt(glb_path, xkt_path)
 
-        # 4) Vérifs + Upload S3
         if not (os.path.exists(xkt_path) and os.path.getsize(xkt_path) > 0):
             raise RuntimeError("XKT not produced or empty")
 
@@ -919,10 +976,15 @@ def convert_step_to_xkt(file_id: str) -> dict[str, int | str]:
         if os.path.exists(glb_path) and os.path.getsize(glb_path) > 0:
             _maybe_put_s3(glb_path, f"glb/{file_id}.glb", "model/gltf-binary")
 
+        final_xkt_url = _public_xkt_url(file_id)
+        _update_file_status(file_id, status="ready", xkt_url=final_xkt_url, error_message=None)
+
         return {
             "glb": glb_path,
             "xkt": xkt_path,
             "xkt_size": os.path.getsize(xkt_path),
+            "xkt_url": final_xkt_url,
+            "glb_url": _public_glb_url(file_id),
         }
 
     except ConversionError as exc:
@@ -932,7 +994,9 @@ def convert_step_to_xkt(file_id: str) -> dict[str, int | str]:
             getattr(exc, "code", "unknown"),
             exc,
         )
+        _update_file_status(file_id, status="failed", xkt_url=None, error_message=str(exc))
         raise
     except Exception as exc:
         logger.exception("[convert][error] file=%s err=%s", file_id, exc)
+        _update_file_status(file_id, status="failed", xkt_url=None, error_message=str(exc))
         raise
