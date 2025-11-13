@@ -2156,8 +2156,8 @@ function waitForModelLoad(model) {
 // Essaie d'abord le XKT, puis bascule GLB en cas d'échec.
 async function tryLoadXKTThenGLB({ fileId, url, glbFallback }) {
   // url DOIT être une string (jamais un booléen/objet)
-  const xktUrl = (typeof url === "string" && url) ||
-                 `${location.origin}/xkt/${fileId}.xkt?nocache=${Date.now()}`;
+  const defaultXktUrl = `${location.origin}${buildFileXKTUrl(fileId, { cacheBust: true })}`;
+  const xktUrl = (typeof url === "string" && url) || defaultXktUrl;
 
   console.log('[viewer]', new Date().toISOString(), 'start load', {
     stableId: fileId,
@@ -2167,9 +2167,9 @@ async function tryLoadXKTThenGLB({ fileId, url, glbFallback }) {
 
   try {
     // Health check = prédicat (on ignore sa valeur de retour)
-const xktUrl = `${location.origin}/xkt/${fileId}.xkt?nocache=${Date.now()}`;
-await ensureHealthyXKT(xktUrl, { fileId }); // booléen ignoré
-return await loadXKTAdvanced(xktUrl, null, { fileId });
+    const healthCheckUrl = `${location.origin}${buildFileXKTUrl(fileId, { cacheBust: true })}`;
+    await ensureHealthyXKT(healthCheckUrl, { fileId }); // booléen ignoré
+    return await loadXKTAdvanced(healthCheckUrl, null, { fileId });
 
     // Charge le XKT avec l'URL STRING (pas le booléen)
     return await loadXKTAdvanced(xktUrl, null, { fileId });
@@ -4170,9 +4170,9 @@ export {};
       const idv = window.CADLYTICS.xkt.lastFileId;
       try {
         const url = await waitXKTReady(idv);
-        log(`[waitXKTReady] /xkt/${idv}.xkt -> ready (${url})`);
+        log(`[waitXKTReady] status -> ready (${url})`);
       } catch (err) {
-        log(`[waitXKTReady] /xkt/${idv}.xkt -> error ${(err && err.message) || err}`);
+        log(`[waitXKTReady] status -> error ${(err && err.message) || err}`);
       }
     };
 
@@ -4215,7 +4215,7 @@ const fileId =
           if (Date.now() - t0 > 10*60*1000) throw new Error("reconvert timeout");
         }
         // 3) recharge avec cache-buster
-        const url = `${baseUrl}/xkt/${fileId}.xkt?v=${Date.now()}`;
+        const url = `${baseUrl}${buildFileXKTUrl(fileId, { cacheBust: true })}`;
         await loadXKTAdvanced(url, null, { fileId });
       } catch (err) {
         console.error('[force] reconvert failed', err);
@@ -4243,7 +4243,7 @@ const fileId =
     window.currentFileId = effectiveId;
 
     const overrideUrl = options && typeof options === 'object' ? options.url : undefined;
-    const url = overrideUrl || `/xkt/${effectiveId}.xkt?nocache=${Date.now()}`;
+    const url = overrideUrl || buildFileXKTUrl(effectiveId, { cacheBust: true });
     // 1) Si tu as déjà un wrapper
     if (typeof window.loadXKTFromUrl === 'function') {
       return window.loadXKTFromUrl(url, { fileId: effectiveId });
@@ -4269,6 +4269,26 @@ const fileId =
 const STATUS_POLL_MIN_MS = 1000;
 const STATUS_POLL_MAX_MS = 5000;
 const STATUS_TIMEOUT_MS = 120000;
+const STATUS_MAX_CONSECUTIVE_404 = 5;
+
+function buildFileApiUrl(fileId, suffix) {
+  if (!fileId) return '';
+  return `/api/files/${encodeURIComponent(fileId)}${suffix}`;
+}
+
+function buildFileStatusUrl(fileId) {
+  return buildFileApiUrl(fileId, '/status');
+}
+
+function buildFileXKTUrl(fileId, { cacheBust } = {}) {
+  const base = buildFileApiUrl(fileId, '/xkt');
+  if (!base) return base;
+  if (cacheBust) {
+    const sep = base.includes('?') ? '&' : '?';
+    return `${base}${sep}nocache=${Date.now()}`;
+  }
+  return base;
+}
 
 function ensureStatusEl() {
   let el = document.getElementById('uploadStatus');
@@ -4319,7 +4339,8 @@ async function waitXKTReady(fileId) {
 
   while (Date.now() - startedAt < STATUS_TIMEOUT_MS) {
     try {
-      const response = await fetch(`/api/files/${encodeURIComponent(fileId)}/status`, {
+      const statusUrl = buildFileStatusUrl(fileId);
+      const response = await fetch(statusUrl, {
         method: 'GET',
         headers: { Accept: 'application/json' },
         cache: 'no-store'
@@ -4330,13 +4351,7 @@ async function waitXKTReady(fileId) {
         const contentType = response.headers.get('content-type') || '';
         console.warn('[status] 404', { fileId, consecutiveNotFound, contentType });
 
-        if (!contentType.includes('application/json')) {
-          const routeMissingError = new Error('Route /api/files/:id/status indisponible');
-          routeMissingError.code = 'STATUS_ROUTE_MISSING';
-          throw routeMissingError;
-        }
-
-        if (consecutiveNotFound >= 2) {
+        if (consecutiveNotFound >= STATUS_MAX_CONSECUTIVE_404) {
           const notFoundError = new Error('ID inconnu côté backend (404)');
           notFoundError.code = 'STATUS_POLL_NOT_FOUND';
           throw notFoundError;
@@ -4348,14 +4363,17 @@ async function waitXKTReady(fileId) {
         consecutiveNotFound = 0;
         const payload = await response.json().catch(() => ({}));
         const status = payload?.status;
-        const xktUrl = payload?.xkt_url || payload?.xktUrl || null;
-        console.log('[status]', status, xktUrl || null);
+        const hasXKT = Boolean(payload?.hasXKT ?? payload?.has_xkt);
+        const xktUrl = payload?.xkt_url
+          || payload?.xktUrl
+          || buildFileXKTUrl(fileId, { cacheBust: true });
+        console.log('[status]', response.status, { fileId, status, hasXKT, xktUrl });
 
-        if (status === 'ready' && xktUrl) {
+        if (status === 'ready' || hasXKT) {
           return xktUrl;
         }
 
-        if (status === 'failed') {
+        if (status === 'error' || status === 'failed') {
           const message = payload?.message || 'Conversion échouée';
           const error = new Error(message);
           error.details = payload;
@@ -4366,7 +4384,7 @@ async function waitXKTReady(fileId) {
       }
     } catch (err) {
       lastError = err;
-      if (err?.code === 'STATUS_ROUTE_MISSING' || err?.code === 'STATUS_POLL_NOT_FOUND') {
+      if (err?.code === 'STATUS_POLL_NOT_FOUND') {
         throw err;
       }
       console.warn('[status] polling exception', err);
@@ -4412,7 +4430,10 @@ async function loadXKT(xktUrl) {
     throw new Error('Viewer indisponible');
   }
 
-  console.log('[viewer] clear + load', { xktUrl });
+  const currentId = typeof resolveCurrentFileId === 'function'
+    ? resolveCurrentFileId()
+    : window.currentFileId;
+  console.log('[xkt] loading', { fileId: currentId, xktUrl });
 
   try {
     viewerInstance.scene?.clear?.();
@@ -4459,7 +4480,7 @@ async function onUploadResponse(resp) {
     try {
       xktUrl = await waitXKTReady(fileId);
     } catch (statusErr) {
-      if (uploadXktUrl && (statusErr?.code === 'STATUS_ROUTE_MISSING' || statusErr?.code === 'STATUS_POLL_NOT_FOUND')) {
+      if (uploadXktUrl && statusErr?.code === 'STATUS_POLL_NOT_FOUND') {
         console.warn('[fallback-xkt] start', { fileId, reason: statusErr?.code, message: statusErr?.message });
         xktUrl = await waitXKTByURL(uploadXktUrl);
         console.log('[fallback-xkt] ok', { fileId, xktUrl });

@@ -1,4 +1,8 @@
 # web.py
+# Cartographie rapide des endpoints /api/files :
+# - app/app.py : file_status() -> GET /api/files/<file_id>/status ; file_reconvert() -> POST /api/files/<file_id>/reconvert
+# - app.py     : file_reconvert() -> POST /api/files/<file_id>/reconvert (Blueprint api_bp)
+# - web.py     : api_file_status() -> GET /api/files/<file_id>/status ; api_file_xkt() -> GET /api/files/<file_id>/xkt
 from __future__ import annotations
 
 import os, uuid, pathlib, json, re, glob, socket, time, subprocess, mimetypes
@@ -223,6 +227,30 @@ def _s3_key_for_xkt(file_id: str) -> str:
 
 def _public_s3_url(key: str) -> str:
     return f"https://{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com/{key}"
+
+_SAFE_FILE_ID_RE = re.compile(r"^[0-9a-fA-F-]{6,64}$")
+
+
+def _xkt_directory() -> str:
+    """Retourne le dossier effectif utilisé pour stocker les XKT."""
+
+    return os.environ.get("PUBLIC_XKT") or os.environ.get("OUTPUT_FOLDER") or OUTPUT_FOLDER
+
+
+def _xkt_file_path(file_id: str) -> tuple[str, str]:
+    """Retourne (dossier, chemin absolu) pour un file_id donné."""
+
+    directory = _xkt_directory()
+    return directory, os.path.join(directory, f"{file_id}.xkt")
+
+
+def _normalize_file_id(value: str) -> str:
+    """Valide les file_id entrants (UUID hex attendu)."""
+
+    candidate = (value or "").strip()
+    if not candidate or not _SAFE_FILE_ID_RE.fullmatch(candidate):
+        abort(400, description="invalid_file_id")
+    return candidate
 
 # ---------- Helpers métriques ----------
 def _cache_paths(file_id: str, axis: str):
@@ -1066,8 +1094,8 @@ def exists_xkt(file_id: str):
 
     # CODENAME: EXISTS-DISK-FIRST
     try:
-        xkt_dir = os.environ.get("PUBLIC_XKT") or OUTPUT_FOLDER
-        path = os.path.join(xkt_dir, f"{file_id}.xkt")
+        directory, path = _xkt_file_path(file_id)
+        os.makedirs(directory, exist_ok=True)
         exists = os.path.exists(path)
         size = os.path.getsize(path) if exists else 0
         status = "done" if exists else "pending"
@@ -1093,6 +1121,54 @@ def exists_xkt(file_id: str):
         resp.headers["Pragma"] = "no-cache"
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp, 200
+
+
+@app.get("/api/files/<file_id>/status")
+def api_file_status(file_id: str):
+    """Expose un statut minimal pour le polling front."""
+
+    safe_id = _normalize_file_id(file_id)
+    directory, path = _xkt_file_path(safe_id)
+    has_xkt = os.path.exists(path)
+    status = "ready" if has_xkt else "pending"
+    xkt_url = _abs_url(f"/api/files/{safe_id}/xkt") if has_xkt else None
+    payload = {
+        "fileId": safe_id,
+        "file_id": safe_id,
+        "status": status,
+        "hasXKT": has_xkt,
+        "xkt_url": xkt_url,
+    }
+    app.logger.info("[files.status] file_id=%s status=%s path=%s", safe_id, status, path)
+    resp = jsonify(payload)
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    return resp, 200
+
+
+@app.get("/api/files/<file_id>/xkt")
+def api_file_xkt(file_id: str):
+    """Renvoie le binaire XKT associé à file_id."""
+
+    safe_id = _normalize_file_id(file_id)
+    directory, path = _xkt_file_path(safe_id)
+    if not os.path.exists(path):
+        app.logger.info("[files.xkt] missing file_id=%s path=%s", safe_id, path)
+        return jsonify({"error": "xkt_not_found", "fileId": safe_id}), 404
+
+    app.logger.info("[files.xkt] serve file_id=%s path=%s", safe_id, path)
+    resp = send_from_directory(
+        directory,
+        f"{safe_id}.xkt",
+        mimetype="application/octet-stream",
+        as_attachment=False,
+        conditional=False,
+        etag=False,
+        max_age=0,
+    )
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
 
 
 @app.get("/api/health/worker")
