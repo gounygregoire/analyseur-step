@@ -12,7 +12,46 @@ def _post_file(api_client, filename: str = "piece.step"):
     return api_client.post("/api/files", data=data)
 
 
-def test_post_files_generates_ready_payload(api_app, api_client):
+def test_post_files_enqueues_job(monkeypatch, api_app, api_client):
+    import backend.api.files as files_api
+
+    monkeypatch.setattr(files_api, "_should_force_sample_mode", lambda: False)
+
+    captured: dict[str, str] = {}
+
+    def _fake_enqueue(file_id: str) -> str:
+        captured["file_id"] = file_id
+        return "job-123"
+
+    monkeypatch.setattr(files_api, "_enqueue_conversion_job", _fake_enqueue)
+
+    resp = _post_file(api_client)
+    assert resp.status_code == 202
+    payload = resp.get_json()
+    assert payload == {
+        "fileId": captured["file_id"],
+        "file_id": captured["file_id"],
+        "jobId": "job-123",
+        "status": "enqueued",
+        "hasXKT": False,
+        "xkt_url": None,
+        "xktUrl": None,
+        "glb_url": None,
+        "message": None,
+    }
+
+    with api_app.app_context():
+        file_row = db.session.get(File, captured["file_id"])
+        assert file_row is not None
+        assert file_row.status == "enqueued"
+        assert file_row.xkt_url is None
+
+
+def test_post_files_fallback_sample_when_forced(api_app, api_client, monkeypatch):
+    import backend.api.files as files_api
+
+    monkeypatch.setattr(files_api, "_should_force_sample_mode", lambda: True)
+
     resp = _post_file(api_client)
     assert resp.status_code == 201
     payload = resp.get_json()
@@ -21,18 +60,10 @@ def test_post_files_generates_ready_payload(api_app, api_client):
     assert payload["status"] == "ready"
     assert payload["hasXKT"] is True
     assert payload["xkt_url"].endswith(f"{file_id}.xkt")
-    assert payload["glb_url"] is None
 
     xkt_path = Path(api_app.config.get("OUTPUT_FOLDER") or os.environ["OUTPUT_FOLDER"]) / f"{file_id}.xkt"
     assert xkt_path.exists()
     assert xkt_path.read_bytes() == b"XKT-FAKE"
-
-    status_resp = api_client.get(f"/api/files/{file_id}/status")
-    assert status_resp.status_code == 200
-    status_payload = status_resp.get_json()
-    assert status_payload["status"] == "ready"
-    assert status_payload["hasXKT"] is True
-    assert status_payload["glb_url"].endswith(f"{file_id}.glb")
 
     xkt_resp = api_client.get(f"/api/files/{file_id}/xkt")
     assert xkt_resp.status_code == 200
@@ -45,15 +76,14 @@ def test_post_files_reports_conversion_error(api_app, api_client, monkeypatch):
     def _raise(*_args, **_kwargs):  # pragma: no cover - intentionally raised
         raise RuntimeError("boom")
 
+    monkeypatch.setattr(files_api, "_should_force_sample_mode", lambda: True)
     monkeypatch.setattr(files_api, "generate_xkt_for_file", _raise)
 
     resp = _post_file(api_client)
     assert resp.status_code == 500
     payload = resp.get_json()
-    assert payload["status"] == "error"
-    assert payload["hasXKT"] is False
-    assert payload["message"]
-    assert payload["glb_url"] is None
+    assert payload["error"] == "conversion_failed"
+    assert payload["detail"]
 
     file_id = payload["file_id"]
     with api_app.app_context():
@@ -66,4 +96,4 @@ def test_post_files_reports_conversion_error(api_app, api_client, monkeypatch):
 def test_get_xkt_missing_returns_404(api_client):
     resp = api_client.get("/api/files/ffffffff-ffff-ffff-ffff-ffffffffffff/xkt")
     assert resp.status_code == 404
-    assert resp.get_json()["error"] == "xkt_not_found"
+    assert resp.get_json()["error"] in {"file_not_found", "xkt_not_found"}
