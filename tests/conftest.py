@@ -49,8 +49,13 @@ def api_app(tmp_path, monkeypatch):
     monkeypatch.setenv("XKT_LOCAL_DIR", str(output_dir))
     monkeypatch.setenv("SRC_DIR", str(upload_dir))
     monkeypatch.setenv("FILES_DB_PATH", str(tmp_path / "files.sqlite"))
+    monkeypatch.setenv("XKT_FAKE_CONVERTER", "1")
     db_path = tmp_path / "cadlytics.sqlite"
     monkeypatch.setenv("SQLALCHEMY_DATABASE_URI", f"sqlite:///{db_path}")
+
+    import app.xkt_pipeline as xkt_pipeline
+
+    xkt_pipeline.XKT_LOCAL_DIR = Path(output_dir)
 
     create_app = _load_create_app()
     app = create_app()
