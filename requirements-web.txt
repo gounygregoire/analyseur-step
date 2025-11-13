@@ -37,3 +37,4 @@ Flask-Compress==1.18
 
 gunicorn==23.0.0
 Pillow==11.2.1
+Flask-Dance[sqla]==7.1.0

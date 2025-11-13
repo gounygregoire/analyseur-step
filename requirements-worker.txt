@@ -26,3 +26,4 @@ shapely==2.0.4
 # OCP
 # vtk
 # cadquery
+Flask-Dance[sqla]==7.1.0
