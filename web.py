@@ -1,8 +1,25 @@
 # web.py
-# Cartographie rapide des endpoints /api/files :
-# - app/app.py : file_status() -> GET /api/files/<file_id>/status ; file_reconvert() -> POST /api/files/<file_id>/reconvert
-# - app.py     : file_reconvert() -> POST /api/files/<file_id>/reconvert (Blueprint api_bp)
-# - web.py     : api_file_status() -> GET /api/files/<file_id>/status ; api_file_xkt() -> GET /api/files/<file_id>/xkt
+# === Synthèse pipeline XKT CADLYTICS ===
+# * Fichiers impliqués :
+#   - app.py (upload -> _schedule_conversion -> convert_to_xkt -> run_real_xkt_converter)
+#   - xkt_converter.py (STEP -> GLB -> `npx @xeokit/xeokit-convert` -> XKT)
+#   - app/file_records.py (statuts en SQLite + synchronisation SQLAlchemy)
+#   - web.py (polling /api/files/<id>/status + GET /api/files/<id>/xkt)
+# * Déclenchement : POST /api/upload stocke le STEP puis démarre un thread
+#   `_conversion_worker` qui appelle `convert_step_to_xkt`. La conversion est
+#   synchrone dans ce worker local (pas de Celery ici) et loggue
+#   `[convert] start/done`.
+# * Sortie : chaque conversion écrit le binaire dans
+#   `{XKT_LOCAL_DIR}/{file_id}.xkt` (fallback vers OUTPUT_FOLDER). Les routes
+#   `/api/files/<id>/status` et `/api/files/<id>/xkt` pointent exactement vers
+#   ce fichier et reflètent `ready|pending|error` suivant la présence du XKT et
+#   l'état connu dans `file_records`.
+# * Cartographie rapide /api/files :
+#   - app/app.py : file_status() -> GET /api/files/<file_id>/status ;
+#                  file_reconvert() -> POST /api/files/<file_id>/reconvert
+#   - app.py     : file_reconvert() -> POST /api/files/<file_id>/reconvert (Blueprint api_bp)
+#   - web.py     : api_file_status() -> GET /api/files/<file_id>/status ;
+#                  api_file_xkt() -> GET /api/files/<file_id>/xkt
 from __future__ import annotations
 
 import os, uuid, pathlib, json, re, glob, socket, time, subprocess, mimetypes
@@ -234,7 +251,16 @@ _SAFE_FILE_ID_RE = re.compile(r"^[0-9a-fA-F-]{6,64}$")
 def _xkt_directory() -> str:
     """Retourne le dossier effectif utilisé pour stocker les XKT."""
 
-    return os.environ.get("PUBLIC_XKT") or os.environ.get("OUTPUT_FOLDER") or OUTPUT_FOLDER
+    candidates = [
+        os.environ.get("XKT_LOCAL_DIR"),
+        os.environ.get("PUBLIC_XKT"),
+        os.environ.get("OUTPUT_FOLDER"),
+        OUTPUT_FOLDER,
+    ]
+    for candidate in candidates:
+        if candidate:
+            return os.path.abspath(candidate)
+    return os.path.abspath(OUTPUT_FOLDER)
 
 
 def _xkt_file_path(file_id: str) -> tuple[str, str]:
@@ -242,6 +268,28 @@ def _xkt_file_path(file_id: str) -> tuple[str, str]:
 
     directory = _xkt_directory()
     return directory, os.path.join(directory, f"{file_id}.xkt")
+
+
+def _file_record(file_id: str):
+    """Récupère un FileRecord (SQLite) si disponible, sinon None."""
+
+    try:
+        from app.file_records import get as _get_file_record  # pylint: disable=import-outside-toplevel
+    except Exception:  # pragma: no cover - fallback lorsque le module est absent
+        return None
+
+    try:
+        return _get_file_record(file_id)
+    except Exception as exc:  # pragma: no cover - log mais ne bloque pas le statut
+        app.logger.warning("[xkt-status] unable to read file_record file_id=%s: %s", file_id, exc)
+        return None
+
+
+def _xkt_probe(file_id: str) -> tuple[str, str, bool]:
+    """Retourne (directory, path, exists) pour un XKT donné."""
+
+    directory, path = _xkt_file_path(file_id)
+    return directory, path, os.path.exists(path)
 
 
 def _normalize_file_id(value: str) -> str:
@@ -1128,18 +1176,47 @@ def api_file_status(file_id: str):
     """Expose un statut minimal pour le polling front."""
 
     safe_id = _normalize_file_id(file_id)
-    directory, path = _xkt_file_path(safe_id)
-    has_xkt = os.path.exists(path)
-    status = "ready" if has_xkt else "pending"
-    xkt_url = _abs_url(f"/api/files/{safe_id}/xkt") if has_xkt else None
+    record = _file_record(safe_id)
+    directory, path, has_xkt_on_disk = _xkt_probe(safe_id)
+
+    status = "pending"
+    message = None
+    if record:
+        rec_status = (getattr(record, "status", "") or "").strip().lower()
+        if rec_status == "failed":
+            status = "error"
+            message = (getattr(record, "error_message", None) or "Conversion échouée").strip() or "Conversion échouée"
+        elif rec_status == "ready":
+            status = "ready"
+        elif rec_status:
+            status = "pending"
+
+    if status != "error" and has_xkt_on_disk:
+        status = "ready"
+
+    has_xkt = status == "ready"
+    xkt_url = None
+    if has_xkt:
+        nocache = int(time.time() * 1000)
+        xkt_url = f"{_abs_url(f'/api/files/{safe_id}/xkt')}?nocache={nocache}"
+
     payload = {
         "fileId": safe_id,
         "file_id": safe_id,
         "status": status,
         "hasXKT": has_xkt,
         "xkt_url": xkt_url,
+        "xktUrl": xkt_url,
+        "message": message,
     }
-    app.logger.info("[files.status] file_id=%s status=%s path=%s", safe_id, status, path)
+    app.logger.info(
+        "[xkt-status] file_id=%s status=%s path=%s exists=%s record=%s",  # noqa: G003
+        safe_id,
+        status,
+        path,
+        has_xkt_on_disk,
+        getattr(record, "status", None),
+    )
     resp = jsonify(payload)
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
@@ -1151,12 +1228,12 @@ def api_file_xkt(file_id: str):
     """Renvoie le binaire XKT associé à file_id."""
 
     safe_id = _normalize_file_id(file_id)
-    directory, path = _xkt_file_path(safe_id)
-    if not os.path.exists(path):
-        app.logger.info("[files.xkt] missing file_id=%s path=%s", safe_id, path)
+    directory, path, has_xkt = _xkt_probe(safe_id)
+    if not has_xkt:
+        app.logger.info("[xkt-get] missing file_id=%s path=%s", safe_id, path)
         return jsonify({"error": "xkt_not_found", "fileId": safe_id}), 404
 
-    app.logger.info("[files.xkt] serve file_id=%s path=%s", safe_id, path)
+    app.logger.info("[xkt-get] serve file_id=%s path=%s", safe_id, path)
     resp = send_from_directory(
         directory,
         f"{safe_id}.xkt",
