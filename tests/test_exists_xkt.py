@@ -12,6 +12,15 @@ if "boto3" not in sys.modules:
 
 if "botocore" not in sys.modules:
     sys.modules["botocore"] = ModuleType("botocore")
+if "botocore.config" not in sys.modules:
+    botocore_config = ModuleType("botocore.config")
+
+    class _Config:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    botocore_config.Config = _Config
+    sys.modules["botocore.config"] = botocore_config
 
 import web
 
