@@ -199,82 +199,64 @@ def register_routes(bp: Blueprint) -> None:
 
     @bp.get("/files/<file_id>/status")
     def file_status(file_id: str):
-        """Retourne le statut basé sur la DB + existence XKT (HTTP/S3)."""
+        """
+        Statut basé sur :
+        - la DB (File.status, File.error_message, File.xkt_url)
+        - l'existence réelle du XKT (HEAD HTTP + /tmp/converted)
+        """
 
         file_row = db.session.get(File, file_id)
-        if not file_row:
-            payload = {
-                "fileId": file_id,
-                "file_id": file_id,
-                "status": "error",
-                "hasXKT": False,
-                "message": "Fichier inconnu",
-                "xkt_url": None,
-                "xktUrl": None,
-                "glb_url": None,
-            }
-            return jsonify(payload), 404
 
-        db_status = (file_row.status or "").strip().lower()
-        error_message = file_row.error_message
-        xkt_url = file_row.xkt_url or _default_xkt_url(file_id)
-        glb_url = _default_glb_url(file_id)
-        http_flag: Optional[bool] = None
-        s3_flag: Optional[bool] = None
-        xkt_exists = False
+        db_status = (file_row.status if file_row else None) or "pending"
+        error_message = file_row.error_message if file_row else None
 
-        if xkt_url and xkt_url.lower().startswith(("http://", "https://")):
-            http_flag = http_exists(xkt_url)
-            xkt_exists = bool(http_flag)
+        xkt_url = (file_row.xkt_url if file_row and file_row.xkt_url else None) or _default_xkt_url(
+            file_id
+        )
 
-        s3_key = f"xkt/{file_id}.xkt"
-        if not xkt_exists and _S3_BUCKET:
-            s3_flag = s3_object_exists(_S3_BUCKET, s3_key)
-            if s3_flag:
-                xkt_exists = True
+        http_ok = False
+        if xkt_url and xkt_url.startswith("http"):
+            http_ok = http_exists(xkt_url)
 
-        if db_status in {"failed", "error"}:
+        local_ok = local_file_exists(file_id, "xkt")
+
+        xkt_exists = bool(http_ok or local_ok)
+
+        if error_message:
+            status = "error"
+            has_xkt = False
+        elif db_status.lower() in {"failed", "error"}:
             status = "error"
             has_xkt = False
         elif xkt_exists:
             status = "ready"
             has_xkt = True
-        elif db_status == "ready":
-            status = "ready"
-            has_xkt = True
-            app.logger.warning(
-                "[xkt-status] DB ready but artifact missing file_id=%s url=%s", file_id, xkt_url
-            )
-        elif db_status in {"processing", "pending", "enqueued"}:
+        elif db_status.lower() in {"enqueued", "processing", "pending"}:
             status = "pending"
             has_xkt = False
         else:
             status = "pending"
             has_xkt = False
 
-        updated_at = file_row.updated_at.isoformat() if file_row.updated_at else None
-        xkt_path = build_xkt_path_from_file_id(file_id)
+        app.logger.info(
+            "[xkt-status] file_id=%s db_status=%s http_ok=%s local_ok=%s xkt_exists=%s final_status=%s",
+            file_id,
+            db_status,
+            http_ok,
+            local_ok,
+            xkt_exists,
+            status,
+        )
+
         payload = {
             "fileId": file_id,
             "file_id": file_id,
             "status": status,
             "hasXKT": has_xkt,
-            "message": error_message if status == "error" else None,
-            "xkt_url": xkt_url if has_xkt else None,
-            "xktUrl": xkt_url if has_xkt else None,
-            "glb_url": glb_url if has_xkt else None,
-            "updated_at": updated_at,
-            "xktPath": xkt_path,
-            "http_head_ok": http_flag,
-            "s3_exists": s3_flag,
+            "message": error_message,
+            "xkt_url": xkt_url,
+            "xktUrl": xkt_url,
         }
-        app.logger.info(
-            "[xkt-status] file_id=%s status=%s db_status=%s has_xkt=%s",  # noqa: G003
-            file_id,
-            status,
-            db_status,
-            has_xkt,
-        )
         return jsonify(payload), 200
 
     @bp.get("/files/<file_id>/xkt")
@@ -306,35 +288,39 @@ def register_routes(bp: Blueprint) -> None:
 
     @bp.get("/files/debug/xkt/<file_id>")
     def debug_xkt(file_id: str):
-        """Debug: expose DB + S3/HTTP pour un file_id donné."""
+        """
+        Debug: montre ce que la DB et le HTTP disent sur un XKT donné.
+        """
 
-        xkt_path = build_xkt_path_from_file_id(file_id)
-        dir_path = os.path.dirname(xkt_path)
-        try:
-            listing = os.listdir(dir_path)
-        except Exception as exc:  # pragma: no cover - dépend du FS
-            listing = [f"<error listing dir: {exc}>"]
-
-        exists = os.path.exists(xkt_path)
         file_row = db.session.get(File, file_id)
-        xkt_url = file_row.xkt_url if file_row else None
-        http_flag = http_exists(xkt_url) if xkt_url and xkt_url.startswith("http") else None
-        s3_key = f"xkt/{file_id}.xkt"
-        s3_flag = s3_object_exists(_S3_BUCKET, s3_key) if _S3_BUCKET else None
 
-        payload = {
-            "fileId": file_id,
-            "xkt_path": xkt_path,
-            "xkt_exists": exists,
-            "dir": dir_path,
-            "dir_listing": listing,
-            "db_status": getattr(file_row, "status", None),
-            "db_xkt_url": xkt_url,
-            "db_error_message": getattr(file_row, "error_message", None),
-            "http_head_ok": http_flag,
-            "s3_exists": s3_flag,
-        }
-        return jsonify(payload), 200
+        xkt_url = None
+        db_status = None
+        db_error = None
+
+        if file_row:
+            db_status = file_row.status
+            db_error = file_row.error_message
+            xkt_url = file_row.xkt_url or _default_xkt_url(file_id)
+        else:
+            xkt_url = _default_xkt_url(file_id)
+
+        http_ok = http_exists(xkt_url) if xkt_url and xkt_url.startswith("http") else None
+        local_ok = local_file_exists(file_id, "xkt")
+
+        return (
+            jsonify(
+                {
+                    "fileId": file_id,
+                    "db_status": db_status,
+                    "db_error_message": db_error,
+                    "xkt_url": xkt_url,
+                    "http_head_ok": http_ok,
+                    "local_file_ok": local_ok,
+                }
+            ),
+            200,
+        )
 
 
 def _normalize_redis_url(url: str) -> str:
