@@ -202,26 +202,49 @@ def register_routes(bp: Blueprint) -> None:
         """
         Statut basé sur :
         - la DB (File.status, File.error_message, File.xkt_url)
-        - l'existence réelle du XKT (HEAD HTTP + /tmp/converted)
+        - l'existence réelle du XKT :
+            * HTTP HEAD sur l'URL publique /xkt/<file_id>.xkt
+            * fallback : présence locale dans OUTPUT_FOLDER (/tmp/converted)
         """
 
+        # 1) Récupération éventuelle en DB
         file_row = db.session.get(File, file_id)
 
-        db_status = (file_row.status if file_row else None) or "pending"
+        db_status = (file_row.status if file_row and file_row.status else "pending")
         error_message = file_row.error_message if file_row else None
 
-        xkt_url = (file_row.xkt_url if file_row and file_row.xkt_url else None) or _default_xkt_url(
-            file_id
-        )
+        # 2) URL XKT exposée au front
+        #    - si la DB a une xkt_url, on l'utilise
+        #    - sinon on construit l'URL par défaut : https://cadlytics.app/xkt/<file_id>.xkt
+        xkt_url = None
+        if file_row and file_row.xkt_url:
+            xkt_url = file_row.xkt_url
+        else:
+            xkt_url = _default_xkt_url(file_id)
 
+        # 3) Vérifier l'existence réelle du XKT
+        #    a) via HEAD HTTP sur l'URL publique
         http_ok = False
-        if xkt_url and xkt_url.startswith("http"):
+        if xkt_url and isinstance(xkt_url, str) and xkt_url.startswith("http"):
             http_ok = http_exists(xkt_url)
 
+        #    b) via présence locale dans OUTPUT_FOLDER (/tmp/converted)
         local_ok = local_file_exists(file_id, "xkt")
 
         xkt_exists = bool(http_ok or local_ok)
 
+        # 4) Log de debug
+        app.logger.info(
+            "[xkt-status] file_id=%s db_status=%s http_ok=%s local_ok=%s xkt_exists=%s xkt_url=%s",
+            file_id,
+            db_status,
+            http_ok,
+            local_ok,
+            xkt_exists,
+            xkt_url,
+        )
+
+        # 5) Statut final renvoyé au front
         if error_message:
             status = "error"
             has_xkt = False
@@ -235,18 +258,9 @@ def register_routes(bp: Blueprint) -> None:
             status = "pending"
             has_xkt = False
         else:
+            # Statut inconnu -> pending par défaut
             status = "pending"
-            has_xkt = False
-
-        app.logger.info(
-            "[xkt-status] file_id=%s db_status=%s http_ok=%s local_ok=%s xkt_exists=%s final_status=%s",
-            file_id,
-            db_status,
-            http_ok,
-            local_ok,
-            xkt_exists,
-            status,
-        )
+            hasXKT = False  # (NB : cette variable n'est pas utilisée dans le payload)
 
         payload = {
             "fileId": file_id,
@@ -289,23 +303,28 @@ def register_routes(bp: Blueprint) -> None:
     @bp.get("/files/debug/xkt/<file_id>")
     def debug_xkt(file_id: str):
         """
-        Debug: montre ce que la DB et le HTTP disent sur un XKT donné.
+        Debug: montre ce que disent la DB, l'URL publique et les fichiers locaux
+        pour un XKT donné.
         """
 
         file_row = db.session.get(File, file_id)
 
-        xkt_url = None
-        db_status = None
-        db_error = None
+        db_status = file_row.status if file_row else None
+        db_error = file_row.error_message if file_row else None
+        db_xkt_url = file_row.xkt_url if file_row and file_row.xkt_url else None
 
-        if file_row:
-            db_status = file_row.status
-            db_error = file_row.error_message
-            xkt_url = file_row.xkt_url or _default_xkt_url(file_id)
-        else:
-            xkt_url = _default_xkt_url(file_id)
+        # URL calculée à partir du file_id
+        default_xkt_url = _default_xkt_url(file_id)
 
-        http_ok = http_exists(xkt_url) if xkt_url and xkt_url.startswith("http") else None
+        # On choisit comme URL effective celle de la DB, sinon l'URL par défaut
+        effective_url = db_xkt_url or default_xkt_url
+
+        http_ok = (
+            http_exists(effective_url)
+            if effective_url and effective_url.startswith("http")
+            else None
+        )
+
         local_ok = local_file_exists(file_id, "xkt")
 
         return (
@@ -314,7 +333,9 @@ def register_routes(bp: Blueprint) -> None:
                     "fileId": file_id,
                     "db_status": db_status,
                     "db_error_message": db_error,
-                    "xkt_url": xkt_url,
+                    "db_xkt_url": db_xkt_url,
+                    "default_xkt_url": default_xkt_url,
+                    "effective_xkt_url": effective_url,
                     "http_head_ok": http_ok,
                     "local_file_ok": local_ok,
                 }
