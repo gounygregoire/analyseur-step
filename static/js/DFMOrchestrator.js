@@ -614,12 +614,13 @@ async function pollJobStatus(jobId, onUpdate, onDone, onError) {
     try {
       const res = await fetch(`/api/dfm/status?job_id=${encodeURIComponent(jobId)}`);
       const data = await res.json();
+      const status = data.result?.status === "error" ? "error" : data.status;
 
-      onUpdate?.(data);
-      if (data.status === "done")  { await onDone?.(data); return; }
-      if (data.status === "failed" || data.status === "error") { onError?.(data); return; }
+      onUpdate?.({ ...data, status });
+      if (status === "done")  { await onDone?.(data); return; }
+      if (status === "failed" || status === "error") { onError?.(data); return; }
 
-      if (data.status === "queued" && Date.now() - queuedSince > 90_000) {
+      if (status === "queued" && Date.now() - queuedSince > 90_000) {
         StatusUI.set("Toujours en file d’attente… un worker va démarrer dès que possible.");
         queuedSince = Date.now();
       }
