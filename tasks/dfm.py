@@ -34,11 +34,25 @@ def dfm_run(self, file_id, material_profile_id, axis, invert=False, tolerance=No
         "material_profile": profile.model_dump(),
     }
 
+    out_dir = os.path.join("static", "dfm", file_id)
+    os.makedirs(out_dir, exist_ok=True)
+    report_path = os.path.join(out_dir, "report.json")
+
+    def _write_report(data: dict) -> None:
+        with open(report_path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+
     # Generate viewer artefacts (heatmaps, thumbnails...)
     try:
         run_dfm(dfm_input, progress_cb=None, fast_mode=False)
-    except Exception:  # pragma: no cover - artefact generation is best effort
-        pass
+    except Exception as exc:  # pragma: no cover - artefact generation is best effort
+        logger.exception("[DFM] run_dfm failed for file_id=%s", file_id)
+        error_report = {
+            "status": "error",
+            "message": f"DFM échoué: {exc}",
+        }
+        _write_report(error_report)
+        raise
 
     # Aggregate a minimal DFM report
     report_data = {
@@ -59,11 +73,7 @@ def dfm_run(self, file_id, material_profile_id, axis, invert=False, tolerance=No
         },
     }
 
-    out_dir = os.path.join("static", "dfm", file_id)
-    os.makedirs(out_dir, exist_ok=True)
-    report_path = os.path.join(out_dir, "report.json")
-    with open(report_path, "w", encoding="utf-8") as fh:
-        json.dump(report_data, fh)
+    _write_report(report_data)
     logger.info("DFM written \u2192 %s", report_path)
 
     return report_data

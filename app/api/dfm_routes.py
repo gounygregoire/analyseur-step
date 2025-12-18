@@ -110,11 +110,13 @@ def status() -> tuple[dict, int]:
         return jsonify({"error": "job_id requis"}), 400
     res = AsyncResult(job_id)
     if res.state != "PENDING" or job_id in _jobs:
-        status = _map_state(res.state)
-        if res.state == "FAILURE":
-            error = str(res.info)
-            return jsonify({"job_id": job_id, "status": status, "error": error}), 200
         meta = res.info if isinstance(res.info, dict) else None
+        status = meta.get("status") if meta and meta.get("status") else _map_state(res.state)
+        if res.state == "FAILURE":
+            error = (meta or {}).get("message") or str(res.info)
+            if status == "done":
+                status = "error"
+            return jsonify({"job_id": job_id, "status": status, "error": error}), 200
         return jsonify({"job_id": job_id, "status": status, "result": meta}), 200
     state = _jobs.get(job_id)
     if state is None:
