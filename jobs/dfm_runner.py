@@ -117,30 +117,28 @@ def _worker(
         out_dir = os.path.join(DFM_ROOT, file_id)
         os.makedirs(out_dir, exist_ok=True)
         json_path = os.path.join(out_dir, "result.json")
+        result_payload = result.model_dump() if hasattr(result, "model_dump") else result.__dict__
         with open(json_path, "w", encoding="utf-8") as fh:
-            fh.write(result.model_dump_json(indent=2))
+            json.dump(result_payload, fh, indent=2)
         report_path = os.path.join(out_dir, "report.json")
+        heatmap_file = os.path.join(out_dir, "heatmap_faces.json")
         report_data = {
             "status": "done",
-            "score": 72,
-            "recommendations": [
-                {
-                    "id": "thickness_uniformity",
-                    "level": "warning",
-                    "message": "Épaisseur non uniforme.",
-                }
-            ],
-            "metrics": {
-                "min_thickness_mm": 1.2,
-                "max_thickness_mm": 3.8,
-                "avg_thickness_mm": 2.4,
-                "undercuts_count": 2,
-            },
+            "metrics": result.metrics,
+            "issues": result.issues,
+            "heatmaps": result.heatmaps,
+            "views": result.views,
+            "flags": result.flags,
+            "material_profile_id": material_profile.get("id"),
+            "axis": demold_axis,
+            "invert": False,
+            "step_path": step_path,
+            "heatmap_files": {"faces": heatmap_file} if os.path.isfile(heatmap_file) else {},
         }
         with open(report_path, "w", encoding="utf-8") as fh:
             json.dump(report_data, fh)
         logger.info("DFM written \u2192 %s", report_path)
-        job.update(status="done", progress=100, result=result.model_dump())
+        job.update(status="done", progress=100, result=result_payload)
         rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
         logger.info("dfm job %s done in %.2fs rss=%.1fMB", job_id, time.perf_counter() - t0, rss)
     except Exception as exc:  # pragma: no cover - error paths hard to trigger in tests

@@ -44,7 +44,7 @@ def dfm_run(self, file_id, material_profile_id, axis, invert=False, tolerance=No
 
     # Generate viewer artefacts (heatmaps, thumbnails...)
     try:
-        run_dfm(dfm_input, progress_cb=None, fast_mode=False)
+        result = run_dfm(dfm_input, progress_cb=None, fast_mode=False)
     except Exception as exc:  # pragma: no cover - artefact generation is best effort
         logger.exception("[DFM] run_dfm failed for file_id=%s", file_id)
         error_report = {
@@ -54,23 +54,21 @@ def dfm_run(self, file_id, material_profile_id, axis, invert=False, tolerance=No
         _write_report(error_report)
         raise
 
-    # Aggregate a minimal DFM report
+    heatmap_file = os.path.join(out_dir, "heatmap_faces.json")
+
+    # Aggregate a DFM report based on the computed results
     report_data = {
         "status": "done",
-        "score": 72,
-        "recommendations": [
-            {
-                "id": "thickness_uniformity",
-                "level": "warning",
-                "message": "Épaisseur non uniforme.",
-            }
-        ],
-        "metrics": {
-            "min_thickness_mm": 1.2,
-            "max_thickness_mm": 3.8,
-            "avg_thickness_mm": 2.4,
-            "undercuts_count": 2,
-        },
+        "metrics": result.metrics,
+        "issues": result.issues,
+        "heatmaps": result.heatmaps,
+        "views": result.views,
+        "flags": result.flags,
+        "material_profile_id": material_profile_id,
+        "axis": axis,
+        "invert": invert,
+        "step_path": step_path,
+        "heatmap_files": {"faces": heatmap_file} if os.path.isfile(heatmap_file) else {},
     }
 
     _write_report(report_data)
